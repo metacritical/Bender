@@ -1,0 +1,17 @@
+name: bender
+version: 0.1.0
+
+dependencies:
+  readline:
+    github: crystal-lang/crystal-readline
+
+authors:
+  - Pankaj Doharey <pankajdoharey@gmail.com>
+
+targets:
+  bender:
+    main: src/bender.cr
+
+crystal: 1.5.1
+
+license: MIT
