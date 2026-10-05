@@ -264,9 +264,14 @@ worker's handle ref. `thread/join` fast path (done) consumes inline;
 slow path claims (`joined=1`), records waiter, roots, `janet_await`s —
 like channel ops, the cfun never resumes after await, the result arrives
 as the call's value. `thread/alive?` (owner-checked, `!done`) polls
-without blocking. `test/suite-thread.janet` (18 tests) locks the
-behavior in `make test`. Panics: non-owner join/alive?, double join,
-join inside `janet_call`.
+without blocking. `(thread/join h timeout)` arms `janet_addtimeout`:
+expiry cancels the waiter (timeout error, rejoinable later); delivery
+and reclaim key off `waiter_sched` (every schedule bumps `sched_id`),
+so a resumed-then-returning fiber can never receive a rogue second
+resume. Finite timeouts need a task fiber (top-level mains cannot be
+cancelled — same upstream limit as `ev/deadline`). `test/suite-thread.janet`
+(23 tests) locks the behavior in `make test`. Panics: non-owner
+join/alive?, double/concurrent join, join inside `janet_call`.
 
 Pitfalls found (all fixed): `janet_try` around `janet_await` catches the
 EVENT suspension itself (sig 13, empty payload) — no try, follow the

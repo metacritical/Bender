@@ -3367,6 +3367,11 @@ typedef struct {
     int is_error;
     Janet result;
     JanetFiber *waiter;
+    /* sched_id of waiter when it suspended: every schedule bumps it, so
+     * a waiter whose id moved on was already resumed elsewhere (timeout
+     * or cancel) and must not be delivered to. Distinguishes a live
+     * previous joiner from a concurrent one. */
+    uint32_t waiter_sched;
 } JanetThreadHandle;
 
 typedef struct {
@@ -3433,22 +3438,24 @@ static void janet_thread_new_complete(JanetEVGenericMessage msg) {
     h->result = result;
     h->is_error = is_error;
     h->done = 1;
-    /* Balance join's gcroots (no-ops if join never suspended). The handle
-     * stays alive via the worker ref below until after scheduling. */
-    if (h->waiter != NULL) {
-        janet_gcunroot(janet_wrap_fiber(h->waiter));
-    }
-    janet_gcunroot(janet_wrap_abstract(h));
+    /* A suspended join roots (handle, waiter) as a pair; unroot exactly.
+     * Deliver only if the waiter is still suspended in our await
+     * (schedule bumps sched_id, so a moved id means timeout/cancel
+     * already resumed it elsewhere — keep the result for a later join
+     * instead of scheduling a rogue resume). */
     if (h->waiter != NULL) {
         JanetFiber *w = h->waiter;
+        uint32_t ws = h->waiter_sched;
         h->waiter = NULL;
-        if (h->is_error) {
-            if (janet_fiber_can_resume(w)) {
-                janet_cancel(w, h->result);
-            }
-        } else {
-            if (janet_fiber_can_resume(w)) {
-                janet_schedule(w, h->result);
+        janet_gcunroot(janet_wrap_fiber(w));
+        janet_gcunroot(janet_wrap_abstract(h));
+        if (w->sched_id == ws) {
+            h->joined = 1;
+            h->result = janet_wrap_nil();
+            if (h->is_error) {
+                janet_cancel(w, result);
+            } else {
+                janet_schedule(w, result);
             }
         }
     }
@@ -3685,6 +3692,7 @@ JANET_CORE_FN(cfun_thread_new,
     handle->is_error = 0;
     handle->result = janet_wrap_nil();
     handle->waiter = NULL;
+    handle->waiter_sched = 0;
     JanetThreadNewArgs *targs = janet_malloc(sizeof(JanetThreadNewArgs));
     if (NULL == targs) {
         janet_buffer_deinit(buffer);
@@ -3725,10 +3733,12 @@ JANET_CORE_FN(cfun_thread_new,
 }
 
 JANET_CORE_FN(cfun_thread_join,
-              "(thread/join handle)",
+              "(thread/join handle &opt timeout)",
               "Wait for the thread `handle` created by `thread/new` to complete and return its value. "
-              "Re-raises the thread's error if it failed. Must be called from the creating thread, exactly once.") {
-    janet_fixarity(argc, 1);
+              "Re-raises the thread's error if it failed. Must be called from the creating thread, exactly once. "
+              "With `timeout` (seconds), raise a timeout error instead of waiting forever; a later join can "
+              "still collect the result. Timeouts require joining from an ev task.") {
+    janet_arity(argc, 1, 2);
     JanetThreadHandle *handle = janet_getabstract(argv, 0, &janet_thread_handle_type);
     if (handle->owner != &janet_vm) {
         janet_panic("thread/join called from non-owner thread");
@@ -3739,6 +3749,7 @@ JANET_CORE_FN(cfun_thread_join,
     if (janet_vm.coerce_error) {
         janet_panic("cannot join inside janet_call");
     }
+    double timeout = janet_optnumber(argv, argc, 1, INFINITY);
     if (handle->done) {
         /* Fast path: completion already ran. */
         handle->joined = 1;
@@ -3749,15 +3760,31 @@ JANET_CORE_FN(cfun_thread_join,
         }
         return result;
     }
-    /* Slow path: claim, suspend until completion callback schedules us
-     * with the result (cfun does not resume after await). */
-    handle->joined = 1;
     JanetFiber *root = janet_root_fiber();
+    if (handle->waiter != NULL) {
+        /* A waiter whose sched_id moved on was already resumed elsewhere
+         * (timeout or cancel): release its roots exactly and take over.
+         * An unmoved waiter is a genuine concurrent join. */
+        if (handle->waiter->sched_id == handle->waiter_sched) {
+            janet_panic("thread already being joined");
+        }
+        janet_gcunroot(janet_wrap_fiber(handle->waiter));
+        janet_gcunroot(janet_wrap_abstract(handle));
+        handle->waiter = NULL;
+    }
+    if (timeout != INFINITY &&
+            !(root->gc.flags & JANET_FIBER_EV_GCFLAG_ROOT)) {
+        janet_panic("thread/join with timeout requires joining from an ev task");
+    }
     handle->waiter = root;
+    handle->waiter_sched = root->sched_id;
     /* Root across suspension; completion callback unroots
      * (mirrors janet_ev_threaded_await's fiber rooting). */
     janet_gcroot(janet_wrap_fiber(root));
     janet_gcroot(janet_wrap_abstract(handle));
+    if (timeout != INFINITY) {
+        janet_addtimeout(timeout);
+    }
     janet_await();
     /* Unreachable when suspending; the completion schedules this fiber
      * with the thread's result (or cancels with its error). */

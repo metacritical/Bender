@@ -73,4 +73,23 @@
     (ev/give ch (thread/join h))))
   (assert (= 123 (ev/take ch)) "join in ev task"))
 
+# 9. Join with a generous timeout succeeds without firing.
+(assert (= 7 (thread/join (thread/new (fn [] 7)) 5)) "timeout success")
+
+# 10. Join timeout fires inside ev tasks, and a later join still collects.
+(let [ch (ev/chan 0)
+      h (thread/new (fn [] (ev/sleep 0.2) :slow))]
+  (ev/go (fn []
+    (def err (try (thread/join h 0.05) ([e] e)))
+    (ev/give ch err)))
+  (assert (= "timeout" (ev/take ch)) "timeout fires")
+  (assert (= :slow (thread/join h)) "rejoin after timeout"))
+
+# 11. Top-level join with timeout fires too (the main fiber is a task
+# fiber once it has suspended through channel ops, so flag it first).
+(let [ch (ev/chan 1)] (ev/give ch :x) (ev/take ch))
+(let [h (thread/new (fn [] (ev/sleep 0.3) :slow))]
+  (assert-error-value "top-level timeout" "timeout" (thread/join h 0.05))
+  (assert (= :slow (thread/join h)) "top-level rejoin"))
+
 (end-suite)

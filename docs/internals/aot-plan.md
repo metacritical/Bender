@@ -277,16 +277,22 @@ thread-local VM exactly like `janet_go_thread_subr` (marshal registries
 `janet_ev_post_event` to the owner (message-owned result bytes,
 unmarshalled on the owner; waiter scheduled with the value, cancelled
 with the error — the joining cfun never resumes after await, like
-channel ops). `thread/alive?` polls completion without blocking (fresh
+channel ops). `thread/join` takes an optional timeout (seconds):
+expiry cancels the waiter with a timeout error (same `sched_id`
+exactly-once discipline as the scheduler: concurrent joiners panic,
+a resumed-then-rejoining fiber reclaims instead of double-delivering,
+and a later join still collects); finite timeouts need a task fiber.
+`thread/alive?` polls completion without blocking (fresh
 handles read alive deterministically: completion can only be processed
-once the spawner suspends). Roots follow the `ev/thread` pattern (join
-gcroots, callback unroots). New `test/suite-thread.janet` (18 tests:
-value round-trips incl. fiber args, 8-way parallel, ev-in-thread, error
-re-raise, double-join, non-function refusal, alive? transitions,
-join-in-ev-task) runs in `make test` (now 37/37). Gates: full suite +
+once the spawner suspends). Roots follow the `ev/thread`
+pattern (join gcroots, callback unroots). New `test/suite-thread.janet`
+(23 tests: value round-trips incl. fiber args, 8-way parallel,
+ev-in-thread, error re-raise, double-join, non-function refusal,
+alive? transitions, join-in-ev-task, timeout fire/rejoin/top-level)
+runs in `make test` (now 37/37). Gates: full suite +
 fibertest + stress/minor/ev + oracle `same` × 5 on `-O2` and `-O0 -g`,
 plus a full ASan run (37/37, fibertest, stress/minor/ev green);
-thread suite 25/25 stable plus 64 KiB `gcsetinterval` runs over
+thread suite 25+/25 stable plus 64 KiB `gcsetinterval` runs over
 suite-boot/peg/ev/marsh green.
 
 Fixed along the way (both pre-existing, both crashers):
