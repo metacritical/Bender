@@ -1,6 +1,17 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## Unreleased
+- Add `thread/new`, `thread/join`, and `thread/alive?` for value-returning
+  OS threads: `(thread/new func &opt arg)` runs an isolated interpreter and
+  returns a handle, `(thread/join handle &opt timeout)` waits for the return
+  value (re-raising thread errors, expiring with a timeout error), and
+  `(thread/alive? handle)` polls completion without blocking.
+- Fix a crash when passing fibers to `ev/thread` workers (uninitialized
+  native-stack fields on unmarshalled fibers).
+- Fix a wild memory read in the generational collector's page lookup for
+  non-slab pointers.
+
 ## 1.42.1 - 2026-09-10
 - More changes to documentation.
 - Correct SONAME in Makefile

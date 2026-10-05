@@ -22,18 +22,20 @@ phase below (currently Phase 2b).
 
 ```sh
 make                    # default -O2 build -> build/janet
-make test               # full suite: 36/36 (incl. suite-native-fiber 47/47,
-                        # suite-gc-stress 21/21, suite-gc-minor 12/12)
-make fibertest          # C call-chain suspension proof: 17/17
+make test               # full suite: 37/37 (incl. suite-native-fiber 47/47,
+                        # suite-gc-stress 21/21, suite-gc-minor 12/12,
+                        # suite-thread 23/23)
+make fibertest          # C call-chain suspension proof: 21 checks green
 mkdir -p /tmp/aot-tests
 printf '(print "hi from janet")\n' > /tmp/aot-tests/hello.janet
 printf '(defn fib [n] (if (< n 2) n (+ (fib (- n 1)) (fib (- n 2)))))\n(print (fib 20))\n' > /tmp/aot-tests/fib.janet
 printf '(def f (fiber/new (fn [] (for i 0 3 (yield i)) :done)))\n(while (def v (resume f)) (print v) (when (= v :done) (break)))\n' > /tmp/aot-tests/yield.janet
 printf '(def ch (ev/chan 0))\n(ev/go (fn [] (ev/sleep 0.01) (ev/give ch :ping)))\n(print (ev/take ch))\n' > /tmp/aot-tests/ev.janet
 printf '(error "boom")\n' > /tmp/aot-tests/err.janet
-for t in hello fib yield ev err; do
+printf '(def hs (map (fn [i] (thread/new (fn [x] (* x x)) i)) (range 5)))\n(pp (map thread/join hs))\n(print (thread/join (thread/new (fn [x] (string "n=" x)) 7)))\n' > /tmp/aot-tests/thread.janet
+for t in hello fib yield ev err thread; do
   ./build/janet tools/janet-diff.janet /tmp/aot-tests/$t.janet
-done                    # AOT oracle: same × 5
+done                    # AOT oracle: same × 6
 make clean && make CFLAGS="-O0 -g" && make test   # same gates, -O0 build
 ```
 
@@ -99,8 +101,9 @@ Build `tools/janet-aot` (C, linked against `build/libjanet.a` at first):
    (fold addresses/paths/times), labels `same/output-diff/exception-diff/
    compile-error/crash`, exit 0/1/2/3 like `spinel diff`.
 
-Accept: `print "hi"`, `fib(20)`, file IO, one fiber yield/resume program and
-one `ev/chan` smoke program produce `same` through the oracle; `-c/-S`
+Accept: `print "hi"`, `fib(20)`, file IO, one fiber yield/resume program,
+one `ev/chan` smoke program, and one `thread/new` + `thread/join` program
+produce `same` through the oracle; `-c/-S`
 emit inspectable C; binary starts with no `janet` on PATH.
 
 ## Phase 1.1 — frames on the native stack
@@ -290,7 +293,7 @@ pattern (join gcroots, callback unroots). New `test/suite-thread.janet`
 ev-in-thread, error re-raise, double-join, non-function refusal,
 alive? transitions, join-in-ev-task, timeout fire/rejoin/top-level)
 runs in `make test` (now 37/37). Gates: full suite +
-fibertest + stress/minor/ev + oracle `same` × 5 on `-O2` and `-O0 -g`,
+fibertest + stress/minor/ev + oracle `same` × 6 on `-O2` and `-O0 -g`,
 plus a full ASan run (37/37, fibertest, stress/minor/ev green);
 thread suite 25+/25 stable plus 64 KiB `gcsetinterval` runs over
 suite-boot/peg/ev/marsh green.
