@@ -963,7 +963,12 @@ static int macroexpand1(
         janet_table_put(c->env, ml_kw, janet_wrap_array(c->lints));
     }
     Janet tempOut;
+    /* Root the macro fiber explicitly: janet_continue only roots it when a
+     * root fiber is already running, but host-driven compiles (no fiber)
+     * would otherwise leave it exposed to collections mid-expansion. */
+    janet_gcroot(janet_wrap_fiber(fiberp));
     JanetSignal status = janet_continue(fiberp, janet_wrap_nil(), &tempOut);
+    janet_gcunroot(janet_wrap_fiber(fiberp));
     janet_table_put(c->env, mf_kw, janet_wrap_nil());
     janet_table_put(c->env, ml_kw, janet_wrap_nil());
     janet_gcunlock(lock);
@@ -973,6 +978,10 @@ static int macroexpand1(
         janetc_error(c, es);
         return 0;
     } else {
+        /* The expansion is consumed element-by-element by the emitter
+         * across further nested allocations (and collections). Pin it for
+         * the rest of the compilation; nothing else references it yet. */
+        janetc_pin(c, tempOut);
         *out = tempOut;
     }
 
@@ -1249,6 +1258,14 @@ static void janetc_init(JanetCompiler *c, JanetTable *env, const uint8_t *where,
     c->lints = lints;
     c->is_redef = janet_truthy(janet_table_get_keyword(c->env, "redef"));
     c->optimize = to_optimization_level(janet_table_get_keyword(c->env, "optimize"));
+    /* Rooted pin array for compiler-held values (see janetc_pin). The
+     * gcroot itself never triggers a collection, so creating and pinning
+     * the empty array is atomic. */
+    c->pins = janet_array(0);
+    janet_gcroot(janet_wrap_array(c->pins));
+    /* Publish on the VM compiler stack for GC marking. */
+    c->compiler_next = janet_vm.compiler_stack;
+    janet_vm.compiler_stack = c;
     /* Init result */
     c->result.error = NULL;
     c->result.status = JANET_COMPILE_OK;
@@ -1262,7 +1279,18 @@ static void janetc_init(JanetCompiler *c, JanetTable *env, const uint8_t *where,
 static void janetc_deinit(JanetCompiler *c) {
     janet_v_free(c->buffer);
     janet_v_free(c->mapbuffer);
+    janet_gcunroot(janet_wrap_array(c->pins));
+    janet_vm.compiler_stack = c->compiler_next;
     c->env = NULL;
+}
+
+/* Pin a value for the duration of the compilation. The push itself can
+ * trigger a collection (array growth), so root the value first (atomic),
+ * then push, then drop the temporary root -- the pins array keeps it. */
+void janetc_pin(JanetCompiler *c, Janet x) {
+    janet_gcroot(x);
+    janet_array_push(c->pins, x);
+    janet_gcunroot(x);
 }
 
 /* Compile a form. */
@@ -1318,6 +1346,23 @@ JANET_CORE_FN(cfun_compile, "(compile ast &opt env source lints)",
               "line col message]`.") {
     janet_sandbox_assert(JANET_SANDBOX_COMPILE);
     janet_arity(argc, 1, 4);
+    /* TEMPORARY 2b-iii: trace compiles under stress. */
+    if (getenv("JANET_COMPILE_TRACE")) {
+        JanetTable *e = (argc > 1 && !janet_checktype(argv[1], JANET_NIL))
+                        ? janet_gettable(argv, 1) : janet_vm.fiber->env;
+        const char *head = "?";
+        if (janet_checktype(argv[0], JANET_TUPLE)) {
+            JanetTuple t = janet_unwrap_tuple(argv[0]);
+            if (janet_tuple_length(t) > 0 && janet_checktype(t[0], JANET_SYMBOL)) {
+                head = (const char *) janet_unwrap_symbol(t[0]);
+            } else {
+                head = "(non-symbol-head)";
+            }
+        } else if (janet_checktype(argv[0], JANET_SYMBOL)) {
+            head = (const char *) janet_unwrap_symbol(argv[0]);
+        }
+        fprintf(stderr, "[compile env=%p head=%s]\n", (void *) e, head);
+    }
     JanetTable *env = (argc > 1 && !janet_checktype(argv[1], JANET_NIL))
                       ? janet_gettable(argv, 1) : janet_vm.fiber->env;
     if (NULL == env) {

@@ -91,7 +91,8 @@
 
 /* Next instruction variations */
 #define maybe_collect() do {\
-    if (janet_vm.next_collection >= janet_vm.gc_interval) janet_collect(); } while (0)
+    if (janet_vm.gc_young_bytes >= janet_vm.gc_minor_threshold) janet_collect_minor(); \
+    else if (janet_vm.next_collection >= janet_vm.gc_interval) janet_collect(); } while (0)
 #define vm_checkgc_next() maybe_collect(); vm_next()
 #define vm_pcnext() pc++; vm_next()
 #define vm_checkgc_pcnext() maybe_collect(); vm_pcnext()
@@ -348,6 +349,7 @@ static Janet janet_binop_call(const char *lmethod, const char *rmethod, Janet lh
 /* Forward declaration */
 static JanetSignal janet_check_can_resume(JanetFiber *fiber, Janet *out, int is_cancel);
 static JanetSignal janet_continue_no_check(JanetFiber *fiber, Janet in, Janet *out);
+static void janet_suspend_swap(JanetFiber *fiber, JanetSignal sig, Janet payload);
 
 /* Interpreter main loop */
 static JanetSignal run_vm(JanetFiber *fiber, Janet in) {
@@ -1426,6 +1428,41 @@ Janet janet_call(JanetFunction *fun, int32_t argc, const Janet *argv) {
     JanetSignal signal = run_vm(janet_vm.fiber, janet_wrap_nil());
     janet_vm.coerce_error = old_coerce_error;
 
+    /* Phase 1.1 (see docs/internals/native-fibers.md): a suspension signal
+     * (yield, user signal, debug, ...) reached through these live C frames
+     * must freeze the whole C chain with a context switch instead of being
+     * coerced to an error. Each resume re-enters the nested VM below, so
+     * the yielding function runs to completion and its C callers observe
+     * an ordinary call. */
+    while (signal != JANET_SIGNAL_OK && signal != JANET_SIGNAL_ERROR) {
+        JanetFiber *susp_fiber = janet_vm.fiber;
+        janet_suspend_swap(susp_fiber, signal, *janet_vm.return_reg);
+        /* Resumed. A signal may have been smuggled in (e.g. cancel);
+         * consume it the way run_vm entry does. */
+        if (susp_fiber->flags & JANET_FIBER_RESUME_SIGNAL) {
+            signal = (susp_fiber->gc.flags & JANET_FIBER_STATUS_MASK) >> JANET_FIBER_STATUS_OFFSET;
+            susp_fiber->gc.flags &= ~JANET_FIBER_STATUS_MASK;
+            susp_fiber->flags &= ~JANET_FIBER_RESUME_SIGNAL;
+            janet_vm.return_reg[0] = susp_fiber->in_value;
+            if (signal == JANET_SIGNAL_OK) {
+                /* Cannot happen via continue_signal, but stay total: an OK
+                 * smuggle is a plain resume. */
+                continue;
+            }
+            if (signal != JANET_SIGNAL_ERROR) {
+                /* A new suspension was injected on resume: propagate it
+                 * outward the same way. */
+                continue;
+            }
+            break;
+        }
+        /* Plain resume: deliver the resume value as the yield result and
+         * keep running the nested call. Clear any stale re-entry flags so
+         * delivery behaves exactly like the trampoline's run_vm re-entry. */
+        susp_fiber->flags &= ~(JANET_FIBER_RESUME_NO_USEVAL | JANET_FIBER_RESUME_NO_SKIP);
+        signal = run_vm(susp_fiber, susp_fiber->in_value);
+    }
+
     /* Teardown */
     janet_vm.stackn = oldn;
     janet_gcunlock(handle);
@@ -1505,6 +1542,142 @@ void janet_restore(JanetTryState *state) {
     janet_vm.coerce_error = state->coerce_error;
 }
 
+/* Phase 1.1 swap-suspension (see docs/internals/native-fibers.md). The VM
+ * dynamic registers always describe the RUNNING party. When a fiber
+ * suspends with live C frames, its registers are parked in the fiber and
+ * the resumer's parked registers loaded, so nothing points into the
+ * frozen C stack while the resumer runs. janet_continue_no_check does the
+ * inverse when resuming. Host (non-fiber) code parks in janet_vm.base_*. */
+
+/* Park the live registers into a fiber (the suspending/yielding party). */
+static void janet_vmregs_save(JanetFiber *f) {
+    f->saved_signal_buf = janet_vm.signal_buf;
+    f->saved_return_reg = janet_vm.return_reg;
+    f->saved_coerce_error = janet_vm.coerce_error;
+    f->saved_stackn = janet_vm.stackn;
+    f->saved_gc_suspend = janet_vm.gc_suspend;
+}
+
+/* Load parked registers from a fiber (the party being switched to). */
+static void janet_vmregs_load(JanetFiber *f) {
+    janet_vm.signal_buf = f->saved_signal_buf;
+    janet_vm.return_reg = f->saved_return_reg;
+    janet_vm.coerce_error = f->saved_coerce_error;
+    janet_vm.stackn = f->saved_stackn;
+    janet_vm.gc_suspend = f->saved_gc_suspend;
+}
+
+/* Park the live registers into the host slots. */
+static void janet_vmregs_save_base(void) {
+    janet_vm.base_signal_buf = janet_vm.signal_buf;
+    janet_vm.base_return_reg = janet_vm.return_reg;
+    janet_vm.base_coerce_error = janet_vm.coerce_error;
+    janet_vm.base_stackn = janet_vm.stackn;
+    janet_vm.base_gc_suspend = janet_vm.gc_suspend;
+}
+
+/* Load parked registers from the host slots. */
+static void janet_vmregs_load_base(void) {
+    janet_vm.signal_buf = janet_vm.base_signal_buf;
+    janet_vm.return_reg = janet_vm.base_return_reg;
+    janet_vm.coerce_error = janet_vm.base_coerce_error;
+    janet_vm.stackn = janet_vm.base_stackn;
+    janet_vm.gc_suspend = janet_vm.base_gc_suspend;
+}
+
+/* Suspend the running fiber with live C frames on its native stack.
+ * Publishes sig/payload exactly like the trampoline does on a returned
+ * signal, parks this fiber's registers, loads the resumer's, and switches
+ * out. On resume, execution continues after this call with this fiber's
+ * registers live again (re-parked by janet_continue_no_check beforehand). */
+static void janet_suspend_swap(JanetFiber *fiber, JanetSignal sig, Janet payload) {
+    fiber->out_payload = payload;
+    fiber->out_signal = sig;
+    fiber->last_value = payload;
+    janet_fiber_set_status(fiber, sig);
+    fiber->suspend_mode = 1;
+    janet_vmregs_save(fiber);
+    JanetFiber *resumer = fiber->resume_fiber;
+    if (resumer) {
+        janet_vmregs_load(resumer);
+    } else {
+        janet_vmregs_load_base();
+    }
+    janet_vm.fiber = resumer;
+    janet_fiber_ctx_swap(&fiber->ctx, fiber->resume_ctx);
+}
+
+/* Suspend the current fiber from C with a yield signal (see janet.h).
+ * Works from any C code running on the fiber's native stack: cfunctions,
+ * nested janet_call frames, or future AOT-compiled frames. */
+Janet janet_fiber_yield(Janet v) {
+    JanetFiber *fiber = janet_vm.fiber;
+    if (NULL == fiber) janet_panic("janet_fiber_yield failed because there is no current fiber");
+    if (NULL == fiber->resume_ctx) janet_panic("janet_fiber_yield failed because the fiber was never resumed");
+    JanetSignal sig = JANET_SIGNAL_YIELD;
+    for (;;) {
+        janet_suspend_swap(fiber, sig, v);
+        /* Resumed: consume a smuggled signal the way run_vm entry does. */
+        if (fiber->flags & JANET_FIBER_RESUME_SIGNAL) {
+            JanetSignal psig = (fiber->gc.flags & JANET_FIBER_STATUS_MASK) >> JANET_FIBER_STATUS_OFFSET;
+            fiber->gc.flags &= ~JANET_FIBER_STATUS_MASK;
+            fiber->flags &= ~JANET_FIBER_RESUME_SIGNAL;
+            janet_vm.return_reg[0] = fiber->in_value;
+            if (psig == JANET_SIGNAL_ERROR) {
+                janet_panicv(fiber->in_value);
+            }
+            if (psig != JANET_SIGNAL_OK) {
+                /* A new suspension was injected on resume: send the
+                 * injected signal outward with the resume value. */
+                sig = psig;
+                v = fiber->in_value;
+                continue;
+            }
+        }
+        return fiber->in_value;
+    }
+}
+
+/* Per-fiber interpreter loop; see docs/internals/native-fibers.md. This
+ * runs on the fiber's own native stack (primed via janet_fiber_ctx_prime).
+ * Between resumes of a fiber, we sit at the ctx_swap waiting to be
+ * switched in; on each resume, we run one VM entry, publish the result on
+ * the fiber, and switch back to the resumer. VM values, signals and
+ * longjmp targets never cross fiber boundaries: every signal handler
+ * (jmp_buf) and return register lives in this loop's JanetTryState on the
+ * fiber's stack. */
+void janet_fiber_trampoline(void) {
+    for (;;) {
+        JanetFiber *fiber = janet_vm.fiber;
+        JanetSignal sig;
+        JanetTryState tstate;
+        sig = janet_try(&tstate);
+        if (!sig) {
+            sig = run_vm(fiber, fiber->in_value);
+        }
+        janet_restore(&tstate);
+        fiber->out_payload = tstate.payload;
+        fiber->out_signal = sig;
+        fiber->last_value = tstate.payload;
+        /* The fiber returned to the trampoline (no frozen C stack above
+         * this point): resume re-enters run_vm, and any stale swap-suspend
+         * mode from an earlier nested suspension is over. */
+        fiber->suspend_mode = 0;
+        janet_fiber_set_status(fiber, sig);
+        /* Hand control back with a full register exchange, mirroring
+         * janet_suspend_swap: park this fiber, load the resumer. */
+        janet_vmregs_save(fiber);
+        JanetFiber *tr_resumer = fiber->resume_fiber;
+        if (tr_resumer) {
+            janet_vmregs_load(tr_resumer);
+        } else {
+            janet_vmregs_load_base();
+        }
+        janet_vm.fiber = tr_resumer;
+        janet_fiber_ctx_swap(&fiber->ctx, fiber->resume_ctx);
+    }
+}
+
 static JanetSignal janet_continue_no_check(JanetFiber *fiber, Janet in, Janet *out) {
 
     JanetFiberStatus old_status = janet_fiber_status(fiber);
@@ -1575,26 +1748,40 @@ static JanetSignal janet_continue_no_check(JanetFiber *fiber, Janet in, Janet *o
         janet_gcroot(janet_wrap_fiber(fiber));
     }
 
-    /* Save global state */
-    JanetTryState tstate;
-    JanetSignal sig = janet_try(&tstate);
-    if (!sig) {
-        /* Normal setup */
-        if (janet_vm.root_fiber == NULL) janet_vm.root_fiber = fiber;
-        janet_vm.fiber = fiber;
-        janet_fiber_set_status(fiber, JANET_STATUS_ALIVE);
-        sig = run_vm(fiber, in);
+    /* Switch onto the target fiber's own native stack. Phase 1.1: the VM
+     * dynamic registers always describe the running party, so park the
+     * caller's live registers and load the target's parked registers
+     * (fresh fibers park zeroes at creation). The target's suspend path
+     * (janet_suspend_swap or the trampoline publish above) inverts this
+     * exchange on the way out. Fallible work (gcroot) stays above the
+     * exchange, where the caller's signal chain is still live. */
+    JanetFiber *caller = janet_vm.fiber;
+    JanetFiberCtx *caller_ctx = caller ? &caller->ctx : &janet_vm.base_ctx;
+    if (caller) {
+        janet_vmregs_save(caller);
+    } else {
+        janet_vmregs_save_base();
     }
+    janet_vmregs_load(fiber);
 
-    /* Restore */
+    if (janet_vm.root_fiber == NULL) janet_vm.root_fiber = fiber;
+    janet_vm.fiber = fiber;
+    janet_fiber_set_status(fiber, JANET_STATUS_ALIVE);
+
+    fiber->in_value = in;
+    fiber->resume_ctx = caller_ctx;
+    fiber->resume_fiber = caller;
+    janet_fiber_ctx_swap(caller_ctx, &fiber->ctx);
+
+    JanetSignal sig = fiber->out_signal;
+    janet_vm.fiber = caller;
     if (janet_vm.root_fiber == fiber) janet_vm.root_fiber = NULL;
     janet_fiber_set_status(fiber, sig);
-    janet_restore(&tstate);
     if (fiber_rooted) {
         janet_gcunroot(janet_wrap_fiber(fiber));
     }
-    fiber->last_value = tstate.payload;
-    *out = tstate.payload;
+    fiber->last_value = fiber->out_payload;
+    *out = fiber->out_payload;
 
     return sig;
 }
@@ -1663,10 +1850,15 @@ int janet_init(void) {
     /* Garbage collection */
     janet_vm.blocks = NULL;
     janet_vm.weak_blocks = NULL;
+    janet_vm.string_blocks = NULL;
     janet_vm.next_collection = 0;
     janet_vm.gc_interval = 0x400000;
     janet_vm.block_count = 0;
     janet_vm.gc_mark_phase = 0;
+    /* Generational policy (Phase 2b-iii): minors run on nursery pressure. */
+    janet_vm.gc_minor_phase = 0;
+    janet_vm.gc_young_bytes = 0;
+    janet_vm.gc_minor_threshold = 256 * 1024;
 
     janet_symcache_init();
 
@@ -1674,6 +1866,14 @@ int janet_init(void) {
     janet_vm.roots = NULL;
     janet_vm.root_count = 0;
     janet_vm.root_capacity = 0;
+
+    /* Initialize shadow root stack (Phase 2b-i) */
+    janet_vm.shadow_roots = NULL;
+    janet_vm.shadow_count = 0;
+    janet_vm.shadow_capacity = 0;
+
+    /* Slab allocator state starts empty (Phase 2b-iii, lazy). */
+    janet_vm.slab_state = NULL;
 
     /* Scratch memory */
     janet_vm.user = NULL;
@@ -1715,6 +1915,13 @@ int janet_init(void) {
     janet_vm.fiber = NULL;
     janet_vm.root_fiber = NULL;
     janet_vm.stackn = 0;
+    /* Phase 1.1/2a: no active compilation, clean host register park. */
+    janet_vm.compiler_stack = NULL;
+    janet_vm.base_signal_buf = NULL;
+    janet_vm.base_return_reg = NULL;
+    janet_vm.base_coerce_error = 0;
+    janet_vm.base_stackn = 0;
+    janet_vm.base_gc_suspend = 0;
 
 #ifdef JANET_EV
     janet_ev_init();
@@ -1745,6 +1952,13 @@ void janet_deinit(void) {
     janet_vm.roots = NULL;
     janet_vm.root_count = 0;
     janet_vm.root_capacity = 0;
+    janet_free(janet_vm.shadow_roots);
+    janet_vm.shadow_roots = NULL;
+    janet_vm.shadow_count = 0;
+    janet_vm.shadow_capacity = 0;
+    /* Slab pages went with clear_memory above; drop the state itself. */
+    janet_free(janet_vm.slab_state);
+    janet_vm.slab_state = NULL;
     janet_vm.abstract_registry = NULL;
     janet_vm.core_env = NULL;
     janet_vm.top_dyns = NULL;

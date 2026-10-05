@@ -194,9 +194,22 @@ struct JanetCompiler {
     /* Collect linting results */
     JanetArray *lints;
 
+    /* Pinned Janet values. The compiler stashes values (macroexpansion
+     * results, and anything else held across nested allocations) in C
+     * structs that the collector cannot see. Everything pushed here is
+     * rooted for the whole compilation; the array itself is gcrooted in
+     * janetc_init and unrooted in janetc_deinit. See janetc_pin. */
+    JanetArray *pins;
+
     /* Cached version of (dyn *redef*) and (dyn *optimize*) */
     int is_redef;
     int32_t optimize;
+
+    /* Link for the VM's compiler stack (Phase 2a root discipline). While
+     * a compilation is active, the collector walks live scopes through
+     * this chain to mark values held in compiler C structs. Pushed in
+     * janetc_init, popped in janetc_deinit. */
+    JanetCompiler *compiler_next;
 };
 
 #define JANET_FOPTS_TAIL 0x10000
@@ -272,6 +285,12 @@ void janetc_lintf(JanetCompiler *C, JanetCompileLintLevel level, const char *for
 
 /* Dispatch to correct form compiler */
 JanetSlot janetc_value(JanetFopts opts, Janet x);
+
+/* Pin a Janet value for the duration of the compilation (Phase 2a root
+ * discipline). Use for values held in C structs across nested allocations
+ * (and therefore collections), e.g. macroexpansion results consumed
+ * element-by-element by the emitter. */
+void janetc_pin(JanetCompiler *c, Janet x);
 
 /* Push and pop from the scope stack */
 void janetc_scope(JanetScope *s, JanetCompiler *c, int flags, const char *name);

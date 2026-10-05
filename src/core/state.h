@@ -110,6 +110,19 @@ struct JanetVM {
     JanetFiber *fiber;
     JanetFiber *root_fiber;
 
+    /* Context saved in host code when it resumes a fiber and we switch onto
+     * that fiber's native stack (only used when janet_vm.fiber is NULL --
+     * resumer inside a fiber keeps the context in that fiber's ctx). */
+    JanetFiberCtx base_ctx;
+    /* Parked VM dynamic registers for host code, parallel to base_ctx: when
+     * host code resumes a fiber, its live registers are saved here, and a
+     * suspending fiber loads them back before switching out (Phase 1.1). */
+    jmp_buf *base_signal_buf;
+    Janet *base_return_reg;
+    int32_t base_coerce_error;
+    int32_t base_stackn;
+    int32_t base_gc_suspend;
+
     /* The current pointer to the inner most jmp_buf. The current
      * return point for panics. */
     jmp_buf *signal_buf;
@@ -137,16 +150,47 @@ struct JanetVM {
     /* Garbage collection */
     void *blocks;
     void *weak_blocks;
+    /* Immutable-string heap (Phase 2b-ii): strings, symbols and keywords
+     * live on their own block list so collection policy can treat them
+     * independently of everything else. Sweep semantics are identical to
+     * the main heap for now; see janet_sweep_list. */
+    void *string_blocks;
     size_t gc_interval;
     size_t next_collection;
     size_t block_count;
     int gc_suspend;
     int gc_mark_phase;
+    /* Generational collection (Phase 2b-iii policy): minor collections run
+     * while gc_minor_phase is set (see janet_collect_minor); young_bytes
+     * counts slab-carved bytes since the last minor, triggering one at
+     * gc_minor_threshold. */
+    int gc_minor_phase;
+    size_t gc_young_bytes;
+    size_t gc_minor_threshold;
 
     /* GC roots */
     Janet *roots;
     size_t root_count;
     size_t root_capacity;
+
+    /* Shadow root stack for generated/C code (Phase 2b-i). Strictly LIFO;
+     * everything below shadow_count is marked on every collection. Backed
+     * by raw memory (never triggers collections on growth). */
+    Janet *shadow_roots;
+    size_t shadow_count;
+    size_t shadow_capacity;
+
+    /* Slab allocator state (Phase 2b-iii): per-VM, gc.c-private.
+     * NULL until the first slab-sized allocation. */
+    void *slab_state;
+
+    /* Active compilations for GC marking (Phase 2a root discipline).
+     * Compilers stash values in C structs (scope consts/syms/defs) that
+     * the collector cannot see; janet_collect walks this chain (most
+     * recent first) via janet_mark_compiler. Pushed/popped by
+     * janetc_init/janetc_deinit; entries point to C-stack state of live
+     * compilations. */
+    struct JanetCompiler *compiler_stack;
 
     /* Scratch memory */
     JanetScratch **scratch_mem;

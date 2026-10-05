@@ -505,6 +505,10 @@ static Janet cfun_io_print_impl_x(int32_t argc, Janet *argv, int newline,
             /* Special case function */
             JanetFunction *fun = janet_unwrap_function(x);
             JanetBuffer *buf = janet_buffer(0);
+            /* Phase 2a root discipline: buf is held only in a C local
+             * across janet_call, which can suspend the fiber and run
+             * collections while suspended. Pin it explicitly. */
+            janet_gcroot(janet_wrap_buffer(buf));
             for (int32_t i = offset; i < argc; ++i) {
                 janet_to_string_b(buf, argv[i]);
             }
@@ -512,6 +516,7 @@ static Janet cfun_io_print_impl_x(int32_t argc, Janet *argv, int newline,
                 janet_buffer_push_u8(buf, '\n');
             Janet args[1] = { janet_wrap_buffer(buf) };
             janet_call(fun, 1, args);
+            janet_gcunroot(janet_wrap_buffer(buf));
             return janet_wrap_nil();
         }
         case JANET_NIL:

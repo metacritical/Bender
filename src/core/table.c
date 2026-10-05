@@ -213,6 +213,9 @@ void janet_table_put(JanetTable *t, Janet key, Janet value) {
         JanetKV *bucket = janet_table_find(t, key);
         if (NULL != bucket && !janet_checktype(bucket->key, JANET_NIL)) {
             bucket->value = value;
+            /* Generational barrier (Phase 2b-iii): old table, new edge. */
+            janet_gc_barrier(t, key);
+            janet_gc_barrier(t, value);
         } else {
             if (NULL == bucket || 2 * (t->count + t->deleted + 1) > t->capacity) {
                 janet_table_rehash(t, janet_tablen(2 * t->count + 2));
@@ -223,6 +226,9 @@ void janet_table_put(JanetTable *t, Janet key, Janet value) {
             bucket->key = key;
             bucket->value = value;
             ++t->count;
+            /* Generational barrier (Phase 2b-iii): old table, new edge. */
+            janet_gc_barrier(t, key);
+            janet_gc_barrier(t, value);
         }
     }
 }
@@ -242,6 +248,9 @@ static void janet_table_put_no_overwrite(JanetTable *t, Janet key, Janet value) 
     bucket->key = key;
     bucket->value = value;
     ++t->count;
+    /* Generational barrier (Phase 2b-iii): old table, new edge. */
+    janet_gc_barrier(t, key);
+    janet_gc_barrier(t, value);
 }
 
 /* Clear a table */
@@ -379,6 +388,11 @@ JANET_CORE_FN(cfun_table_setproto,
         proto = janet_gettable(argv, 1);
     }
     table->proto = proto;
+    /* Generational barrier (Phase 2b-iii): a young proto on an old table
+     * is a new edge minors would otherwise miss. */
+    if (NULL != proto) {
+        janet_gc_barrier(table, janet_wrap_table(proto));
+    }
     return argv[0];
 }
 

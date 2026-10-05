@@ -1902,6 +1902,13 @@ static JanetPeg *compile_peg(Janet x) {
         }
     }
     builder.tags = janet_table(0);
+    /* Phase 2a root discipline: grammar/tags are fresh tables held only in
+     * the C-local Builder across peg_compile1, which allocates (and under
+     * pressure, collects) throughout. Pin them; default_grammar comes from
+     * dyn bindings (already reachable). Panics inside (peg_panic longjmp)
+     * leak these two pins, matching the existing fiber_rooted convention. */
+    janet_gcroot(janet_wrap_table(builder.grammar));
+    janet_gcroot(janet_wrap_table(builder.tags));
     builder.constants = NULL;
     builder.bytecode = NULL;
     builder.nexttag = 1;
@@ -1911,6 +1918,8 @@ static JanetPeg *compile_peg(Janet x) {
     peg_compile1(&builder, x);
     JanetPeg *peg = make_peg(&builder);
     builder_cleanup(&builder);
+    janet_gcunroot(janet_wrap_table(builder.grammar));
+    janet_gcunroot(janet_wrap_table(builder.tags));
     return peg;
 }
 
@@ -1969,15 +1978,45 @@ static PegCall peg_cfun_init(int32_t argc, Janet *argv, int get_replace) {
     ret.s.outer_text_end = ret.s.text_end;
     ret.s.depth = JANET_RECURSION_GUARD;
     ret.s.captures = janet_array(0);
+    janet_gcroot(janet_wrap_array(ret.s.captures));
     ret.s.tagged_captures = janet_array(0);
+    janet_gcroot(janet_wrap_array(ret.s.tagged_captures));
     ret.s.scratch = janet_buffer(10);
+    janet_gcroot(janet_wrap_buffer(ret.s.scratch));
     ret.s.tags = janet_buffer(10);
+    janet_gcroot(janet_wrap_buffer(ret.s.tags));
+    /* Phase 2a root discipline: the working set is held only in C locals
+     * across matching (whose growth triggers collections) and, for
+     * replace, across janet_call, which can suspend the fiber and collect
+     * while suspended. Pin every piece (gcroot itself never collects, so
+     * each pin is atomic); argv-derived views stay reachable through the
+     * VM stack. Released by peg_cfun_deinit. */
+    janet_gcroot(janet_wrap_abstract(ret.peg));
+    if (ret.s.extrav != NULL) {
+        janet_gcroot(janet_wrap_tuple((JanetTuple) ret.s.extrav));
+    }
     ret.s.constants = ret.peg->constants;
     ret.s.bytecode = ret.peg->bytecode;
     ret.s.linemap = NULL;
     ret.s.linemaplen = -1;
     ret.s.has_backref = ret.peg->has_backref;
     return ret;
+}
+
+/* Release the working-set pins taken by peg_cfun_init. Call before every
+ * return from the cfunction (no allocation may intervene between the
+ * release and the return of a working value, which the caller then roots
+ * via the VM stack). Panics inside callbacks leak these pins, matching
+ * the existing fiber_rooted convention. */
+static void peg_cfun_deinit(PegCall *c) {
+    janet_gcunroot(janet_wrap_array(c->s.captures));
+    janet_gcunroot(janet_wrap_array(c->s.tagged_captures));
+    janet_gcunroot(janet_wrap_buffer(c->s.scratch));
+    janet_gcunroot(janet_wrap_buffer(c->s.tags));
+    janet_gcunroot(janet_wrap_abstract(c->peg));
+    if (c->s.extrav != NULL) {
+        janet_gcunroot(janet_wrap_tuple((JanetTuple) c->s.extrav));
+    }
 }
 
 static void peg_call_reset(PegCall *c) {
@@ -1994,7 +2033,9 @@ JANET_CORE_FN(cfun_peg_match,
               "Returns nil if text does not match the language defined by peg. The syntax of PEGs is documented on the Janet website.") {
     PegCall c = peg_cfun_init(argc, argv, 0);
     const uint8_t *result = peg_rule(&c.s, c.s.bytecode, c.bytes.bytes + c.start);
-    return result ? janet_wrap_array(c.s.captures) : janet_wrap_nil();
+    Janet out = result ? janet_wrap_array(c.s.captures) : janet_wrap_nil();
+    peg_cfun_deinit(&c);
+    return out;
 }
 
 JANET_CORE_FN(cfun_peg_find,
@@ -2003,9 +2044,12 @@ JANET_CORE_FN(cfun_peg_find,
     PegCall c = peg_cfun_init(argc, argv, 0);
     for (int32_t i = c.start; i < c.bytes.len; i++) {
         peg_call_reset(&c);
-        if (peg_rule(&c.s, c.s.bytecode, c.bytes.bytes + i))
+        if (peg_rule(&c.s, c.s.bytecode, c.bytes.bytes + i)) {
+            peg_cfun_deinit(&c);
             return janet_wrap_integer(i);
+        }
     }
+    peg_cfun_deinit(&c);
     return janet_wrap_nil();
 }
 
@@ -2014,17 +2058,24 @@ JANET_CORE_FN(cfun_peg_find_all,
               "Find all indexes where the peg matches in text. Returns an array of integers.") {
     PegCall c = peg_cfun_init(argc, argv, 0);
     JanetArray *ret = janet_array(0);
+    janet_gcroot(janet_wrap_array(ret));
     for (int32_t i = c.start; i < c.bytes.len; i++) {
         peg_call_reset(&c);
         if (peg_rule(&c.s, c.s.bytecode, c.bytes.bytes + i))
             janet_array_push(ret, janet_wrap_integer(i));
     }
-    return janet_wrap_array(ret);
+    Janet out = janet_wrap_array(ret);
+    janet_gcunroot(out);
+    peg_cfun_deinit(&c);
+    return out;
 }
 
 static Janet cfun_peg_replace_generic(int32_t argc, Janet *argv, int only_one) {
     PegCall c = peg_cfun_init(argc, argv, 1);
     JanetBuffer *ret = janet_buffer(0);
+    /* Phase 2a: ret is built here (not in init), so pin it separately;
+     * the rest of the working set is already pinned by peg_cfun_init. */
+    janet_gcroot(janet_wrap_buffer(ret));
     int32_t trail = 0;
     for (int32_t i = c.start; i < c.bytes.len;) {
         peg_call_reset(&c);
@@ -2048,7 +2099,10 @@ static Janet cfun_peg_replace_generic(int32_t argc, Janet *argv, int only_one) {
     if (trail < c.bytes.len) {
         janet_buffer_push_bytes(ret, c.bytes.bytes + trail, (c.bytes.len - trail));
     }
-    return janet_wrap_buffer(ret);
+    Janet retv = janet_wrap_buffer(ret);
+    janet_gcunroot(retv);
+    peg_cfun_deinit(&c);
+    return retv;
 }
 
 JANET_CORE_FN(cfun_peg_replace_all,

@@ -278,6 +278,12 @@ test: $(JANET_TARGET) $(TEST_SCRIPTS) $(EXAMPLE_SCRIPTS)
 	for f in test/suite*.janet; do $(RUN) ./$(JANET_TARGET) "$$f" || exit; done
 	for f in examples/*.janet; do $(RUN) ./$(JANET_TARGET) -k "$$f"; done
 
+# Phase 1.1b: C call-chain suspension proof (tools/fiber-c-test.c).
+# Builds against the static library and runs the embedder assertions.
+fibertest: $(JANET_TARGET) $(JANET_STATIC_LIBRARY)
+	$(CC) -O2 -Ibuild -Isrc/include tools/fiber-c-test.c $(JANET_STATIC_LIBRARY) -lm -lpthread -ldl -o build/fiber-c-test
+	$(RUN) ./build/fiber-c-test
+
 valtest: $(JANET_TARGET) $(TEST_SCRIPTS) $(EXAMPLE_SCRIPTS)
 	for f in test/suite*.janet; do $(VALGRIND_COMMAND) ./$(JANET_TARGET) "$$f" || exit; done
 	for f in examples/*.janet; do $(VALGRIND_COMMAND) ./$(JANET_TARGET) -k "$$f"; done

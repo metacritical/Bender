@@ -208,8 +208,10 @@ int32_t janet_abstract_decref_maybe_free(void *abst) {
         if (head->type->gc) {
             janet_assert(!head->type->gc(head->data, head->size), "finalizer failed");
         }
-        /* Free memory */
-        janet_free(head);
+        /* Free memory via the slab-aware release: threaded abstracts can
+         * be freed outside sweep (and retagged post-alloc), so plain
+         * janet_free would corrupt slab pages. */
+        janet_gc_release((JanetGCObject *) head);
     }
     return result;
 }

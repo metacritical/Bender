@@ -701,11 +701,32 @@ void janet_marshal(
     st.seen_envs = NULL;
     st.rreg = rreg;
     st.maybe_cycles = !(flags & JANET_MARSHAL_NO_CYCLES);
-    janet_table_init(&st.seen, 0);
-    marshal_one(&st, x, flags);
-    janet_table_deinit(&st.seen);
+    /* Phase 2a root discipline: suspend collections for the whole
+     * operation. The marshal state (output buffer, seen tables, id
+     * vectors) lives in C/struct scratch the collector cannot see; a
+     * collection mid-operation could sweep the in-progress image or the
+     * input's shared structure. The lock is released on all paths; a
+     * panic inside re-raises after unlocking (same signal as without). */
+    int lock = janet_gclock();
+    JanetTryState tstate;
+    JanetSignal sig = janet_try(&tstate);
+    if (!sig) {
+        janet_table_init(&st.seen, 0);
+        marshal_one(&st, x, flags);
+        janet_table_deinit(&st.seen);
+    }
+    janet_gcunlock(lock);
     janet_v_free(st.seen_envs);
     janet_v_free(st.seen_defs);
+    if (sig) {
+        janet_restore(&tstate);
+        if (sig == JANET_SIGNAL_ERROR) {
+            janet_panicv(tstate.payload);
+        } else {
+            janet_signalv(sig, tstate.payload);
+        }
+    }
+    janet_restore(&tstate);
 }
 
 typedef struct {
@@ -1089,6 +1110,13 @@ static const uint8_t *unmarshal_one_fiber(
     fiber->child = NULL;
     fiber->env = NULL;
     fiber->last_value = janet_wrap_nil();
+    /* Native-stack fields must be initialized explicitly (like fiber_alloc):
+     * gcalloc slots are not guaranteed zero (dirty slab bump slots and
+     * malloc reuse), and ensure_native_stack below treats a non-NULL base
+     * as a live mapping. Uninitialized garbage here primes a wild stack. */
+    fiber->native_stack = NULL;
+    fiber->native_stack_base = NULL;
+    fiber->native_stack_size = 0;
 #ifdef JANET_EV
     fiber->sched_id = 0;
     fiber->supervisor_channel = NULL;
@@ -1222,6 +1250,23 @@ static const uint8_t *unmarshal_one_fiber(
     if (status < 0 || status > JANET_STATUS_ALIVE) {
         janet_panic("invalid fiber status");
     }
+
+    /* Native-stack substrate (see docs/internals/native-fibers.md):
+     * unmarshalled fibers bypass fiber_alloc, so arm their switch context
+     * here and initialize the cross-switch value slots explicitly
+     * (gcalloc zeroes are not valid nils). */
+    fiber->in_value = janet_wrap_nil();
+    fiber->out_payload = janet_wrap_nil();
+    fiber->out_signal = JANET_SIGNAL_OK;
+    fiber->resume_ctx = NULL;
+    fiber->suspend_mode = 0;
+    fiber->resume_fiber = NULL;
+    fiber->saved_signal_buf = NULL;
+    fiber->saved_return_reg = NULL;
+    fiber->saved_coerce_error = 0;
+    fiber->saved_stackn = 0;
+    fiber->saved_gc_suspend = 0;
+    janet_fiber_ensure_native_stack(fiber);
 
     /* Return data */
     *out = fiber;
@@ -1659,12 +1704,34 @@ Janet janet_unmarshal(
     st.lookup_envs = NULL;
     st.lookup = NULL;
     st.reg = reg;
-    Janet out;
-    const uint8_t *nextbytes = unmarshal_one(&st, bytes, &out, flags);
-    if (next) *next = nextbytes;
+    Janet out = janet_wrap_nil();
+    /* Phase 2a root discipline: suspend collections for the whole
+     * operation. The lookup vectors hold raw FuncDef/FuncEnv pointers and
+     * half-built values that cannot be rooted individually; a collection
+     * mid-operation could sweep them (rebuilt objects then dangle). The
+     * lock is released on all paths; a panic inside re-raises after
+     * unlocking (same signal as without). */
+    int ulock = janet_gclock();
+    JanetTryState ustate;
+    JanetSignal usig = janet_try(&ustate);
+    const uint8_t *nextbytes = NULL;
+    if (!usig) {
+        nextbytes = unmarshal_one(&st, bytes, &out, flags);
+    }
+    janet_gcunlock(ulock);
     janet_v_free(st.lookup_defs);
     janet_v_free(st.lookup_envs);
     janet_v_free(st.lookup);
+    if (usig) {
+        janet_restore(&ustate);
+        if (usig == JANET_SIGNAL_ERROR) {
+            janet_panicv(ustate.payload);
+        } else {
+            janet_signalv(usig, ustate.payload);
+        }
+    }
+    janet_restore(&ustate);
+    if (next) *next = nextbytes;
     return out;
 }
 

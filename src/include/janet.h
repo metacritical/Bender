@@ -981,6 +981,29 @@ struct JanetGCObject {
 
 /* A lightweight green thread in janet. Does not correspond to
  * operating system threads. */
+
+/* Native-stack switch context for a fiber (Spinel-style fibers). On
+ * x86_64/aarch64 the context is just the saved stack pointer (the callee-
+ * saved registers live on the coroutine's own stack, see janet_fiber_ctx_swap
+ * in src/core/fiber.c); elsewhere it is a POSIX ucontext_t. One slot is
+ * enough because a fiber is suspended either from inside its VM loop or
+ * from an in-flight nested resume -- the slot always holds the state to
+ * re-enter, and is overwritten on every out-running switch. */
+#if defined(__x86_64__) || defined(__aarch64__)
+typedef struct JanetFiberCtx { void *sp; } JanetFiberCtx;
+#else
+#include <ucontext.h>
+typedef struct JanetFiberCtx { ucontext_t uc; } JanetFiberCtx;
+#endif
+
+/* Prime a context so the first janet_fiber_ctx_swap into it begins
+ * executing entry(); on x86_64/aarch64 it paints the first save frame
+ * on the stack, on other platforms it runs getcontext/makecontext. */
+JANET_API void janet_fiber_ctx_prime(JanetFiberCtx *ctx, void *base,
+                                     size_t size, void (*entry)(void));
+/* Save *from's current position and switch to *to. */
+JANET_API void janet_fiber_ctx_swap(JanetFiberCtx *from, JanetFiberCtx *to);
+
 struct JanetFiber {
     JanetGCObject gc; /* GC Object stuff */
     int32_t flags; /* More flags */
@@ -993,6 +1016,35 @@ struct JanetFiber {
     Janet *data; /* Dynamically resized stack memory */
     JanetFiber *child; /* Keep linked list of fibers for restarting pending fibers */
     Janet last_value; /* Last returned value from a fiber */
+    /* Native-stack state for Spinel-style fibers: this fiber's VM entries run
+     * on native_stack, suspending is a context switch out via ctx, and
+     * resume_ctx is where the switch returns control to. in_value,
+     * out_payload, and out_signal carry values across the switch boundary. */
+    JanetFiberCtx ctx; /* This fiber's context; holds its resume point */
+    JanetFiberCtx *resume_ctx; /* The fiber's resumer, to switch back to */
+    Janet in_value; /* Argument for the next resume */
+    Janet out_payload; /* Value or error from the last resume */
+    JanetSignal out_signal; /* Signal from the last resume */
+    /* Phase 1.1 swap-suspension (see docs/internals/native-fibers.md): when
+     * a fiber suspends with live C frames on its native stack (a yield or
+     * user signal passing through janet_call), the VM dynamic registers
+     * are parked in saved_* and the resumer's registers loaded, so no
+     * Janet state points into the frozen C stack while the resumer runs.
+     * suspend_mode selects the resume path: 0 re-enters run_vm from the
+     * trampoline (fiber returned to it), 1 swaps back into the frozen C
+     * stack. resume_fiber is the resumer (NULL for host code). */
+    int32_t suspend_mode;
+    JanetFiber *resume_fiber;
+    jmp_buf *saved_signal_buf;
+    Janet *saved_return_reg;
+    int32_t saved_coerce_error;
+    int32_t saved_stackn;
+    int32_t saved_gc_suspend;
+    /* Total mapped size (guard pages + usable region). The usable region is
+     * [native_stack, native_stack_base + native_stack_size). */
+    void *native_stack; /* Usable region of the native stack (post-guard) */
+    void *native_stack_base; /* Mapping base (native_stack - guard) */
+    size_t native_stack_size; /* Total mapped bytes */
 #ifdef JANET_EV
     /* These fields are only relevant for fibers that are used as "root fibers" -
      * that is, fibers that are scheduled on the event loop and behave much like threads
@@ -1935,6 +1987,17 @@ JANET_API void janet_collect(void);
 JANET_API void janet_gcroot(Janet root);
 JANET_API int janet_gcunroot(Janet root);
 
+/* Scoped GC roots for generated/C code (Phase 2b-i). Values pushed on the
+ * shadow stack are marked on every collection until popped. Unlike
+ * janet_gcroot (a persistent set with search removal), the shadow stack is
+ * strictly LIFO: snapshot the top with janet_gcshadow_mark, push values
+ * held in C frames, and discard with janet_gcshadow_pop_to when the frame
+ * exits. A panicking exit leaks the pushed slots (bounded, exceptional --
+ * same convention as janet_gcroot). Pushing never triggers a collection. */
+JANET_API void janet_gcshadow_push(Janet x);
+JANET_API size_t janet_gcshadow_mark(void);
+JANET_API void janet_gcshadow_pop_to(size_t mark);
+
 /* Allow disabling garbage collection temporarily or for certain sections of code.
  * this is a very cheap operation. */
 JANET_API int janet_gclock(void);
@@ -2012,6 +2075,15 @@ JANET_API void janet_interpreter_interrupt(JanetVM *vm);
 JANET_API void janet_interpreter_interrupt_handled(JanetVM *vm); /* Call this after running interrupt handler */
 JANET_API JanetSignal janet_continue(JanetFiber *fiber, Janet in, Janet *out);
 JANET_API JanetSignal janet_continue_signal(JanetFiber *fiber, Janet in, Janet *out, JanetSignal sig);
+/* Suspend the current fiber with a yield signal carrying v, freezing any
+ * live C frames on the fiber's native stack (Phase 1.1 swap-suspension).
+ * Returns the resume value. A signal smuggled in on resume (e.g. cancel)
+ * raises like a yield point inside run_vm would: ERROR unwinds with a
+ * longjmp, anything else re-suspends outward. Panics if there is no
+ * current fiber. Values held in C locals across the suspension follow the
+ * usual C API contract: root them (janet_gcroot) or keep them in VM
+ * stack slots, as the collector cannot see the frozen C stack. */
+JANET_API Janet janet_fiber_yield(Janet v);
 JANET_API JanetSignal janet_pcall(JanetFunction *fun, int32_t argn, const Janet *argv, Janet *out, JanetFiber **f);
 JANET_API JanetSignal janet_step(JanetFiber *fiber, Janet in, Janet *out);
 JANET_API Janet janet_call(JanetFunction *fun, int32_t argc, const Janet *argv);

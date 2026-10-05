@@ -346,6 +346,11 @@ static JanetTable *handleattr(JanetCompiler *c, const char *kind, int32_t argn, 
         return NULL;
     }
     JanetTable *tab = janet_table(2);
+    /* Phase 2a root discipline: this table is held only in C locals across
+     * dohead_destructure below, which compiles the bound value (arbitrary
+     * code, allocations, collections, and -- since Phase 1.1 -- even
+     * suspensions). Pin it for the rest of the compilation. */
+    janetc_pin(c, janet_wrap_table(tab));
     const char *binding_name = janet_type(argv[0]) == JANET_SYMBOL
                                ? ((const char *)janet_unwrap_symbol(argv[0]))
                                : "<multiple bindings>";

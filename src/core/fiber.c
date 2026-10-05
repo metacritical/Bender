@@ -29,6 +29,166 @@
 #include "util.h"
 #endif
 
+#ifndef JANET_WINDOWS
+#include <sys/mman.h>
+#include <unistd.h>
+#endif
+
+/* Stack size for a fiber's native C stack. The fibers here back VM frames
+ * (as of Phase 1 the VM values live in fiber->data, so this serves the C
+ * calls made while running a fiber -- cfuns, janet_call children, ev), so
+ * it can be substantially larger than the 256 KB Spinel uses for generated
+ * code with tight -O2 frames. */
+#ifndef JANET_FIBER_STACK_BYTES
+#define JANET_FIBER_STACK_BYTES (2 * 1024 * 1024)
+#endif
+/* Guard size, fully locked behind the usable region. */
+#ifndef JANET_FIBER_GUARD_BYTES
+#define JANET_FIBER_GUARD_BYTES (64 * 1024)
+#endif
+
+static void *fiber_native_stack_alloc(size_t *out_total) {
+#ifdef JANET_WINDOWS
+    size_t total = JANET_FIBER_STACK_BYTES;
+    void *p = malloc(total);
+    if (NULL == p) JANET_OUT_OF_MEMORY;
+    *out_total = total;
+    return p;
+#else
+    long page = sysconf(_SC_PAGESIZE);
+    if (page <= 0) page = 4096;
+    size_t guard = ((size_t)JANET_FIBER_GUARD_BYTES + (size_t)page - 1) /
+                   (size_t)page * (size_t)page;
+    size_t total = guard + JANET_FIBER_STACK_BYTES;
+    void *p = mmap(NULL, total, PROT_NONE, MAP_PRIVATE | MAP_ANON, -1, 0);
+    if (MAP_FAILED == p) JANET_OUT_OF_MEMORY;
+    if (mprotect((char *)p + guard, JANET_FIBER_STACK_BYTES,
+                 PROT_READ | PROT_WRITE)) {
+        munmap(p, total);
+        JANET_OUT_OF_MEMORY;
+    }
+    *out_total = total;
+    return p;
+#endif
+}
+
+void janet_fiber_native_stack_free(JanetFiber *fiber) {
+    if (fiber->native_stack_base) {
+        /* Never unmap the stack we are currently executing on. This happens
+         * at interpreter shutdown: janet_deinit -> janet_clear_memory frees
+         * every fiber, but deinit itself runs inside a fiber (e.g. via
+         * (os/exit) from a script). Leaking that one mapping is safe --
+         * the process is exiting (and for embedders that re-init, it is
+         * one stack mapping per deinit). */
+        if (fiber == janet_vm.fiber) {
+            fiber->native_stack_base = NULL;
+            fiber->native_stack = NULL;
+            fiber->native_stack_size = 0;
+            return;
+        }
+#ifdef JANET_WINDOWS
+        free(fiber->native_stack_base);
+#else
+        /* native_stack_size is the total mapping size (guard + usable). */
+        munmap(fiber->native_stack_base, fiber->native_stack_size);
+#endif
+        fiber->native_stack_base = NULL;
+        fiber->native_stack = NULL;
+        fiber->native_stack_size = 0;
+    }
+}
+
+/* Portable coroutine context switch, adapted from Spinel's sp_fiber_ctx.
+ *
+ * On x86_64/aarch64 we use a tiny cooperative register switch written as
+ * file-scope inline asm; it lands in .text (W^X-safe), saves only the
+ * callee-saved registers + stack pointer, and makes no syscalls. The whole
+ * "machine context" is the saved stack pointer: every other piece of state
+ * lives on the coroutine's own stack. Other architectures fall back to
+ * <ucontext.h> swapcontext. */
+#if defined(__x86_64__) || defined(__aarch64__)
+#if defined(__APPLE__)
+  #define JANET_CTX_SYM "_janet_fiber_ctx_swap"
+#else
+  #define JANET_CTX_SYM "janet_fiber_ctx_swap"
+#endif
+#if defined(__x86_64__)
+__asm__(
+  ".text\n"
+  ".globl " JANET_CTX_SYM "\n"
+  JANET_CTX_SYM ":\n"
+  "  pushq %rbp\n  pushq %rbx\n  pushq %r12\n  pushq %r13\n  pushq %r14\n  pushq %r15\n"
+  "  movq %rsp, (%rdi)\n"
+  "  movq (%rsi), %rsp\n"
+  "  popq %r15\n  popq %r14\n  popq %r13\n  popq %r12\n  popq %rbx\n  popq %rbp\n"
+  "  ret\n"
+);
+#else
+__asm__(
+  ".text\n"
+  ".globl " JANET_CTX_SYM "\n"
+  JANET_CTX_SYM ":\n"
+  "  stp x19, x20, [sp, #-160]!\n"
+  "  stp x21, x22, [sp, #16]\n"
+  "  stp x23, x24, [sp, #32]\n"
+  "  stp x25, x26, [sp, #48]\n"
+  "  stp x27, x28, [sp, #64]\n"
+  "  stp x29, x30, [sp, #80]\n"
+  "  stp d8,  d9,  [sp, #96]\n"
+  "  stp d10, d11, [sp, #112]\n"
+  "  stp d12, d13, [sp, #128]\n"
+  "  stp d14, d15, [sp, #144]\n"
+  "  mov x2, sp\n"
+  "  str x2, [x0]\n"
+  "  ldr x2, [x1]\n"
+  "  mov sp, x2\n"
+  "  ldp d14, d15, [sp, #144]\n"
+  "  ldp d12, d13, [sp, #128]\n"
+  "  ldp d10, d11, [sp, #112]\n"
+  "  ldp d8,  d9,  [sp, #96]\n"
+  "  ldp x29, x30, [sp, #80]\n"
+  "  ldp x27, x28, [sp, #64]\n"
+  "  ldp x25, x26, [sp, #48]\n"
+  "  ldp x23, x24, [sp, #32]\n"
+  "  ldp x21, x22, [sp, #16]\n"
+  "  ldp x19, x20, [sp], #160\n"
+  "  ret\n"
+);
+#endif
+
+void janet_fiber_ctx_prime(JanetFiberCtx *ctx, void *base, size_t size,
+                           void (*entry)(void)) {
+  uintptr_t top = ((uintptr_t)base + size) & ~(uintptr_t)15;
+#if defined(__x86_64__)
+  /* entry's first instruction needs rsp%16 == 8 (as if reached by `call`).
+   * sp_fiber ctx_swap pops 6 callee-saved regs then `ret`s: [entry][rbp]
+   * [rbx][r12][r13][r14][r15<-sp]. */
+  void **s = (void **)(top - 8);
+  *--s = (void *)entry;
+  for (int i = 0; i < 6; i++) *--s = 0;
+  ctx->sp = s;
+#else
+  void **s = (void **)(top - 160);
+  for (int i = 0; i < 20; i++) s[i] = 0;
+  s[11] = (void *)entry;
+  ctx->sp = s;
+#endif
+}
+#else
+void janet_fiber_ctx_swap(JanetFiberCtx *from, JanetFiberCtx *to) {
+  swapcontext(&from->uc, &to->uc);
+}
+
+void janet_fiber_ctx_prime(JanetFiberCtx *ctx, void *base, size_t size,
+                           void (*entry)(void)) {
+  getcontext(&ctx->uc);
+  ctx->uc.uc_stack.ss_sp = base;
+  ctx->uc.uc_stack.ss_size = size;
+  ctx->uc.uc_link = NULL;
+  makecontext(&ctx->uc, entry, 0);
+}
+#endif
+
 static void fiber_reset(JanetFiber *fiber) {
     fiber->maxstack = JANET_STACK_MAX;
     fiber->frame = 0;
@@ -38,6 +198,20 @@ static void fiber_reset(JanetFiber *fiber) {
     fiber->flags = JANET_FIBER_MASK_YIELD | JANET_FIBER_RESUME_NO_USEVAL | JANET_FIBER_RESUME_NO_SKIP;
     fiber->env = NULL;
     fiber->last_value = janet_wrap_nil();
+    fiber->in_value = janet_wrap_nil();
+    fiber->out_payload = janet_wrap_nil();
+    fiber->out_signal = JANET_SIGNAL_OK;
+    fiber->resume_ctx = NULL;
+    /* Phase 1.1: fresh fibers re-enter run_vm from the trampoline with
+     * clean parked registers (loaded by janet_continue_no_check). */
+    fiber->suspend_mode = 0;
+    fiber->resume_fiber = NULL;
+    fiber->saved_signal_buf = NULL;
+    fiber->saved_return_reg = NULL;
+    fiber->saved_coerce_error = 0;
+    fiber->saved_stackn = 0;
+    fiber->saved_gc_suspend = 0;
+    janet_fiber_ensure_native_stack(fiber);
 #ifdef JANET_EV
     fiber->sched_id = 0;
     fiber->ev_callback = NULL;
@@ -61,12 +235,51 @@ static JanetFiber *fiber_alloc(int32_t capacity) {
     }
     janet_vm.next_collection += sizeof(Janet) * capacity;
     fiber->data = data;
+    /* This fiber's private native C stack (with a guard region) */
+    fiber->native_stack_base = NULL;
+    fiber->native_stack = NULL;
+    fiber->native_stack_size = 0;
+    janet_fiber_ensure_native_stack(fiber);
     return fiber;
 }
 
-/* Create a new fiber with argn values on the stack by reusing a fiber. */
+/* Allocate the fiber's native stack on first use and (re)prime its switch
+ * context to enter the VM trampoline. See fiber.h for when re-priming
+ * is valid. */
+void janet_fiber_ensure_native_stack(JanetFiber *fiber) {
+    if (!fiber->native_stack_base) {
+        fiber->native_stack_base = fiber_native_stack_alloc(&fiber->native_stack_size);
+#ifndef JANET_WINDOWS
+        fiber->native_stack = (char *)fiber->native_stack_base +
+            fiber->native_stack_size - JANET_FIBER_STACK_BYTES;
+#else
+        fiber->native_stack = fiber->native_stack_base;
+#endif
+    }
+    if (fiber->native_stack) {
+        size_t usable = fiber->native_stack_size -
+            (size_t)((char *)fiber->native_stack -
+                     (char *)fiber->native_stack_base);
+        janet_fiber_ctx_prime(&fiber->ctx, fiber->native_stack, usable,
+                              janet_fiber_trampoline);
+    }
+}
 JanetFiber *janet_fiber_reset(JanetFiber *fiber, JanetFunction *callee, int32_t argc, const Janet *argv) {
     int32_t newstacktop;
+    /* Phase 2a invariant: never start a fiber on a half-built function.
+     * Caught real use-after-sweep construction bugs under GC stress (the
+     * def must be fully populated before any fiber references it). */
+    if (NULL == callee || NULL == callee->def || NULL == callee->def->bytecode) {
+        JanetFiber *cur = janet_vm.fiber;
+        fprintf(stderr, "janet_fiber_reset: fiber started on half-built function (callee=%p def=%p bytecode=%p)\n",
+                (void *) callee,
+                (void *) (callee ? (void *) callee->def : NULL),
+                (void *) (callee && callee->def ? (void *) callee->def->bytecode : NULL));
+        if (cur) {
+            janet_stacktrace(cur, janet_wrap_nil());
+        }
+        abort();
+    }
     fiber_reset(fiber);
     if (argc) {
         newstacktop = fiber->stacktop + argc;

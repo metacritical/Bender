@@ -84,6 +84,23 @@ void janet_fiber_popframe(JanetFiber *fiber);
 void janet_env_maybe_detach(JanetFuncEnv *env);
 int janet_env_valid(JanetFuncEnv *env);
 
+/* The interpreter-side trampoline (defined in vm.c, referenced by the
+ * native-stack priming in fiber.c). Each VM resumption of a fiber runs this
+ * loop on that fiber's own native stack: establish a signal-handling
+ * jmp_buf in fiber-local scope, run_vm once, deliver the outcome, and
+ * context-switch back to the resumer. */
+void janet_fiber_trampoline(void);
+
+/* Ensure a fiber has a native stack and a primed switch context. Used both
+ * for fresh fibers and for fibers reconstituted by unmarshal, which bypass
+ * fiber_alloc. Re-priming discards any parked position, so it must only be
+ * used when the fiber will (re)start execution from its committed pc. */
+void janet_fiber_ensure_native_stack(JanetFiber *fiber);
+
+/* Free a fiber's native stack mapping (native_stack_base/size). Called
+ * from the GC sweep in gc.c. */
+void janet_fiber_native_stack_free(JanetFiber *fiber);
+
 #ifdef JANET_EV
 void janet_fiber_did_resume(JanetFiber *fiber);
 #endif

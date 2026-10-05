@@ -67,4 +67,24 @@ enum JanetMemoryType {
  * and then call when janet_enablegc when it is initialized and reachable by the gc (on the JANET stack) */
 void *janet_gcalloc(enum JanetMemoryType type, size_t size);
 
+/* Minor (nursery) collection: mark from the full root set with old-clean
+ * tables/arrays pruned via the gate, then sweep young dead blocks only.
+ * Triggered by nursery pressure (see maybe_collect); explicit collects
+ * stay major. */
+void janet_collect_minor(void);
+
+/* Generational write barrier (Phase 2b-iii policy): record an old
+ * container that newly references a heap value, so minor collections
+ * (which skip clean old tables/arrays) still find the edge. Immediates
+ * and young containers need nothing; large/stack objects are always
+ * traversed. Call after every store of a Janet value into a heap table,
+ * array, or equivalent long-lived container. */
+void janet_gc_barrier(void *obj, Janet value);
+
+/* Release a GC object back to its backing store (Phase 2b-iii): either a
+ * slab slot (returned to the class free list) or plain malloc (freed).
+ * All whole-object frees must go through here; subsidiary buffers still
+ * use janet_free directly. */
+void janet_gc_release(JanetGCObject *mem);
+
 #endif

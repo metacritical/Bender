@@ -29,6 +29,7 @@
 #include "util.h"
 #include "fiber.h"
 #include "vector.h"
+#include "compile.h"
 #endif
 
 /* Helpers for marking the various gc types */
@@ -46,7 +47,15 @@ static void janet_mark_abstract(void *adata);
 
 /* Local state that is only temporary for gc */
 static JANET_THREAD_LOCAL uint32_t depth = JANET_RECURSION_GUARD;
-static JANET_THREAD_LOCAL size_t orig_rootcount;
+
+/* Generational gate (Phase 2b-iii policy), defined with the slab code
+ * below; used by the table/array markers. */
+static int janet_gc_minor_skip(JanetGCObject *mem);
+/* Object old for generational purposes (slab page age, or malloc-large);
+ * defined with the slab code below. */
+static int janet_slab_obj_old(void *ptr);
+/* Reset generational slab state after a full sweep; defined below. */
+static void janet_slab_major_reset(void);
 
 /* Hint to the GC that we may need to collect */
 void janet_gcpressure(size_t s) {
@@ -163,6 +172,8 @@ static void janet_mark_kvs(const JanetKV *kvs, int32_t n) {
 static void janet_mark_array(JanetArray *array) {
     if (janet_gc_reachable(array))
         return;
+    if (janet_gc_minor_skip((JanetGCObject *) array))
+        return;
     janet_gc_mark(array);
     if (janet_gc_type((JanetGCObject *) array) == JANET_MEMORY_ARRAY) {
         janet_mark_many(array->data, array->count);
@@ -172,6 +183,8 @@ static void janet_mark_array(JanetArray *array) {
 static void janet_mark_table(JanetTable *table) {
 recur: /* Manual tail recursion */
     if (janet_gc_reachable(table))
+        return;
+    if (janet_gc_minor_skip((JanetGCObject *) table))
         return;
     janet_gc_mark(table);
     enum JanetMemoryType memtype = janet_gc_type(table);
@@ -261,6 +274,45 @@ static void janet_mark_function(JanetFunction *func) {
     }
 }
 
+/* Phase 2a root discipline: mark everything a live compilation holds in
+ * C structs invisible to the collector (scope consts/syms/defs, lint and
+ * pin arrays, env, in-progress result). Nested compiles (macros calling
+ * compile) chain via compiler_next, most recent first. Scopes form a
+ * parent chain from the current (innermost) scope; popped scopes merge
+ * their symbols upward and free their vectors, so walking parents covers
+ * everything live. Raw symbol bytes are marked by wrapping (symbols are
+ * the only string-likes stashed raw); integer/buffer state needs nothing.
+ * Runs inside janet_collect, where the compiler stack only ever holds
+ * live C-stack state. */
+static void janet_mark_compiler(JanetCompiler *c) {
+    if (c->env) janet_mark_table(c->env);
+    if (c->lints) janet_mark_array(c->lints);
+    if (c->result.funcdef) janet_mark_funcdef(c->result.funcdef);
+    for (JanetScope *s = c->scope; s; s = s->parent) {
+        if (s->consts) {
+            janet_mark_many(s->consts, janet_v_count(s->consts));
+        }
+        if (s->syms) {
+            int32_t n = janet_v_count(s->syms);
+            for (int32_t i = 0; i < n; i++) {
+                janet_mark(s->syms[i].slot.constant);
+                if (s->syms[i].sym) {
+                    janet_mark(janet_wrap_string(s->syms[i].sym));
+                }
+                if (s->syms[i].sym2 && s->syms[i].sym2 != s->syms[i].sym) {
+                    janet_mark(janet_wrap_string(s->syms[i].sym2));
+                }
+            }
+        }
+        if (s->defs) {
+            int32_t n = janet_v_count(s->defs);
+            for (int32_t i = 0; i < n; i++) {
+                if (s->defs[i]) janet_mark_funcdef(s->defs[i]);
+            }
+        }
+    }
+}
+
 static void janet_mark_fiber(JanetFiber *fiber) {
     int32_t i, j;
     JanetStackFrame *frame;
@@ -270,6 +322,17 @@ recur:
     janet_gc_mark(fiber);
 
     janet_mark(fiber->last_value);
+    /* Values in flight across a context switch. The resume argument and
+     * the last result live in the fiber struct (not in fiber->data), so
+     * they must be marked explicitly or a collection between suspend and
+     * resume could free them. */
+    janet_mark(fiber->in_value);
+    janet_mark(fiber->out_payload);
+    /* Phase 1.1: the resumer link keeps a suspended fiber's resume party
+     * alive across collections while swapped out. */
+    if (fiber->resume_fiber) {
+        janet_mark(janet_wrap_fiber(fiber->resume_fiber));
+    }
 
     /* Mark values on the argument stack */
     janet_mark_many(fiber->data + fiber->stackstart,
@@ -341,6 +404,7 @@ static void janet_deinit_block(JanetGCObject *mem) {
             }
 #endif
             janet_free(f->data);
+            janet_fiber_native_stack_free(f);
         }
         break;
         case JANET_MEMORY_BUFFER:
@@ -403,12 +467,57 @@ static int janet_check_liveref(Janet x) {
 
 /* Iterate over all allocated memory, and free memory that is not
  * marked as reachable. Flip the gc color flag for next sweep. */
-void janet_sweep() {
+
+/* Sweep one strong-heap list (Phase 2b-ii shared; 2b-iii generational).
+ * In a major collection, every unmarked block is freed. In a minor
+ * collection, only young blocks are freed; old blocks are left alone
+ * (marked ones get their bit cleared like usual, unmarked old blocks
+ * simply wait for the next major). Young/old comes from the slab page
+ * (malloc-backed large objects always count as old). When sweeping the
+ * string heap, every block must be a string or symbol (keywords intern
+ * to symbols); otherwise it must be neither -- misrouting is a bug. */
+static void janet_sweep_list(JanetGCObject **head, int heap_kind, int is_minor) {
     JanetGCObject *previous = NULL;
+    JanetGCObject *current = *head;
+    while (NULL != current) {
+        JanetGCObject *next = current->data.next;
+        if (heap_kind == 0) {
+            enum JanetMemoryType type = janet_gc_type(current);
+            janet_assert(type != JANET_MEMORY_STRING && type != JANET_MEMORY_SYMBOL,
+                         "string block on main heap");
+        } else if (heap_kind == 1) {
+            enum JanetMemoryType type = janet_gc_type(current);
+            janet_assert(type == JANET_MEMORY_STRING || type == JANET_MEMORY_SYMBOL,
+                         "non-string block on string heap");
+        }
+        /* heap_kind 2 (weak heap) carries no assert; weak types live there. */
+        if (current->flags & (JANET_MEM_REACHABLE | JANET_MEM_DISABLED)) {
+            previous = current;
+            current->flags &= ~JANET_MEM_REACHABLE;
+        } else if (!is_minor || !janet_slab_obj_old(current)) {
+            janet_vm.block_count--;
+            janet_deinit_block(current);
+            if (NULL != previous) {
+                previous->data.next = next;
+            } else {
+                *head = next;
+            }
+            janet_gc_release(current);
+        } else {
+            previous = current;
+        }
+        current = next;
+    }
+}
+
+void janet_sweep_weak_drop(void) {
+    /* Weak-ref dropping runs at majors only. In minors the mark is
+     * partial (old heap unscanned), so liveness verdicts would be wrong;
+     * weak tables are instead traversed conservatively via the normal
+     * mark exemption for weak types, and clearing waits for a major. */
+    if (janet_vm.gc_minor_phase) return;
     JanetGCObject *current = janet_vm.weak_blocks;
     JanetGCObject *next;
-
-    /* Sweep weak heap to drop weak refs */
     while (NULL != current) {
         next = current->data.next;
         if (current->flags & (JANET_MEM_REACHABLE | JANET_MEM_DISABLED)) {
@@ -444,48 +553,25 @@ void janet_sweep() {
         }
         current = next;
     }
+}
 
-    /* Sweep weak heap to free blocks */
-    previous = NULL;
-    current = janet_vm.weak_blocks;
-    while (NULL != current) {
-        next = current->data.next;
-        if (current->flags & (JANET_MEM_REACHABLE | JANET_MEM_DISABLED)) {
-            previous = current;
-            current->flags &= ~JANET_MEM_REACHABLE;
-        } else {
-            janet_vm.block_count--;
-            janet_deinit_block(current);
-            if (NULL != previous) {
-                previous->data.next = next;
-            } else {
-                janet_vm.weak_blocks = next;
-            }
-            janet_free(current);
-        }
-        current = next;
-    }
+/* Sweep all three heaps' blocks (minor-aware). In a minor collection
+ * only young dead blocks are freed; old blocks wait for a major.
+ * Weak-ref dropping is separate (majors only); the ev threaded section
+ * below also runs at majors only. */
+static void janet_sweep_heaps(void) {
+    /* Sweep weak heap to free blocks (minor-aware via helper). */
+    janet_sweep_list((JanetGCObject **) &janet_vm.weak_blocks, 2, janet_vm.gc_minor_phase);
 
-    /* Sweep main heap to free blocks */
-    previous = NULL;
-    current = janet_vm.blocks;
-    while (NULL != current) {
-        next = current->data.next;
-        if (current->flags & (JANET_MEM_REACHABLE | JANET_MEM_DISABLED)) {
-            previous = current;
-            current->flags &= ~JANET_MEM_REACHABLE;
-        } else {
-            janet_vm.block_count--;
-            janet_deinit_block(current);
-            if (NULL != previous) {
-                previous->data.next = next;
-            } else {
-                janet_vm.blocks = next;
-            }
-            janet_free(current);
-        }
-        current = next;
-    }
+    /* Sweep both strong heaps with identical semantics (Phase 2b-ii):
+     * the main heap, then the immutable-string heap. */
+    janet_sweep_list((JanetGCObject **) &janet_vm.blocks, 0, janet_vm.gc_minor_phase);
+    janet_sweep_list((JanetGCObject **) &janet_vm.string_blocks, 1, janet_vm.gc_minor_phase);
+}
+
+void janet_sweep(void) {
+    janet_sweep_weak_drop();
+    janet_sweep_heaps();
 
 #ifdef JANET_EV
     /* Sweep threaded abstract types for references to decrement */
@@ -520,15 +606,372 @@ void janet_sweep() {
         }
     }
 #endif
+    /* A full sweep leaves every survivor old: reset all page ages and
+     * merge the old freelists back so old slots become reusable young
+     * slots (conservative restart for the next minor cycle). */
+    janet_slab_major_reset();
 }
 
 /* Allocate some memory that is tracked for garbage collection */
+/* Phase 2b-iii slab allocator, generational (Spinel storage model).
+ * Same lists, same deinit -- only the backing store changes from
+ * one-malloc-per-object to carved pages with free lists. Objects larger
+ * than the biggest class still use malloc (large path, always treated as
+ * old). Freelist links overlay JanetGCObject.data.next: free slots are
+ * not live objects. Pages are 16 KiB aligned so any slot address maps to
+ * its page header with a mask; a live-page directory (binary searched)
+ * plus a magic + bounds check keeps the mapping exact (never confused by
+ * malloc'd blocks, never reads unmapped memory). All growth uses raw
+ * allocation so slab paths never trigger the collections they serve.
+ * Per-VM state (see JanetVM.slab_state).
+ *
+ * Generations are page-granular: a page's age counts survived minors
+ * (0-1 young, 2+ old). This is sound with pointer-identity reasoning --
+ * objects never move, and young allocations only ever land on young
+ * pages, so a young page's occupants are all young (an old object on a
+ * young page would have had to move there). The reverse is not true
+ * (old pages freely hold young garbage until swept), which is why sweep
+ * distinguishes per object, not per page. See janet_gc_barrier and
+ * janet_collect_minor. */
+
+#define JANET_SLAB_PAGE_SIZE 16384
+#define JANET_SLAB_PAGE_MASK (~(uintptr_t)0x3FFF)
+#define JANET_SLAB_MAGIC 0x4A534C41u
+#define JANET_SLAB_NCLASSES 8
+#define JANET_SLAB_OLD_AGE 2
+
+/* Bytes of young allocation between minor collections. */
+#define JANET_MINOR_THRESHOLD (256 * 1024)
+
+static const size_t janet_slab_classes[JANET_SLAB_NCLASSES] =
+    {32, 64, 96, 128, 192, 256, 384, 512};
+
+typedef struct JanetSlabPage {
+    struct JanetSlabPage *next;
+    uint32_t magic;
+    int32_t class_index;
+    int32_t age;
+    int32_t dirty;
+    int32_t bump;
+} JanetSlabPage;
+
+#define JANET_SLAB_USABLE (JANET_SLAB_PAGE_SIZE - sizeof(JanetSlabPage))
+#define JANET_SLAB_SLOTS(p) ((void *)((char *)(p) + sizeof(JanetSlabPage)))
+
+typedef struct {
+    JanetSlabPage *pages[JANET_SLAB_NCLASSES];
+    JanetSlabPage *cur[JANET_SLAB_NCLASSES];
+    JanetGCObject *young_free[JANET_SLAB_NCLASSES];
+    JanetGCObject *old_free[JANET_SLAB_NCLASSES];
+    /* Sorted directory of live page bases for exact membership: the
+     * mask+magic probe below must never read unmapped memory, and not
+     * every candidate pointer lives on a slab page (malloc large path,
+     * foreign memory). Pages are added rarely (one per 16 KiB of same
+     * class) and freed en-masse, so a sorted array with binary search
+     * is cheap and exact. Raw allocation (never triggers collections). */
+    JanetSlabPage **dir;
+    size_t dir_count;
+    size_t dir_cap;
+} JanetSlabState;
+
+static JanetSlabState *janet_slab_state(void) {
+    JanetSlabState *ss = (JanetSlabState *) janet_vm.slab_state;
+    if (NULL == ss) {
+        ss = janet_malloc(sizeof(JanetSlabState));
+        if (NULL == ss) {
+            JANET_OUT_OF_MEMORY;
+        }
+        memset(ss, 0, sizeof(JanetSlabState));
+        janet_vm.slab_state = ss;
+    }
+    return ss;
+}
+
+/* Size class for a total object size, or -1 for the malloc large path. */
+static int janet_slab_class_for(size_t size) {
+    for (int i = 0; i < JANET_SLAB_NCLASSES; i++) {
+        if (size <= janet_slab_classes[i]) return i;
+    }
+    return -1;
+}
+
+static void *janet_slab_page_alloc(void) {
+#ifdef JANET_WINDOWS
+    return _aligned_malloc(JANET_SLAB_PAGE_SIZE, JANET_SLAB_PAGE_SIZE);
+#else
+    void *p = NULL;
+    if (posix_memalign(&p, JANET_SLAB_PAGE_SIZE, JANET_SLAB_PAGE_SIZE) != 0) {
+        return NULL;
+    }
+    return p;
+#endif
+}
+
+static void janet_slab_page_free(void *page) {
+#ifdef JANET_WINDOWS
+    _aligned_free(page);
+#else
+    janet_free(page);
+#endif
+}
+
+/* Page owning ptr, or NULL (malloc-backed large object, a stack object,
+ * or foreign memory -- all treated as old). Membership is established by
+ * binary search over the live-page directory first, so the header probe
+ * below only ever reads our own mapped pages; the magic + bounds checks
+ * then keep the mapping exact. */
+static JanetSlabPage *janet_slab_page_for(void *ptr) {
+    JanetSlabState *ss = (JanetSlabState *) janet_vm.slab_state;
+    if (NULL == ss || 0 == ss->dir_count) return NULL;
+    uintptr_t base = (uintptr_t) ptr & JANET_SLAB_PAGE_MASK;
+    size_t lo = 0, hi = ss->dir_count;
+    while (lo < hi) {
+        size_t mid = lo + (hi - lo) / 2;
+        uintptr_t midbase = (uintptr_t) ss->dir[mid];
+        if (midbase < base) {
+            lo = mid + 1;
+        } else if (midbase > base) {
+            hi = mid;
+        } else {
+            JanetSlabPage *page = (JanetSlabPage *) base;
+            if (page->magic != JANET_SLAB_MAGIC) return NULL;
+            if (page->class_index < 0 || page->class_index >= JANET_SLAB_NCLASSES) return NULL;
+            if (page->bump < 0 || (size_t) page->bump > (size_t) JANET_SLAB_USABLE) return NULL;
+            if ((char *) ptr < (char *) JANET_SLAB_SLOTS(page)) return NULL;
+            if ((char *) ptr >= (char *) base + JANET_SLAB_PAGE_SIZE) return NULL;
+            return page;
+        }
+    }
+    return NULL;
+}
+
+/* Insert a page into the sorted directory. Returns 0 on OOM (caller
+ * must drop the page). Raw allocation only. */
+static int janet_slab_dir_insert(JanetSlabPage *page) {
+    JanetSlabState *ss = (JanetSlabState *) janet_vm.slab_state;
+    size_t lo = 0, hi = ss->dir_count;
+    uintptr_t base = (uintptr_t) page;
+    while (lo < hi) {
+        size_t mid = lo + (hi - lo) / 2;
+        if ((uintptr_t) ss->dir[mid] < base) {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    if (ss->dir_count == ss->dir_cap) {
+        size_t ncap = ss->dir_cap ? ss->dir_cap * 2 : 16;
+        JanetSlabPage **ndir = janet_malloc(ncap * sizeof(JanetSlabPage *));
+        if (NULL == ndir) return 0;
+        memcpy(ndir, ss->dir, lo * sizeof(JanetSlabPage *));
+        memcpy(ndir + lo + 1, ss->dir + lo, (ss->dir_count - lo) * sizeof(JanetSlabPage *));
+        janet_free(ss->dir);
+        ss->dir = ndir;
+        ss->dir_cap = ncap;
+    } else {
+        memmove(ss->dir + lo + 1, ss->dir + lo, (ss->dir_count - lo) * sizeof(JanetSlabPage *));
+    }
+    ss->dir[lo] = page;
+    ss->dir_count++;
+    return 1;
+}
+
+/* Object age for GC purposes: young pages hold only young objects (see
+ * the header comment); anything else counts as old. */
+static int janet_slab_obj_old(void *ptr) {
+    JanetSlabPage *page = janet_slab_page_for(ptr);
+    if (NULL == page) return 1;
+    return page->age >= JANET_SLAB_OLD_AGE;
+}
+
+static void *janet_slab_alloc(int class_index) {
+    JanetSlabState *ss = janet_slab_state();
+    size_t slot = janet_slab_classes[class_index];
+    /* Pop a young slot, skipping (to the old list) any slot whose page
+     * has aged out since the slot was freed. Self-correcting: every pop
+     * either uses or re-files the head, so it always terminates. */
+    for (;;) {
+        JanetGCObject *slot_obj = ss->young_free[class_index];
+        if (NULL == slot_obj) break;
+        ss->young_free[class_index] = slot_obj->data.next;
+        JanetSlabPage *page = janet_slab_page_for(slot_obj);
+        if (NULL != page && page->age < JANET_SLAB_OLD_AGE) {
+            /* TEMPORARY 2b-iii bisect: zero recycled slots to test for
+             * uninitialized-field reads. */
+            memset(slot_obj, 0, slot);
+            return slot_obj;
+        }
+        slot_obj->data.next = (JanetGCObject *) ss->old_free[class_index];
+        ss->old_free[class_index] = slot_obj;
+    }
+    JanetSlabPage *page = ss->cur[class_index];
+    if (NULL == page || page->age >= JANET_SLAB_OLD_AGE ||
+            (size_t) page->bump + slot > (size_t) JANET_SLAB_USABLE) {
+        page = janet_slab_page_alloc();
+        if (NULL == page) {
+            return NULL;
+        }
+        page->next = ss->pages[class_index];
+        page->magic = JANET_SLAB_MAGIC;
+        page->class_index = (int32_t) class_index;
+        page->age = 0;
+        page->dirty = 0;
+        page->bump = 0;
+        if (!janet_slab_dir_insert(page)) {
+            janet_slab_page_free(page);
+            return NULL;
+        }
+        ss->pages[class_index] = page;
+        ss->cur[class_index] = page;
+    }
+    void *out = (char *) JANET_SLAB_SLOTS(page) + page->bump;
+    page->bump += (int32_t) slot;
+    janet_vm.gc_young_bytes += slot;
+    return out;
+}
+
+/* Release a whole GC object: slab slot back to the free list matching
+ * its page's current age, or plain free for large-path objects. All
+ * whole-object frees route here. */
+void janet_gc_release(JanetGCObject *mem) {
+    JanetSlabState *ss = (JanetSlabState *) janet_vm.slab_state;
+    if (NULL != ss) {
+        JanetSlabPage *page = janet_slab_page_for(mem);
+        if (NULL != page) {
+            int cls = page->class_index;
+            if (page->age < JANET_SLAB_OLD_AGE) {
+                mem->data.next = (JanetGCObject *) ss->young_free[cls];
+                ss->young_free[cls] = mem;
+            } else {
+                mem->data.next = (JanetGCObject *) ss->old_free[cls];
+                ss->old_free[cls] = mem;
+            }
+            return;
+        }
+    }
+    janet_free(mem);
+}
+
+/* Free all slab pages (used at clear; freelists die with them). */
+static void janet_slab_free_pages(void) {
+    JanetSlabState *ss = (JanetSlabState *) janet_vm.slab_state;
+    if (NULL == ss) return;
+    for (int i = 0; i < JANET_SLAB_NCLASSES; i++) {
+        JanetSlabPage *page = ss->pages[i];
+        while (NULL != page) {
+            JanetSlabPage *next = page->next;
+            janet_slab_page_free(page);
+            page = next;
+        }
+        ss->pages[i] = NULL;
+        ss->cur[i] = NULL;
+        ss->young_free[i] = NULL;
+        ss->old_free[i] = NULL;
+    }
+    janet_free(ss->dir);
+    ss->dir = NULL;
+    ss->dir_count = 0;
+    ss->dir_cap = 0;
+    janet_vm.gc_young_bytes = 0;
+}
+
+/* Merge old freelists back into young ones (used at major collections,
+ * when all ages reset below). O(chains), no searching. */
+static void janet_slab_merge_free(void) {
+    JanetSlabState *ss = (JanetSlabState *) janet_vm.slab_state;
+    if (NULL == ss) return;
+    for (int i = 0; i < JANET_SLAB_NCLASSES; i++) {
+        if (NULL == ss->old_free[i]) continue;
+        JanetGCObject *tail = ss->old_free[i];
+        while (NULL != tail->data.next) {
+            tail = tail->data.next;
+        }
+        tail->data.next = (JanetGCObject *) ss->young_free[i];
+        ss->young_free[i] = ss->old_free[i];
+        ss->old_free[i] = NULL;
+    }
+}
+
+/* Reset generational state after a full sweep: all pages back to young
+ * (conservative restart -- the next minors re-segregate), dirty flags
+ * clear, freelists merged, nursery counter restarted. O(pages). */
+static void janet_slab_major_reset(void) {
+    JanetSlabState *ss = (JanetSlabState *) janet_vm.slab_state;
+    if (NULL == ss) return;
+    for (int i = 0; i < JANET_SLAB_NCLASSES; i++) {
+        for (JanetSlabPage *p = ss->pages[i]; NULL != p; p = p->next) {
+            p->age = 0;
+            p->dirty = 0;
+        }
+    }
+    janet_slab_merge_free();
+    janet_vm.gc_young_bytes = 0;
+}
+
+/* Minor-mode reachability gate (Phase 2b-iii policy): during a minor
+ * collection, skip old, clean, precisely-tracked containers (their young
+ * references are covered by the barrier). Everything else is traversed
+ * exactly like a major: young objects, large malloc-backed objects
+ * (always traversed, few), disabled objects, fibers, abstracts, weak
+ * tables (cleared only at majors), and all non-table/array types.
+ * Skipping is always safe; traversing is always safe; only skipping an
+ * object with unbarriered young edges would be wrong, and every such
+ * edge goes through janet_gc_barrier. */
+static int janet_gc_minor_skip(JanetGCObject *mem) {
+    if (!janet_vm.gc_minor_phase) return 0;
+    /* While any compilation is active, traverse everything: compilation
+     * interleaves symbol/env table traffic (macroexpansion resolves and
+     * installs bindings, lint tables churn) with macro-fiber collections
+     * in ways that defeat the clean/generation accounting the gate
+     * relies on. Compiles are infrequent next to runtime stores, and
+     * minors still skip all old sweeping, so this costs little. */
+    if (janet_vm.compiler_stack) return 0;
+    int32_t flags = mem->flags;
+    if (flags & JANET_MEM_DISABLED) return 0;
+    int32_t type = flags & JANET_MEM_TYPEBITS;
+#if 0 /* TEMPORARY 2b-iii bisect: tables always traverse */
+    if (type != JANET_MEMORY_TABLE && type != JANET_MEMORY_ARRAY) return 0;
+#else
+    if (type != JANET_MEMORY_ARRAY) return 0;
+#endif
+    JanetSlabPage *page = janet_slab_page_for(mem);
+    if (NULL == page) return 0;
+    if (page->age < JANET_SLAB_OLD_AGE) return 0;
+    return !page->dirty;
+}
+
+/* Generational write barrier (Phase 2b-iii policy): record an old
+ * container that newly references a heap value, so minor collections
+ * (which skip clean old tables/arrays) still find the edge. Immediates
+ * (nil/boolean/number/cfunction/pointer) never create edges; young and
+ * large containers are always traversed, so only old slab pages are
+ * marked dirty. Call after every store of a Janet value into a heap
+ * table, array, or equivalent long-lived container. */
+void janet_gc_barrier(void *obj, Janet value) {
+    JanetType t = janet_type(value);
+    if (t == JANET_NIL || t == JANET_BOOLEAN || t == JANET_NUMBER ||
+            t == JANET_CFUNCTION || t == JANET_POINTER) {
+        return;
+    }
+    JanetSlabPage *page = janet_slab_page_for(obj);
+    if (NULL == page) return;
+    if (page->age < JANET_SLAB_OLD_AGE) return;
+    page->dirty = 1;
+}
+
 void *janet_gcalloc(enum JanetMemoryType type, size_t size) {
     JanetGCObject *mem;
 
     /* Make sure everything is inited */
     janet_assert(NULL != janet_vm.cache, "please initialize janet before use");
-    mem = janet_malloc(size);
+    /* Phase 2b-iii: slab pages for size-classed objects, malloc large
+     * path otherwise. Either way the object joins a heap list below. */
+    int slab_class = janet_slab_class_for(size);
+    if (slab_class >= 0) {
+        mem = janet_slab_alloc(slab_class);
+    } else {
+        mem = janet_malloc(size);
+    }
 
     /* Check for bad malloc */
     if (NULL == mem) {
@@ -538,9 +981,14 @@ void *janet_gcalloc(enum JanetMemoryType type, size_t size) {
     /* Configure block */
     mem->flags = type;
 
-    /* Prepend block to heap list */
+    /* Prepend block to heap list. Immutable strings (strings, symbols,
+     * keywords -- keywords intern to symbols) live on their own heap so
+     * collection policy can treat them independently (Phase 2b-ii). */
     janet_vm.next_collection += size;
-    if (type < JANET_MEMORY_TABLE_WEAKK) {
+    if (type == JANET_MEMORY_STRING || type == JANET_MEMORY_SYMBOL) {
+        mem->data.next = janet_vm.string_blocks;
+        janet_vm.string_blocks = mem;
+    } else if (type < JANET_MEMORY_TABLE_WEAKK) {
         /* normal heap */
         mem->data.next = janet_vm.blocks;
         janet_vm.blocks = mem;
@@ -574,9 +1022,202 @@ static JanetScratch *janet_mem2scratch(void *mem) {
     return s - 1;
 }
 
+/* Mark the full root set (Phase 2a explicit roots + 2b-i shadow roots).
+ * Shared by major and minor collections; in minors the table/array gate
+ * (janet_gc_minor_skip) prunes old-clean subtrees during traversal. */
+static void janet_mark_roots(void) {
+    uint32_t i;
+    size_t orig_rootcount = janet_vm.root_count;
+#ifdef JANET_EV
+    janet_ev_mark();
+#endif
+    if (janet_vm.top_dyns) {
+        janet_mark(janet_wrap_table(janet_vm.top_dyns));
+    }
+    if (janet_vm.root_fiber != NULL) { /* Can be NULL if janet_collect called outside of interpreter loop */
+        janet_mark_fiber(janet_vm.root_fiber);
+    }
+    /* Mark values held in C structs by live compilations (Phase 2a). */
+    for (JanetCompiler *comp = janet_vm.compiler_stack; comp; comp = comp->compiler_next) {
+        janet_mark_compiler(comp);
+    }
+    for (i = 0; i < orig_rootcount; i++)
+        janet_mark(janet_vm.roots[i]);
+    /* Scoped shadow roots (Phase 2b-i): everything pushed is live. */
+    for (i = 0; i < janet_vm.shadow_count; i++)
+        janet_mark(janet_vm.shadow_roots[i]);
+    while (orig_rootcount < janet_vm.root_count) {
+        Janet x = janet_vm.roots[--janet_vm.root_count];
+        janet_mark(x);
+    }
+}
+
+/* Minor-mode edge verifier (Phase 2b-iii debugging, env-gated via
+ * JANET_GC_VERIFY=1): after minor marking, walk every heap object and
+ * check that each young heap object reachable through a live edge is
+ * marked. Reports the holder type and aborts on the first miss (a missed
+ * barrier edge or a wrongly skipped container). Expensive: development
+ * use only. */
+static int janet_gc_verify_young_marked(const char *holder, Janet v) {
+    JanetType t = janet_type(v);
+    JanetGCObject *m = NULL;
+    switch (t) {
+        default:
+            return 1;
+        case JANET_FIBER:
+            m = (JanetGCObject *) janet_unwrap_fiber(v);
+            break;
+        case JANET_STRING:
+        case JANET_SYMBOL:
+        case JANET_KEYWORD:
+            m = (JanetGCObject *) janet_string_head(janet_unwrap_string(v));
+            break;
+        case JANET_ARRAY:
+            m = (JanetGCObject *) janet_unwrap_array(v);
+            break;
+        case JANET_TABLE:
+            m = (JanetGCObject *) janet_unwrap_table(v);
+            break;
+        case JANET_STRUCT:
+            m = (JanetGCObject *) janet_struct_head(janet_unwrap_struct(v));
+            break;
+        case JANET_TUPLE:
+            m = (JanetGCObject *) janet_tuple_head(janet_unwrap_tuple(v));
+            break;
+        case JANET_BUFFER:
+            m = (JanetGCObject *) janet_unwrap_buffer(v);
+            break;
+        case JANET_FUNCTION:
+            m = (JanetGCObject *) janet_unwrap_function(v);
+            break;
+        case JANET_ABSTRACT:
+            m = (JanetGCObject *) janet_abstract_head(janet_unwrap_abstract(v));
+            break;
+    }
+    if (NULL == m) return 1;
+    JanetSlabPage *page = janet_slab_page_for(m);
+    if (NULL == page || page->age >= JANET_SLAB_OLD_AGE) return 1;
+    if (m->flags & JANET_MEM_REACHABLE) return 1;
+    fprintf(stderr, "gc-verify: young unmarked %p via %s\n", (void *) m, holder);
+    return 0;
+}
+
+static int janet_gc_verify_minor(void) {
+    int bad = 0;
+    /* NOTE: janet_vm.blocks etc. are void* in the struct; cast through. */
+    void *heads[3] = {janet_vm.blocks, janet_vm.string_blocks, janet_vm.weak_blocks};
+    for (int h = 0; h < 3; h++) {
+        for (JanetGCObject *m = (JanetGCObject *) heads[h]; NULL != m; m = m->data.next) {
+            /* Only live holders matter: an unmarked holder's subgraph is
+             * garbage as a whole (its young referents are correctly
+             * unmarked too). Disabled objects are always kept+traversed,
+             * so their edges count as live. */
+            if (!(m->flags & (JANET_MEM_REACHABLE | JANET_MEM_DISABLED))) continue;
+            int32_t type = m->flags & JANET_MEM_TYPEBITS;
+            if (type == JANET_MEMORY_TABLE || type == JANET_MEMORY_TABLE_WEAKK ||
+                    type == JANET_MEMORY_TABLE_WEAKV || type == JANET_MEMORY_TABLE_WEAKKV) {
+                JanetTable *t = (JanetTable *) m;
+                if (t->proto) {
+                    if (!janet_gc_verify_young_marked("table-proto", janet_wrap_table(t->proto))) bad = 1;
+                }
+                JanetKV *end = t->data + t->capacity;
+                for (JanetKV *kv = t->data; kv < end; kv++) {
+                    if (!janet_gc_verify_young_marked("table-key", kv->key)) bad = 1;
+                    if (!janet_gc_verify_young_marked("table-value", kv->value)) bad = 1;
+                }
+            } else if (type == JANET_MEMORY_ARRAY || type == JANET_MEMORY_ARRAY_WEAK) {
+                JanetArray *a = (JanetArray *) m;
+                for (int32_t i = 0; i < a->count; i++) {
+                    if (!janet_gc_verify_young_marked("array-elem", a->data[i])) bad = 1;
+                }
+            } else if (type == JANET_MEMORY_TUPLE) {
+                JanetTupleHead *th = (JanetTupleHead *) m;
+                for (int32_t i = 0; i < th->length; i++) {
+                    if (!janet_gc_verify_young_marked("tuple-elem", th->data[i])) bad = 1;
+                }
+            } else if (type == JANET_MEMORY_STRUCT) {
+                JanetStructHead *sh = (JanetStructHead *) m;
+                for (int32_t i = 0; i < sh->length; i++) {
+                    if (!janet_gc_verify_young_marked("struct-key", sh->data[i].key)) bad = 1;
+                    if (!janet_gc_verify_young_marked("struct-value", sh->data[i].value)) bad = 1;
+                }
+            } else if (type == JANET_MEMORY_FIBER) {
+                JanetFiber *f = (JanetFiber *) m;
+                if (f->data) {
+                    for (int32_t i = f->stackstart; i < f->stacktop; i++) {
+                        if (!janet_gc_verify_young_marked("fiber-slot", f->data[i])) bad = 1;
+                    }
+                }
+                if (f->env) {
+                    if (!janet_gc_verify_young_marked("fiber-env", janet_wrap_table(f->env))) bad = 1;
+                }
+                if (f->child) {
+                    if (!janet_gc_verify_young_marked("fiber-child", janet_wrap_fiber(f->child))) bad = 1;
+                }
+                if (!janet_gc_verify_young_marked("fiber-last", f->last_value)) bad = 1;
+                if (!janet_gc_verify_young_marked("fiber-in", f->in_value)) bad = 1;
+                if (!janet_gc_verify_young_marked("fiber-out", f->out_payload)) bad = 1;
+            } else if (type == JANET_MEMORY_FUNCTION) {
+                /* envs are raw pointers, always followed by mark_function
+                 * (functions are never gated); env objects themselves are
+                 * walked independently below. Nothing to check here. */
+            } else if (type == JANET_MEMORY_FUNCDEF) {
+                JanetFuncDef *def = (JanetFuncDef *) m;
+                for (int32_t i = 0; i < def->constants_length; i++) {
+                    if (!janet_gc_verify_young_marked("funcdef-const", def->constants[i])) bad = 1;
+                }
+            } else if (type == JANET_MEMORY_FUNCENV) {
+                JanetFuncEnv *env = (JanetFuncEnv *) m;
+                if (env->offset == 0 && env->as.values) {
+                    for (int32_t i = 0; i < env->length; i++) {
+                        if (!janet_gc_verify_young_marked("funcenv-value", env->as.values[i])) bad = 1;
+                    }
+                }
+            }
+        }
+    }
+    return bad;
+}
+
+/* Minor collection (Phase 2b-iii policy): mark from the same roots (old-
+ * clean tables/arrays prune via the gate; old→young edges arrive via
+ * the barrier-dirtied pages, which are traversed like everything else),
+ * then sweep young dead blocks only. Weak-ref dropping waits for majors
+ * (conservative: weak-held young objects float until then). Afterwards
+ * young pages age (cap old) and dirty flags clear. */
+void janet_collect_minor(void) {
+    if (janet_vm.gc_suspend) return;
+    depth = JANET_RECURSION_GUARD;
+    janet_vm.gc_mark_phase = 1;
+    janet_vm.gc_minor_phase = 1;
+    janet_mark_roots();
+    janet_vm.gc_mark_phase = 0;
+    if (getenv("JANET_GC_VERIFY")) {
+        if (janet_gc_verify_minor()) {
+            fprintf(stderr, "gc-verify: minor mark incomplete, aborting\n");
+            abort();
+        }
+    }
+    janet_sweep_heaps();
+    janet_vm.gc_minor_phase = 0;
+    /* Age surviving young pages. Dirty flags deliberately persist until
+     * the next major: a young referee needs several minors to age out,
+     * so clearing per-minor would drop coverage while it is still young
+     * (old container + young entry swept live). Stale-dirty pages cost
+     * only extra traversal, never correctness. */
+    JanetSlabState *ss = (JanetSlabState *) janet_vm.slab_state;
+    if (NULL != ss) {
+        for (int i = 0; i < JANET_SLAB_NCLASSES; i++) {
+            for (JanetSlabPage *p = ss->pages[i]; NULL != p; p = p->next) {
+                if (p->age < JANET_SLAB_OLD_AGE) p->age++;
+            }
+        }
+        janet_vm.gc_young_bytes = 0;
+    }
+}
+
 /* Run garbage collection */
 void janet_collect(void) {
-    uint32_t i;
     if (janet_vm.gc_suspend) return;
     depth = JANET_RECURSION_GUARD;
     janet_vm.gc_mark_phase = 1;
@@ -588,26 +1229,17 @@ void janet_collect(void) {
     if (janet_vm.block_count * 8 > janet_vm.gc_interval) {
         janet_vm.gc_interval = janet_vm.block_count * sizeof(JanetGCObject);
     }
-    orig_rootcount = janet_vm.root_count;
-#ifdef JANET_EV
-    janet_ev_mark();
-#endif
-    if (janet_vm.top_dyns) {
-        janet_mark(janet_wrap_table(janet_vm.top_dyns));
-    }
-    if (janet_vm.root_fiber != NULL) { /* Can be NULL if janet_collect called outside of interpreter loop */
-        janet_mark_fiber(janet_vm.root_fiber);
-    }
-    for (i = 0; i < orig_rootcount; i++)
-        janet_mark(janet_vm.roots[i]);
-    while (orig_rootcount < janet_vm.root_count) {
-        Janet x = janet_vm.roots[--janet_vm.root_count];
-        janet_mark(x);
-    }
+    janet_mark_roots();
     janet_vm.gc_mark_phase = 0;
     janet_sweep();
     janet_vm.next_collection = 0;
-    janet_free_all_scratch();
+    /* NOTE (Phase 2a root discipline): scratch memory is deliberately NOT
+     * reclaimed here. Scratch lifetimes belong to their C scopes (compile
+     * buffers, vectors, table storage, ...), which routinely span Janet
+     * allocations and therefore collections; freeing it per-collect
+     * invalidates live scratch (use-after-free, then an "invalid
+     * janet_sfree" abort). Panic-leaked scratch is still recovered at
+     * shutdown in janet_clear_memory. */
 }
 
 /* Add a root value to the GC. This prevents the GC from removing a value
@@ -640,6 +1272,35 @@ static int janet_gc_idequals(Janet lhs, Janet rhs) {
         default:
             return janet_unwrap_pointer(lhs) == janet_unwrap_pointer(rhs);
     }
+}
+
+/* Scoped shadow roots for generated/C code (Phase 2b-i). Strictly LIFO:
+ * snapshot with mark, discard with pop_to. Growth uses raw realloc so a
+ * push itself can never trigger the collection it protects against. */
+void janet_gcshadow_push(Janet x) {
+    size_t newcount = janet_vm.shadow_count + 1;
+    if (newcount > janet_vm.shadow_capacity) {
+        size_t newcap = 2 * newcount;
+        if (newcap < 8) newcap = 8;
+        janet_vm.shadow_roots = janet_realloc(janet_vm.shadow_roots, sizeof(Janet) * newcap);
+        if (NULL == janet_vm.shadow_roots) {
+            JANET_OUT_OF_MEMORY;
+        }
+        janet_vm.shadow_capacity = newcap;
+    }
+    janet_vm.shadow_roots[janet_vm.shadow_count] = x;
+    janet_vm.shadow_count = newcount;
+}
+
+size_t janet_gcshadow_mark(void) {
+    return janet_vm.shadow_count;
+}
+
+void janet_gcshadow_pop_to(size_t mark) {
+    if (mark > janet_vm.shadow_count) {
+        janet_panicf("gcshadow mark %d beyond stack top %d", (int) mark, (int) janet_vm.shadow_count);
+    }
+    janet_vm.shadow_count = mark;
 }
 
 /* Remove a root value from the GC. This allows the gc to potentially reclaim
@@ -689,10 +1350,21 @@ void janet_clear_memory(void) {
     while (NULL != current) {
         janet_deinit_block(current);
         JanetGCObject *next = current->data.next;
-        janet_free(current);
+        janet_gc_release(current);
         current = next;
     }
     janet_vm.blocks = NULL;
+    current = janet_vm.string_blocks;
+    while (NULL != current) {
+        janet_deinit_block(current);
+        JanetGCObject *next = current->data.next;
+        janet_gc_release(current);
+        current = next;
+    }
+    janet_vm.string_blocks = NULL;
+    /* With no live objects left, drop the slab pages themselves (frees
+     * directory + freelists with them; fresh pages on next use). */
+    janet_slab_free_pages();
     janet_free_all_scratch();
     janet_free(janet_vm.scratch_mem);
 }

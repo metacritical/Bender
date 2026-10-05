@@ -111,6 +111,8 @@ void janet_array_push(JanetArray *array, Janet x) {
     janet_array_ensure(array, newcount, 2);
     array->data[array->count] = x;
     array->count = newcount;
+    /* Generational barrier (Phase 2b-iii): old array, new edge. */
+    janet_gc_barrier(array, x);
 }
 
 /* Pop a value from the top of the array */
@@ -181,6 +183,9 @@ JANET_CORE_FN(cfun_array_fill,
     for (int32_t i = 0; i < array->count; i++) {
         array->data[i] = x;
     }
+    /* Generational barrier (Phase 2b-iii): old array, new edge. One call
+     * covers the bulk fill (same value everywhere). */
+    janet_gc_barrier(array, x);
     return argv[0];
 }
 
@@ -335,6 +340,11 @@ JANET_CORE_FN(cfun_array_insert,
     }
     safe_memcpy(array->data + at, argv + 2, chunksize);
     array->count += (argc - 2);
+    /* Generational barrier (Phase 2b-iii): the memmoved prefix keeps its
+     * old edges, but the argv values are new -- cover each of them. */
+    for (int32_t i = 2; i < argc; i++) {
+        janet_gc_barrier(array, argv[i]);
+    }
     return argv[0];
 }
 

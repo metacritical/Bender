@@ -3355,6 +3355,429 @@ JANET_CORE_FN(cfun_ev_thread,
     }
 }
 
+/* Phase 3 slice: value-returning thread/new + thread/join.
+ * Share-nothing: args marshalled in, result marshalled back.
+ * Detached worker + pipe completion via janet_ev_post_event.
+ * Handle state only mutated on owner thread; join is owner-checked. */
+
+typedef struct {
+    JanetVM *owner;
+    int done;
+    int joined;
+    int is_error;
+    Janet result;
+    JanetFiber *waiter;
+} JanetThreadHandle;
+
+typedef struct {
+    JanetThreadHandle *handle;
+    uint8_t *bytes;
+    size_t len;
+    int is_error;
+} JanetThreadCompletion;
+
+typedef struct {
+    JanetBuffer *input;
+    JanetThreadHandle *handle;
+    JanetVM *owner;
+    uint32_t flags;
+    uint32_t sandbox_flags;
+} JanetThreadNewArgs;
+
+static int janet_thread_handle_gc(void *p, size_t len) {
+    (void) len;
+    (void) p;
+    return 0;
+}
+
+static int janet_thread_handle_mark(void *p, size_t len) {
+    (void) len;
+    JanetThreadHandle *h = (JanetThreadHandle *) p;
+    janet_mark(h->result);
+    if (h->waiter) {
+        janet_mark(janet_wrap_fiber(h->waiter));
+    }
+    return 0;
+}
+
+const JanetAbstractType janet_thread_handle_type = {
+    "core/thread-handle",
+    janet_thread_handle_gc,
+    janet_thread_handle_mark,
+    NULL, /* get */
+    NULL, /* put */
+    NULL, /* marshal (refuse: handles stay on owner thread) */
+    NULL, /* unmarshal */
+    NULL, /* tostring */
+    NULL, /* compare */
+    NULL, /* hash */
+    NULL, /* next */
+    NULL, /* call */
+    NULL, /* length */
+    NULL, /* bytes */
+    NULL  /* gcperthread */
+};
+
+static void janet_thread_new_complete(JanetEVGenericMessage msg) {
+    JanetThreadCompletion *c = (JanetThreadCompletion *) msg.argp;
+    JanetThreadHandle *h = c->handle;
+    Janet result = janet_wrap_nil();
+    if (c->bytes != NULL && c->len > 0) {
+        result = janet_unmarshal(c->bytes, c->len, JANET_MARSHAL_UNSAFE, NULL, NULL);
+        janet_free(c->bytes);
+    } else if (c->bytes != NULL) {
+        janet_free(c->bytes);
+    }
+    int is_error = c->is_error;
+    janet_free(c);
+    h->result = result;
+    h->is_error = is_error;
+    h->done = 1;
+    /* Balance join's gcroots (no-ops if join never suspended). The handle
+     * stays alive via the worker ref below until after scheduling. */
+    if (h->waiter != NULL) {
+        janet_gcunroot(janet_wrap_fiber(h->waiter));
+    }
+    janet_gcunroot(janet_wrap_abstract(h));
+    if (h->waiter != NULL) {
+        JanetFiber *w = h->waiter;
+        h->waiter = NULL;
+        if (h->is_error) {
+            if (janet_fiber_can_resume(w)) {
+                janet_cancel(w, h->result);
+            }
+        } else {
+            if (janet_fiber_can_resume(w)) {
+                janet_schedule(w, h->result);
+            }
+        }
+    }
+    janet_ev_dec_refcount();
+    /* Release worker ref last; may free handle (with result) if owner
+     * dropped it. Do not touch h after this. */
+    janet_abstract_decref_maybe_free(h);
+}
+
+/* Build a completion holding a malloc'd copy of marshalled bytes. */
+static JanetThreadCompletion *janet_thread_make_completion(
+    JanetThreadHandle *handle, uint8_t *bytes, size_t len, int is_error) {
+    JanetThreadCompletion *c = janet_malloc(sizeof(JanetThreadCompletion));
+    if (NULL == c) {
+        JANET_OUT_OF_MEMORY;
+    }
+    c->handle = handle;
+    c->bytes = bytes;
+    c->len = len;
+    c->is_error = is_error;
+    return c;
+}
+
+/* Marshal v (worker VM) into a malloc'd byte copy for transfer. */
+static void janet_thread_marshal_result_copy(Janet v, uint8_t **out_bytes, size_t *out_len) {
+    JanetBuffer tmp;
+    janet_buffer_init(&tmp, 0);
+    janet_marshal(&tmp, v, NULL, JANET_MARSHAL_UNSAFE);
+    uint8_t *copy = NULL;
+    if (tmp.count > 0) {
+        copy = janet_malloc((size_t) tmp.count);
+        if (NULL == copy) {
+            janet_buffer_deinit(&tmp);
+            JANET_OUT_OF_MEMORY;
+        }
+        memcpy(copy, tmp.data, (size_t) tmp.count);
+    }
+    *out_bytes = copy;
+    *out_len = (size_t) tmp.count;
+    janet_buffer_deinit(&tmp);
+}
+
+static JanetThreadCompletion *janet_thread_new_run(JanetThreadNewArgs *targs) {
+    JanetBuffer *buffer = targs->input;
+    const uint8_t *nextbytes = buffer->data;
+    const uint8_t *endbytes = nextbytes + buffer->count;
+    uint32_t flags = targs->flags;
+    JanetThreadHandle *handle = targs->handle;
+    janet_init();
+    janet_vm.sandbox_flags = targs->sandbox_flags;
+    JanetThreadCompletion *comp = NULL;
+    JanetTryState tstate;
+    JanetSignal signal = janet_try(&tstate);
+    if (!signal) {
+        if (!(flags & 0x2)) {
+            Janet aregv = janet_unmarshal(nextbytes, endbytes - nextbytes,
+                JANET_MARSHAL_UNSAFE, NULL, &nextbytes);
+            janet_assert(janet_checktype(aregv, JANET_TABLE), "expected table for abstract registry");
+            janet_vm.abstract_registry = janet_unwrap_table(aregv);
+            janet_gcroot(janet_wrap_table(janet_vm.abstract_registry));
+        }
+        if (!(flags & 0x4)) {
+            uint32_t count1;
+            memcpy(&count1, nextbytes, sizeof(count1));
+            size_t count = (size_t) count1;
+            janet_assert(count <= (size_t)(endbytes - nextbytes - sizeof(count1)) / sizeof(JanetCFunRegistry),
+                "thread message invalid");
+            janet_vm.registry_count = count;
+            janet_vm.registry_cap = count;
+            janet_vm.registry = janet_malloc(count * sizeof(JanetCFunRegistry));
+            if (janet_vm.registry == NULL) {
+                JANET_OUT_OF_MEMORY;
+            }
+            janet_vm.registry_dirty = 1;
+            nextbytes += sizeof(uint32_t);
+            memcpy(janet_vm.registry, nextbytes, count * sizeof(JanetCFunRegistry));
+            nextbytes += count * sizeof(JanetCFunRegistry);
+        }
+        Janet fiberv = janet_unmarshal(nextbytes, endbytes - nextbytes,
+            JANET_MARSHAL_UNSAFE, NULL, &nextbytes);
+        Janet value = janet_unmarshal(nextbytes, endbytes - nextbytes,
+            JANET_MARSHAL_UNSAFE, NULL, &nextbytes);
+        /* Input consumed; free before running (malloc only, no VM). */
+        janet_buffer_deinit(buffer);
+        janet_free(buffer);
+        janet_free(targs);
+        targs = NULL;
+        buffer = NULL;
+        JanetFiber *fiber;
+        if (!janet_checktype(fiberv, JANET_FIBER)) {
+            janet_assert(janet_checktype(fiberv, JANET_FUNCTION), "expected function or fiber");
+            JanetFunction *func = janet_unwrap_function(fiberv);
+            janet_assert(func->def->min_arity >= 0 && func->def->min_arity <= 1,
+                "thread function must accept 0 or 1 arguments");
+            fiber = janet_fiber(func, 64, func->def->min_arity, &value);
+            janet_assert(fiber != NULL, "bad fiber in thread setup");
+            fiber->flags |=
+                JANET_FIBER_MASK_ERROR |
+                JANET_FIBER_MASK_USER0 |
+                JANET_FIBER_MASK_USER1 |
+                JANET_FIBER_MASK_USER2 |
+                JANET_FIBER_MASK_USER3 |
+                JANET_FIBER_MASK_USER4;
+        } else {
+            fiber = janet_unwrap_fiber(fiberv);
+        }
+        fiber->supervisor_channel = NULL;
+        janet_schedule(fiber, value);
+        janet_loop();
+        JanetFiberStatus status = janet_fiber_status(fiber);
+        Janet result = fiber->last_value;
+        int is_error = 0;
+        if (status == JANET_STATUS_ERROR) {
+            is_error = 1;
+        } else if (status != JANET_STATUS_DEAD) {
+            result = janet_cstringv("thread did not complete (yielded)");
+            is_error = 1;
+        }
+        /* Root fiber (hence last_value) across marshalling allocations. */
+        Janet fiber_j = janet_wrap_fiber(fiber);
+        Janet result_j = result;
+        janet_gcroot(fiber_j);
+        janet_gcroot(result_j);
+        uint8_t *bytes = NULL;
+        size_t len = 0;
+        janet_thread_marshal_result_copy(result, &bytes, &len);
+        janet_gcunroot(fiber_j);
+        janet_gcunroot(result_j);
+        comp = janet_thread_make_completion(handle, bytes, len, is_error);
+        janet_restore(&tstate);
+    } else {
+        janet_restore(&tstate);
+        /* Startup or marshal failure: report payload if marshallable,
+         * else a static fallback. */
+        Janet payload = tstate.payload;
+        uint8_t *bytes = NULL;
+        size_t len = 0;
+        Janet payload_j = payload;
+        janet_gcroot(payload_j);
+        JanetTryState tstate2;
+        JanetSignal sig2 = janet_try(&tstate2);
+        if (!sig2) {
+            janet_thread_marshal_result_copy(payload, &bytes, &len);
+            janet_restore(&tstate2);
+        } else {
+            janet_restore(&tstate2);
+            Janet fallback = janet_cstringv("thread failed (unmarshallable error)");
+            Janet fallback_j = fallback;
+            janet_gcroot(fallback_j);
+            janet_thread_marshal_result_copy(fallback, &bytes, &len);
+            janet_gcunroot(fallback_j);
+        }
+        janet_gcunroot(payload_j);
+        if (buffer != NULL) {
+            janet_buffer_deinit(buffer);
+            janet_free(buffer);
+        }
+        if (targs != NULL) {
+            janet_free(targs);
+        }
+        comp = janet_thread_make_completion(handle, bytes, len, 1);
+    }
+    janet_deinit();
+    return comp;
+}
+
+#ifdef JANET_WINDOWS
+static DWORD WINAPI janet_thread_new_worker(LPVOID ptr) {
+    JanetThreadNewArgs *targs = (JanetThreadNewArgs *) ptr;
+    JanetVM *owner = targs->owner;
+    JanetThreadCompletion *comp = janet_thread_new_run(targs);
+    JanetEVGenericMessage msg;
+    memset(&msg, 0, sizeof(msg));
+    msg.argp = comp;
+    janet_ev_post_event(owner, janet_thread_new_complete, msg);
+    return 0;
+}
+#else
+static void *janet_thread_new_worker(void *ptr) {
+    JanetThreadNewArgs *targs = (JanetThreadNewArgs *) ptr;
+    JanetVM *owner = targs->owner;
+    JanetThreadCompletion *comp = janet_thread_new_run(targs);
+    JanetEVGenericMessage msg;
+    memset(&msg, 0, sizeof(msg));
+    msg.argp = comp;
+    janet_ev_post_event(owner, janet_thread_new_complete, msg);
+    return NULL;
+}
+#endif
+
+JANET_CORE_FN(cfun_thread_new,
+              "(thread/new main &opt value flags)",
+              "Run `main` in a new operating system thread and return a handle. "
+              "`main` is a function taking 0 or 1 arguments, or a fiber; `value` is passed as the argument. "
+              "The thread runs an isolated VM (share-nothing: args marshalled in, result marshalled back). "
+              "Use `(thread/join handle)` to wait for completion and get the return value (re-raises thread errors). "
+              "Flags: `:a` don't copy abstract registry, `:c` don't copy cfunction registry.") {
+    janet_sandbox_assert(JANET_SANDBOX_THREADS);
+    janet_arity(argc, 1, 3);
+    Janet value = argc >= 2 ? argv[1] : janet_wrap_nil();
+    if (janet_checktype(argv[0], JANET_FUNCTION)) {
+        JanetFunction *func = janet_getfunction(argv, 0);
+        if (func->def->arity < 0 || func->def->min_arity > 1) {
+            janet_panic("function must take 0 or 1 arguments");
+        }
+    } else {
+        janet_getfiber(argv, 0);
+    }
+    uint64_t flags = 0;
+    if (argc >= 3) {
+        flags = janet_getflags(argv, 2, "ac");
+    }
+    JanetBuffer *buffer = janet_malloc(sizeof(JanetBuffer));
+    if (NULL == buffer) {
+        JANET_OUT_OF_MEMORY;
+    }
+    janet_buffer_init(buffer, 0);
+    if (!(flags & 0x2)) {
+        janet_marshal(buffer, janet_wrap_table(janet_vm.abstract_registry), NULL, JANET_MARSHAL_UNSAFE);
+    }
+    if (!(flags & 0x4)) {
+        janet_assert(janet_vm.registry_count <= INT32_MAX, "assert failed size check");
+        uint32_t temp = (uint32_t) janet_vm.registry_count;
+        janet_buffer_push_bytes(buffer, (uint8_t *) &temp, sizeof(temp));
+        janet_buffer_push_bytes(buffer, (uint8_t *) janet_vm.registry,
+            (int32_t) janet_vm.registry_count * sizeof(JanetCFunRegistry));
+    }
+    janet_marshal(buffer, argv[0], NULL, JANET_MARSHAL_UNSAFE);
+    janet_marshal(buffer, value, NULL, JANET_MARSHAL_UNSAFE);
+    JanetThreadHandle *handle = janet_abstract_threaded(&janet_thread_handle_type, sizeof(JanetThreadHandle));
+    handle->owner = &janet_vm;
+    handle->done = 0;
+    handle->joined = 0;
+    handle->is_error = 0;
+    handle->result = janet_wrap_nil();
+    handle->waiter = NULL;
+    JanetThreadNewArgs *targs = janet_malloc(sizeof(JanetThreadNewArgs));
+    if (NULL == targs) {
+        janet_buffer_deinit(buffer);
+        janet_free(buffer);
+        janet_panic("failed to allocate thread args");
+    }
+    targs->input = buffer;
+    targs->handle = handle;
+    targs->owner = &janet_vm;
+    targs->flags = (uint32_t) flags;
+    targs->sandbox_flags = janet_vm.sandbox_flags;
+    janet_abstract_incref(handle);
+    janet_ev_inc_refcount();
+#ifdef JANET_WINDOWS
+    HANDLE wh = CreateThread(NULL, 0, janet_thread_new_worker, targs, 0, NULL);
+    if (NULL == wh) {
+        janet_abstract_decref_maybe_free(handle);
+        janet_ev_dec_refcount();
+        janet_buffer_deinit(buffer);
+        janet_free(buffer);
+        janet_free(targs);
+        janet_panic("failed to create thread");
+    }
+    CloseHandle(wh);
+#else
+    pthread_t worker;
+    int err = pthread_create(&worker, &janet_vm.new_thread_attr, janet_thread_new_worker, targs);
+    if (err) {
+        janet_abstract_decref_maybe_free(handle);
+        janet_ev_dec_refcount();
+        janet_buffer_deinit(buffer);
+        janet_free(buffer);
+        janet_free(targs);
+        janet_panicf("%s", janet_strerror(err));
+    }
+#endif
+    return janet_wrap_abstract(handle);
+}
+
+JANET_CORE_FN(cfun_thread_join,
+              "(thread/join handle)",
+              "Wait for the thread `handle` created by `thread/new` to complete and return its value. "
+              "Re-raises the thread's error if it failed. Must be called from the creating thread, exactly once.") {
+    janet_fixarity(argc, 1);
+    JanetThreadHandle *handle = janet_getabstract(argv, 0, &janet_thread_handle_type);
+    if (handle->owner != &janet_vm) {
+        janet_panic("thread/join called from non-owner thread");
+    }
+    if (handle->joined) {
+        janet_panic("thread already joined");
+    }
+    if (janet_vm.coerce_error) {
+        janet_panic("cannot join inside janet_call");
+    }
+    if (handle->done) {
+        /* Fast path: completion already ran. */
+        handle->joined = 1;
+        Janet result = handle->result;
+        handle->result = janet_wrap_nil();
+        if (handle->is_error) {
+            janet_panicv(result);
+        }
+        return result;
+    }
+    /* Slow path: claim, suspend until completion callback schedules us
+     * with the result (cfun does not resume after await). */
+    handle->joined = 1;
+    JanetFiber *root = janet_root_fiber();
+    handle->waiter = root;
+    /* Root across suspension; completion callback unroots
+     * (mirrors janet_ev_threaded_await's fiber rooting). */
+    janet_gcroot(janet_wrap_fiber(root));
+    janet_gcroot(janet_wrap_abstract(handle));
+    janet_await();
+    /* Unreachable when suspending; the completion schedules this fiber
+     * with the thread's result (or cancels with its error). */
+    return janet_wrap_nil();
+}
+
+JANET_CORE_FN(cfun_thread_alive,
+              "(thread/alive? handle)",
+              "Return whether the thread `handle` created by `thread/new` is "
+              "still running. Once true it stays true until `thread/join`; "
+              "after `thread/join` returns false. Must be called from the "
+              "creating thread.") {
+    janet_fixarity(argc, 1);
+    JanetThreadHandle *handle = janet_getabstract(argv, 0, &janet_thread_handle_type);
+    if (handle->owner != &janet_vm) {
+        janet_panic("thread/alive? called from non-owner thread");
+    }
+    return janet_wrap_boolean(!handle->done);
+}
+
 JANET_CORE_FN(cfun_ev_give_supervisor,
               "(ev/give-supervisor tag & payload)",
               "Send a message to the current supervisor channel if there is one. The message will be a "
@@ -3722,6 +4145,9 @@ void janet_lib_ev(JanetTable *env) {
         JANET_CORE_REG("ev/chan-close", cfun_channel_close),
         JANET_CORE_REG("ev/go", cfun_ev_go),
         JANET_CORE_REG("ev/thread", cfun_ev_thread),
+        JANET_CORE_REG("thread/new", cfun_thread_new),
+        JANET_CORE_REG("thread/join", cfun_thread_join),
+        JANET_CORE_REG("thread/alive?", cfun_thread_alive),
         JANET_CORE_REG("ev/give-supervisor", cfun_ev_give_supervisor),
         JANET_CORE_REG("ev/sleep", cfun_ev_sleep),
         JANET_CORE_REG("ev/deadline", cfun_ev_deadline),
@@ -3748,6 +4174,7 @@ void janet_lib_ev(JanetTable *env) {
     janet_register_abstract_type(&janet_channel_type);
     janet_register_abstract_type(&janet_mutex_type);
     janet_register_abstract_type(&janet_rwlock_type);
+    janet_register_abstract_type(&janet_thread_handle_type);
 }
 
 #endif

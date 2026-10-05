@@ -734,6 +734,8 @@ void janet_putindex(Janet ds, int32_t index, Janet value) {
                 array->count = index + 1;
             }
             array->data[index] = value;
+            /* Generational barrier (Phase 2b-iii): old array, new edge. */
+            janet_gc_barrier(array, value);
             break;
         }
         case JANET_BUFFER: {
@@ -782,6 +784,8 @@ void janet_put(Janet ds, Janet key, Janet value) {
                 array->count = index + 1;
             }
             array->data[index] = value;
+            /* Generational barrier (Phase 2b-iii): old array, new edge. */
+            janet_gc_barrier(array, value);
             break;
         }
         case JANET_BUFFER: {
