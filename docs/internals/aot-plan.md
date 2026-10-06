@@ -406,6 +406,49 @@ both land in the same unboxed C. Next: fold emission into the
 janet-aot driver (image entry calling natives), widen the supported
 subset (comparisons/branches), then the full pipeline.
 
+## Phase 4 steps 8–13 — closing the native-tier gaps (roadmap)
+
+Goal: grow the transcriber until real game-loop code (the target
+workload: janet + raylib, C compiler on every platform, AOT-legal
+where JITs are not) proves out, and ship it inside `janet-aot`'s
+hybrid binary. Every step is gated by the existing parity harness
+(native results `cmp`-equal to the interpreter) — no translation is
+trusted until it agrees byte-for-byte.
+
+- **Step 8 — branches (CFG).** Recover basic blocks from the jump
+  ops (`jmp`, `jmpif/jmpno/jmpni/jmpnn` — operand is a signed offset
+  from the jump's pc), emit labels + `goto`/`if`-`goto`. Condition
+  slots must be `:bool` (from cmp ops): janet truthiness (0 is
+  truthy!) forbids C truthiness on numeric slots — refuse otherwise.
+  Slot types at block merges via iterative dataflow join (monotone,
+  terminates). `jmpni`/`jmpnn` (nil tests) refused initially.
+- **Step 9 — loops.** Back edges → C loops; loop-carried slot types
+  via the same dataflow fixpoint (loop body re-processed until types
+  stabilize, then declared before the loop). VM stack-check semantics
+  noted (native loops never grow the VM stack — by design).
+- **Step 10 — external C calls.** Declared signatures (a mapping the
+  tool consumes: janet name → c-symbol, param/return types) emitted
+  as direct calls — the raylib story: the game's platform calls are
+  C symbols at link time, simpler than native→native janet calls.
+- **Step 11 — numeric array state.** SoA state for game entities.
+  Design-heavy: buffer-as-typed-array view vs new core primitive;
+  allocation goes through the runtime with explicit roots
+  (janet_gcshadow). Design doc + parity spike before committing.
+- **Step 12 — hybrid binary integration (call planning).** janet-aot
+  emits BOTH the boxed image and native.c; proven functions become
+  native cfunctions (wrapper: unbox args → call → rebox result)
+  bound via an extern-cfun registry, so boxed callers pay one
+  conversion at the boundary and native internals stay native.
+  Residue (eval, dynamic require) keeps working — boxed tier ships
+  eval in the binary already.
+- **Step 13 — int-overflow policy + DCE.** `raise`/`wrap`/`promote`
+  flag for native int64 semantics (boxed doubles truncate at 2^53);
+  dead-code elimination via reachability + section-GC.
+
+Order serves the games workload: branches and loops unblock every
+real loop body; external C calls unblock raylib; arrays unblock
+entity state; integration makes it a product; policy/DCE are polish.
+
 ### Phase 4 step 5 — `^` hint syntax (DONE, this checkout)
 
 Clojure-ergonomic surface, no parser changes: the reader already

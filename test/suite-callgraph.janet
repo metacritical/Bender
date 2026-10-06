@@ -210,4 +210,35 @@
 (assert (not (nil? (string/find "static int64_t twice(int64_t p0)" ntext))) "unhinted fn emitted")
 (assert (not (nil? (string/find "inc_l(p0)" ntext))) "native-to-native calls")
 
+# Step 8 (branches): CFG + if/goto emission, parity through merges
+(spit "/tmp/cg-branch.janet" (string
+  "(defn iabs {:hint {:params [:long] :returns :long}} [x] (if (< x 0) (- 0 x) x))\n"
+  "(defn maxi [a b] (if (> a b) a b))\n"
+  "(defn clamp {:hint {:params [:long :long :long] :returns :long}} [x lo hi]\n"
+  "  (if (< x lo) lo (if (> x hi) hi x)))\n"
+  "(defn main [] (print (iabs -5) (maxi 2 7) (clamp 15 0 10)))\n"))
+(assert (= 0 (os/execute ["/bin/sh" "-c"
+  "rm -rf /tmp/cg-br && ./build/janet tools/callgraph.janet /tmp/cg-branch.janet --emit-native /tmp/cg-br"] :p))
+  "branch emit run")
+(assert (= 0 (os/execute ["/bin/sh" "-c"
+  "cc -O2 -w /tmp/cg-br/native.c -o /tmp/cg-br/native"] :p)) "branch native compiles")
+(assert (= 0 (os/execute ["/bin/sh" "-c"
+  "/tmp/cg-br/native > /tmp/cg-br/actual.txt && cmp /tmp/cg-br/expected.txt /tmp/cg-br/actual.txt"] :p))
+  "branch parity")
+(def btext (slurp "/tmp/cg-br/native.c"))
+(assert (not (nil? (string/find "goto L" btext))) "branches emit goto")
+# unhinted maxi proven through merge dataflow
+(assert (not (nil? (string/find "static int64_t maxi(int64_t p0, int64_t p1)" btext)))
+        "unhinted branched fn emitted")
+
+# refusal: branch condition must be a bool slot (janet 0 is truthy)
+(spit "/tmp/cg-badcond.janet" (string
+  "(defn f {:hint {:params [:long] :returns :long}} [x] (if x 1 2))\n"
+  "(defn main [] (print (f 1)))\n"))
+(os/execute ["/bin/sh" "-c"
+  "rm -rf /tmp/cg-bc && ./build/janet tools/callgraph.janet /tmp/cg-badcond.janet --emit-native /tmp/cg-bc > /tmp/cg-bc-out.txt"])
+# the tool legitimately exits nonzero (nothing emittable); the report is the contract
+(assert (not (nil? (string/find "branch condition is long not bool"
+  (slurp "/tmp/cg-bc-out.txt")))) "truthy-on-number refused")
+
 (end-suite)

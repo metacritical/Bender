@@ -619,99 +619,296 @@
   (when (get cnts t) (put cnts t (+ 1 (get cnts t)))))
 (print "rets " (get cnts :long) " " (get cnts :double) " " (get cnts :number) " rounds " (res :rounds))
 
-# Step 7 (--emit-native): unboxed C emission. A def emits when its
-# params and return are ALL concrete numeric — from hints (contracts,
-# used directly) or from inference (widening + fixpoint proven) — and
-# its body is in the supported subset. Straight-line arithmetic plus
-# direct calls to other emitted natives (two-round dependency pass);
-# `/` only for :double returns (janet / is real division; C / on
-# int64 truncates).
+# Step 7 (--emit-native) + Step 8 (branches): unboxed C emission. A def
+# emits when its params and return are ALL concrete numeric — hinted
+# (contracts, used directly) or inference-proven (widening) — and its
+# body translates: straight-line arithmetic, push-arg direct calls to
+# other emitted natives (two-round dependency pass), and BRANCHES: the
+# jump ops recover a CFG, block-entry slot types come from iterative
+# dataflow join, branch conditions must be :bool (janet truthiness
+# makes 0 truthy — C truthiness on a numeric slot would diverge), and
+# jumps emit labels + goto. `/` only for :double returns (janet / is
+# real division; C / on int64 truncates).
 (def emit-c-ops
   @{'ldi true 'ldc true 'add true 'sub true 'mul true 'div true
     'addim true 'subim true 'mulim true 'ret true
     'push true 'push2 true 'push3 true 'call true 'tcall true
+    'jmp true 'jmpif true 'jmpno true
+    'lt true 'ltim true 'gt true 'gtim true
+    'eq true 'eqim true 'neq true 'neqim true
     # callee-only loads: the C call targets the native symbol directly,
-    # so ldu/lds feeding a call are no-ops (the value never crosses)
+    # so ldu/lds feeding a call are no-ops
     'ldu true 'lds true})
 (def emit-arith-c @{'add "+" 'sub "-" 'mul "*" 'div "/"})
 (def emit-arith-im-c @{'addim "+" 'subim "-" 'mulim "*"})
+(def emit-cmp-c @{'lt "<" 'ltim "<" 'gt ">" 'gtim ">"
+                  'eq "==" 'eqim "==" 'neq "!=" 'neqim "!="})
+(def emit-cmp-im @{'ltim true 'gtim true 'eqim true 'neqim true})
+(def emit-term-ops @{'ret true 'retn true 'err true})
+(def emit-cond-jumps @{'jmpif true 'jmpno true})
 
 (defn emit-c-type [t] (if (= t :long) "int64_t" "double"))
 (defn emit-c-name [nm] (string/replace-all "-" "_" nm))
 (defn emit-c-num [v] (string/format "%.17g" v))
 (defn emit-slot [a arity] (if (< a arity) (string "p" a) (string "s" a)))
 
-(defn emit-fn-c [id d rt pt call-map emitted-names]
+# Step 8: CFG recovery + block-entry slot dataflow + validation.
+# Returns @{:ok true :leaders [...] :block-end {...} :states {pc -> st}}
+# or @{:ok false :reason string}.
+(defn flow-check [id d pt rt call-map rts]
+  (def code (or (d :bytecode) @[]))
+  (def n (length code))
+  (def cmap (or (get call-map id) @{}))
+  # leaders: entry, jump targets, post-terminator / post-jump
+  (def leader? @{0 true})
+  (var pc 0)
+  (each ins code
+    (def op (ins 0))
+    (cond
+      (= op 'jmp)
+      (do (def t (+ pc (ins 1)))
+        (when (and (>= t 0) (< t n)) (put leader? t true))
+        (when (< (+ pc 1) n) (put leader? (+ pc 1) true)))
+      (get emit-cond-jumps op)
+      (do (def t (+ pc (ins 2)))
+        (when (and (>= t 0) (< t n)) (put leader? t true))
+        (when (< (+ pc 1) n) (put leader? (+ pc 1) true)))
+      (get emit-term-ops op)
+      (when (< (+ pc 1) n) (put leader? (+ pc 1) true))
+      nil)
+    (++ pc))
+  (def leaders (sort (keys leader?)))
+  (def block-end @{})
+  (var bi 0)
+  (while (< bi (length leaders))
+    (put block-end (leaders bi)
+         (if (< (+ bi 1) (length leaders)) (leaders (+ bi 1)) n))
+    (++ bi))
+  # dataflow: block-entry states, conservative join at merges
+  (def st0 @{})
+  (var pi 0)
+  (each t pt (put st0 pi t) (++ pi))
+  (def in-states @{0 st0})
+  (def changed-box @{:v true})
+  (defn state-copy [st]
+    (def c2 @{})
+    (eachk k st (put c2 k (get st k)))
+    c2)
+  (defn merge-to [tgt stx]
+    (def cur (get in-states tgt))
+    (if (nil? cur)
+      (do (put in-states tgt (state-copy stx))
+        (put changed-box :v true))
+      (do (eachk k stx
+        (def a (get cur k :unknown))
+        (def b (get stx k :unknown))
+        (def nn (if (or (= a :unknown) (= b :unknown))
+                  :unknown
+                  (infer/type-join a b)))
+        (when (not= nn a)
+          (put cur k nn)
+          (put changed-box :v true))))))
+  (var guard 0)
+  (while (and (get changed-box :v) (< guard 20))
+    (++ guard)
+    (put changed-box :v false)
+    (each start leaders
+      (def inst (get in-states start))
+      (when inst
+        (def st (state-copy inst))
+        (def endx (get block-end start))
+        (var pc start)
+        (while (< pc endx)
+          (def ins (code pc))
+          (def op (ins 0))
+          (cond
+            (= op 'ldi) (put st (ins 1) :long)
+            (= op 'ldc) (put st (ins 1) (infer/const-num-type d (ins 2)))
+            (= op 'ldn) (put st (ins 1) :nil)
+            (or (= op 'ldt) (= op 'ldf)) (put st (ins 1) :bool)
+            (= op 'len) (put st (ins 1) :long)
+            (= op 'movn) (put st (ins 1) (get st (ins 2) :unknown))
+            (= op 'movf) (put st (ins 2) (get st (ins 1) :unknown))
+            (get infer/arith-im-ops op)
+            (put st (ins 1) (infer/arith-join (get st (ins 2) :unknown) :long))
+            (get infer/arith-ops op)
+            (put st (ins 1)
+                 (infer/arith-join (get st (ins 2) :unknown)
+                                   (get st (ins 3) :unknown)))
+            (get infer/cmp-ops op) (put st (ins 1) :bool)
+            (= op 'call)
+            (do (def tid (get cmap pc))
+              (when tid (put st (ins 1) (rts tid))))
+            nil)
+          (++ pc))
+        (def lastins (code (- endx 1)))
+        (def lop (lastins 0))
+        (cond
+          (get emit-term-ops lop) nil
+          (= lop 'jmp) (merge-to (+ (- endx 1) (lastins 1)) st)
+          (get emit-cond-jumps lop)
+          (do (merge-to (+ (- endx 1) (lastins 2)) st)
+            (merge-to endx st))
+          (merge-to endx st)))))
+  (when (get changed-box :v)
+    (break @{:ok false :reason "dataflow did not converge"}))
+  # per-tier slot purity: a :long function must never see a :double
+  # value in a slot (the emitter types temps by the return type)
+  (when (= rt :long)
+    (var impure nil)
+    (each start leaders
+      (if impure
+        nil
+        (do (def st (get in-states start))
+          (when st
+            (eachp [k v] st
+              (when (and (not= v :long) (not= v :bool) (>= k (length pt)) (nil? impure))
+                (set impure (string "non-long slot " k " (" v ") in long fn"))))))))
+  (if impure
+    @{:ok false :reason impure}
+    nil))
+  (if (get changed-box :v)
+    @{:ok false :reason "dataflow did not converge"}
+    @{:ok true :leaders leaders :block-end block-end :states in-states}))
+
+(defn emit-fn-c [id d rt pt call-map emitted-names rts]
   (def arity (length pt))
   (when (d :vararg) (break [nil "vararg"]))
   (unless (get infer/numeric-types rt) (break [nil "return not concrete"]))
+  (def fl (flow-check id d pt rt call-map rts))
+  (unless (fl :ok) (break [nil (fl :reason)]))
+  (def leaders (fl :leaders))
+  (def block-end (fl :block-end))
+  (def states (fl :states))
+  (def code (or (d :bytecode) @[]))
+  (def n (length code))
+  (def cmap (or (get call-map id) @{}))
   (def pdecls (seq [i :range [0 arity]]
                 (string (emit-c-type (pt i)) " p" i)))
   (def ct (emit-c-type rt))
   (def lines @[])
   (var bad nil)
-  (var pending @[])
-  (var spread false)
-  (def cmap (or (get call-map id) @{}))
-  (var pc 0)
-  (each ins (or (d :bytecode) @[])
-    (def op (ins 0))
-    (if (get emit-c-ops op)
-      (cond
-        (= op 'ldi)
-        (array/push lines (string "    const " ct " s" (ins 1) " = " (ins 2) ";"))
-        (= op 'ldc)
-        (do (def cval ((or (d :constants) @[]) (ins 2)))
-          (unless (and cval (= :number (type cval)))
-            (set bad "ldc non-number")
-            (break))
-          (array/push lines (string "    const " ct " s" (ins 1) " = " (emit-c-num cval) ";")))
-        (= op 'ret)
-        (array/push lines (string "    return s" (ins 1) ";"))
-        (= op 'push) (array/push pending (emit-slot (ins 1) arity))
-        (= op 'push2)
-        (do (array/push pending (emit-slot (ins 1) arity))
-          (array/push pending (emit-slot (ins 2) arity)))
-        (= op 'push3)
-        (do (array/push pending (emit-slot (ins 1) arity))
-          (array/push pending (emit-slot (ins 2) arity))
-          (array/push pending (emit-slot (ins 3) arity)))
-        (= op 'pusha) (do (set bad "spread args") (break))
-        (= op 'div)
-        (if (= rt :double)
-          (do (set pending @[])
-            (array/push lines
-                        (string "    const double s" (ins 1) " = "
-                                (emit-slot (ins 2) arity) " / "
-                                (emit-slot (ins 3) arity) ";")))
-          (do (set bad "div on long")
-            (break)))
-        (or (= op 'add) (= op 'sub) (= op 'mul))
-        (do (set pending @[])
-          (array/push lines
-                      (string "    const " ct " s" (ins 1) " = "
-                              (emit-slot (ins 2) arity) " " (emit-arith-c op) " "
-                              (emit-slot (ins 3) arity) ";")))
-        (get emit-arith-im-c op)
-        (do (set pending @[])
-          (array/push lines
-                      (string "    const " ct " s" (ins 1) " = "
-                              (emit-slot (ins 2) arity) " " (emit-arith-im-c op) " "
-                              (ins 3) ";")))
-        (or (= op 'call) (= op 'tcall))
-        (do (def tid (get cmap pc))
-          (def cname (if tid (get emitted-names tid)))
-          (unless (and tid cname (not spread))
-            (set bad "call to non-native")
-            (break))
-          (def callx (string (emit-c-name cname) "(" (string/join pending ", ") ")"))
-          (if (= op 'call)
-            (array/push lines (string "    const " ct " s" (ins 1) " = " callx ";"))
-            (array/push lines (string "    return " callx ";")))
-          (set pending @[])))
-      (do (set bad (string "op " op))
-        (break)))
-    (++ pc))
+  (each start leaders
+    (def st (get states start))
+    (if (nil? st)
+      (set bad "unreachable block")
+      (do
+        (unless (= start 0) (array/push lines (string "L" start ":;")))
+        (var pending @[])
+        (var spread false)
+        (var pc start)
+        (def endx (get block-end start))
+        (while (and (< pc endx) (nil? bad))
+          (def ins (code pc))
+          (def op (ins 0))
+          # keep the slot-type state current (mirrors flow-check)
+          (cond
+            (= op 'ldi) (put st (ins 1) :long)
+            (= op 'ldc) (put st (ins 1) (infer/const-num-type d (ins 2)))
+            (= op 'ldn) (put st (ins 1) :nil)
+            (or (= op 'ldt) (= op 'ldf)) (put st (ins 1) :bool)
+            (= op 'len) (put st (ins 1) :long)
+            (= op 'movn) (put st (ins 1) (get st (ins 2) :unknown))
+            (= op 'movf) (put st (ins 2) (get st (ins 1) :unknown))
+            (get infer/arith-im-ops op)
+            (put st (ins 1) (infer/arith-join (get st (ins 2) :unknown) :long))
+            (get infer/arith-ops op)
+            (put st (ins 1)
+                 (infer/arith-join (get st (ins 2) :unknown)
+                                   (get st (ins 3) :unknown)))
+            (get infer/cmp-ops op) (put st (ins 1) :bool)
+            (= op 'call)
+            (do (def tid (get cmap pc))
+              (when tid (put st (ins 1) (rts tid))))
+            nil)
+          (cond
+            (= op 'ldi)
+            (array/push lines (string "    const " ct " s" (ins 1) " = " (ins 2) ";"))
+            (= op 'ldc)
+            (do (def cval ((or (d :constants) @[]) (ins 2)))
+              (unless (and cval (= :number (type cval)))
+                (set bad "ldc non-number")
+                (break))
+              (array/push lines (string "    const " ct " s" (ins 1) " = " (emit-c-num cval) ";")))
+            (= op 'ret)
+            (do (def rvt (get st (ins 1) :unknown))
+              # :double fns commit all numeric temps to double, so a
+              # :number/:long slot promotes; :long fns require exact long
+              (def eff (if (= rt :double)
+                         (if (get infer/numeric-types rvt) :double rvt)
+                         rvt))
+              (unless (= eff rt)
+                (set bad (string "ret slot is " rvt " not " rt))
+                (break))
+              (array/push lines (string "    return " (emit-slot (ins 1) arity) ";")))
+            (= op 'push) (array/push pending (emit-slot (ins 1) arity))
+            (= op 'push2)
+            (do (array/push pending (emit-slot (ins 1) arity))
+              (array/push pending (emit-slot (ins 2) arity)))
+            (= op 'push3)
+            (do (array/push pending (emit-slot (ins 1) arity))
+              (array/push pending (emit-slot (ins 2) arity))
+              (array/push pending (emit-slot (ins 3) arity)))
+            (= op 'pusha) (set bad "spread args")
+            (= op 'jmp)
+            (array/push lines (string "    goto L" (+ pc (ins 1)) ";"))
+            (get emit-cond-jumps op)
+            (do (def cnd (get st (ins 1) :unknown))
+              (unless (= cnd :bool)
+                (set bad (string "branch condition is " cnd " not bool"))
+                (break))
+              (if (= op 'jmpif)
+                (array/push lines (string "    if (" (emit-slot (ins 1) arity) ") goto L" (+ pc (ins 2)) ";"))
+                (array/push lines (string "    if (!" (emit-slot (ins 1) arity) ") goto L" (+ pc (ins 2)) ";"))))
+            (get emit-cmp-c op)
+            (if (get emit-cmp-im op)
+              (array/push lines
+                          (string "    const int64_t s" (ins 1) " = "
+                                  (emit-slot (ins 2) arity) " " (emit-cmp-c op) " "
+                                  (ins 3) ";"))
+              (array/push lines
+                          (string "    const int64_t s" (ins 1) " = "
+                                  (emit-slot (ins 2) arity) " " (emit-cmp-c op) " "
+                                  (emit-slot (ins 3) arity) ";")))
+            (= op 'div)
+            (if (= rt :double)
+              (do (set pending @[])
+                (array/push lines
+                            (string "    const double s" (ins 1) " = "
+                                    (emit-slot (ins 2) arity) " / "
+                                    (emit-slot (ins 3) arity) ";")))
+              (do (set bad "div on long")
+                (break)))
+            (or (= op 'add) (= op 'sub) (= op 'mul))
+            (do (set pending @[])
+              (array/push lines
+                          (string "    const " ct " s" (ins 1) " = "
+                                  (emit-slot (ins 2) arity) " " (emit-arith-c op) " "
+                                  (emit-slot (ins 3) arity) ";")))
+            (get emit-arith-im-c op)
+            (do (set pending @[])
+              (array/push lines
+                          (string "    const " ct " s" (ins 1) " = "
+                                  (emit-slot (ins 2) arity) " " (emit-arith-im-c op) " "
+                                  (ins 3) ";")))
+            (or (= op 'call) (= op 'tcall))
+            (do (def tid (get cmap pc))
+              (def cname (if tid (get emitted-names tid)))
+              (def trt (if tid (rts tid) :unknown))
+              (if (and tid cname (= trt rt) (not spread) (not= op 'tcall))
+                (do (array/push lines
+                                (string "    const " ct " s" (ins 1) " = "
+                                        (emit-c-name cname) "(" (string/join pending ", ") ");"))
+                  (set pending @[]))
+                (if (and tid cname (= trt rt) (not spread))
+                  (do (array/push lines
+                                  (string "    return " (emit-c-name cname)
+                                          "(" (string/join pending ", ") ");"))
+                    (set pending @[]))
+                  (do (set bad "call to non-native or type mismatch")
+                    (break)))))
+            nil)
+          (++ pc)))))
   (if bad
     [nil bad]
     [(string "static " ct " " (emit-c-name (string (or (d :name) "?"))) "("
@@ -720,13 +917,11 @@
 
 (defn emit-native-all [outdir]
   (os/mkdir outdir)
-  # a def emits when its params and return are ALL concrete numeric —
-  # hinted (contract) or inference-proven (widening). Anything else is
-  # reported WITH its unproven slots so the user knows where to hint.
-  (defn describe-types [pt rt]
-    (def qs (string/join (map (fn [t] (if (= t :unknown) "?" (string t))) pt) " "))
-    (string "params [" qs "] ret " (if (= rt :unknown) "?" (string rt))))
-  # candidates: fully concrete params + return, non-vararg
+  # candidates: fully concrete params + return, non-vararg; everything
+  # else is reported WITH its unproven slots (add-a-hint diagnostics)
+  (defn describe-types [pt2 rt2]
+    (def qs (string/join (map (fn [t] (if (= t :unknown) "?" (string t))) pt2) " "))
+    (string "params [" qs "] ret " (if (= rt2 :unknown) "?" (string rt2))))
   (def cand @{})
   (def skips @[])
   (each id (range (length defs))
@@ -739,14 +934,13 @@
     (unless (get infer/numeric-types rt) (set concrete false))
     (if concrete
       (put cand id true)
-      # not provable (yet): name the unproven slots — the actionable
-      # "add a hint here" report
       (array/push skips [id (string (or (d :name) "?"))
                           (string "types not proven: " (describe-types pt rt))])))
   # two-round dependency resolution: leaves first, then callers whose
   # targets are all emitted
   (def emitted-names @{})  # id -> janet name
   (def emitted @[])
+  (def skip-reason @{})
   (def cand-ids (filter (fn [k] (number? k)) (sort (keys cand))))
   (var round 0)
   (var changed true)
@@ -757,24 +951,24 @@
       (unless (get emitted-names id)
         (def info (get defs id))
         (def d (info :d))
-        (def [code reason] (emit-fn-c id d (rts id) (get pts id) call-map emitted-names))
+        (def [code reason] (emit-fn-c id d (rts id) (get pts id) call-map emitted-names rts))
         (if code
           (do (def nm (string (d :name)))
             (put emitted-names id nm)
             (array/push emitted {:id id :name nm :code code :pt (get pts id) :rt (rts id)})
             (set changed true))
-          (put cand (string id "-r" reason) reason)))))
-  # candidates that failed translation get their operational reason
+          (put skip-reason id reason)))))
   (each id cand-ids
     (unless (get emitted-names id)
       (def d ((get defs id) :d))
-      (array/push skips [id (string (or (d :name) "?")) "unsupported ops or calls non-native"])))
+      (array/push skips [id (string (or (d :name) "?"))
+                          (or (get skip-reason id) "calls non-emitted native")])))
   (each [id nm r] skips (print "native-skip " id " " nm " " r))
   (when (empty? emitted)
     (eprint "emit-native: no emittable functions")
     (os/exit 1))
-  (defn samples-for [pt]
-    (def per (map (fn [t] (if (= t :long) @[0 1 3] @[0.5 1.5 2.5])) pt))
+  (defn samples-for [pt2]
+    (def per (map (fn [t] (if (= t :long) @[-3 -1 0 1 3] @[-2.5 0.5 1.5 2.5])) pt2))
     (var combos @[@[]])
     (each opts per
       (def nxt @[])
