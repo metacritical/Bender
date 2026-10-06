@@ -22,9 +22,9 @@ phase below (currently Phase 2b).
 
 ```sh
 make                    # default -O2 build -> build/janet
-make test               # full suite: 37/37 (incl. suite-native-fiber 47/47,
+make test               # full suite: 38/38 (incl. suite-native-fiber 47/47,
                         # suite-gc-stress 21/21, suite-gc-minor 12/12,
-                        # suite-thread 25/25)
+                        # suite-thread 25/25, suite-callgraph 15/15)
 make fibertest          # C call-chain suspension proof: 21 checks green
 mkdir -p /tmp/aot-tests
 printf '(print "hi from janet")\n' > /tmp/aot-tests/hello.janet
@@ -318,6 +318,25 @@ Only after 1.1+2: whole-program type analysis over the `FuncDef` graph
 (Spinel `analyze*.c` analogue: registration → call-site widening →
 fixpoint on returns/slots → feature/DCE flags → per-node type cache shared
 with codegen in one process), then:
+
+### Phase 4 step 1 — registration (DONE, this checkout)
+
+`tools/callgraph.janet` extracts the FuncDef graph without running the
+program: parse → one `(do ...)` unit compile (mkimage-style; macros
+pre-installed like loading does) → `disasm` walk. Emits `def` nodes
+(arity/slots/instrs), `contains` (closure nesting), `calls` (unique
+direct target), `extern`/`ambiguous`/`unknown`, `dynamic` (eval/compile/
+require/… — the inference-defeating set), and uncompiled-unit lines,
+plus a stats summary. Resolution is shallow on purpose: symbolmap
+ranges, backward scan to the nearest slot writer (`ldc` constants with
+core-identity for cfunctions, `clo` children, `lds` self, `ldu` by
+upvalue index). `test/suite-callgraph.janet` (15 tests) runs in
+`make test`. Semantics verified against upstream (not tool shortcuts):
+forward references fail the unit exactly like real loading; statically
+unreferenced top-level defns are dropped by the compiler's dead-store
+elimination, so the graph is precisely the statically-live code (dynamic
+escape needs the interpreter fallback flagged by `dynamic`). Next:
+call-site widening fixpoint on this graph.
 
 - Boxed `Janet` for polymorphic slots; unboxed C (`double`, `int64`) for
   inferred numeric loops/structs; value-type promotion for small immutable
