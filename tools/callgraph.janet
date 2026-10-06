@@ -106,7 +106,8 @@
 # the thunk constants; params maps positionally onto the arglist.
 # :long and :double are unboxed; absent (or :number) stays boxed.
 # Validation only here — consumption (unboxed codegen) is the next phase.
-(def valid-hints @{:long true :double true :number true})
+# :float is an alias for :double (janet numbers are doubles)
+(def valid-hints @{:long true :double true :number true :float true})
 (defn hint-of [id]
   (def info (get defs id))
   (when (nil? info) (break nil))
@@ -133,10 +134,35 @@
         (def m (form 2))
         (when (and (or (table? m) (struct? m)) (get m :hint))
           (set h (get m :hint)))
+        # bare param-only hints: (defn f [x ^double y] ...) — no dict,
+        # no ^ return hint, but the arglist carries ^ params
+        (when (nil? h)
+          (def arglist (if (or (table? m) (struct? m)) (form 3) (form 2)))
+          (when (and (tuple? arglist)
+                     (some (fn [a] (and (symbol? a) (= 94 (get (string a) 0))))
+                           arglist))
+            (def hm @{})
+            (def ph @[])
+            (var k 0)
+            (while (< k (length arglist))
+              (def a (arglist k))
+              (if (and (symbol? a) (= 94 (get (string a) 0)))
+                (do
+                  (var pnm (string/slice (string a) 1))
+                  (if (= 58 (get pnm 0)) (set pnm (string/slice pnm 1)))
+                  (def pk (keyword pnm))
+                  (array/push ph (if (= pk :float) :double pk))
+                  (++ k) (++ k))
+                (do (array/push ph :number) (++ k))))
+            (put hm :params (tuple ;ph))
+            (set h hm)))
         (when (and (symbol? m) (= 94 (get (string m) 0)))
           # ^ returns-hint + optional ^ param hints in the arglist
           (def hm @{})
-          (put hm :returns (keyword (string/slice (string m) 1)))
+          (var rnm (string/slice (string m) 1))
+          (if (= 58 (get rnm 0)) (set rnm (string/slice rnm 1)))
+          (def rk (keyword rnm))
+          (put hm :returns (if (= rk :float) :double rk))
           (def arglist (form 3))
           (def ph @[])
           (var k 0)
@@ -145,7 +171,10 @@
             (if (and (symbol? a) (= 94 (get (string a) 0)))
               (do
                 # hinted param: the hint entry IS the param's entry
-                (array/push ph (keyword (string/slice (string a) 1)))
+                (var pnm (string/slice (string a) 1))
+                (if (= 58 (get pnm 0)) (set pnm (string/slice pnm 1)))
+                (def pk (keyword pnm))
+                (array/push ph (if (= pk :float) :double pk))
                 (++ k)
                 (++ k))
               (do

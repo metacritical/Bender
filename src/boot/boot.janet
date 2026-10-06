@@ -39,8 +39,12 @@
           (do
             (if (= t :symbol)
               (if (= 94 (get (string ith) 0))
-                # ^type before the argvector hints the return type
-                (set ret-hint (keyword (string/slice (string ith) 1)))
+                # ^type or ^:type before the argvector hints the return type
+                (do (var nm (string/slice (string ith) 1))
+                  (if (= 58 (get nm 0)) (set nm (string/slice nm 1)))
+                  # :float is an alias for :double (janet numbers are doubles)
+                  (def k (keyword nm))
+                  (set ret-hint (if (= k :float) :double k)))
                 nil)
               nil)
             (if (= t :string)
@@ -63,7 +67,10 @@
         (if (= 94 (get (string a) 0))
           (do
             # hinted param: the hint entry IS the param's slot entry
-            (array/push param-hints (keyword (string/slice (string a) 1)))
+            (var nm (string/slice (string a) 1))
+            (if (= 58 (get nm 0)) (set nm (string/slice nm 1)))
+            (def k (keyword nm))
+            (array/push param-hints (if (= k :float) :double k))
             (set ai (+ ai 1))
             (array/push pargs (in raw-args ai))
             (set ai (+ ai 1)))
