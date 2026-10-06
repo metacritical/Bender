@@ -5,13 +5,14 @@
 # -c       emit C only (app.c next to output path)
 # -S       print generated C to stdout (compile nothing)
 # -E       build to a temp dir, run it with leftover args, discard binary
-set -eu
+set -u
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 JANET="$ROOT/build/janet"
 CC=${CC:-cc}
 
 SRC=""
 OUT=""
+NATIVE=""
 ONLY_C=0
 PRINT_C=0
 RUN_MODE=0
@@ -21,6 +22,7 @@ while [ $# -gt 0 ]; do
     -c) ONLY_C=1; shift;;
     -S) PRINT_C=1; shift;;
     -E) RUN_MODE=1; shift; break;;
+    --native) NATIVE=1; shift;;
     -*) echo "janet-aot: unknown flag $1" >&2; exit 2;;
     *) if [ -z "$SRC" ]; then SRC="$1"; else echo "janet-aot: one input only" >&2; exit 2; fi; shift;;
   esac
@@ -30,19 +32,37 @@ done
 
 if [ -z "$OUT" ]; then OUT="$(dirname -- "$SRC")/$(basename -- "$SRC" .janet)"; fi
 
+
 if [ "$RUN_MODE" -eq 1 ]; then
   TMP=$(mktemp -d)
   trap 'rm -rf "$TMP"' EXIT INT TERM
-  "$JANET" "$ROOT/tools/mkimage.janet" "$SRC" "$TMP/app.c"
-  "$CC" -O2 -I"$ROOT/build" -I"$ROOT/src/include" "$TMP/app.c" \
-    "$ROOT/build/libjanet.a" -lm -lpthread -o "$TMP/app"
+  if [ -n "$NATIVE" ]; then
+    "$JANET" "$ROOT/tools/callgraph.janet" "$SRC" --emit-native-lib "$TMP"
+    "$JANET" "$ROOT/tools/mkimage.janet" "$SRC" --native "$TMP/native-names.txt" "$TMP/app.c"
+    "$CC" -O2 -w -DJANET_AOT_NATIVE_INIT -I"$ROOT/build" -I"$ROOT/src/include" "$TMP/app.c" \
+      "$TMP/native.c" "$ROOT/build/libjanet.a" -lm -lpthread -o "$TMP/app"
+  else
+    "$JANET" "$ROOT/tools/mkimage.janet" "$SRC" "$TMP/app.c"
+    "$CC" -O2 -I"$ROOT/build" -I"$ROOT/src/include" "$TMP/app.c" \
+      "$ROOT/build/libjanet.a" -lm -lpthread -o "$TMP/app"
+  fi
   exec "$TMP/app" "$@"
 fi
 
 CFILE="${OUT}.c"
-"$JANET" "$ROOT/tools/mkimage.janet" "$SRC" "$CFILE"
-if [ "$PRINT_C" -eq 1 ]; then cat "$CFILE"; rm -f "$CFILE"; exit 0; fi
-if [ "$ONLY_C" -eq 1 ]; then echo "wrote $CFILE"; exit 0; fi
-"$CC" -O2 -I"$ROOT/build" -I"$ROOT/src/include" "$CFILE" \
-  "$ROOT/build/libjanet.a" -lm -lpthread -o "$OUT"
+if [ -n "$NATIVE" ]; then
+  NDIR="${OUT}-native"
+  "$JANET" "$ROOT/tools/callgraph.janet" "$SRC" --emit-native-lib "$NDIR"
+  "$JANET" "$ROOT/tools/mkimage.janet" "$SRC" --native "$NDIR/native-names.txt" "$CFILE"
+  if [ "$PRINT_C" -eq 1 ]; then cat "$CFILE" "$NDIR/native.c"; exit 0; fi
+  if [ "$ONLY_C" -eq 1 ]; then echo "wrote $CFILE + $NDIR/native.c"; exit 0; fi
+  "$CC" -O2 -w -DJANET_AOT_NATIVE_INIT -I"$ROOT/build" -I"$ROOT/src/include" "$CFILE" \
+    "$NDIR/native.c" "$ROOT/build/libjanet.a" -lm -lpthread -o "$OUT"
+else
+  "$JANET" "$ROOT/tools/mkimage.janet" "$SRC" "$CFILE"
+  if [ "$PRINT_C" -eq 1 ]; then cat "$CFILE"; rm -f "$CFILE"; exit 0; fi
+  if [ "$ONLY_C" -eq 1 ]; then echo "wrote $CFILE"; exit 0; fi
+  "$CC" -O2 -I"$ROOT/build" -I"$ROOT/src/include" "$CFILE" \
+    "$ROOT/build/libjanet.a" -lm -lpthread -o "$OUT"
+fi
 echo "built $OUT"

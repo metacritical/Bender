@@ -44,6 +44,7 @@
 # parity semantics; native emission calls the C symbol directly (the
 # raylib story).
 (var emit-native-dir nil)
+(var emit-native-lib-dir nil)
 (var externs-file nil)
 (var filtered @[])
 (var i 0)
@@ -52,6 +53,8 @@
   (cond
     (and (= a "--emit-native") (< (+ i 1) (length args)))
     (do (set emit-native-dir (args (+ i 1))) (++ i))
+    (and (= a "--emit-native-lib") (< (+ i 1) (length args)))
+    (do (set emit-native-lib-dir (args (+ i 1))) (++ i))
     (and (= a "--externs") (< (+ i 1) (length args)))
     (do (set externs-file (args (+ i 1))) (++ i))
     (array/push filtered a))
@@ -1087,4 +1090,78 @@
   (spit (string outdir "/expected.txt") (string (string/join expected "\n") "\n"))
   (print "native " (length emitted) " fns " (length calls) " samples " outdir))
 
+(defn wrapper-for [nm pt rt]
+  (def cn (emit-c-name nm))
+  (def ps (string/join (seq [i :range [0 (length pt)]]
+                     (string "janet_unwrap_"
+                             (if (= (pt i) :long) "integer" "number")
+                             "(argv[" i "])"))
+                  ", "))
+  (def rv (if (= rt :long) "janet_wrap_integer" "janet_wrap_number"))
+  (string "static Janet " cn "_wrapper(int32_t argc, Janet *argv) {\n"
+          "    (void) argc;\n"
+          "    return " rv "(" cn "(" ps "));\n}\n"))
+
 (when emit-native-dir (emit-native-all emit-native-dir))
+
+(defn emit-native-lib [outdir]
+  # Step 12: hybrid-binary flavor. Emits native.c with the kernels PLUS
+  # janet-cfunction wrappers (unbox args -> kernel -> rebox result) and a
+  # native_init(JanetTable*) that registers the wrappers into the runtime
+  # env. The host app calls native_init(env) after janet_core_env and
+  # before running/compiling any janet code — env-resolved call sites
+  # (notably eval'd code) then dispatch straight to the natives.
+  (os/mkdir outdir)
+  # candidates + two-round dependency resolution (same discipline as
+  # emit-native-all): leaves first, then callers of emitted natives
+  (def cand @{})
+  (each id (range (length defs))
+    (def info (get defs id))
+    (def d (info :d))
+    (def pt (get pts id))
+    (def rt (rts id))
+    (var concrete (and (> (length pt) 0) (not (d :vararg))))
+    (each t pt (unless (get infer/numeric-types t) (set concrete false)))
+    (unless (get infer/numeric-types rt) (set concrete false))
+    (when concrete (put cand id true)))
+  (def emitted-names @{})
+  (def kernels @[])
+  (var round 0)
+  (var changed true)
+  (while (and changed (< round 4))
+    (++ round)
+    (set changed false)
+    (each id (filter (fn [k] (number? k)) (sort (keys cand)))
+      (unless (get emitted-names id)
+        (def info (get defs id))
+        (def d (info :d))
+        (def [res reason] (emit-fn-c id d (rts id) (get pts id) call-map emitted-names rts))
+        (when res
+          (def nm (string (d :name)))
+          (put emitted-names id nm)
+          (array/push kernels {:name nm :code (res :code)
+                               :wrapper (wrapper-for nm (get pts id) (rts id))})
+          (set changed true)))))
+  (def cout @"")
+  (buffer/push-string cout "#include <janet.h>\n#include <inttypes.h>\n\n")
+  (each k kernels
+    (buffer/push-string cout (k :code))
+    (buffer/push-string cout "\n")
+    (buffer/push-string cout (k :wrapper))
+    (buffer/push-string cout "\n"))
+  (buffer/push-string cout "void native_init(JanetTable *env) {\n")
+  (buffer/push-string cout "    static const JanetReg regs[] = {\n")
+  (each k kernels
+    (buffer/push-string cout
+      (string "    { \"" (k :name) "\", " (emit-c-name (k :name)) "_wrapper, NULL },\n")))
+  (buffer/push-string cout "    { NULL, NULL, NULL } };\n")
+  (buffer/push-string cout "    janet_cfuns(env, \"native\", regs);\n")
+  (buffer/push-string cout "    janet_cfuns(env, \"native\", regs);\n")  (buffer/push-string cout "    fprintf(stderr, \"native_init: registered %d wrappers\\n\", (int) (sizeof(regs)/sizeof(regs[0]) - 1));\n")
+  (buffer/push-string cout "}\n")
+  (spit (string outdir "/native.c") cout)
+  (def nl @"")
+  (each k kernels (buffer/push-string nl (k :name)) (buffer/push-string nl "\n"))
+  (spit (string outdir "/native-names.txt") nl)
+  (print "native-lib " (length kernels) " kernels " outdir))
+
+(when emit-native-lib-dir (emit-native-lib emit-native-lib-dir))

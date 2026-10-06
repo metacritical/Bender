@@ -18,9 +18,23 @@
 # eval/compile/dobytes on runtime strings is NOT detected statically yet —
 # programs using them build but keep interpreting at runtime.
 
-(def args (tuple/slice (dyn :args) 1)) # :args[0] is this script's path
+# :args[0] is this script's path; SRC OUT [--native names.txt]
+(def rawargs (tuple/slice (dyn :args) 1))
+(var args @[])
+(var native-names @{})
+(var native-names-file nil)
+(var nai 0)
+(while (< nai (length rawargs))
+  (def a (rawargs nai))
+  (if (and (= a "--native") (< (+ nai 1) (length rawargs)))
+    (do (set native-names-file (rawargs (+ nai 1)))
+        (++ nai))
+    (array/push args a))
+  (++ nai))
+(var native-names @{})
+(var native-names-file nil)
 (when (< (length args) 2)
-  (eprint "usage: mkimage.janet SRC.janet OUT.c")
+  (eprint "usage: mkimage.janet SRC.janet OUT.c [--native names.txt]")
   (os/exit 1))
 (def srcpath (get args 0))
 (def outpath (get args 1))
@@ -45,9 +59,40 @@
       (when (not (nil? v)) (put snap k v))))
   (set t (table/getproto t)))
 
-(def forms
+(var forms
   (try (parse-all src)
     ([err] (eprint srcpath ": parse error: " err) (os/exit 1))))
+
+# --native names.txt (step 12 hybrid): names in the file were compiled to
+# native kernels (native.c, sibling of output). Strip their defn forms —
+# the boxed copies would overwrite the native wrappers at thunk-run — and
+# prepend a prelude that rebinds each name from the env, where the app's
+# native_init registered the wrapper cfunctions pre-unmarshal. Same-unit
+# call sites then compile against the prelude bindings -> wrappers.
+(when native-names-file
+  (def nf (slurp native-names-file))
+  (each l (string/split "\n" nf)
+    (when (> (length l) 0) (put native-names (symbol l) true))))
+
+(when (next native-names)
+  # strip proven defn forms; keep everything else
+  (def kept @[])
+  (each f forms
+    (if (and (tuple? f) (>= (length f) 2)
+             (symbol? (get f 0))
+             (or (= (string (get f 0)) "defn") (= (string (get f 0)) "defn-"))
+             (symbol? (get f 1))
+             (get native-names (get f 1)))
+      nil
+      (array/push kept f)))
+  (set forms kept)
+  # prelude: rebind each native name from the env (wrapper cfunctions
+  # registered by native_init before the thunk runs)
+  (each nm (keys native-names)
+    (array/push forms 0
+                (tuple 'def nm
+                       (tuple ':value
+                              (tuple 'get '(curenv) (tuple 'quote nm)))))))
 
 # One thunk for the whole file: correct cross-form refs, zero build-time run.
 (def program (tuple/slice @['do ;forms] 0))
@@ -93,6 +138,12 @@
       janet_init();
       JanetTable *env = janet_core_env(NULL);
       janet_table_put(env, janet_ckeywordv("executable"), janet_cstringv(argv[0]));
+#ifdef JANET_AOT_NATIVE_INIT
+      /* hybrid binary: register native kernels before any janet code
+       * runs (boxed or eval'd call sites resolve through env) */
+      extern void native_init(JanetTable *env);
+      native_init(env);
+#endif
       JanetTable *reg = janet_table((int32_t) janet_aot_names_len);
       for (unsigned long i = 0; i < janet_aot_names_len; i++) {
           Janet v = janet_resolve_core(janet_aot_names[i]);
