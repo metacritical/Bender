@@ -136,4 +136,24 @@
 (assert (not (nil? (string/find "hint-bad 1 bad-returns-hint" hbtext))) "bad returns flagged")
 (assert (not (nil? (string/find "hints 1 1" hbtext))) "bad count in hints line")
 
+# ^ syntax (reader-level hints via defn): same metadata as the dict form
+(spit "/tmp/cg-caret.janet" (string
+  "(defn add3 ^long [a ^double b] (+ a b))\n"
+  "(defn main [] (print (add3 1 2.5)))\n"))
+(assert (= 0 (os/execute ["/bin/sh" "-c"
+  "./build/janet tools/callgraph.janet /tmp/cg-caret.janet > /tmp/cg-caret-out.txt"] :p))
+  "callgraph caret run")
+(def ctext (slurp "/tmp/cg-caret-out.txt"))
+(assert (not (nil? (string/find "hint 1 number double -> long" ctext))) "caret hints match dict form")
+(assert (not (nil? (string/find "hints 1 0" ctext))) "caret hint counts clean")
+
+# raw fn with ^ params is a compile error, not a silent arity change
+(spit "/tmp/cg-guard.janet" "(def bad (fn [x ^long y] x))\n")
+(assert (= 0 (os/execute ["/bin/sh" "-c"
+  "./build/janet tools/callgraph.janet /tmp/cg-guard.janet > /tmp/cg-guard-out.txt"] :p))
+  "callgraph guard run")
+(def gtext (slurp "/tmp/cg-guard-out.txt"))
+(assert (not (nil? (string/find "uncompiled" gtext))) "raw fn ^ param refused")
+(assert (not (nil? (string/find "cannot start with ^" gtext))) "guard message present")
+
 (end-suite)

@@ -14,11 +14,22 @@
   (defn name & more)
 
   Define a function. Equivalent to `(def name (fn name [args] ...))`.
+
+  Optional Clojure-style type hints are accepted for ahead-of-time
+  compilation: a `^type` symbol before the argvector hints the return
+  type, and `^type` before a parameter symbol hints that parameter
+  (positional; unmarked parameters read as `:number`). Hinted values
+  (`:long`, `:double`) may be unboxed by an AOT compiler; without
+  hints everything stays boxed. Hints are collected into a
+  `{:hint ...}` metadata entry on the binding.
+
+  (defn f ^long [x ^double y] ...)   # returns :long, y is :double
   ```
   (fn defn [name & more]
     (def len (length more))
     (def modifiers @[])
     (var docstr "")
+    (var ret-hint nil)
     (def fstart
       (fn recur [i]
         (def {i ith} more)
@@ -26,24 +37,70 @@
         (if (= t :tuple)
           i
           (do
+            (if (= t :symbol)
+              (if (= 94 (get (string ith) 0))
+                # ^type before the argvector hints the return type
+                (set ret-hint (keyword (string/slice (string ith) 1)))
+                nil)
+              nil)
             (if (= t :string)
               (set docstr ith)
-              (array/push modifiers ith))
+              (if (= t :symbol)
+                nil
+                (array/push modifiers ith)))
             (if (< i len) (recur (+ i 1)))))))
     (def start (fstart 0))
-    (def args (in more start))
+    # Strip ^type hint symbols out of the arglist: [x ^long y] binds
+    # two parameters, x (unhinted) and y (:long). Every parameter gets
+    # a positional hint entry, `:number` when unmarked.
+    (def raw-args (in more start))
+    (def pargs @[])
+    (def param-hints @[])
+    (var ai 0)
+    (while (< ai (length raw-args))
+      (def a (in raw-args ai))
+      (if (= :symbol (type a))
+        (if (= 94 (get (string a) 0))
+          (do
+            # hinted param: the hint entry IS the param's slot entry
+            (array/push param-hints (keyword (string/slice (string a) 1)))
+            (set ai (+ ai 1))
+            (array/push pargs (in raw-args ai))
+            (set ai (+ ai 1)))
+          (do
+            (array/push pargs a)
+            (array/push param-hints :number)
+            (set ai (+ ai 1))))
+        (do
+          (array/push pargs a)
+          (array/push param-hints :number)
+          (set ai (+ ai 1)))))
+    (var hinted false)
+    (var hi 0)
+    (while (< hi (length param-hints))
+      (if (not= (in param-hints hi) :number) (set hinted true))
+      (set hi (+ hi 1)))
+    (if (if hinted true ret-hint)
+      (do
+        (def hm @{})
+        (if hinted (put hm :params (tuple ;param-hints)) nil)
+        (if ret-hint (put hm :returns ret-hint) nil)
+        # def metadata accepts structs (a table here is rejected by the
+        # compiler's attribute handling)
+        (array/push modifiers (struct :hint hm)))
+      nil)
     # Add function signature to docstring
     (var index 0)
-    (def arglen (length args))
+    (def arglen (length pargs))
     (def buf (buffer "(" name))
     (while (< index arglen)
       (buffer/push-string buf " ")
-      (buffer/format buf "%j" (in args index))
+      (buffer/format buf "%j" (in pargs index))
       (set index (+ index 1)))
     (array/push modifiers (string buf ")\n\n" docstr))
     (if (dyn :debug) (array/push modifiers {:source-form (dyn :macro-form)}))
     # Build return value
-    ~(def ,name ,;modifiers (fn ,name ,;(tuple/slice more start)))))
+    ~(def ,name ,;modifiers (fn ,name ,(tuple ;pargs) ,;(tuple/slice more (+ start 1))))))
 
 (defn defmacro :macro :flycheck
   "Define a macro."

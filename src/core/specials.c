@@ -358,6 +358,19 @@ static JanetTable *handleattr(JanetCompiler *c, const char *kind, int32_t argn, 
         Janet attr = argv[i];
         switch (janet_type(attr)) {
             case JANET_TUPLE:
+                if (argn > 10) {
+                    janet_eprintf("DBG def %s argn=%d\n", binding_name, (int) argn);
+                    for (int32_t q = 0; q < argn; q++) {
+                        JanetString dstr = janet_description(argv[q]);
+                        janet_eprintf("  argv[%d] type=%d len=%d: ",
+                                      (int) q, (int) janet_type(argv[q]),
+                                      (int) janet_string_length(dstr));
+                        for (int32_t w = 0; w < janet_string_length(dstr) && w < 70; w++) {
+                            janet_eprintf("%c", (char) dstr[w]);
+                        }
+                        janet_eprintf("\n");
+                    }
+                }
                 janetc_cerror(c, "unexpected form - did you intend to use defn?");
                 break;
             default:
@@ -1079,6 +1092,14 @@ static JanetSlot janetc_fn(JanetFopts opts, int32_t argn, const Janet *argv) {
         } else if (janet_checktype(param, JANET_SYMBOL)) {
             /* Check for varargs and unfixed arity */
             const uint8_t *sym = janet_unwrap_symbol(param);
+            if (sym[0] == '^') {
+                /* Type hints belong on defn (^type before a parameter),
+                 * which strips them before the fn special ever sees the
+                 * arglist. A raw fn with ^ params would otherwise bind
+                 * the hint as a parameter and silently change arity. */
+                errmsg = "parameter names cannot start with ^ (type hints belong on defn)";
+                goto error;
+            }
             if (sym[0] == '&') {
                 if (!janet_cstrcmp(sym, "&")) {
                     if (seenamp) {

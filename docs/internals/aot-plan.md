@@ -24,7 +24,7 @@ phase below (currently Phase 2b).
 make                    # default -O2 build -> build/janet
 make test               # full suite: 38/38 (incl. suite-native-fiber 47/47,
                         # suite-gc-stress 21/21, suite-gc-minor 12/12,
-                        # suite-thread 25/25, suite-callgraph 40/40)
+                        # suite-thread 25/25, suite-callgraph 46/46)
 make fibertest          # C call-chain suspension proof: 21 checks green
 mkdir -p /tmp/aot-tests
 printf '(print "hi from janet")\n' > /tmp/aot-tests/hello.janet
@@ -330,7 +330,7 @@ require/… — the inference-defeating set), and uncompiled-unit lines,
 plus a stats summary. Resolution is shallow on purpose: symbolmap
 ranges, backward scan to the nearest slot writer (`ldc` constants with
 core-identity for cfunctions, `clo` children, `lds` self, `ldu` by
-upvalue index). `test/suite-callgraph.janet` (40 tests) runs in
+upvalue index). `test/suite-callgraph.janet` (46 tests) runs in
 `make test`. Semantics verified against upstream (not tool shortcuts):
 forward references fail the unit exactly like real loading; statically
 unreferenced top-level defns are dropped by the compiler's dead-store
@@ -367,9 +367,29 @@ thunk constants; params maps positionally. `:long`/`:double` unbox;
 absent or `:number` stays boxed; unannotated code keeps the inference
 path. Tool-side validation only so far (extraction, `hint` lines,
 `hint-bad` rejections for unknown keywords/arity mismatches,
-`hint-call` linking hinted callees with resolvable sites). Next:
-compiler-side consumption — check/emit unboxed codegen paths for
-hinted defs, then the returns fixpoint using hints as seeds.
+`hint-call` linking hinted callees with resolvable sites).
+
+### Phase 4 step 5 — `^` hint syntax (DONE, this checkout)
+
+Clojure-ergonomic surface, no parser changes: the reader already
+tokenizes `^type` as an ordinary symbol, so `defn` itself now
+interprets it — `^type` before the argvector is the return hint,
+`^type` before a parameter hints that parameter — strips both, and
+emits the identical `{:hint ...}` metadata as the dict form. Written
+in boot-janet using only core C functions (defn sits at line 12,
+before `and`/`or`/`cond`/`when`/`each`/`++` exist) and committed with
+exact paren accounting. The fn special (specials.c) now REJECTS
+parameter symbols starting with `^` so a raw `(fn [x ^long y])`
+fails loudly instead of silently binding the hint as a parameter and
+changing arity (the original corruption that made `^` unusable).
+Tool extract-hints understands both surfaces; suite pins cover the
+dict form, the `^` form (identical `hint` lines), and the guard.
+Bootstrap lessons recorded: def-attribute metadata must be a struct
+(a table is rejected by handleattr), and a single missing paren in
+boot.janet manifests as bizarre downstream compile errors (the
+swallowed-forms `argn=21`) — paren balance in boot edits must be
+verified mechanically. Next: compiler-side unboxed codegen consuming
+hints, then the returns fixpoint.
 
 - Boxed `Janet` for polymorphic slots; unboxed C (`double`, `int64`) for
   inferred numeric loops/structs; value-type promotion for small immutable

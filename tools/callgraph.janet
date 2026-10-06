@@ -84,14 +84,39 @@
     (def text (slurp f))
     (def forms (parse-all text))
     (each form forms
-      # find defn forms with a {:hint {...}} dict modifier and record
-      # the hint under every name-ids entry registered for that name
+      # find defn forms carrying hints and record the hint under every
+      # name-ids entry registered for that name. Two surfaces:
+      # (defn f {:hint {...}} ...)            dict modifier
+      # (defn f ^long [x ^double y] ...)      ^ syntax (defn strips it
+      # into the same metadata; we parse it directly here)
       (when (and (tuple? form) (>= (length form) 3)
                  (symbol? (form 0))
                  (or (= (string (form 0)) "defn") (= (string (form 0)) "defn-")))
+        (var h nil)
         (def m (form 2))
         (when (and (or (table? m) (struct? m)) (get m :hint))
-          (def h (get m :hint))
+          (set h (get m :hint)))
+        (when (and (symbol? m) (= 94 (get (string m) 0)))
+          # ^ returns-hint + optional ^ param hints in the arglist
+          (def hm @{})
+          (put hm :returns (keyword (string/slice (string m) 1)))
+          (def arglist (form 3))
+          (def ph @[])
+          (var k 0)
+          (while (< k (length arglist))
+            (def a (arglist k))
+            (if (and (symbol? a) (= 94 (get (string a) 0)))
+              (do
+                # hinted param: the hint entry IS the param's entry
+                (array/push ph (keyword (string/slice (string a) 1)))
+                (++ k)
+                (++ k))
+              (do
+                (array/push ph :number)
+                (++ k))))
+          (put hm :params (tuple ;ph))
+          (set h hm))
+        (when h
           (def nm (string (form 1)))
           (def ids (get name-ids nm))
           (when ids
