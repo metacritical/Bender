@@ -25,6 +25,10 @@
     :u64 :long :u32 :long :u16 :long :u8 :long
     :float :double})
 
+# int-family predicate (mirrors callgraph's int-hints table; :number
+# is deliberately excluded — unknown int-or-float stays fail-closed)
+(defn int-family? [t] (or (= t :long) (= :long (get width-family t))))
+
 (defn type-join [a0 b0]
   # widths normalize to their family before joining
   (def a (get width-family a0 a0))
@@ -93,8 +97,10 @@
     (when hp
       (var i 0)
       (each p hp
+        # Step 11: :array params are opaque-but-known (pointer, never
+        # arithmetized); annotation-seeded either way (pfixed below)
         (when (< i arity)
-          (put parr i (if (get numeric-types p) p :unknown)))
+          (put parr i (if (or (get numeric-types p) (= p :array)) p :unknown)))
         (++ i))
       (put pfixed id true))
     (put pts id parr)
@@ -134,6 +140,21 @@
         (put st (ins 1)
              (arith-join (get st (ins 2) :unknown) (get st (ins 3) :unknown)))
         (get cmp-ops op) (put st (ins 1) :bool)
+        # Step 11: array access. get needs an :array base and an
+        # int-family index (-> :number); anything else is :unknown
+        # (fail-closed: tables/strings stay boxed). put keeps :array
+        # only with int index + numeric value, else :unknown.
+        (= op 'get)
+        (put st (ins 1)
+             (if (and (= :array (get st (ins 2) :unknown))
+                      (int-family? (get st (ins 3) :unknown)))
+               :number :unknown))
+        (= op 'put)
+        (do (def pa (get st (ins 1) :unknown))
+          (when (= pa :array)
+            (unless (and (int-family? (get st (ins 2) :unknown))
+                         (get numeric-types (get st (ins 3) :unknown)))
+              (put st (ins 1) :unknown))))
         (= op 'push) (array/push pending (get st (ins 1) :unknown))
         (= op 'push2)
         (do (array/push pending (get st (ins 1) :unknown))

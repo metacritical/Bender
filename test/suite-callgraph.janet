@@ -317,4 +317,47 @@
 # literals coerced at the call boundary)
 (assert (nil? (string/find "add_i32(-2.5" wtext)) "int-width harness samples integral")
 
+# ---- Step 11: numeric array state (SoA spike) ----
+(spit "/tmp/cg-arr.janet" (string
+  "(defn asum {:hint {:params [:array] :returns :double}} [a]\n"
+  "  (var s 0.0)\n"
+  "  (for i 0 (length a)\n"
+  "    (+= s (get a i)))\n"
+  "  s)\n"
+  "(defn ascale {:hint {:params [:array :double] :returns :double}} [a k]\n"
+  "  (for i 0 (length a)\n"
+  "    (put a i (* (get a i) k)))\n"
+  "  (get a 0))\n"
+  "(defn main [] (print (asum @[1.5 2.5]) (ascale @[1 2 3] 10)))\n"))
+(assert (= 0 (os/execute ["/bin/sh" "-c"
+  "rm -rf /tmp/cg-arr && ./build/janet tools/callgraph.janet /tmp/cg-arr.janet --emit-native /tmp/cg-arr"] :p))
+  "array emit run")
+(assert (= 0 (os/execute ["/bin/sh" "-c"
+  (string "cc -O2 -w -Isrc/include -Isrc/conf /tmp/cg-arr/native.c build/janet.o"
+          " -lm -lpthread -ldl -o /tmp/cg-arr/native"
+          " && /tmp/cg-arr/native > /tmp/cg-arr/actual.txt"
+          " && cmp /tmp/cg-arr/expected.txt /tmp/cg-arr/actual.txt")] :p))
+  "array parity (sum over len/get loop + in-place scale via put)")
+(def atext (slurp "/tmp/cg-arr/native.c"))
+(assert (not (nil? (string/find "JanetArray* p0" atext))) "array param exact type")
+(assert (not (nil? (string/find "->count" atext))) "len lowers to count")
+(assert (not (nil? (string/find "->data[" atext))) "get/put lower to data[]")
+(assert (not (nil? (string/find "array index out of bounds" atext)))
+        "OOB guard emitted")
+(assert (not (nil? (string/find "#include <janet.h>" atext)))
+        "janet.h included for array kernels")
+# fail-closed rules: float index and len-of-number skip with reasons
+(spit "/tmp/cg-arrbad.janet" (string
+  "(defn gbad {:hint {:params [:array :double] :returns :double}} [a i] (get a i))\n"
+  "(defn lns {:hint {:params [:double] :returns :double}} [x] (length x))\n"
+  "# reachable (else dropped pre-analysis) but never run: emit fails first\n"
+  "(defn main [] (print (gbad @[1] 0.5) (lns 3)))\n"))
+(os/execute ["/bin/sh" "-c"
+  "rm -rf /tmp/cg-arrbad && ./build/janet tools/callgraph.janet /tmp/cg-arrbad.janet --emit-native /tmp/cg-arrbad >/tmp/cg-arrbad.log 2>&1"] :p)
+(def badout (slurp "/tmp/cg-arrbad.log"))
+(assert (not (nil? (string/find "get requires array and int index" badout)))
+        "float-index get skips with reason")
+(assert (not (nil? (string/find "len of non-array" badout)))
+        "len-of-number skips with reason")
+
 (end-suite)

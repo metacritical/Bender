@@ -651,9 +651,36 @@ trusted until it agrees byte-for-byte.
   linked into the harness — fallback ≡ C impl, byte-identical. This
   is the raylib story proven end to end.
 - **Step 11 — numeric array state.** SoA state for game entities.
-  Design-heavy: buffer-as-typed-array view vs new core primitive;
-  allocation goes through the runtime with explicit roots
-  (janet_gcshadow). Design doc + parity spike before committing.
+  DESIGN (recorded 2026-10-06, spike shipped): NOT a new core
+  primitive and NOT buffer views — boxed `JanetArray*` params with
+  unboxed indexed access. Rationale: arrays already exist, marshal,
+  and root like any value; kernels only need read/write/accumulate,
+  and SoA is just N array params. Surface: `:array` param hint
+  (opaque pointer, never arithmetized); opcodes `len` (array->:long),
+  `get` (array x int->:number), `put` (array x int x numeric->:array,
+  in place). Rules enforced at flow-check: len/get base must be
+  :array-typed, get/put index must be int-family, put value numeric,
+  returns stay numeric; anything else skips with a reason.
+  - GC: arrays are rooted by the caller for the call duration;
+    kernels never retain pointers (no escaping: no globals, no
+    pointer returns) — safe with zero collector work.
+  - Bounds: janet `get` OOB returns nil, which has no unboxed
+    representation — native emits an explicit check that aborts on
+    violation (documented opt-in divergence, same class as :float).
+    Canonical `for i 0 (length a)` loops are in-bounds by
+    construction; proving len-guard dominance to elide the check is
+    future work.
+  - Elements are unchecked `janet_unwrap_number` (garbage for
+    non-numbers — documented; hardening with checknumber later).
+  - Harness: fixed sample arrays (one float, one int) built with
+    wrap macros; harness cc adds `-Isrc/include -Isrc/conf` and links
+    `build/janet.o` (nanbox helpers are real functions, not macros —
+    pure bit ops, no VM init needed); expected values by eval with
+    the same arrays. Array kernels sample int params from [0 1]
+    (variants have length >= 2; OOB aborts by design).
+  - Wrapper: `(JanetArray *)janet_unwrap_array(argv[i])` pass-through.
+  - Future: typed buffers (`:buf-f64` views over buffer bytes),
+    bounds-check elision, `put` chaining returns.
 - **Step 12 — hybrid binary integration (DONE, this checkout).**
   `emit-native-lib` emits kernels + janet-cfunction wrappers (unbox →
   kernel → rebox) + `native_init(JanetTable*)` registering them.
