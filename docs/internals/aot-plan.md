@@ -325,9 +325,43 @@ is the same shape with two tiers:
 - `monitor`, `link`, `send (!)` and the M3 registry all resolve
   **pids**, never handles/channels. Reason values: `:normal` |
   error value | `:noproc` (target already dead).
-- Deliberately deferred: exit *propagation* (trapping), monitor refs/
-  demonitor, remote-node routing. M2 notifies; supervisors (which need
-  propagation + `noproc`) come after pids land.
+
+**Cooperative supervision (recorded 2026-10-06).** Full OTP signal
+semantics fight this architecture (no interpreter safepoints, no
+shared heap, marshal-everything), so supervision is *cooperative*:
+it works between live workers that pump their mailboxes, which covers
+the games workload (a crashed physics worker gets restarted instead of
+killing the game). The boundary is semantics, not footnotes:
+- GUARANTEED: `:down` notification to monitors on worker exit;
+  error values travel as reasons; trapping workers observe exits as
+  messages and can restart peers via `thread/new`.
+- NOT PROVIDED (documented, behind M4): preemptive or untrappable
+  kill — a wedged worker (long computation, deadlocked send) never
+  reads its `:down` and never dies; cross-thread signal ordering is
+  best-effort, never Erlang-strict; restart cost is a full OS-thread +
+  VM boot, so supervision is for coarse workers, not Erlang-scale
+  process counts (cheap restart comes with M4 task queues).
+- Design, in order:
+  - *M2b refs/demonitor*: `ev/monitor` returns an integer slot ref;
+    `ev/demonitor handle ref` tombstones it (post-completion
+    demonitor is a clean no-op). ~20 lines of C, no architectural
+    tension.
+  - *M2c trap-exit*: per-mailbox flag (`mailbox/trap-exit mb bool`).
+    Worker loop on `:down` with non-`:normal` reason: trapping ->
+    handler observes `(:down [tag reason])` as today; not trapping
+    -> worker exits with that reason (`error`), which rides the
+    existing completion path and cascades. ~10 lines of Janet, zero
+    new runtime primitives. Supervisors are trapping workers.
+  - *M2d link as composition*: `mailbox/link` stays two monitors +
+    propagate-on-down — identical semantics to a C primitive under
+    best-effort delivery, so no primitive is needed. Setup needs no
+    atomicity: back-to-back `ev/monitor` calls on one owner cannot
+    interleave harmfully (a worker exiting mid-setup yields an
+    immediate `:down` — still correct ordering).
+  - *M2e pids*: `[:pid node serial chan]` + per-root-VM counter +
+    `mailbox/self`; pid-resolving `ev/monitor`/`link`/`send`;
+    `:noproc` immediate-down for dead pids. Bare-fiber pids wait on
+    M4 (fibers own no channel yet).
 
 **M1 — worker-mailbox pattern library** (pure janet, `ev/mailbox.janet`
 or shipped as an example). Surface:
@@ -374,9 +408,24 @@ surface below is the follow-up that unlocks supervisors. Surface:
 - Tests: normal exit delivers `:normal`; error exit delivers the
   error; monitor survives worker crash; link chain (A<->B, B dies, A
   notified). Gate: full `make test` + threaded-channel stress.
-- Pid follow-up (unlocks supervisors): pid value + `self()` +
-  pid-resolving monitor/send; `:noproc` immediate-down for dead pids;
-  registry (M3) maps names to pids. Bare-fiber pids deferred to M4.
+- Pid follow-up (unlocks supervisors, TODO in order — each lands
+  with suite pins + full gates before the next starts):
+  - TODO M2b refs/demonitor: slot-ref return + `ev/demonitor`;
+    pins: demonitor-then-exit delivers nothing, double-demonitor and
+    post-completion demonitor are silent no-ops, surviving monitors
+    still fire.
+  - TODO M2c trap-exit: `mailbox/trap-exit` flag + loop propagation;
+    pins: trapping worker observes `:down` and survives; non-trapping
+    linked worker exits with the peer's reason (cascade A->B->C);
+    `:normal` exits never propagate.
+  - TODO M2d link composition: `mailbox/link` on M2b+M2c; pins: link
+    chain B-dies-A-notified with reason preserved; mid-setup exit
+    still orders correctly.
+  - TODO M2e pids: pid value + counter + `mailbox/self`,
+    pid-resolving monitor/link/send, `:noproc` immediate-down; pins:
+    pid round-trips through marshal, self() inside workers, monitor
+    by pid, dead-pid monitor gives `:noproc`. Bare-fiber pids
+    deferred to M4. Registry (M3) maps names to pids.
 - Known-open (pre-existing, reproduced on the clean tree 2026-10-06):
   ASan `stack-use-after-scope` when an `ev/go` task that called
   `ev/sleep` gives into an `ev/thread-chan`. Minimal repro (no
@@ -411,6 +460,11 @@ Phase 3 text above: work-stealing runqueues, SIGURG preemption at
 poll points, scheduler-aware parking. Prereq: everything above is
 schedulable on 1:N; M:N changes WHERE fibers run, not how they
 communicate — the messaging layer is deliberately scheduler-agnostic.
+M4 additionally unlocks what cooperation cannot: Erlang-exact signal
+semantics (preemptive/untrappable kill via interpreter safepoints),
+strict cross-task ordering, cheap task restart (fresh task in a warm
+VM — supervision at scale), and bare-fiber pids (every scheduled task
+owns a queue).
 
 **M5 — shareable immutable structs** (runtime + GC). Janet structs are
 immutable — candidates for zero-copy sharing. Blocker: two isolated
@@ -422,10 +476,12 @@ fast path, and a `shareable` predicate (deep-immutability check:
 no tables/arrays/buffers/objects inside). Design doc + GC review
 BEFORE implementing — this touches the collector.
 
-**Dependency chain:** M1 (pure janet) -> M2 (runtime) -> M3 (runtime)
--> M4 (scheduler core); M5 independent of M2-M4, gated on the GC
-design review. Each task: feature branch, suite pins, full gates
-(`make test`, `make fibertest`, oracle x6), feature commit.
+**Dependency chain:** M1 (pure janet) -> M2 (runtime) -> M2b/c/d/e
+(cooperative supervision: refs, trapping, link, pids — each gated
+separately) -> M3 (registry, names to pids) -> M4 (scheduler core +
+Erlang-exact signals + fiber pids); M5 independent of M2-M4, gated on
+the GC design review. Each task: feature branch, suite pins, full
+gates (`make test`, `make fibertest`, oracle x6), feature commit.
 
 ### Phase 3 slice — value-returning thread/new + thread/join (DONE, this checkout)
 
