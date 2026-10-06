@@ -3400,10 +3400,13 @@ static int janet_thread_handle_gc(void *p, size_t len) {
     (void) len;
     JanetThreadHandle *h = (JanetThreadHandle *) p;
     /* Drop undelivered monitors (completion already ran if done, so
-     * this only fires when the handle is collected first). */
+     * this only fires when the handle is collected first). Tombstoned
+     * slots hold nil and were unrooted by ev/demonitor. */
     if (h->monitors != NULL) {
         for (int32_t i = 0; i < h->n_monitors * 2; i++) {
-            janet_gcunroot(h->monitors[i]);
+            if (!janet_checktype(h->monitors[i], JANET_NIL)) {
+                janet_gcunroot(h->monitors[i]);
+            }
         }
         janet_free(h->monitors);
         h->monitors = NULL;
@@ -3468,6 +3471,8 @@ static void janet_thread_deliver_monitors(JanetThreadHandle *h, int is_error, Ja
     for (int32_t i = 0; i < h->n_monitors; i++) {
         Janet chanv = h->monitors[i * 2];
         Janet tag = h->monitors[i * 2 + 1];
+        /* Tombstoned by ev/demonitor: already unrooted, skip. */
+        if (janet_checktype(chanv, JANET_NIL)) continue;
         janet_thread_give_down(chanv,
             janet_thread_down_message(tag, is_error, result));
         janet_gcunroot(chanv);
@@ -3874,8 +3879,9 @@ JANET_CORE_FN(cfun_thread_monitor,
               "`reason` is `:normal` on clean exit or the thread's error "
               "value on failure. Delivery is best-effort (at-most-once): "
               "the message is dropped if `chan` is closed or full. "
-              "Monitoring an already-finished thread delivers immediately. "
-              "Must be called from the creating thread. Returns `handle`.") {
+              "Monitoring an already-finished thread delivers immediately "
+              "and returns nil. Must be called from the creating thread. "
+              "Returns an integer monitor ref for `ev/demonitor`.") {
     janet_sandbox_assert(JANET_SANDBOX_THREADS);
     janet_fixarity(argc, 3);
     JanetThreadHandle *handle = janet_getabstract(argv, 0, &janet_thread_handle_type);
@@ -3886,10 +3892,11 @@ JANET_CORE_FN(cfun_thread_monitor,
     janet_getchannel(argv, 2);
     Janet tag = argv[1];
     if (handle->done) {
-        /* Late registration: completion already ran, deliver now. */
+        /* Late registration: completion already ran, deliver now.
+         * No slot is stored, so there is no ref to return. */
         janet_thread_give_down(chanv,
             janet_thread_down_message(tag, handle->is_error, handle->result));
-        return argv[0];
+        return janet_wrap_nil();
     }
     if (handle->n_monitors >= handle->cap_monitors) {
         int32_t ncap = handle->cap_monitors ? handle->cap_monitors * 2 : 4;
@@ -3902,10 +3909,48 @@ JANET_CORE_FN(cfun_thread_monitor,
     }
     janet_gcroot(chanv);
     janet_gcroot(tag);
-    handle->monitors[handle->n_monitors * 2] = chanv;
-    handle->monitors[handle->n_monitors * 2 + 1] = tag;
+    int32_t ref = handle->n_monitors;
+    handle->monitors[ref * 2] = chanv;
+    handle->monitors[ref * 2 + 1] = tag;
     handle->n_monitors++;
-    return argv[0];
+    return janet_wrap_integer(ref);
+}
+
+JANET_CORE_FN(cfun_thread_demonitor,
+              "(ev/demonitor handle ref)",
+              "Remove the monitor `ref` (returned by `ev/monitor`) from "
+              "the thread `handle`, so no `:down` message is delivered for "
+              "it. Unknown refs, already-removed monitors, and monitors on "
+              "finished threads are silent no-ops. Must be called from the "
+              "creating thread. Returns nil.") {
+    janet_sandbox_assert(JANET_SANDBOX_THREADS);
+    janet_fixarity(argc, 2);
+    JanetThreadHandle *handle = janet_getabstract(argv, 0, &janet_thread_handle_type);
+    if (handle->owner != &janet_vm) {
+        janet_panic("ev/demonitor called from non-owner thread");
+    }
+    if (!janet_checkint(argv[1])) {
+        janet_panic("ev/demonitor ref must be an integer");
+    }
+    int32_t ref = janet_unwrap_integer(argv[1]);
+    /* Finished threads already delivered and freed the list. */
+    if (handle->monitors == NULL) {
+        return janet_wrap_nil();
+    }
+    if (ref < 0 || ref >= handle->n_monitors) {
+        return janet_wrap_nil();
+    }
+    Janet chanv = handle->monitors[ref * 2];
+    Janet tag = handle->monitors[ref * 2 + 1];
+    if (janet_checktype(chanv, JANET_NIL)) {
+        /* Already removed. */
+        return janet_wrap_nil();
+    }
+    janet_gcunroot(chanv);
+    janet_gcunroot(tag);
+    handle->monitors[ref * 2] = janet_wrap_nil();
+    handle->monitors[ref * 2 + 1] = janet_wrap_nil();
+    return janet_wrap_nil();
 }
 
 JANET_CORE_FN(cfun_ev_give_supervisor,
@@ -4279,6 +4324,7 @@ void janet_lib_ev(JanetTable *env) {
         JANET_CORE_REG("thread/join", cfun_thread_join),
         JANET_CORE_REG("thread/alive?", cfun_thread_alive),
         JANET_CORE_REG("ev/monitor", cfun_thread_monitor),
+        JANET_CORE_REG("ev/demonitor", cfun_thread_demonitor),
         JANET_CORE_REG("ev/give-supervisor", cfun_ev_give_supervisor),
         JANET_CORE_REG("ev/sleep", cfun_ev_sleep),
         JANET_CORE_REG("ev/deadline", cfun_ev_deadline),

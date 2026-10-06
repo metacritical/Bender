@@ -169,4 +169,56 @@
   (assert (= :pong (mailbox/call a :ping nil 5)) "survivor keeps working")
   (mailbox/quit a))
 
+# M2b: monitor refs + ev/demonitor.
+
+# 15. ev/monitor returns an integer ref; demonitor-then-exit delivers
+# nothing (channel stays empty after join).
+(let [ch (ev/thread-chan 4)
+      h (thread/new (fn [] (ev/sleep 0.02) :gone))]
+  (def ref (ev/monitor h :t15 ch))
+  (assert (int? ref) "monitor returns integer ref")
+  (ev/demonitor h ref)
+  (assert (= :gone (thread/join h)) "join still works")
+  (assert (= 0 (ev/count ch)) "demonitored monitor is silent"))
+
+# 16. Double demonitor and unknown refs are silent no-ops.
+(let [ch (ev/thread-chan 4)
+      h (thread/new (fn [] :twice))]
+  (def ref (ev/monitor h :t16 ch))
+  (ev/demonitor h ref)
+  (ev/demonitor h ref)
+  (ev/demonitor h 99)
+  (ev/demonitor h -1)
+  (thread/join h)
+  (assert (= 0 (ev/count ch)) "double/unknown demonitor silent"))
+
+# 17. Demonitor after completion is a silent no-op; the already-fired
+# message is still there.
+(let [ch (ev/thread-chan 4)
+      h (thread/new (fn [] :early))]
+  (def ref (ev/monitor h :t17 ch))
+  (thread/join h)
+  (ev/demonitor h ref)
+  (assert (deep= [:down :t17 :normal] (ev/take ch)) "post-join demonitor keeps message"))
+
+# 18. Survivors still fire when a sibling monitor is removed.
+(let [c1 (ev/thread-chan 4)
+      c2 (ev/thread-chan 4)
+      h (thread/new (fn [] (ev/sleep 0.02) :both))]
+  (def r1 (ev/monitor h :gone c1))
+  (def r2 (ev/monitor h :kept c2))
+  (assert (not= r1 r2) "refs are distinct slots")
+  (ev/demonitor h r1)
+  (thread/join h)
+  (assert (= 0 (ev/count c1)) "removed monitor silent")
+  (assert (deep= [:down :kept :normal] (ev/take c2)) "survivor fires"))
+
+# 19. Late registration (already-finished thread) delivers immediately
+# and returns nil — there is no live slot to demonitor.
+(let [ch (ev/thread-chan 4)
+      h (thread/new (fn [] 9))]
+  (thread/join h)
+  (assert (nil? (ev/monitor h :t19 ch)) "late monitor returns nil")
+  (assert (deep= [:down :t19 :normal] (ev/take ch)) "late monitor delivers"))
+
 (end-suite)
