@@ -241,4 +241,27 @@
 (assert (not (nil? (string/find "branch condition is long not bool"
   (slurp "/tmp/cg-bc-out.txt")))) "truthy-on-number refused")
 
+# Step 9 (loops): while loops, loop-carried slots, back edges
+(spit "/tmp/cg-loop.janet" (string
+  "(defn sum-to {:hint {:params [:long] :returns :long}} [n]\n"
+  "  (var acc 0) (var i 0)\n"
+  "  (while (< i n) (set acc (+ acc i)) (set i (+ i 1)))\n"
+  "  acc)\n"
+  "(defn fact {:hint {:params [:long] :returns :long}} [n]\n"
+  "  (var r 1) (var k 2)\n"
+  "  (while (<= k n) (set r (* r k)) (set k (+ k 1)))\n"
+  "  r)\n"
+  "(defn main [] (print (sum-to 10) (fact 5)))\n"))
+(assert (= 0 (os/execute ["/bin/sh" "-c"
+  "rm -rf /tmp/cg-lp && ./build/janet tools/callgraph.janet /tmp/cg-loop.janet --emit-native /tmp/cg-lp"] :p))
+  "loop emit run")
+(assert (= 0 (os/execute ["/bin/sh" "-c"
+  "cc -O2 /tmp/cg-lp/native.c -o /tmp/cg-lp/native"] :p)) "loop native compiles")
+(assert (= 0 (os/execute ["/bin/sh" "-c"
+  "/tmp/cg-lp/native > /tmp/cg-lp/actual.txt && cmp /tmp/cg-lp/expected.txt /tmp/cg-lp/actual.txt"] :p))
+  "loop parity")
+(def ltext (slurp "/tmp/cg-lp/native.c"))
+(assert (not (nil? (string/find "goto L" ltext))) "loops emit back-edge goto")
+(assert (not (nil? (string/find "s1 = s1 + s2;" ltext))) "loop-carried slots reassign")
+
 (end-suite)

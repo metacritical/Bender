@@ -422,10 +422,13 @@ trusted until it agrees byte-for-byte.
   truthy!) forbids C truthiness on numeric slots — refuse otherwise.
   Slot types at block merges via iterative dataflow join (monotone,
   terminates). `jmpni`/`jmpnn` (nil tests) refused initially.
-- **Step 9 — loops.** Back edges → C loops; loop-carried slot types
-  via the same dataflow fixpoint (loop body re-processed until types
-  stabilize, then declared before the loop). VM stack-check semantics
-  noted (native loops never grow the VM stack — by design).
+- **Step 9 — loops (DONE, this checkout).** Back edges were already
+  gotos via the Step 8 CFG; the real work: `lte`/`gte` added to the
+  cmp sets (janet `<=`/`>=` compile to dedicated ops), and temps
+  changed from const-per-write to declare-once/assign-many (loop
+  bodies reassign their variable slots — `(mul 1 1 2)` on slot r).
+  Loop-carried types converge in the existing dataflow worklist.
+  Parity: sum-to/fact byte-identical incl. back-edge gotos.
 - **Step 10 — external C calls.** Declared signatures (a mapping the
   tool consumes: janet name → c-symbol, param/return types) emitted
   as direct calls — the raylib story: the game's platform calls are

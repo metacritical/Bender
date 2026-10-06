@@ -634,7 +634,7 @@
     'addim true 'subim true 'mulim true 'ret true
     'push true 'push2 true 'push3 true 'call true 'tcall true
     'jmp true 'jmpif true 'jmpno true
-    'lt true 'ltim true 'gt true 'gtim true
+    'lt true 'ltim true 'gt true 'gtim true 'lte true 'gte true
     'eq true 'eqim true 'neq true 'neqim true
     # callee-only loads: the C call targets the native symbol directly,
     # so ldu/lds feeding a call are no-ops
@@ -642,7 +642,13 @@
 (def emit-arith-c @{'add "+" 'sub "-" 'mul "*" 'div "/"})
 (def emit-arith-im-c @{'addim "+" 'subim "-" 'mulim "*"})
 (def emit-cmp-c @{'lt "<" 'ltim "<" 'gt ">" 'gtim ">"
+                  'lte "<=" 'gte ">="
                   'eq "==" 'eqim "==" 'neq "!=" 'neqim "!="})
+# dest slot operand position per writing op (params excluded from decls)
+(def emit-writers
+  @{'ldi 1 'ldc 1 'add 1 'sub 1 'mul 1 'div 1 'addim 1 'subim 1 'mulim 1
+    'lt 1 'ltim 1 'gt 1 'gtim 1 'lte 1 'gte 1
+    'eq 1 'eqim 1 'neq 1 'neqim 1 'call 1 'movn 1 'movf 2})
 (def emit-cmp-im @{'ltim true 'gtim true 'eqim true 'neqim true})
 (def emit-term-ops @{'ret true 'retn true 'err true})
 (def emit-cond-jumps @{'jmpif true 'jmpno true})
@@ -785,8 +791,17 @@
   (def cmap (or (get call-map id) @{}))
   (def pdecls (seq [i :range [0 arity]]
                 (string (emit-c-type (pt i)) " p" i)))
+  # collect written slots (loop bodies reassign) -> declare once at top
+  (def written @{})
+  (each ins code
+    (def wpos (get emit-writers (ins 0)))
+    (when wpos
+      (def dst (ins wpos))
+      (when (>= dst arity) (put written dst true))))
   (def ct (emit-c-type rt))
   (def lines @[])
+  (each slot (sort (keys written))
+    (array/push lines (string "    " ct " s" slot ";")))
   (var bad nil)
   (each start leaders
     (def st (get states start))
@@ -823,13 +838,13 @@
             nil)
           (cond
             (= op 'ldi)
-            (array/push lines (string "    const " ct " s" (ins 1) " = " (ins 2) ";"))
+            (array/push lines (string "    s" (ins 1) " = " (ins 2) ";"))
             (= op 'ldc)
             (do (def cval ((or (d :constants) @[]) (ins 2)))
               (unless (and cval (= :number (type cval)))
                 (set bad "ldc non-number")
                 (break))
-              (array/push lines (string "    const " ct " s" (ins 1) " = " (emit-c-num cval) ";")))
+              (array/push lines (string "    s" (ins 1) " = " (emit-c-num cval) ";")))
             (= op 'ret)
             (do (def rvt (get st (ins 1) :unknown))
               # :double fns commit all numeric temps to double, so a
@@ -863,18 +878,18 @@
             (get emit-cmp-c op)
             (if (get emit-cmp-im op)
               (array/push lines
-                          (string "    const int64_t s" (ins 1) " = "
+                          (string "    s" (ins 1) " = "
                                   (emit-slot (ins 2) arity) " " (emit-cmp-c op) " "
                                   (ins 3) ";"))
               (array/push lines
-                          (string "    const int64_t s" (ins 1) " = "
+                          (string "    s" (ins 1) " = "
                                   (emit-slot (ins 2) arity) " " (emit-cmp-c op) " "
                                   (emit-slot (ins 3) arity) ";")))
             (= op 'div)
             (if (= rt :double)
               (do (set pending @[])
                 (array/push lines
-                            (string "    const double s" (ins 1) " = "
+                            (string "    s" (ins 1) " = "
                                     (emit-slot (ins 2) arity) " / "
                                     (emit-slot (ins 3) arity) ";")))
               (do (set bad "div on long")
@@ -882,13 +897,13 @@
             (or (= op 'add) (= op 'sub) (= op 'mul))
             (do (set pending @[])
               (array/push lines
-                          (string "    const " ct " s" (ins 1) " = "
+                          (string "    s" (ins 1) " = "
                                   (emit-slot (ins 2) arity) " " (emit-arith-c op) " "
                                   (emit-slot (ins 3) arity) ";")))
             (get emit-arith-im-c op)
             (do (set pending @[])
               (array/push lines
-                          (string "    const " ct " s" (ins 1) " = "
+                          (string "    s" (ins 1) " = "
                                   (emit-slot (ins 2) arity) " " (emit-arith-im-c op) " "
                                   (ins 3) ";")))
             (or (= op 'call) (= op 'tcall))
@@ -897,7 +912,7 @@
               (def trt (if tid (rts tid) :unknown))
               (if (and tid cname (= trt rt) (not spread) (not= op 'tcall))
                 (do (array/push lines
-                                (string "    const " ct " s" (ins 1) " = "
+                                (string "    s" (ins 1) " = "
                                         (emit-c-name cname) "(" (string/join pending ", ") ");"))
                   (set pending @[]))
                 (if (and tid cname (= trt rt) (not spread))

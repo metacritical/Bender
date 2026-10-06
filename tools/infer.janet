@@ -48,6 +48,7 @@
   @{'addim true 'subim true 'mulim true})
 (def cmp-ops
   @{'eq true 'eqim true 'lt true 'ltim true 'gt true 'gtim true
+    'lte true 'gte true
     'neq true 'neqim true 'ltu true 'gtu true 'cmp true 'next true})
 
 (defn const-num-type [d cidx]
