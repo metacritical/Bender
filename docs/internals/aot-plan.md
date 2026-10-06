@@ -24,7 +24,7 @@ phase below (currently Phase 2b).
 make                    # default -O2 build -> build/janet
 make test               # full suite: 38/38 (incl. suite-native-fiber 47/47,
                         # suite-gc-stress 21/21, suite-gc-minor 12/12,
-                        # suite-thread 25/25, suite-callgraph 46/46)
+                        # suite-thread 25/25, suite-callgraph 66/66)
 make fibertest          # C call-chain suspension proof: 21 checks green
 mkdir -p /tmp/aot-tests
 printf '(print "hi from janet")\n' > /tmp/aot-tests/hello.janet
@@ -369,6 +369,43 @@ path. Tool-side validation only so far (extraction, `hint` lines,
 `hint-bad` rejections for unknown keywords/arity mismatches,
 `hint-call` linking hinted callees with resolvable sites).
 
+### Phase 4 step 6 — hybrid inference: returns fixpoint + call-site
+widening (DONE, this checkout)
+
+`tools/infer.janet` (shared by analysis and emission), modeled on
+Spinel's `bind_args_params`/`slot_take`: at every call site, each
+pushed argument's type narrows monotonically into the callee's param
+slot (intersection; conflicting widths widen to `:number` = boxed
+poly; annotation-seeded slots are contracts and never touched —
+Spinel's `rbs_seeded`). Returns flow from RETURN sites and tail
+calls; whole-program fixpoint (≤8 rounds). Lattice
+`:unknown > :number > {long, double}` + bool/nil leaves; intra-fn
+forward slot scan seeded from param types. THE HYBRID: hints are
+used directly — a `:double` hint commits to unboxed double with no
+inference needed; unhinted code is proven by widening (e.g.
+`(defn twice [x] (inc-l (inc-l x)))` infers param+return `long`
+from one hinted callee). Emits `ret <id> <t>` and `ptypes <id>
+<t...>` lines plus `rets` summary. Suite pins include the unhinted
+propagation chain.
+
+### Phase 4 step 7 — unboxed C emission (DONE, this checkout)
+
+`callgraph.janet FILE --emit-native DIR`: any def whose params and
+return are all concrete (hinted contract or inference-proven) and
+whose body is in the straight-line subset (ldi/ldc-number/
+add/sub/mul/div + immediates, push args, ret, direct calls to other
+emitted natives via a two-round dependency pass; ldu/lds callee
+loads are no-ops since the C call targets the native symbol)
+emits as `static int64_t|double f(...)` with janet `/` only for
+`:double` (C `/` truncates int64). Harness runs fixed samples;
+expected.txt comes from the janet interpreter calling the same
+functions — the suite `cmp`s them: byte-identical parity, including
+unhinted functions and native-to-native calls. This is the
+end-to-end proof of the hybrid: hinted contracts and pure inference
+both land in the same unboxed C. Next: fold emission into the
+janet-aot driver (image entry calling natives), widen the supported
+subset (comparisons/branches), then the full pipeline.
+
 ### Phase 4 step 5 — `^` hint syntax (DONE, this checkout)
 
 Clojure-ergonomic surface, no parser changes: the reader already
@@ -388,8 +425,9 @@ Bootstrap lessons recorded: def-attribute metadata must be a struct
 (a table is rejected by handleattr), and a single missing paren in
 boot.janet manifests as bizarre downstream compile errors (the
 swallowed-forms `argn=21`) — paren balance in boot edits must be
-verified mechanically. Next: compiler-side unboxed codegen consuming
-hints, then the returns fixpoint.
+verified mechanically. Steps 6–7 above supersede this next-step note:
+the returns fixpoint, call-site widening, and unboxed C emission are
+DONE (hybrid: hints direct, inference fills the rest).
 
 - Boxed `Janet` for polymorphic slots; unboxed C (`double`, `int64`) for
   inferred numeric loops/structs; value-type promotion for small immutable

@@ -34,9 +34,21 @@
 # graph is precisely the statically-live code; anything reachable only
 # dynamically (eval) needs the interpreter fallback flagged by `dynamic`.
 
-(def args (tuple/slice (dyn :args) 1))
+(var args (tuple/slice (dyn :args) 1))
+# --emit-native DIR: also emit unboxed C for defs whose param/return
+# types are concrete (hinted contracts OR inference-proven)
+(var emit-native-dir nil)
+(var filtered @[])
+(var i 0)
+(while (< i (length args))
+  (def a (args i))
+  (if (and (= a "--emit-native") (< (+ i 1) (length args)))
+    (do (set emit-native-dir (args (+ i 1))) (++ i))
+    (array/push filtered a))
+  (++ i))
+(set args filtered)
 (when (empty? args)
-  (eprint "usage: callgraph.janet FILE [FILE...]")
+  (eprint "usage: callgraph.janet FILE [FILE...] [--emit-native DIR]")
   (os/exit 4))
 
 # Inference-defeating globals (Phase 4 refusals): dynamic code loading and
@@ -78,20 +90,24 @@
   (def info (get defs id))
   (when (nil? info) (break nil))
   (info :hint))
+(var all-defn-forms @{})
 (defn extract-hints []
   (var nhints 0)
   (each f args
     (def text (slurp f))
     (def forms (parse-all text))
     (each form forms
-      # find defn forms carrying hints and record the hint under every
-      # name-ids entry registered for that name. Two surfaces:
-      # (defn f {:hint {...}} ...)            dict modifier
-      # (defn f ^long [x ^double y] ...)      ^ syntax (defn strips it
-      # into the same metadata; we parse it directly here)
       (when (and (tuple? form) (>= (length form) 3)
                  (symbol? (form 0))
                  (or (= (string (form 0)) "defn") (= (string (form 0)) "defn-")))
+        # keep every defn form so the native emitter can eval one for
+        # expected values (hinted or not)
+        (put all-defn-forms (string (form 1)) form)
+        # find defn forms carrying hints and record the hint under every
+        # name-ids entry registered for that name. Two surfaces:
+        # (defn f {:hint {...}} ...)            dict modifier
+        # (defn f ^long [x ^double y] ...)      ^ syntax (defn strips it
+        # into the same metadata; we parse it directly here)
         (var h nil)
         (def m (form 2))
         (when (and (or (table? m) (struct? m)) (get m :hint))
@@ -578,131 +594,212 @@
     (array/push hc id)))
 (print "hint-call" (if (empty? hc) "" (string " " (string/join (map string hc) " "))))
 
-# Step 6 (returns fixpoint): infer return types over the graph.
-# Lattice: :unknown > :number > {:long, :double}; plus :bool/:nil leaves.
-# Seeds: hinted :returns. Intra-function: single forward linear scan over
-# bytecode tracking slot types (params seeded from :hint :params, arith
-# ops join operand types, calls take the callee's current return type).
-# Jumps are flow boundaries we do NOT model — a single pass under-
-# approximates on merge-heavy code, which is safe (falls back to boxed).
-# Whole-program: iterate until stable (max 8 rounds); call results feed
-# callers on the next round.
-(def numeric-types @{:long true :double true :number true})
-(defn type-join [a b]
-  (cond
-    (= a b) a
-    (= a :unknown) b
-    (= b :unknown) a
-    (and (get numeric-types a) (get numeric-types b))
-    (if (or (= a :number) (= b :number))
-      :number
-      (if (or (= a :double) (= b :double)) :double :long))
-    :unknown))
-(defn arith-join [t1 t2]
-  (if (and (get numeric-types t1) (get numeric-types t2))
-    (type-join t1 t2)
-    :unknown))
+(import ./infer)
 
-(def arith-ops
-  @{'add true 'sub true 'mul true 'div true 'divf true
-    'mod true 'rem true})
-(def arith-im-ops
-  @{'addim true 'subim true 'mulim true})
-(def cmp-ops
-  @{'eq true 'eqim true 'lt true 'ltim true 'gt true 'gtim true
-    'neq true 'neqim true 'ltu true 'gtu true 'cmp true 'next true})
-
-(defn const-num-type [d cidx]
-  # :long/:double for numeric constants, :unknown otherwise
-  (def consts (or (get d :constants) @[]))
-  (if (>= cidx (length consts))
-    :unknown
-    (do (def c (consts cidx))
-      (if (= :number (type c))
-        (if (= c (math/trunc c)) :long :double)
-        :unknown))))
-
-(defn param-types [id]
-  # positional slot types from :hint :params (nil entries as :unknown)
-  (def h (get (get defs id) :hint))
-  (if (and h (get h :params))
-    (do (def pts @[])
-      (each p (get h :params)
-        (array/push pts (if (get numeric-types p) p :unknown)))
-      pts)
-    nil))
-
-(defn infer-def [id rts]
-  # single forward pass; returns the joined type of all RETURN sites
-  (def info (get defs id))
-  (def d (info :d))
-  (def code (or (d :bytecode) @[]))
-  (def cmap (or (get call-map id) @{}))
-  (def st @{})
-  (def pts (param-types id))
-  (when pts
-    (var pi 0)
-    (each t pts
-      (put st pi t)
-      (++ pi)))
-  (var rtype :unknown)
-  (var pc 0)
-  (each ins code
-    (def op (ins 0))
-    (cond
-      (= op 'ldi) (put st (ins 1) :long)
-      (= op 'ldc) (put st (ins 1) (const-num-type d (ins 2)))
-      (= op 'ldn) (put st (ins 1) :nil)
-      (or (= op 'ldt) (= op 'ldf)) (put st (ins 1) :bool)
-      (= op 'len) (put st (ins 1) :long)
-      (= op 'movn) (put st (ins 1) (get st (ins 2) :unknown))
-      (= op 'movf) (put st (ins 2) (get st (ins 1) :unknown))
-      (get arith-im-ops op)
-      (put st (ins 1) (arith-join (get st (ins 2) :unknown) :long))
-      (get arith-ops op)
-      (put st (ins 1)
-           (arith-join (get st (ins 2) :unknown) (get st (ins 3) :unknown)))
-      (get cmp-ops op) (put st (ins 1) :bool)
-      (= op 'call)
-      (do (def tid (get cmap pc))
-        (when (and tid (< tid (length rts)))
-          (put st (ins 1) (rts tid))))
-      (= op 'tcall)
-      (do (def tid (get cmap pc))
-        (when (and tid (< tid (length rts)))
-          (set rtype (type-join rtype (rts tid)))))
-      (= op 'ret) (set rtype (type-join rtype (get st (ins 1) :unknown)))
-      (= op 'retn) (set rtype (type-join rtype :nil))
-      nil)
-    (++ pc))
-  rtype)
-
-(var rts @[])
-(each id (range (length defs))
-  (def h (get (get defs id) :hint))
-  (def r (if (and h (get h :returns)) (get h :returns) :unknown))
-  (array/push rts r))
-(var rounds 0)
-(var changed true)
-(while (and changed (< rounds 8))
-  (++ rounds)
-  (set changed false)
-  (each id (range (length defs))
-    # a hinted :returns is the codegen contract — never weakened by
-    # inference; only unannotated defs refine
-    (def h (get (get defs id) :hint))
-    (if (and h (get h :returns))
-      nil
-      (do (def t (infer-def id rts))
-        (when (not= t (rts id))
-          (put rts id t)
-          (set changed true))))))
+# Step 6+ (hybrid inference): hints are direct contracts (used as-is for
+# unboxing, never weakened); call-site widening + fixpoint prove the
+# unhinted rest. Concrete => unboxed, unproven => boxed.
+(def res (infer/analyze defs call-map))
+(def rts (res :rts))
+(def pts (res :pts))
 (each id (range (length defs))
   (def t (rts id))
-  (when (get numeric-types t)
+  (when (get infer/numeric-types t)
     (print "ret " id " " t)))
+(each id (range (length defs))
+  (def parr (get pts id))
+  (var all-concrete (> (length parr) 0))
+  (each t parr
+    (unless (get infer/numeric-types t) (set all-concrete false)))
+  (when all-concrete
+    (print "ptypes " id " " (string/join (map string parr) " "))))
 (def cnts @{:long 0 :double 0 :number 0})
 (each id (range (length defs))
   (def t (rts id))
   (when (get cnts t) (put cnts t (+ 1 (get cnts t)))))
-(print "rets " (get cnts :long) " " (get cnts :double) " " (get cnts :number) " rounds " rounds)
+(print "rets " (get cnts :long) " " (get cnts :double) " " (get cnts :number) " rounds " (res :rounds))
+
+# Step 7 (--emit-native): unboxed C emission. A def emits when its
+# params and return are ALL concrete numeric — from hints (contracts,
+# used directly) or from inference (widening + fixpoint proven) — and
+# its body is in the supported subset. Straight-line arithmetic plus
+# direct calls to other emitted natives (two-round dependency pass);
+# `/` only for :double returns (janet / is real division; C / on
+# int64 truncates).
+(def emit-c-ops
+  @{'ldi true 'ldc true 'add true 'sub true 'mul true 'div true
+    'addim true 'subim true 'mulim true 'ret true
+    'push true 'push2 true 'push3 true 'call true 'tcall true
+    # callee-only loads: the C call targets the native symbol directly,
+    # so ldu/lds feeding a call are no-ops (the value never crosses)
+    'ldu true 'lds true})
+(def emit-arith-c @{'add "+" 'sub "-" 'mul "*" 'div "/"})
+(def emit-arith-im-c @{'addim "+" 'subim "-" 'mulim "*"})
+
+(defn emit-c-type [t] (if (= t :long) "int64_t" "double"))
+(defn emit-c-name [nm] (string/replace-all "-" "_" nm))
+(defn emit-c-num [v] (string/format "%.17g" v))
+(defn emit-slot [a arity] (if (< a arity) (string "p" a) (string "s" a)))
+
+(defn emit-fn-c [id d rt pt call-map emitted-names]
+  (def arity (length pt))
+  (when (d :vararg) (break [nil "vararg"]))
+  (unless (get infer/numeric-types rt) (break [nil "return not concrete"]))
+  (def pdecls (seq [i :range [0 arity]]
+                (string (emit-c-type (pt i)) " p" i)))
+  (def ct (emit-c-type rt))
+  (def lines @[])
+  (var bad nil)
+  (var pending @[])
+  (var spread false)
+  (def cmap (or (get call-map id) @{}))
+  (var pc 0)
+  (each ins (or (d :bytecode) @[])
+    (def op (ins 0))
+    (if (get emit-c-ops op)
+      (cond
+        (= op 'ldi)
+        (array/push lines (string "    const " ct " s" (ins 1) " = " (ins 2) ";"))
+        (= op 'ldc)
+        (do (def cval ((or (d :constants) @[]) (ins 2)))
+          (unless (and cval (= :number (type cval)))
+            (set bad "ldc non-number")
+            (break))
+          (array/push lines (string "    const " ct " s" (ins 1) " = " (emit-c-num cval) ";")))
+        (= op 'ret)
+        (array/push lines (string "    return s" (ins 1) ";"))
+        (= op 'push) (array/push pending (emit-slot (ins 1) arity))
+        (= op 'push2)
+        (do (array/push pending (emit-slot (ins 1) arity))
+          (array/push pending (emit-slot (ins 2) arity)))
+        (= op 'push3)
+        (do (array/push pending (emit-slot (ins 1) arity))
+          (array/push pending (emit-slot (ins 2) arity))
+          (array/push pending (emit-slot (ins 3) arity)))
+        (= op 'pusha) (do (set bad "spread args") (break))
+        (= op 'div)
+        (if (= rt :double)
+          (do (set pending @[])
+            (array/push lines
+                        (string "    const double s" (ins 1) " = "
+                                (emit-slot (ins 2) arity) " / "
+                                (emit-slot (ins 3) arity) ";")))
+          (do (set bad "div on long")
+            (break)))
+        (or (= op 'add) (= op 'sub) (= op 'mul))
+        (do (set pending @[])
+          (array/push lines
+                      (string "    const " ct " s" (ins 1) " = "
+                              (emit-slot (ins 2) arity) " " (emit-arith-c op) " "
+                              (emit-slot (ins 3) arity) ";")))
+        (get emit-arith-im-c op)
+        (do (set pending @[])
+          (array/push lines
+                      (string "    const " ct " s" (ins 1) " = "
+                              (emit-slot (ins 2) arity) " " (emit-arith-im-c op) " "
+                              (ins 3) ";")))
+        (or (= op 'call) (= op 'tcall))
+        (do (def tid (get cmap pc))
+          (def cname (if tid (get emitted-names tid)))
+          (unless (and tid cname (not spread))
+            (set bad "call to non-native")
+            (break))
+          (def callx (string (emit-c-name cname) "(" (string/join pending ", ") ")"))
+          (if (= op 'call)
+            (array/push lines (string "    const " ct " s" (ins 1) " = " callx ";"))
+            (array/push lines (string "    return " callx ";")))
+          (set pending @[])))
+      (do (set bad (string "op " op))
+        (break)))
+    (++ pc))
+  (if bad
+    [nil bad]
+    [(string "static " ct " " (emit-c-name (string (or (d :name) "?"))) "("
+             (string/join pdecls ", ") ") {\n" (string/join lines "\n") "\n}")
+     nil]))
+
+(defn emit-native-all [outdir]
+  (os/mkdir outdir)
+  # candidates: fully concrete params + return, non-vararg
+  (def cand @{})
+  (each id (range (length defs))
+    (def info (get defs id))
+    (def d (info :d))
+    (def pt (get pts id))
+    (def rt (rts id))
+    (var concrete (and (> (length pt) 0) (not (d :vararg))))
+    (each t pt (unless (get infer/numeric-types t) (set concrete false)))
+    (unless (get infer/numeric-types rt) (set concrete false))
+    (when concrete (put cand id true)))
+  # two-round dependency resolution: leaves first, then callers whose
+  # targets are all emitted
+  (def emitted-names @{})  # id -> janet name
+  (def emitted @[])
+  (def cand-ids (filter (fn [k] (number? k)) (sort (keys cand))))
+  (var round 0)
+  (var changed true)
+  (while (and changed (< round 4))
+    (++ round)
+    (set changed false)
+    (each id cand-ids
+      (unless (get emitted-names id)
+        (def info (get defs id))
+        (def d (info :d))
+        (def [code reason] (emit-fn-c id d (rts id) (get pts id) call-map emitted-names))
+        (if code
+          (do (def nm (string (d :name)))
+            (put emitted-names id nm)
+            (array/push emitted {:id id :name nm :code code :pt (get pts id) :rt (rts id)})
+            (set changed true))
+          (put cand (string id "-r" reason) reason)))))
+  # report skips: candidates that never made it
+  (def skips @[])
+  (each id cand-ids
+    (unless (get emitted-names id)
+      (array/push skips [id (string (get ((get defs id) :d) :name)) "unsupported or calls non-native"])))
+  (each [id nm r] skips (print "native-skip " id " " nm " " r))
+  (when (empty? emitted)
+    (eprint "emit-native: no emittable functions")
+    (os/exit 1))
+  (defn samples-for [pt]
+    (def per (map (fn [t] (if (= t :long) @[0 1 3] @[0.5 1.5 2.5])) pt))
+    (var combos @[@[]])
+    (each opts per
+      (def nxt @[])
+      (each c combos
+        (each v opts
+          (def cc (array/slice c))
+          (array/push cc v)
+          (array/push nxt cc)))
+      (set combos nxt))
+    combos)
+  (def c-parts @[])
+  (def calls @[])
+  (each e emitted
+    (array/push c-parts (e :code))
+    (def form (get all-defn-forms (e :name)))
+    (unless form
+      (eprint "emit-native: no form for " (e :name))
+      (os/exit 1))
+    (def fnval (eval form))
+    (each combo (samples-for (e :pt))
+      (array/push calls {:e e :args (tuple ;combo) :fn fnval})))
+  (def cout @"")
+  (buffer/push-string cout "#include <stdio.h>\n#include <inttypes.h>\n\n")
+  (each c c-parts (buffer/push-string cout c) (buffer/push-string cout "\n\n"))
+  (buffer/push-string cout "int main(void) {\n")
+  (each c calls
+    (def args-c (string/join (map string (c :args)) ", "))
+    (buffer/push-string cout
+      (string "    printf(\"%.17g\\n\", (double) " (emit-c-name ((c :e) :name))
+              "(" args-c "));\n")))
+  (buffer/push-string cout "    return 0;\n}\n")
+  (spit (string outdir "/native.c") cout)
+  (def expected @[])
+  (each c calls
+    (def v ((c :fn) ;(c :args)))
+    (array/push expected (string/format "%.17g" v)))
+  (spit (string outdir "/expected.txt") (string (string/join expected "\n") "\n"))
+  (print "native " (length emitted) " fns " (length calls) " samples " outdir))
+
+(when emit-native-dir (emit-native-all emit-native-dir))

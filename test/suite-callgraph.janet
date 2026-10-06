@@ -179,4 +179,35 @@
 (assert (nil? (string/find "ret 6 " rtext)) "no ret for main")
 (assert (nil? (string/find "ret 5 " rtext)) "no ret for thunk")
 
+# Hybrid inference: unhinted functions proven by call-site widening
+(spit "/tmp/cg-hybrid.janet" (string
+  "(defn inc-l {:hint {:params [:long] :returns :long}} [x] (+ x 1))\n"
+  "(defn twice [x] (inc-l (inc-l x)))\n"
+  "(defn quad [x] (twice (twice x)))\n"
+  "(defn scale ^double [a ^double b] (+ (* a a) (* b b)))\n"
+  "(defn main [] (print (quad 1) (scale 3 4) (twice 5)))\n"))
+(assert (= 0 (os/execute ["/bin/sh" "-c"
+  "./build/janet tools/callgraph.janet /tmp/cg-hybrid.janet > /tmp/cg-hybrid-out.txt"] :p))
+  "callgraph hybrid run")
+(def htext (slurp "/tmp/cg-hybrid-out.txt"))
+(assert (not (nil? (string/find "ret 2 long" htext))) "unhinted twice inferred long")
+(assert (not (nil? (string/find "ret 3 long" htext))) "chained unhinted quad inferred")
+(assert (not (nil? (string/find "ptypes 2 long" htext))) "twice param widened from call site")
+(assert (not (nil? (string/find "ptypes 3 long" htext))) "quad param widened")
+(assert (not (nil? (string/find "ptypes 4 number double" htext))) "scale params from hint")
+
+# Step 7 parity: hinted AND unhinted-inferred fns emit to unboxed C;
+# native results must byte-match the janet interpreter on samples
+(assert (= 0 (os/execute ["/bin/sh" "-c"
+  "rm -rf /tmp/cg-em && ./build/janet tools/callgraph.janet /tmp/cg-hybrid.janet --emit-native /tmp/cg-em"] :p))
+  "emit-native run")
+(assert (= 0 (os/execute ["/bin/sh" "-c" "cc -O2 /tmp/cg-em/native.c -o /tmp/cg-em/native"] :p))
+  "native.c compiles")
+(assert (= 0 (os/execute ["/bin/sh" "-c"
+  "/tmp/cg-em/native > /tmp/cg-em/actual.txt && cmp /tmp/cg-em/expected.txt /tmp/cg-em/actual.txt"] :p))
+  "native/interpreter parity")
+(def ntext (slurp "/tmp/cg-em/native.c"))
+(assert (not (nil? (string/find "static int64_t twice(int64_t p0)" ntext))) "unhinted fn emitted")
+(assert (not (nil? (string/find "inc_l(p0)" ntext))) "native-to-native calls")
+
 (end-suite)
