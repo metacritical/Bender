@@ -82,4 +82,32 @@
 (assert (not (nil? (string/find "ambiguous 4 dup"
   (slurp "/tmp/cg-amb-out.txt")))) "duplicate def ambiguous")
 
+
+# Step 3 (arity audit): called-as arity sets, mismatches, unknowns
+(spit "/tmp/cg-arity.janet" (string
+  "(defn f2 [a b] (+ a b))\n"
+  "(defn opt3 [a b &opt c] (+ a b (if c c 0)))\n"
+  "(defn varf [& xs] (length xs))\n"
+  "(defn main [] (print (f2 1 2) (opt3 1 2) (opt3 1 2 3) (varf 1 2 3)))\n"))
+(assert (= 0 (os/execute ["/bin/sh" "-c"
+  "./build/janet tools/callgraph.janet /tmp/cg-arity.janet > /tmp/cg-arity-out.txt"] :p))
+  "callgraph arity run")
+(def atext (slurp "/tmp/cg-arity-out.txt"))
+(defn ahas [s] (not (nil? (string/find s atext))))
+(assert (ahas "called-as 1 2") "f2 called with 2")
+(assert (ahas "called-as 2 2 3") "opt3 called with 2 and 3")
+(assert (ahas "called-as 3 3") "varf called with 3")
+(assert (ahas "arity 0 0") "no bad, no unknown")
+
+# mismatch detector agrees with the compiler's own rejection
+(spit "/tmp/cg-bad.janet" (string
+  "(defn g3 [a b c] (+ a b c))\n"
+  "(defn main [] (print (g3 1 2)))\n"))
+(assert (= 0 (os/execute ["/bin/sh" "-c"
+  "./build/janet tools/callgraph.janet /tmp/cg-bad.janet > /tmp/cg-bad-out.txt"] :p))
+  "callgraph bad run")
+(def btext (slurp "/tmp/cg-bad-out.txt"))
+(assert (not (nil? (string/find "arity-bad 2 1 2" btext))) "too-few flagged")
+(assert (not (nil? (string/find "arity 1 0" btext))) "bad count exact")
+
 (end-suite)

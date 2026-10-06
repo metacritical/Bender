@@ -101,15 +101,20 @@
     'ret true 'retn true 'err true 'tcall true 'res true})
 
 (defn resolve-name [caller-id tname]
-  # shared tail: dynamic > unique image def > ambiguous > extern
+  # shared tail: dynamic > unique image def > ambiguous > extern.
+  # returns the resolved target id or nil.
   (cond
-    (get dynamic-names tname) (array/push edges ["dynamic" caller-id tname])
+    (get dynamic-names tname)
+    (do (array/push edges ["dynamic" caller-id tname]) nil)
     (do (def ids (get name-ids tname))
       (cond
-        (nil? ids) (array/push edges ["extern" caller-id tname])
-        (= 1 (length ids)) (do (array/push edges ["calls" caller-id (ids 0)])
-                              (++ resolved))
-        (array/push edges ["ambiguous" caller-id tname])))))
+        (nil? ids)
+        (do (array/push edges ["extern" caller-id tname]) nil)
+        (= 1 (length ids))
+        (do (array/push edges ["calls" caller-id (ids 0)])
+          (++ resolved)
+          (ids 0))
+        (do (array/push edges ["ambiguous" caller-id tname]) nil)))))
 
 (defn const-target [d cidx core-names]
   # classify a constant for call resolution. Returns a tuple
@@ -150,11 +155,13 @@
       cid)))
 
 (defn record-call [caller-id d pc slot core-names]
+  # returns the resolved target id or nil; pushes exactly one edge line
   (++ callsites)
+  (var target nil)
   # 1. named local via symbolmap range entry
   (def sname (slot-name d pc slot))
   (if sname
-    (resolve-name caller-id sname)
+    (set target (resolve-name caller-id sname))
     # 2. scan back to the nearest writer of the slot
     (do (def code (or (d :bytecode) @[]))
       (var j (- pc 1))
@@ -174,31 +181,97 @@
               (= op 'ldc)
               (do (def ct (const-target d (ins 2) core-names))
                 (cond
-                  (= (ct 0) :fn) (resolve-name caller-id (ct 1))
+                  (= (ct 0) :fn) (set target (resolve-name caller-id (ct 1)))
                   (= (ct 0) :core) (array/push edges ["extern" caller-id (ct 1)])
                   (= (ct 0) :key) (array/push edges ["extern" caller-id (ct 1)])
                   (array/push edges ["unknown" caller-id slot])))
               (= op 'clo)
               (do (def cid (child-at caller-id (ins 2)))
                 (if cid
-                  (do (array/push edges ["calls" caller-id cid]) (++ resolved))
+                  (do (array/push edges ["calls" caller-id cid])
+                    (++ resolved)
+                    (set target cid))
                   (array/push edges ["unknown" caller-id slot])))
               (= op 'lds)
-              (do (array/push edges ["calls" caller-id caller-id]) (++ resolved))
+              (do (array/push edges ["calls" caller-id caller-id])
+                (++ resolved)
+                (set target caller-id))
               (= op 'ldu)
               (do (def uname (if (>= (length ins) 4) (upvalue-name d (ins 3)) nil))
                 (if uname
-                  (resolve-name caller-id uname)
+                  (set target (resolve-name caller-id uname))
                   (array/push edges ["unknown" caller-id slot])))
               (array/push edges ["unknown" caller-id slot]))
             (set done true)))
         (-- j))
       (when (not done)
-        (array/push edges ["unknown" caller-id slot])))))
+        (array/push edges ["unknown" caller-id slot]))))
+  target)
+
+# Step 3 (call-site arity audit): count pushed args with a strict
+# straight-line pattern only — consecutive push/push2/push3 plus at most
+# one callee-slot load. Loads between pushes are arg temps (slots are
+# reused), so any load op is fine; anything else that is not a push or
+# a load means the args are computed/spread — `arity-unknown`, never a
+# false mismatch. Returns the count or nil.
+(var called-as @{})   # target id -> table used as int set
+(var arity-bad 0)
+(var arity-unknown 0)
+(def load-ops
+  @{'ldc true 'clo true 'lds true 'ldu true 'ldi true 'ldn true
+    'ldt true 'ldf true 'get true 'in true 'movn true 'movf true
+    'geti true 'add true 'sub true 'mul true 'div true 'addim true
+    'subim true 'mulim true 'len true 'equ true 'lt true 'gt true
+    'ltu true 'gtu true 'equim true 'ltim true 'gtim true})
+(defn call-arity [d pc slot]
+  (def code (or (d :bytecode) @[]))
+  (var n 0)
+  (var j (- pc 1))
+  (var scanned 0)
+  (var ok true)
+  (while (and (>= j 0) (< scanned 60) (= ok true))
+    (++ scanned)
+    (def ins (code j))
+    (def op (ins 0))
+    (cond
+      (= op 'push) (+= n 1)
+      (= op 'push2) (+= n 2)
+      (= op 'push3) (+= n 3)
+      # a previous call/tcall/return/jump ends this site's arg block
+      # cleanly (ops before it are a different branch or call)
+      (get flow-stop-ops op) (set ok false)
+      (= op 'call) (set ok false)
+      (= op 'pusha) (set ok nil)
+      (get load-ops op) nil   # arg temps / callee load: harmless
+      (set ok nil))
+    (-- j))
+  # running off the start (j < 0) or hitting a previous call/tcall is a
+  # clean boundary; anything else unknown means the pattern was broken
+  (if (or (< j 0) (= ok false)) n nil))
+
+(defn audit-site [caller-id d pc slot tid]
+  (def n (call-arity d pc slot))
+  (if (nil? n)
+    (do (++ arity-unknown)
+      (array/push edges ["arity-unknown" caller-id]))
+    (when tid
+      (def tinfo (get defs tid))
+      (when (nil? tinfo)
+        (eprint "DBG tid=" tid " ndefs=" (length defs))
+        (break))
+      (def tdef (tinfo :d))
+      (def tmin (or (tdef :min-arity) 0))
+      (def tmax (or (tdef :max-arity) 2147483647))
+      (def seen (or (get called-as tid) @{}))
+      (put seen n true)
+      (put called-as tid seen)
+      (when (or (< n tmin) (> n tmax))
+        (++ arity-bad)
+        (array/push edges ["arity-bad" caller-id tid n])))))
 
 (defn walk-def-at [id core-names]
   # contains edges to direct children (found via contiguous ranges),
-  # then this def's own call sites
+  # then this def's own call sites (each audited for arity)
   (def info (defs id))
   (def d (info :d))
   (var cid (+ id 1))
@@ -210,8 +283,12 @@
   (each ins code
     (def op (ins 0))
     (cond
-      (= op 'call) (record-call id d pc (ins 2) core-names)
-      (= op 'tcall) (record-call id d pc (ins 1) core-names)
+      (= op 'call)
+      (do (def tid (record-call id d pc (ins 2) core-names))
+        (audit-site id d pc (ins 2) tid))
+      (= op 'tcall)
+      (do (def tid (record-call id d pc (ins 1) core-names))
+        (audit-site id d pc (ins 1) tid))
       nil)
     (++ pc)))
 
@@ -278,6 +355,8 @@
     (= (e 0) "unknown") (print "unknown " (e 1) " " (e 2))
     (= (e 0) "uncompiled") (print "uncompiled " (e 1) " " (e 2) " " (e 3))
     (= (e 0) "dynamic") (print "dynamic " (e 1) " " (e 2))
+    (= (e 0) "arity-bad") (print "arity-bad " (e 1) " " (e 2) " " (e 3))
+    (= (e 0) "arity-unknown") (print "arity-unknown " (e 1))
     (print "unknown-edge " e)))
 
 (var unresolved 0)
@@ -371,3 +450,7 @@
   (when (get tainted id)
     (print "tainted " id)))
 (print "fix " (length reach-list) " " (length recursive) " " (length tainted))
+(each tid (sort (keys called-as))
+  (def counts (sorted (keys (get called-as tid))))
+  (print "called-as " tid " " (string/join (map string counts) " ")))
+(print "arity " arity-bad " " arity-unknown)

@@ -24,7 +24,7 @@ phase below (currently Phase 2b).
 make                    # default -O2 build -> build/janet
 make test               # full suite: 38/38 (incl. suite-native-fiber 47/47,
                         # suite-gc-stress 21/21, suite-gc-minor 12/12,
-                        # suite-thread 25/25, suite-callgraph 24/24)
+                        # suite-thread 25/25, suite-callgraph 32/32)
 make fibertest          # C call-chain suspension proof: 21 checks green
 mkdir -p /tmp/aot-tests
 printf '(print "hi from janet")\n' > /tmp/aot-tests/hello.janet
@@ -330,7 +330,7 @@ require/… — the inference-defeating set), and uncompiled-unit lines,
 plus a stats summary. Resolution is shallow on purpose: symbolmap
 ranges, backward scan to the nearest slot writer (`ldc` constants with
 core-identity for cfunctions, `clo` children, `lds` self, `ldu` by
-upvalue index). `test/suite-callgraph.janet` (24 tests) runs in
+upvalue index). `test/suite-callgraph.janet` (32 tests) runs in
 `make test`. Semantics verified against upstream (not tool shortcuts):
 forward references fail the unit exactly like real loading; statically
 unreferenced top-level defns are dropped by the compiler's dead-store
@@ -343,8 +343,20 @@ Same tool, appended `reach`/`callers`/`recursive`/`tainted`/`fix` lines:
 reachability from entry thunks over calls+contains, per-def caller
 sets, self-reachability through ≥1 edge, and backwards dynamic taint
 (a container taints its holder — the DCE root/keep rule in embryo).
-Exactly-once delivery style, all deterministic and order-stable. Next:
-call-site widening (arity/return-type propagation) on this graph.
+Exactly-once delivery style, all deterministic and order-stable.
+
+### Phase 4 step 3 — call-site arity audit (DONE, this checkout)
+
+`record-call` now returns the resolved target; each site is audited:
+a backward scan counts `push`/`push2`/`push3` with load-ops (arg temps,
+slots are reused) and clean boundaries (prior `call`/`tcall` or any
+flow stop); anything else (`pusha`, computed spreads) is
+`arity-unknown`, never a false mismatch. Emits `called-as <id> <n...>`
+sets, `arity-bad <caller> <callee> <n>` when a counted call violates
+the callee's min/max arity, and an `arity <bad> <unknown>` summary —
+mismatches agree with the compiler's own runtime rejections. Next:
+type hints (Clojure-style optional annotations) feeding unboxed
+codegen, then widening/returns fixpoint on that scaffold.
 
 - Boxed `Janet` for polymorphic slots; unboxed C (`double`, `int64`) for
   inferred numeric loops/structs; value-type promotion for small immutable
