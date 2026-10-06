@@ -88,6 +88,17 @@ else ifeq ($(UNAME), SunOS)
 	LDCONFIG:=false
 endif
 
+# Optional image slimming: build with `make NODOCSTRINGS=1` and/or
+# `make NOSOURCEMAPS=1` to strip docstrings / source maps from the
+# embedded core image (smaller libjanet for shipped binaries).
+# Both feed boot/config via boot.c; the default build keeps everything.
+ifdef NODOCSTRINGS
+	BOOT_CFLAGS+=-DJANET_NO_DOCSTRINGS
+endif
+ifdef NOSOURCEMAPS
+	BOOT_CFLAGS+=-DJANET_NO_SOURCEMAPS
+endif
+
 # For other unix likes, add flags here!
 ifeq ($(UNAME), Haiku)
 	LDCONFIG:=true
