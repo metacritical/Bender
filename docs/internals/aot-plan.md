@@ -457,7 +457,13 @@ Design as implemented:
   named send/call through looked-up pids. ASan stress clean
   (40 entries, overwrite churn, concurrent + cross-thread registrants).
 
-**M4 — M:N scheduler core** (runtime, sp_sched.c analogue). As the
+**M4 — M:N scheduler core** (runtime, sp_sched.c analogue).
+M4a SHIPPED: pooled warm-VM executors (`examples/pool.janet` —
+M one-shot tasks over N long-lived VMs on a shared queue, zero
+runtime code) deliver the cheap-restart half of M4's promise
+today. REMAINS (M4b, multi-session epic): the preemptive core —
+work-stealing runqueues, SIGURG preemption at poll points,
+scheduler-aware parking. As the
 Phase 3 text above: work-stealing runqueues, SIGURG preemption at
 poll points, scheduler-aware parking. Prereq: everything above is
 schedulable on 1:N; M:N changes WHERE fibers run, not how they
@@ -468,15 +474,17 @@ strict cross-task ordering, cheap task restart (fresh task in a warm
 VM — supervision at scale), and bare-fiber pids (every scheduled task
 owns a queue).
 
-**M5 — shareable immutable structs** (runtime + GC). Janet structs are
-immutable — candidates for zero-copy sharing. Blocker: two isolated
-heaps/GCs — who owns the memory? Options: (a) ownership transfer
-(sender loses it — destructive send, Erlang-style), (b) refcounted
-immortal page (allocate struct + contents in a shared slab, refcount
-per referencing VM). Requires: cross-heap GC protocol, marshal-free
-fast path, and a `shareable` predicate (deep-immutability check:
-no tables/arrays/buffers/objects inside). Design doc + GC review
-BEFORE implementing — this touches the collector.
+**M5 — shareable immutable structs.** REVIEWED 2026-10-06 — see
+`docs/internals/shared-structs-design.md` (the plan-gated
+prerequisite, now delivered). Verdict: option (a) ownership
+transfer is REJECTED (slab arenas make single-object transfer
+impossible — a "transfer" would copy anyway); option (b) is
+FEASIBLE as refcounted off-heap flattened blobs following the
+threaded-abstract pattern (atomic refcount, wrapper-gc decref,
+UNSAFE marshal passthrough for free, `shareable?` deep predicate)
+— Erlang-refc-binary shaped, zero collector changes. Implementation
+waits on the four open proofs in §5 of the review (finalizer
+reliability, refcount audit, marshal coverage, predicate edges).
 
 **Dependency chain:** M1 (pure janet) -> M2 (runtime) -> M2b/c/d/e
 (cooperative supervision: refs, trapping, link, pids — each gated
