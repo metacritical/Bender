@@ -156,4 +156,27 @@
 (assert (not (nil? (string/find "uncompiled" gtext))) "raw fn ^ param refused")
 (assert (not (nil? (string/find "cannot start with ^" gtext))) "guard message present")
 
+# Step 6 (returns fixpoint): hints seed, inference propagates through
+# calls and arithmetic; hinted contracts are never weakened
+(spit "/tmp/cg-ret.janet" (string
+  "(defn inc-l {:hint {:params [:long] :returns :long}} [x] (+ x 1))\n"
+  "(defn wrap2 [x] (inc-l (inc-l x)))\n"
+  "(defn mul-d ^double [x ^double y] (* x y))\n"
+  "(defn use-d [x] (+ (mul-d x 1.5) 0.5))\n"
+  "(defn poly [x] (if (> x 0) x nil))\n"
+  "(defn main [] (print (inc-l 1) (wrap2 2) (mul-d 1 2.5) (use-d 3)))\n"))
+(assert (= 0 (os/execute ["/bin/sh" "-c"
+  "./build/janet tools/callgraph.janet /tmp/cg-ret.janet > /tmp/cg-ret-out.txt"] :p))
+  "callgraph ret run")
+(def rtext (slurp "/tmp/cg-ret-out.txt"))
+(assert (not (nil? (string/find "ret 1 long" rtext))) "hinted long")
+(assert (not (nil? (string/find "ret 2 long" rtext))) "propagated long via calls")
+(assert (not (nil? (string/find "ret 3 double" rtext))) "hinted double held")
+(assert (not (nil? (string/find "ret 4 double" rtext))) "propagated double via call result")
+(assert (not (nil? (string/find "rets 2 2 0" rtext))) "rets summary")
+# poly joins long with nil -> unknown -> no ret line for it (defs 0,5,6)
+(assert (not (nil? (string/find "def 5 main" rtext))) "main is def 5")
+(assert (nil? (string/find "ret 6 " rtext)) "no ret for main")
+(assert (nil? (string/find "ret 5 " rtext)) "no ret for thunk")
+
 (end-suite)

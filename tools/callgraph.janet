@@ -372,6 +372,8 @@
       (when (tinfo :hint)
         (put hinted-targets tid true)))))
 
+(var call-map @{})  # id -> table {pc -> resolved target id} for inference
+
 (defn walk-def-at [id core-names]
   # contains edges to direct children (found via contiguous ranges),
   # then this def's own call sites (each audited for arity)
@@ -381,6 +383,8 @@
   (each child (or (d :defs) @[])
     (array/push edges ["contains" id cid])
     (+= cid (subtree-size cid)))
+  (def cmap @{})
+  (put call-map id cmap)
   (def code (or (d :bytecode) @[]))
   (var pc 0)
   (each ins code
@@ -388,9 +392,11 @@
     (cond
       (= op 'call)
       (do (def tid (record-call id d pc (ins 2) core-names))
+        (put cmap pc tid)
         (audit-site id d pc (ins 2) tid))
       (= op 'tcall)
       (do (def tid (record-call id d pc (ins 1) core-names))
+        (put cmap pc tid)
         (audit-site id d pc (ins 1) tid))
       nil)
     (++ pc)))
@@ -571,3 +577,132 @@
   (when (and (get (get defs id) :hint) (get hinted-targets id))
     (array/push hc id)))
 (print "hint-call" (if (empty? hc) "" (string " " (string/join (map string hc) " "))))
+
+# Step 6 (returns fixpoint): infer return types over the graph.
+# Lattice: :unknown > :number > {:long, :double}; plus :bool/:nil leaves.
+# Seeds: hinted :returns. Intra-function: single forward linear scan over
+# bytecode tracking slot types (params seeded from :hint :params, arith
+# ops join operand types, calls take the callee's current return type).
+# Jumps are flow boundaries we do NOT model — a single pass under-
+# approximates on merge-heavy code, which is safe (falls back to boxed).
+# Whole-program: iterate until stable (max 8 rounds); call results feed
+# callers on the next round.
+(def numeric-types @{:long true :double true :number true})
+(defn type-join [a b]
+  (cond
+    (= a b) a
+    (= a :unknown) b
+    (= b :unknown) a
+    (and (get numeric-types a) (get numeric-types b))
+    (if (or (= a :number) (= b :number))
+      :number
+      (if (or (= a :double) (= b :double)) :double :long))
+    :unknown))
+(defn arith-join [t1 t2]
+  (if (and (get numeric-types t1) (get numeric-types t2))
+    (type-join t1 t2)
+    :unknown))
+
+(def arith-ops
+  @{'add true 'sub true 'mul true 'div true 'divf true
+    'mod true 'rem true})
+(def arith-im-ops
+  @{'addim true 'subim true 'mulim true})
+(def cmp-ops
+  @{'eq true 'eqim true 'lt true 'ltim true 'gt true 'gtim true
+    'neq true 'neqim true 'ltu true 'gtu true 'cmp true 'next true})
+
+(defn const-num-type [d cidx]
+  # :long/:double for numeric constants, :unknown otherwise
+  (def consts (or (get d :constants) @[]))
+  (if (>= cidx (length consts))
+    :unknown
+    (do (def c (consts cidx))
+      (if (= :number (type c))
+        (if (= c (math/trunc c)) :long :double)
+        :unknown))))
+
+(defn param-types [id]
+  # positional slot types from :hint :params (nil entries as :unknown)
+  (def h (get (get defs id) :hint))
+  (if (and h (get h :params))
+    (do (def pts @[])
+      (each p (get h :params)
+        (array/push pts (if (get numeric-types p) p :unknown)))
+      pts)
+    nil))
+
+(defn infer-def [id rts]
+  # single forward pass; returns the joined type of all RETURN sites
+  (def info (get defs id))
+  (def d (info :d))
+  (def code (or (d :bytecode) @[]))
+  (def cmap (or (get call-map id) @{}))
+  (def st @{})
+  (def pts (param-types id))
+  (when pts
+    (var pi 0)
+    (each t pts
+      (put st pi t)
+      (++ pi)))
+  (var rtype :unknown)
+  (var pc 0)
+  (each ins code
+    (def op (ins 0))
+    (cond
+      (= op 'ldi) (put st (ins 1) :long)
+      (= op 'ldc) (put st (ins 1) (const-num-type d (ins 2)))
+      (= op 'ldn) (put st (ins 1) :nil)
+      (or (= op 'ldt) (= op 'ldf)) (put st (ins 1) :bool)
+      (= op 'len) (put st (ins 1) :long)
+      (= op 'movn) (put st (ins 1) (get st (ins 2) :unknown))
+      (= op 'movf) (put st (ins 2) (get st (ins 1) :unknown))
+      (get arith-im-ops op)
+      (put st (ins 1) (arith-join (get st (ins 2) :unknown) :long))
+      (get arith-ops op)
+      (put st (ins 1)
+           (arith-join (get st (ins 2) :unknown) (get st (ins 3) :unknown)))
+      (get cmp-ops op) (put st (ins 1) :bool)
+      (= op 'call)
+      (do (def tid (get cmap pc))
+        (when (and tid (< tid (length rts)))
+          (put st (ins 1) (rts tid))))
+      (= op 'tcall)
+      (do (def tid (get cmap pc))
+        (when (and tid (< tid (length rts)))
+          (set rtype (type-join rtype (rts tid)))))
+      (= op 'ret) (set rtype (type-join rtype (get st (ins 1) :unknown)))
+      (= op 'retn) (set rtype (type-join rtype :nil))
+      nil)
+    (++ pc))
+  rtype)
+
+(var rts @[])
+(each id (range (length defs))
+  (def h (get (get defs id) :hint))
+  (def r (if (and h (get h :returns)) (get h :returns) :unknown))
+  (array/push rts r))
+(var rounds 0)
+(var changed true)
+(while (and changed (< rounds 8))
+  (++ rounds)
+  (set changed false)
+  (each id (range (length defs))
+    # a hinted :returns is the codegen contract — never weakened by
+    # inference; only unannotated defs refine
+    (def h (get (get defs id) :hint))
+    (if (and h (get h :returns))
+      nil
+      (do (def t (infer-def id rts))
+        (when (not= t (rts id))
+          (put rts id t)
+          (set changed true))))))
+(each id (range (length defs))
+  (def t (rts id))
+  (when (get numeric-types t)
+    (print "ret " id " " t)))
+(def cnts @{:long 0 :double 0 :number 0})
+(each id (range (length defs))
+  (def t (rts id))
+  (when (get cnts t) (put cnts t (+ 1 (get cnts t)))))
+(print "rets " (get cnts :long) " " (get cnts :double) " " (get cnts :number) " rounds " rounds)
