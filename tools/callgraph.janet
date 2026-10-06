@@ -720,8 +720,15 @@
 
 (defn emit-native-all [outdir]
   (os/mkdir outdir)
+  # a def emits when its params and return are ALL concrete numeric —
+  # hinted (contract) or inference-proven (widening). Anything else is
+  # reported WITH its unproven slots so the user knows where to hint.
+  (defn describe-types [pt rt]
+    (def qs (string/join (map (fn [t] (if (= t :unknown) "?" (string t))) pt) " "))
+    (string "params [" qs "] ret " (if (= rt :unknown) "?" (string rt))))
   # candidates: fully concrete params + return, non-vararg
   (def cand @{})
+  (def skips @[])
   (each id (range (length defs))
     (def info (get defs id))
     (def d (info :d))
@@ -730,7 +737,12 @@
     (var concrete (and (> (length pt) 0) (not (d :vararg))))
     (each t pt (unless (get infer/numeric-types t) (set concrete false)))
     (unless (get infer/numeric-types rt) (set concrete false))
-    (when concrete (put cand id true)))
+    (if concrete
+      (put cand id true)
+      # not provable (yet): name the unproven slots — the actionable
+      # "add a hint here" report
+      (array/push skips [id (string (or (d :name) "?"))
+                          (string "types not proven: " (describe-types pt rt))])))
   # two-round dependency resolution: leaves first, then callers whose
   # targets are all emitted
   (def emitted-names @{})  # id -> janet name
@@ -752,11 +764,11 @@
             (array/push emitted {:id id :name nm :code code :pt (get pts id) :rt (rts id)})
             (set changed true))
           (put cand (string id "-r" reason) reason)))))
-  # report skips: candidates that never made it
-  (def skips @[])
+  # candidates that failed translation get their operational reason
   (each id cand-ids
     (unless (get emitted-names id)
-      (array/push skips [id (string (get ((get defs id) :d) :name)) "unsupported or calls non-native"])))
+      (def d ((get defs id) :d))
+      (array/push skips [id (string (or (d :name) "?")) "unsupported ops or calls non-native"])))
   (each [id nm r] skips (print "native-skip " id " " nm " " r))
   (when (empty? emitted)
     (eprint "emit-native: no emittable functions")
