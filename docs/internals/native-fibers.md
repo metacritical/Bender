@@ -232,12 +232,13 @@ explicitly. Shipped on this checkout; full suite green on `-O2` and
 4. `make fibertest` (17 C checks) and the AOT oracle cover the
    suspension paths; `tools/janet-aot.sh` unchanged.
 
-Known-open (extreme pressure only, `gcsetinterval 2048`, never at
-default or at 64 KiB+ where everything is green): two `suite-boot`
-behavioral asserts (`match 9`, `issue 463`) fail deterministically in
-full-file `dofile` runs but pass standalone, with prints added, and as
-script files — a layout-sensitive unrooted value in macro/quasiquote
-paths still to be pinned. No crashes; tracked for the next pass.
+Closed: the extreme-pressure (`gcsetinterval 2048`) `suite-boot`
+behavioral asserts (`match 9`, `issue 463`) no longer reproduce —
+verified green at `2048` across suite-boot/peg/ev/marsh/thread/
+gc-stress/native-fiber, plus suite-boot at `512` and suite-thread at
+`1024`. Never explained by a targeted fix (likely the 2b-iii rooting
+discipline plus layout shifts); if it ever recurs, suspect an unrooted
+value in macro/quasiquote paths first.
 
 ## Phase 3 — threads
 

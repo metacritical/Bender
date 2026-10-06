@@ -228,10 +228,10 @@ swap the implementation underneath in three ordered slices:
    freed at clear/deinit. Full suite green on `-O2` and `-O0 -g`,
    stress + fibertest + oracle green, boot/peg/ev/marsh clean at
    64 KiB stress, string microbench at parity (~6.5 ms vs ~7.0 ms per
-   20k interning ops). Notably, the two extreme-pressure behavioral
-   failures from Phase 2a no longer reproduce at any interval tried
-   (likely layout shift, not a targeted fix — the macro-path audit
-   stays open).
+    20k interning ops). Notably, the two extreme-pressure behavioral
+    failures from Phase 2a no longer reproduce at any interval tried
+    (down to `512` on suite-boot) — the macro-path audit is now closed
+    (see Phase 2a in native-fibers.md).
 
    **Policy done (this checkout).** Page-granular generations on top:
    per-page age (young 0–1, old 2+) and dirty flags on the slab headers;
@@ -258,8 +258,9 @@ swap the implementation underneath in three ordered slices:
 Gates for all of 2b: `make test`, `test/suite-gc-stress.janet`,
 `make fibertest`, the AOT oracle, plus targeted stress runs
 (`gcsetinterval 65536` over `suite-boot`/`suite-peg`/`suite-ev`/
-`suite-marsh` must stay green; extreme `2048` currently has two known
-behavioral failures — see native-fibers.md — fix or carry explicitly).
+`suite-marsh` must stay green; extreme `2048` — and `512` for
+suite-boot, `1024` for suite-thread — also green now, closing the
+Phase 2a macro-path audit).
 
 ## Phase 3 — M:N threads (after GC)
 
