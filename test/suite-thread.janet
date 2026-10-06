@@ -92,4 +92,10 @@
   (assert-error-value "top-level timeout" "timeout" (thread/join h 0.05))
   (assert (= :slow (thread/join h)) "top-level rejoin"))
 
+# 12. Fibers nested inside args and results round-trip through marshal.
+(let [f (fiber/new (fn [x] (* x 3)))]
+  (assert (= 42 (thread/join (thread/new (fn [t] (resume (t :fib) 14)) @{:fib f}))) "fiber nested in arg"))
+(let [h (thread/new (fn [_] (fiber/new (fn [x] (string "w=" x)))) 7)]
+  (assert (= "w=7" (resume (thread/join h) 7)) "fiber nested in result"))
+
 (end-suite)

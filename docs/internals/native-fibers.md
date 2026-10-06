@@ -271,7 +271,7 @@ and reclaim key off `waiter_sched` (every schedule bumps `sched_id`),
 so a resumed-then-returning fiber can never receive a rogue second
 resume. Finite timeouts need a task fiber (top-level mains cannot be
 cancelled — same upstream limit as `ev/deadline`). `test/suite-thread.janet`
-(23 tests) locks the behavior in `make test`. Panics: non-owner
+(25 tests, incl. nested fibers) locks the behavior in `make test`. Panics: non-owner
 join/alive?, double/concurrent join, join inside `janet_call`.
 
 Pitfalls found (all fixed): `janet_try` around `janet_await` catches the
@@ -284,10 +284,11 @@ zeroes — wild-stack prime); `janet_slab_page_for` must gate the
 mask+magic probe behind live-page membership (wild read on malloc-large
 and foreign pointers — per-VM sorted directory now).
 
-Known-open: values transitively holding live fibers are still only as
-safe as `ev/thread`'s long-standing fiber-marshal path (top-level fiber
-args are covered by the init fix above and green under ASan); nested
-fibers inside thread args/results remain untested.
+Closed (was: live-fiber arguments race): the crash was uninitialized
+`native_stack{,_base,_size}` on unmarshalled fibers meeting dirty slots,
+fixed by explicit init like `fiber_alloc`. Top-level fiber args are
+covered by `test/suite-thread.janet`, and fibers nested inside args and
+results round-trip too (probed both directions, 20/20 stable).
 
 ## Phase 4 — AOT compiler
 

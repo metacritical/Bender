@@ -24,7 +24,7 @@ phase below (currently Phase 2b).
 make                    # default -O2 build -> build/janet
 make test               # full suite: 37/37 (incl. suite-native-fiber 47/47,
                         # suite-gc-stress 21/21, suite-gc-minor 12/12,
-                        # suite-thread 23/23)
+                        # suite-thread 25/25)
 make fibertest          # C call-chain suspension proof: 21 checks green
 mkdir -p /tmp/aot-tests
 printf '(print "hi from janet")\n' > /tmp/aot-tests/hello.janet
@@ -290,7 +290,7 @@ and a later join still collects); finite timeouts need a task fiber.
 handles read alive deterministically: completion can only be processed
 once the spawner suspends). Roots follow the `ev/thread`
 pattern (join gcroots, callback unroots). New `test/suite-thread.janet`
-(23 tests: value round-trips incl. fiber args, 8-way parallel,
+(25 tests: value round-trips incl. fiber args, nested fibers, 8-way parallel,
 ev-in-thread, error re-raise, double-join, non-function refusal,
 alive? transitions, join-in-ev-task, timeout fire/rejoin/top-level)
 runs in `make test` (now 37/37). Gates: full suite +
