@@ -458,6 +458,11 @@
   (def text (slurp f))
   (def forms (parse-all text))
   (def env (make-env))
+  # extern fallbacks pre-bind their names so the unit compiles and
+  # provides the parity oracle
+  (each name (keys externs)
+    (def e (get externs name))
+    (put env (symbol name) @{:value (get e :fallback)}))
   (each name (all-bindings env)
     (def entry (get env name))
     (def v (if (table? entry) (get entry :value) entry))
@@ -661,6 +666,7 @@
     'addim true 'subim true 'mulim true 'ret true
     'push true 'push2 true 'push3 true 'call true 'tcall true
     'jmp true 'jmpif true 'jmpno true
+    'movn true 'movf true
     'lt true 'ltim true 'gt true 'gtim true 'lte true 'gte true
     'eq true 'eqim true 'neq true 'neqim true
     # callee-only loads: the C call targets the native symbol directly,
@@ -922,6 +928,12 @@
                                     (emit-slot (ins 3) arity) ";")))
               (do (set bad "div on long")
                 (break)))
+            (= op 'movn)
+            (array/push lines (string "    s" (ins 1) " = "
+                                      (emit-slot (ins 2) arity) ";"))
+            (= op 'movf)
+            (array/push lines (string "    s" (ins 2) " = "
+                                      (emit-slot (ins 1) arity) ";"))
             (or (= op 'add) (= op 'sub) (= op 'mul))
             (do (set pending @[])
               (array/push lines
@@ -971,7 +983,7 @@
           (++ pc)))))
   (if bad
     [nil bad]
-    [{:code (string "static " ct " " (emit-c-name (string (or (d :name) "?"))) "("
+    [{:code (string ct " " (emit-c-name (string (or (d :name) "?"))) "("
              (string/join pdecls ", ") ") {\n" (string/join lines "\n") "\n}")
       :externs used-externs}
      nil]))

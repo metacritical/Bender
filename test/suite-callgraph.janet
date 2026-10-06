@@ -207,7 +207,7 @@
   "/tmp/cg-em/native > /tmp/cg-em/actual.txt && cmp /tmp/cg-em/expected.txt /tmp/cg-em/actual.txt"] :p))
   "native/interpreter parity")
 (def ntext (slurp "/tmp/cg-em/native.c"))
-(assert (not (nil? (string/find "static int64_t twice(int64_t p0)" ntext))) "unhinted fn emitted")
+(assert (not (nil? (string/find "int64_t twice(int64_t p0)" ntext))) "unhinted fn emitted")
 (assert (not (nil? (string/find "inc_l(p0)" ntext))) "native-to-native calls")
 
 # Step 8 (branches): CFG + if/goto emission, parity through merges
@@ -228,7 +228,7 @@
 (def btext (slurp "/tmp/cg-br/native.c"))
 (assert (not (nil? (string/find "goto L" btext))) "branches emit goto")
 # unhinted maxi proven through merge dataflow
-(assert (not (nil? (string/find "static int64_t maxi(int64_t p0, int64_t p1)" btext)))
+(assert (not (nil? (string/find "int64_t maxi(int64_t p0, int64_t p1)" btext)))
         "unhinted branched fn emitted")
 
 # refusal: branch condition must be a bool slot (janet 0 is truthy)
