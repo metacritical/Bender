@@ -207,3 +207,21 @@
   (monitor a b [:link tag])
   (monitor b a [:link tag])
   [a b])
+
+###
+### M3: named registry sugar. ev/register/whereis/unregister are the
+### runtime primitives (process-global, cross-thread); these bind a
+### mailbox's pid under a name and resolve it back to a sendable pid.
+###
+
+(defn register
+  "Bind `name` to `mb`'s pid in the process-global registry."
+  [mb name]
+  (ev/register name ((resolve mb) :pid))
+  mb)
+
+(defn whereis
+  "Resolve `name` to a pid (or nil). The pid plugs straight into
+  send/call/monitor/link."
+  [name]
+  (ev/whereis name))

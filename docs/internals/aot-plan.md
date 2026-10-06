@@ -437,23 +437,25 @@ surface below is the follow-up that unlocks supervisors. Surface:
   drops, late monitors, GC pressure) — the only signature seen is
   this pre-existing one.
 
-**M3 — named registry** (runtime, state.h + one cfun file). Surface:
-
-```janet
-(ev/register :physics pid)   # keyword -> pid (mailbox pid or worker pid)
-(ev/whereis :physics)        # -> pid or nil
-(ev/unregister :physics)
-```
-
-- Mechanics: per-thread-local VM tables would be invisible across
-  threads — the registry must live in the MAIN/root env and store
-  channel handles (thread-safe queues are the shareable object).
-  `register` overwrites atomically (table put under a lock, mirroring
-  threaded channels' locking).
-- Games: `(ev/whereis :physics)` — the physics worker is addressed by
-  name from any layer, including eval'd mod code.
-- Tests: register/whereis/unregister round-trip, overwrite, lookup
-  from a worker thread (cross-thread visibility).
+**M3 — named registry** (runtime, ev.c — no new file needed).
+DONE. Surface as spec'd (`ev/register`/`ev/whereis`/`ev/unregister`,
+keywords to pids), plus `mailbox/register`/`mailbox/whereis` sugar.
+Design as implemented:
+- Process-global C table (name -> marshaled byte copy) under a
+  platform once-init mutex. Janet tables are per-VM/isolated, so the
+  store lives in C; values copy out and unmarshal in the caller's VM
+  — never a cross-heap reference, no GC coupling, VMs may die freely.
+- Marshal runs BEFORE the lock (a refusal raises without wedging
+  the mutex). UNSAFE mode passes threaded channels by pointer, so
+  M2e pids travel intact (verified: pid round-trips `deep=`).
+- Thread handles are refused explicitly (UNSAFE would pass them by
+  pointer, leaking a ref and handing out an owner-locked capability).
+  Registry entries live until removed/overwritten; one channel ref
+  per registration is never released (documented, registry-scale).
+- Tests: pid round-trip, overwrite, unregister semantics,
+  cross-thread visibility both directions, refusal + continued use,
+  named send/call through looked-up pids. ASan stress clean
+  (40 entries, overwrite churn, concurrent + cross-thread registrants).
 
 **M4 — M:N scheduler core** (runtime, sp_sched.c analogue). As the
 Phase 3 text above: work-stealing runqueues, SIGURG preemption at

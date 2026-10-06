@@ -3916,6 +3916,184 @@ JANET_CORE_FN(cfun_thread_monitor,
     return janet_wrap_integer(ref);
 }
 
+/* M3: process-global name registry. One store shared by every VM
+ * in the process (Janet tables are per-VM and isolated, so this lives
+ * in C). Values are kept as marshaled byte copies: no cross-heap
+ * references, no GC coupling — lookups copy out and unmarshal in the
+ * caller's VM. Marshal runs BEFORE the lock is taken, so a refusal
+ * (e.g. thread handles) raises without wedging the mutex. UNSAFE mode
+ * passes threaded channels by pointer (shared, incref'd) — the M2e
+ * pid shape travels intact. Known minor cost: one channel ref per
+ * registration is never released; irrelevant at registry scale. */
+typedef struct {
+    char *name;
+    uint8_t *bytes;
+    size_t len;
+} JanetNameRegistryEntry;
+
+static JanetNameRegistryEntry *reg_entries = NULL;
+static int32_t reg_count = 0;
+static int32_t reg_cap = 0;
+/* Local platform mutex (JanetOSMutex is opaque and cannot embed). */
+#ifdef JANET_WINDOWS
+static CRITICAL_SECTION reg_lock;
+static void reg_lock_init(void) { InitializeCriticalSection(&reg_lock); }
+static void reg_lock_take(void) { EnterCriticalSection(&reg_lock); }
+static void reg_lock_drop(void) { LeaveCriticalSection(&reg_lock); }
+#else
+static pthread_mutex_t reg_lock;
+static void reg_lock_init(void) { pthread_mutex_init(&reg_lock, NULL); }
+static void reg_lock_take(void) { pthread_mutex_lock(&reg_lock); }
+static void reg_lock_drop(void) { pthread_mutex_unlock(&reg_lock); }
+#endif
+#ifdef JANET_WINDOWS
+static INIT_ONCE reg_once = INIT_ONCE_STATIC_INIT;
+static BOOL CALLBACK reg_do_init(PINIT_ONCE once, PVOID arg, PVOID *ctx) {
+    (void) once;
+    (void) arg;
+    (void) ctx;
+    reg_lock_init();
+    return TRUE;
+}
+static void reg_ensure_init(void) {
+    InitOnceExecuteOnce(&reg_once, reg_do_init, NULL, NULL);
+}
+#else
+static pthread_once_t reg_once = PTHREAD_ONCE_INIT;
+static void reg_do_init(void) {
+    reg_lock_init();
+}
+static void reg_ensure_init(void) {
+    pthread_once(&reg_once, reg_do_init);
+}
+#endif
+
+/* Caller holds reg_lock. Returns index or -1. */
+static int32_t reg_find(const char *name) {
+    for (int32_t i = 0; i < reg_count; i++) {
+        if (!strcmp(reg_entries[i].name, name)) return i;
+    }
+    return -1;
+}
+
+JANET_CORE_FN(cfun_registry_register,
+              "(ev/register name value)",
+              "Bind keyword `name` to `value` in the process-global "
+              "registry, visible from every thread. `value` is stored as "
+              "a marshaled copy: lookups get an equal copy in the "
+              "caller's own VM, never a cross-heap reference. Replacing "
+              "an entry drops the old copy. Unmarshalable values (thread "
+              "handles) raise. Returns `value`.") {
+    janet_fixarity(argc, 2);
+    const uint8_t *kws = janet_getkeyword(argv, 0);
+    const char *name = (const char *) kws;
+    /* Thread handles are owner-local capabilities: UNSAFE marshal
+     * would pass them by pointer (silently leaking a ref and handing
+     * out a handle every foreign use rejects). Refuse explicitly. */
+    if (janet_checktype(argv[1], JANET_ABSTRACT) &&
+            janet_abstract_type(janet_unwrap_abstract(argv[1])) == &janet_thread_handle_type) {
+        janet_panic("ev/register cannot store thread handles (owner-local)");
+    }
+    JanetBuffer tmp;
+    janet_buffer_init(&tmp, 0);
+    janet_marshal(&tmp, argv[1], NULL, JANET_MARSHAL_UNSAFE);
+    uint8_t *copy = janet_malloc(tmp.count ? (size_t) tmp.count : 1);
+    if (NULL == copy) {
+        janet_buffer_deinit(&tmp);
+        JANET_OUT_OF_MEMORY;
+    }
+    if (tmp.count) memcpy(copy, tmp.data, (size_t) tmp.count);
+    size_t len = (size_t) tmp.count;
+    janet_buffer_deinit(&tmp);
+    reg_ensure_init();
+    reg_lock_take();
+    int32_t at = reg_find(name);
+    if (at >= 0) {
+        janet_free(reg_entries[at].bytes);
+        reg_entries[at].bytes = copy;
+        reg_entries[at].len = len;
+    } else {
+        if (reg_count >= reg_cap) {
+            int32_t ncap = reg_cap ? reg_cap * 2 : 8;
+            JanetNameRegistryEntry *nent = janet_realloc(reg_entries,
+                (size_t) ncap * sizeof(JanetNameRegistryEntry));
+            if (NULL == nent) {
+                reg_lock_drop();
+                janet_free(copy);
+                JANET_OUT_OF_MEMORY;
+            }
+            reg_entries = nent;
+            reg_cap = ncap;
+        }
+        size_t nlen = strlen(name) + 1;
+        char *kcopy = janet_malloc(nlen);
+        if (NULL == kcopy) {
+            reg_lock_drop();
+            janet_free(copy);
+            JANET_OUT_OF_MEMORY;
+        }
+        memcpy(kcopy, name, nlen);
+        reg_entries[reg_count].name = kcopy;
+        reg_entries[reg_count].bytes = copy;
+        reg_entries[reg_count].len = len;
+        reg_count++;
+    }
+    reg_lock_drop();
+    return argv[1];
+}
+
+JANET_CORE_FN(cfun_registry_whereis,
+              "(ev/whereis name)",
+              "Look up keyword `name` in the process-global registry. "
+              "Returns an unmarshaled copy of the registered value in "
+              "the caller's VM, or nil when absent.") {
+    janet_fixarity(argc, 1);
+    const uint8_t *kws = janet_getkeyword(argv, 0);
+    const char *name = (const char *) kws;
+    reg_ensure_init();
+    reg_lock_take();
+    int32_t at = reg_find(name);
+    uint8_t *copy = NULL;
+    size_t len = 0;
+    if (at >= 0 && reg_entries[at].len) {
+        len = reg_entries[at].len;
+        copy = janet_malloc(len);
+        if (NULL == copy) {
+            reg_lock_drop();
+            JANET_OUT_OF_MEMORY;
+        }
+        memcpy(copy, reg_entries[at].bytes, len);
+    }
+    reg_lock_drop();
+    if (NULL == copy) {
+        return janet_wrap_nil();
+    }
+    Janet out = janet_unmarshal(copy, len, JANET_MARSHAL_UNSAFE, NULL, NULL);
+    janet_free(copy);
+    return out;
+}
+
+JANET_CORE_FN(cfun_registry_unregister,
+              "(ev/unregister name)",
+              "Remove keyword `name` from the process-global registry. "
+              "Returns true when an entry was removed, false otherwise.") {
+    janet_fixarity(argc, 1);
+    const uint8_t *kws = janet_getkeyword(argv, 0);
+    const char *name = (const char *) kws;
+    reg_ensure_init();
+    reg_lock_take();
+    int32_t at = reg_find(name);
+    int found = (at >= 0);
+    if (found) {
+        janet_free(reg_entries[at].name);
+        janet_free(reg_entries[at].bytes);
+        reg_entries[at] = reg_entries[reg_count - 1];
+        reg_count--;
+    }
+    reg_lock_drop();
+    return janet_wrap_boolean(found);
+}
+
 JANET_CORE_FN(cfun_thread_demonitor,
               "(ev/demonitor handle ref)",
               "Remove the monitor `ref` (returned by `ev/monitor`) from "
@@ -4325,6 +4503,9 @@ void janet_lib_ev(JanetTable *env) {
         JANET_CORE_REG("thread/alive?", cfun_thread_alive),
         JANET_CORE_REG("ev/monitor", cfun_thread_monitor),
         JANET_CORE_REG("ev/demonitor", cfun_thread_demonitor),
+        JANET_CORE_REG("ev/register", cfun_registry_register),
+        JANET_CORE_REG("ev/whereis", cfun_registry_whereis),
+        JANET_CORE_REG("ev/unregister", cfun_registry_unregister),
         JANET_CORE_REG("ev/give-supervisor", cfun_ev_give_supervisor),
         JANET_CORE_REG("ev/sleep", cfun_ev_sleep),
         JANET_CORE_REG("ev/deadline", cfun_ev_deadline),

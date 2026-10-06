@@ -424,4 +424,52 @@
           "non-trapper survives monitor traffic")
   (mailbox/quit watcher))
 
+# M3: named registry (ev/register/whereis/unregister + sugar).
+
+# 33. Pid round-trips through the registry by value.
+(let [w (mailbox/spawn (fn [_t p] p))]
+  (mailbox/register w :m33)
+  (assert (deep= (w :pid) (mailbox/whereis :m33)) "registry pid round-trip")
+  (assert (nil? (mailbox/whereis :m33-missing)) "missing name is nil")
+  (mailbox/quit w)
+  (ev/unregister :m33))
+
+# 34. Overwrite wins; unregister removes (true) and is false when absent.
+(ev/register :m34 :first)
+(ev/register :m34 :second)
+(assert (= :second (ev/whereis :m34)) "overwrite wins")
+(assert (ev/unregister :m34) "unregister present")
+(assert (nil? (ev/whereis :m34)) "removed name is nil")
+(assert (not (ev/unregister :m34)) "unregister absent is false")
+
+# 35. Cross-thread visibility both directions.
+(let [sig (ev/thread-chan 1)
+      h (thread/new (fn [c] (ev/register :m35-w :wval) (ev/give c :done)) sig)]
+  (ev/take sig)
+  (thread/join h)
+  (assert (= :wval (ev/whereis :m35-w)) "worker registration visible")
+  (ev/unregister :m35-w))
+(ev/register :m35-m :mval)
+(let [sig (ev/thread-chan 1)
+      h (thread/new (fn [c] (ev/give c (ev/whereis :m35-m))) sig)]
+  (assert (= :mval (ev/take sig)) "worker sees main registration")
+  (thread/join h)
+  (ev/unregister :m35-m))
+
+# 36. Unmarshalable values raise without wedging the registry.
+(let [h (thread/new (fn [] :x))]
+  (assert-error "handle refused" (ev/register :m36 h))
+  (thread/join h))
+(assert (= :ok (do (ev/register :m36 :ok) (ev/whereis :m36)))
+        "registry usable after refused value")
+(ev/unregister :m36)
+
+# 37. Named send: address a worker by name, call through the looked-up pid.
+(let [phys (mailbox/spawn (fn [t p] (case t :step (+ p 1) :echo p)))]
+  (mailbox/register phys :m37-phys)
+  (def target (mailbox/whereis :m37-phys))
+  (assert (= 43 (mailbox/call target :step 42 5)) "call via registry pid")
+  (mailbox/quit phys)
+  (ev/unregister :m37-phys))
+
 (end-suite)
