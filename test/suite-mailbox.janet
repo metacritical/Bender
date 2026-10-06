@@ -298,4 +298,43 @@
   (assert (= :pong (mailbox/call a :ping nil 5)) "peer keeps working")
   (mailbox/quit a))
 
+# M2d: link composition (no new mechanism — pins on monitor+trap).
+
+# 24. Linking with an already-dead peer: the late path delivers an
+# immediate :down to the survivor, which stays alive and working.
+(let [a (mailbox/spawn
+          (do (var seen nil)
+              (fn [tag payload]
+                (case tag
+                  :down (set seen payload)
+                  :last seen
+                  :ping :pong))))
+      b (mailbox/spawn (fn [_t p] p))]
+  (mailbox/quit b)
+  (mailbox/link a b :l24)
+  (assert (deep= [:l24 :normal] (mailbox/call a :last nil 5))
+          "dead-peer link notifies immediately")
+  (assert (thread/alive? (a :worker)) "survivor alive")
+  (assert (= :pong (mailbox/call a :ping nil 5)) "survivor works")
+  (mailbox/quit a))
+
+# 25. Double link installs two independent monitors: quitting the peer
+# notifies twice, consistently.
+(let [a (mailbox/spawn
+          (do (var n 0)
+              (var seen nil)
+              (fn [tag payload]
+                (case tag
+                  :down (do (set seen payload) (set n (+ n 1)))
+                  :last seen
+                  :count n))))
+      b (mailbox/spawn (fn [_t p] p))]
+  (mailbox/link a b :l25)
+  (mailbox/link a b :l25)
+  (mailbox/quit b)
+  (assert (= 2 (mailbox/call a :count nil 5)) "both link legs fire")
+  (assert (deep= [:l25 :normal] (mailbox/call a :last nil 5))
+          "link tags consistent")
+  (mailbox/quit a))
+
 (end-suite)
