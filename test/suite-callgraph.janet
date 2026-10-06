@@ -110,4 +110,30 @@
 (assert (not (nil? (string/find "arity-bad 2 1 2" btext))) "too-few flagged")
 (assert (not (nil? (string/find "arity 1 0" btext))) "bad count exact")
 
+# Step 4 (type hints): Clojure-style optional annotations via the defn
+# dict modifier; extraction, validation, and call-site linkage
+(spit "/tmp/cg-hint.janet" (string
+  "(defn add2 {:hint {:params [:double :double] :returns :double}} [x y] (+ x y))\n"
+  "(defn half {:hint {:returns :double}} [x] (/ x 2))\n"
+  "(defn main [] (print (add2 1.5 2.5) (half 4)))\n"))
+(assert (= 0 (os/execute ["/bin/sh" "-c"
+  "./build/janet tools/callgraph.janet /tmp/cg-hint.janet > /tmp/cg-hint-out.txt"] :p))
+  "callgraph hint run")
+(def htext (slurp "/tmp/cg-hint-out.txt"))
+(assert (not (nil? (string/find "hint 1 double double -> double" htext))) "add2 hint line")
+(assert (not (nil? (string/find "hint 2 - -> double" htext))) "half returns-only hint")
+(assert (not (nil? (string/find "hints 2 0" htext))) "hint counts")
+(assert (not (nil? (string/find "hint-call 1 2" htext))) "hinted callees linked")
+
+# invalid hints are rejected, never silently accepted
+(spit "/tmp/cg-hintbad.janet" (string
+  "(defn f {:hint {:params [:double] :returns :bogus}} [x] x)\n"
+  "(defn main [] (print (f 1)))\n"))
+(assert (= 0 (os/execute ["/bin/sh" "-c"
+  "./build/janet tools/callgraph.janet /tmp/cg-hintbad.janet > /tmp/cg-hintbad-out.txt"] :p))
+  "callgraph hintbad run")
+(def hbtext (slurp "/tmp/cg-hintbad-out.txt"))
+(assert (not (nil? (string/find "hint-bad 1 bad-returns-hint" hbtext))) "bad returns flagged")
+(assert (not (nil? (string/find "hints 1 1" hbtext))) "bad count in hints line")
+
 (end-suite)

@@ -299,7 +299,7 @@ inference falls back to the interpreter inside the same runtime.
 
 ### Phase 4 step 1 — registration (DONE)
 
-`tools/callgraph.janet` (gated by `test/suite-callgraph.janet`, 32 tests):
+`tools/callgraph.janet` (gated by `test/suite-callgraph.janet`, 40 tests):
 whole-file `(do ...)` compile, `disasm` walk, `def`/`contains`/`calls`/
 `extern`/`ambiguous`/`unknown`/`dynamic` edges plus stats, with a
 reachability + caller/recursive/taint fixpoint on top. Shallow

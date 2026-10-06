@@ -56,7 +56,7 @@
   (def id next-id)
   (++ next-id)
   (def name (string (or (d :name) (string "<anon-" id ">"))))
-  (array/push defs {:d d :name name})
+  (array/push defs @{:d d :name name :hint nil})
   (def bucket (get name-ids name))
   (if bucket
     (array/push bucket id)
@@ -66,6 +66,80 @@
   (each child (or (d :defs) @[])
     (register-def child))
   id)
+
+# Step 4 (type hints): optional Clojure-style annotations. Surface:
+# (defn f {:hint {:params [:double :long] :returns :long}} [x y] ...)
+# — the dict modifier lands in the env metadata table and survives into
+# the thunk constants; params maps positionally onto the arglist.
+# :long and :double are unboxed; absent (or :number) stays boxed.
+# Validation only here — consumption (unboxed codegen) is the next phase.
+(def valid-hints @{:long true :double true :number true})
+(defn hint-of [id]
+  (def info (get defs id))
+  (when (nil? info) (break nil))
+  (info :hint))
+(defn extract-hints []
+  (var nhints 0)
+  (each f args
+    (def text (slurp f))
+    (def forms (parse-all text))
+    (each form forms
+      # find defn forms with a {:hint {...}} dict modifier and record
+      # the hint under every name-ids entry registered for that name
+      (when (and (tuple? form) (>= (length form) 3)
+                 (symbol? (form 0))
+                 (or (= (string (form 0)) "defn") (= (string (form 0)) "defn-")))
+        (def m (form 2))
+        (when (and (or (table? m) (struct? m)) (get m :hint))
+          (def h (get m :hint))
+          (def nm (string (form 1)))
+          (def ids (get name-ids nm))
+          (when ids
+            (each id ids
+              (def info (get defs id))
+              (put info :hint h))
+            (++ nhints))))))
+  nhints)
+
+(defn check-hints []
+  # validate each hint against its def: param count fits arity, hint
+  # keywords are known; emit hint lines and hint-bad problems
+  (var nbad 0)
+  (each id (range (length defs))
+    (def h (hint-of id))
+    (when h
+      (def d (get (get defs id) :d))
+      (def params (get h :params))
+      (def returns (get h :returns))
+      (var ok true)
+      (when params
+        (unless (indexed? params)
+          (set ok false)
+          (array/push edges ["hint-bad" id "params-not-indexed"]))
+        (when (indexed? params)
+          (def tmax (or (get d :max-arity) 2147483647))
+          (when (> (length params) tmax)
+            (set ok false)
+            (array/push edges ["hint-bad" id "too-many-params"]))
+          (each p params
+            (unless (and (keyword? p) (get valid-hints p))
+              (set ok false)
+              (array/push edges ["hint-bad" id "bad-param-hint"]))))
+        (when (and (indexed? params) (< (length params) (get d :min-arity 0)))
+          # hinted params must cover at least the required prefix
+          (set ok false)
+          (array/push edges ["hint-bad" id "too-few-params"])))
+      (when (and returns (or (not (keyword? returns))
+                             (not (get valid-hints returns))))
+        (set ok false)
+        (array/push edges ["hint-bad" id "bad-returns-hint"]))
+      (when ok
+        (def pl (if params (string/join (map string params) " ") ""))
+        (print "hint " id " "
+               (if (empty? pl) "-" pl)
+               " -> " (if returns (string returns) "-")))
+      (unless ok (++ nbad))))
+  nbad)
 
 (defn slot-name [d pc slot]
   # symbolmap range entries are [start end slot name]; pc is the
@@ -215,6 +289,7 @@
 # a load means the args are computed/spread — `arity-unknown`, never a
 # false mismatch. Returns the count or nil.
 (var called-as @{})   # target id -> table used as int set
+(var hinted-targets @{})  # hinted callee ids actually called somewhere
 (var arity-bad 0)
 (var arity-unknown 0)
 (def load-ops
@@ -267,7 +342,10 @@
       (put called-as tid seen)
       (when (or (< n tmin) (> n tmax))
         (++ arity-bad)
-        (array/push edges ["arity-bad" caller-id tid n])))))
+        (array/push edges ["arity-bad" caller-id tid n]))
+      # hinted callee: record the call for unboxing decisions
+      (when (tinfo :hint)
+        (put hinted-targets tid true)))))
 
 (defn walk-def-at [id core-names]
   # contains edges to direct children (found via contiguous ranges),
@@ -329,11 +407,17 @@
     (array/push edges ["uncompiled" f -1 (string (get thunk :error))])
     (register-def (disasm thunk))))
 
+# Step 4: extract type hints BEFORE the walk so audit-site sees them.
+(var nhints (extract-hints))
+
 # Pass 2: walk every def exactly once (ids are dense 0..n-1).
 (var i 0)
 (while (< i (length defs))
   (walk-def-at i core-names)
   (++ i))
+
+# validate hints (after the walk: hint-bad lines join the edge stream)
+(var nbad-hints (check-hints))
 
 # Print nodes.
 (var j 0)
@@ -357,6 +441,7 @@
     (= (e 0) "dynamic") (print "dynamic " (e 1) " " (e 2))
     (= (e 0) "arity-bad") (print "arity-bad " (e 1) " " (e 2) " " (e 3))
     (= (e 0) "arity-unknown") (print "arity-unknown " (e 1))
+    (= (e 0) "hint-bad") (print "hint-bad " (e 1) " " (e 2))
     (print "unknown-edge " e)))
 
 (var unresolved 0)
@@ -454,3 +539,10 @@
   (def counts (sorted (keys (get called-as tid))))
   (print "called-as " tid " " (string/join (map string counts) " ")))
 (print "arity " arity-bad " " arity-unknown)
+(print "hints " nhints " " nbad-hints)
+# hinted defs with at least one resolvable call site: unboxing candidates
+(var hc @[])
+(each id (range (length defs))
+  (when (and (get (get defs id) :hint) (get hinted-targets id))
+    (array/push hc id)))
+(print "hint-call" (if (empty? hc) "" (string " " (string/join (map string hc) " "))))

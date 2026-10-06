@@ -24,7 +24,7 @@ phase below (currently Phase 2b).
 make                    # default -O2 build -> build/janet
 make test               # full suite: 38/38 (incl. suite-native-fiber 47/47,
                         # suite-gc-stress 21/21, suite-gc-minor 12/12,
-                        # suite-thread 25/25, suite-callgraph 32/32)
+                        # suite-thread 25/25, suite-callgraph 40/40)
 make fibertest          # C call-chain suspension proof: 21 checks green
 mkdir -p /tmp/aot-tests
 printf '(print "hi from janet")\n' > /tmp/aot-tests/hello.janet
@@ -330,7 +330,7 @@ require/… — the inference-defeating set), and uncompiled-unit lines,
 plus a stats summary. Resolution is shallow on purpose: symbolmap
 ranges, backward scan to the nearest slot writer (`ldc` constants with
 core-identity for cfunctions, `clo` children, `lds` self, `ldu` by
-upvalue index). `test/suite-callgraph.janet` (32 tests) runs in
+upvalue index). `test/suite-callgraph.janet` (40 tests) runs in
 `make test`. Semantics verified against upstream (not tool shortcuts):
 forward references fail the unit exactly like real loading; statically
 unreferenced top-level defns are dropped by the compiler's dead-store
@@ -354,9 +354,22 @@ flow stop); anything else (`pusha`, computed spreads) is
 `arity-unknown`, never a false mismatch. Emits `called-as <id> <n...>`
 sets, `arity-bad <caller> <callee> <n>` when a counted call violates
 the callee's min/max arity, and an `arity <bad> <unknown>` summary —
-mismatches agree with the compiler's own runtime rejections. Next:
-type hints (Clojure-style optional annotations) feeding unboxed
-codegen, then widening/returns fixpoint on that scaffold.
+mismatches agree with the compiler's own runtime rejections.
+
+### Phase 4 step 4 — type hints (DONE, this checkout)
+
+Clojure-style optional annotations, zero parser changes (the `^`
+caret symbol is NOT usable in arglists — it parses as a distinct
+parameter slot and silently changes arity). Surface:
+`(defn f {:hint {:params [:double :long] :returns :long}} [x y] ...)`
+— the dict modifier lands in the env metadata and survives into the
+thunk constants; params maps positionally. `:long`/`:double` unbox;
+absent or `:number` stays boxed; unannotated code keeps the inference
+path. Tool-side validation only so far (extraction, `hint` lines,
+`hint-bad` rejections for unknown keywords/arity mismatches,
+`hint-call` linking hinted callees with resolvable sites). Next:
+compiler-side consumption — check/emit unboxed codegen paths for
+hinted defs, then the returns fixpoint using hints as seeds.
 
 - Boxed `Janet` for polymorphic slots; unboxed C (`double`, `int64`) for
   inferred numeric loops/structs; value-type promotion for small immutable
