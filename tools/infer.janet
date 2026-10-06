@@ -130,7 +130,7 @@
         (= op 'pusha) (set spread true)
         (= op 'call)
         (do (def tid (get cmap pc))
-          (when tid
+          (when (and tid (number? tid))
             # call-site widening: bind each pushed arg into the callee's
             # param slot (annotation-seeded params are never touched)
             (unless spread
@@ -145,12 +145,12 @@
                       (put callee-pts i nn)
                       (put box :changed true)))
                   (++ i))))
-            (put st (ins 1) (rts tid)))
+            (when (number? tid) (put st (ins 1) (rts tid))))
           (set pending @[])
           (set spread false))
         (= op 'tcall)
         (do (def tid (get cmap pc))
-          (when tid
+          (when (and tid (number? tid))
             (unless spread
               (def callee-pts (get pts tid))
               (def cf (get pfixed tid))
@@ -163,7 +163,8 @@
                       (put callee-pts i nn)
                       (put box :changed true)))
                   (++ i))))
-            (set rtype (type-join rtype (rts tid))))
+            (when (number? tid)
+              (set rtype (type-join rtype (rts tid)))))
           (set pending @[])
           (set spread false))
         (= op 'ret) (set rtype (type-join rtype (get st (ins 1) :unknown)))

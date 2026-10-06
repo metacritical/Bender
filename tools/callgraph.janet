@@ -37,16 +37,34 @@
 (var args (tuple/slice (dyn :args) 1))
 # --emit-native DIR: also emit unboxed C for defs whose param/return
 # types are concrete (hinted contracts OR inference-proven)
+# --externs FILE: janet file defining an `externs` dictionary —
+# {"janet-name" {:c "csymbol" :params [...] :returns t
+#                :fallback (fn ...)}}
+# The fallback pre-binds the name so the unit compiles and provides
+# parity semantics; native emission calls the C symbol directly (the
+# raylib story).
 (var emit-native-dir nil)
+(var externs-file nil)
 (var filtered @[])
 (var i 0)
 (while (< i (length args))
   (def a (args i))
-  (if (and (= a "--emit-native") (< (+ i 1) (length args)))
+  (cond
+    (and (= a "--emit-native") (< (+ i 1) (length args)))
     (do (set emit-native-dir (args (+ i 1))) (++ i))
+    (and (= a "--externs") (< (+ i 1) (length args)))
+    (do (set externs-file (args (+ i 1))) (++ i))
     (array/push filtered a))
   (++ i))
 (set args filtered)
+(var externs {})
+(when externs-file
+  # the externs file must define an `externs` dictionary binding
+  (set externs (get (get (dofile externs-file) (quote externs)) :value))
+  (unless (dictionary? externs)
+    (eprint "externs file must define an `externs` dictionary")
+    (os/exit 4)))
+(var extern-call-map @{})  # id -> {pc -> extern janet name}
 (when (empty? args)
   (eprint "usage: callgraph.janet FILE [FILE...] [--emit-native DIR]")
   (os/exit 4))
@@ -215,12 +233,19 @@
   @{'jmp true 'jmpif true 'jmpni true 'jmpnn true 'jmpno true
     'ret true 'retn true 'err true 'tcall true 'res true})
 
-(defn resolve-name [caller-id tname]
-  # shared tail: dynamic > unique image def > ambiguous > extern.
-  # returns the resolved target id or nil.
+(defn resolve-name [caller-id tname pc]
+  # shared tail: dynamic > declared extern > unique image def >
+  # ambiguous > unknown. Returns the resolved target id, an extern
+  # NAME string (recorded in extern-call-map), or nil.
   (cond
     (get dynamic-names tname)
     (do (array/push edges ["dynamic" caller-id tname]) nil)
+    (get externs tname)
+    (do (array/push edges ["extern-call" caller-id tname])
+      (put (or (get extern-call-map caller-id)
+               (do (def t2 @{}) (put extern-call-map caller-id t2) t2))
+           pc tname)
+      tname)
     (do (def ids (get name-ids tname))
       (cond
         (nil? ids)
@@ -270,13 +295,14 @@
       cid)))
 
 (defn record-call [caller-id d pc slot core-names]
-  # returns the resolved target id or nil; pushes exactly one edge line
+  # returns the resolved target id, an extern name string, or nil;
+  # pushes exactly one edge line
   (++ callsites)
   (var target nil)
   # 1. named local via symbolmap range entry
   (def sname (slot-name d pc slot))
   (if sname
-    (set target (resolve-name caller-id sname))
+    (set target (resolve-name caller-id sname pc))
     # 2. scan back to the nearest writer of the slot
     (do (def code (or (d :bytecode) @[]))
       (var j (- pc 1))
@@ -296,7 +322,7 @@
               (= op 'ldc)
               (do (def ct (const-target d (ins 2) core-names))
                 (cond
-                  (= (ct 0) :fn) (set target (resolve-name caller-id (ct 1)))
+                  (= (ct 0) :fn) (set target (resolve-name caller-id (ct 1) pc))
                   (= (ct 0) :core) (array/push edges ["extern" caller-id (ct 1)])
                   (= (ct 0) :key) (array/push edges ["extern" caller-id (ct 1)])
                   (array/push edges ["unknown" caller-id slot])))
@@ -314,7 +340,7 @@
               (= op 'ldu)
               (do (def uname (if (>= (length ins) 4) (upvalue-name d (ins 3)) nil))
                 (if uname
-                  (set target (resolve-name caller-id uname))
+                  (set target (resolve-name caller-id uname pc))
                   (array/push edges ["unknown" caller-id slot])))
               (array/push edges ["unknown" caller-id slot]))
             (set done true)))
