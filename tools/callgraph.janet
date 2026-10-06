@@ -398,9 +398,7 @@
       (array/push edges ["arity-unknown" caller-id]))
     (when tid
       (def tinfo (get defs tid))
-      (when (nil? tinfo)
-        (eprint "DBG tid=" tid " ndefs=" (length defs))
-        (break))
+      (when (nil? tinfo) (break))
       (def tdef (tinfo :d))
       (def tmin (or (tdef :min-arity) 0))
       (def tmax (or (tdef :max-arity) 2147483647))
@@ -518,12 +516,12 @@
     (print "unknown-edge " e)))
 
 (var unresolved 0)
-(var externs 0)
+(var extern-count 0)
 (each e edges
-  (when (= (e 0) "extern") (++ externs))
+  (when (= (e 0) "extern") (++ extern-count))
   (when (or (= (e 0) "ambiguous") (= (e 0) "unknown"))
     (++ unresolved)))
-(print "stats " (length defs) " " callsites " " resolved " " externs " " unresolved)
+(print "stats " (length defs) " " callsites " " resolved " " extern-count " " unresolved)
 
 # Pass 3 (fixpoint): reachability from entry thunks, caller sets,
 # recursion, dynamic taint. Roots are defs named "thunk" — every
@@ -826,6 +824,7 @@
       (when (>= dst arity) (put written dst true))))
   (def ct (emit-c-type rt))
   (def lines @[])
+  (var used-externs @[])
   (each slot (sort (keys written))
     (array/push lines (string "    " ct " s" slot ";")))
   (var bad nil)
@@ -934,26 +933,44 @@
                                   (ins 3) ";")))
             (or (= op 'call) (= op 'tcall))
             (do (def tid (get cmap pc))
-              (def cname (if tid (get emitted-names tid)))
-              (def trt (if tid (rts tid) :unknown))
-              (if (and tid cname (= trt rt) (not spread) (not= op 'tcall))
-                (do (array/push lines
-                                (string "    s" (ins 1) " = "
-                                        (emit-c-name cname) "(" (string/join pending ", ") ");"))
-                  (set pending @[]))
-                (if (and tid cname (= trt rt) (not spread))
-                  (do (array/push lines
-                                  (string "    return " (emit-c-name cname)
-                                          "(" (string/join pending ", ") ");"))
-                    (set pending @[]))
-                  (do (set bad "call to non-native or type mismatch")
-                    (break)))))
+              (if (string? tid)
+                # declared extern: direct C symbol call
+                (do (def ext (get externs tid))
+                  (def extret (get ext :returns))
+                  (def extc (get ext :c))
+                  (if (and extret extc (= extret rt) (not spread)
+                           (= (length pending) (length (get ext :params))))
+                    (do (array/push used-externs tid)
+                      (array/push lines
+                                  (string "    "
+                                          (if (= op 'tcall)
+                                            (string "return ")
+                                            (string ct " s" (ins 1) " = "))
+                                          extc "(" (string/join pending ", ") ");"))
+                      (set pending @[]))
+                    (do (set bad "extern signature mismatch")
+                      (break))))
+                (do (def cname (if tid (get emitted-names tid)))
+                  (def trt (if tid (rts tid) :unknown))
+                  (if (and tid cname (= trt rt) (not spread) (not= op 'tcall))
+                    (do (array/push lines
+                                    (string "    s" (ins 1) " = "
+                                            (emit-c-name cname) "(" (string/join pending ", ") ");"))
+                      (set pending @[]))
+                    (if (and tid cname (= trt rt) (not spread))
+                      (do (array/push lines
+                                      (string "    return " (emit-c-name cname)
+                                              "(" (string/join pending ", ") ");"))
+                        (set pending @[]))
+                      (do (set bad "call to non-native or type mismatch")
+                        (break)))))))
             nil)
           (++ pc)))))
   (if bad
     [nil bad]
-    [(string "static " ct " " (emit-c-name (string (or (d :name) "?"))) "("
+    [{:code (string "static " ct " " (emit-c-name (string (or (d :name) "?"))) "("
              (string/join pdecls ", ") ") {\n" (string/join lines "\n") "\n}")
+      :externs used-externs}
      nil]))
 
 (defn emit-native-all [outdir]
@@ -973,6 +990,9 @@
     (var concrete (and (> (length pt) 0) (not (d :vararg))))
     (each t pt (unless (get infer/numeric-types t) (set concrete false)))
     (unless (get infer/numeric-types rt) (set concrete false))
+    # a def named like a declared extern is the compiled fallback
+    # artifact — the real implementation lives in C
+    (when (get externs (string (or (d :name) "?"))) (set concrete false))
     (if concrete
       (put cand id true)
       (array/push skips [id (string (or (d :name) "?"))
@@ -992,11 +1012,13 @@
       (unless (get emitted-names id)
         (def info (get defs id))
         (def d (info :d))
-        (def [code reason] (emit-fn-c id d (rts id) (get pts id) call-map emitted-names rts))
-        (if code
+        (def [res reason] (emit-fn-c id d (rts id) (get pts id) call-map emitted-names rts))
+        (if res
           (do (def nm (string (d :name)))
             (put emitted-names id nm)
-            (array/push emitted {:id id :name nm :code code :pt (get pts id) :rt (rts id)})
+            (array/push emitted {:id id :name nm :code (res :code)
+                                 :externs (res :externs)
+                                 :pt (get pts id) :rt (rts id)})
             (set changed true))
           (put skip-reason id reason)))))
   (each id cand-ids
@@ -1022,6 +1044,11 @@
     combos)
   (def c-parts @[])
   (def calls @[])
+  # bind extern fallbacks so eval'd defn forms can call them for parity
+  (each name (keys externs)
+    (def fb (get (get externs name) :fallback))
+    # env entries are binding descriptors, not raw values
+    (when fb (put (curenv) (symbol name) @{:value fb})))
   (each e emitted
     (array/push c-parts (e :code))
     (def form (get all-defn-forms (e :name)))
@@ -1033,6 +1060,17 @@
       (array/push calls {:e e :args (tuple ;combo) :fn fnval})))
   (def cout @"")
   (buffer/push-string cout "#include <stdio.h>\n#include <inttypes.h>\n\n")
+  # extern C declarations used by the emitted natives (raylib story)
+  (var anyext false)
+  (each e emitted
+    (each en (e :externs)
+      (def ext (get externs en))
+      (buffer/push-string cout
+        (string "extern " (emit-c-type (get ext :returns)) " "
+                (get ext :c) "("
+                (string/join (map emit-c-type (get ext :params)) ", ") ");\n"))
+      (set anyext true)))
+  (when anyext (buffer/push-string cout "\n"))
   (each c c-parts (buffer/push-string cout c) (buffer/push-string cout "\n\n"))
   (buffer/push-string cout "int main(void) {\n")
   (each c calls

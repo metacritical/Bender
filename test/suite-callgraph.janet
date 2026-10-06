@@ -264,4 +264,34 @@
 (assert (not (nil? (string/find "goto L" ltext))) "loops emit back-edge goto")
 (assert (not (nil? (string/find "s1 = s1 + s2;" ltext))) "loop-carried slots reassign")
 
+# Step 10 (extern C calls): declared symbols emitted as direct calls,
+# harness linked against a real C implementation, parity via fallback
+(spit "/tmp/cg-ext.janet" (string
+  "(defn game-clamp [x lo hi] (if (< x lo) lo (if (> x hi) hi x)))\n"
+  "(defn physics {:hint {:params [:double :double :double :double] :returns :double}}\n"
+  "  [pos vel lo hi] (game-clamp (+ pos (* vel 0.016)) lo hi))\n"
+  "(defn main [] (print (physics 0 100 0 10)))\n"))
+(spit "/tmp/cg-ext-decls.janet" (string
+  "(def externs {\"game-clamp\" {:c \"game_clamp\"\n"
+  "               :params [:double :double :double]\n"
+  "               :returns :double\n"
+  "               :fallback (fn [x lo hi] (if (< x lo) lo (if (> x hi) hi x)))}})\n"))
+(spit "/tmp/cg-ext-impl.c" (string
+  "double game_clamp(double x, double lo, double hi) {\n"
+  "  if (x < lo) return lo;\n"
+  "  if (x > hi) return hi;\n"
+  "  return x; }\n"))
+(assert (= 0 (os/execute ["/bin/sh" "-c"
+  "rm -rf /tmp/cg-ex && ./build/janet tools/callgraph.janet /tmp/cg-ext.janet --externs /tmp/cg-ext-decls.janet --emit-native /tmp/cg-ex"] :p))
+  "extern emit run")
+(assert (= 0 (os/execute ["/bin/sh" "-c"
+  "cc -O2 /tmp/cg-ex/native.c /tmp/cg-ext-impl.c -o /tmp/cg-ex/native"] :p))
+  "extern native compiles+links real C impl")
+(assert (= 0 (os/execute ["/bin/sh" "-c"
+  "/tmp/cg-ex/native > /tmp/cg-ex/actual.txt && cmp /tmp/cg-ex/expected.txt /tmp/cg-ex/actual.txt"] :p))
+  "extern parity")
+(def etext (slurp "/tmp/cg-ex/native.c"))
+(assert (not (nil? (string/find "extern double game_clamp(double, double, double);" etext)))
+        "extern decl hoisted")
+
 (end-suite)

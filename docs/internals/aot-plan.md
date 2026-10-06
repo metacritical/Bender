@@ -429,10 +429,14 @@ trusted until it agrees byte-for-byte.
   bodies reassign their variable slots — `(mul 1 1 2)` on slot r).
   Loop-carried types converge in the existing dataflow worklist.
   Parity: sum-to/fact byte-identical incl. back-edge gotos.
-- **Step 10 — external C calls.** Declared signatures (a mapping the
-  tool consumes: janet name → c-symbol, param/return types) emitted
-  as direct calls — the raylib story: the game's platform calls are
-  C symbols at link time, simpler than native→native janet calls.
+- **Step 10 — external C calls (DONE, this checkout).** `--externs
+  FILE` loads declared signatures (janet name → C symbol, param/return
+  types, plus a janet `:fallback` fn). The fallback pre-binds the name
+  so the unit compiles and provides the parity oracle; the emitted
+  native calls the C symbol directly with an `extern` declaration
+  hoisted into the harness. Verified with a real C implementation
+  linked into the harness — fallback ≡ C impl, byte-identical. This
+  is the raylib story proven end to end.
 - **Step 11 — numeric array state.** SoA state for game entities.
   Design-heavy: buffer-as-typed-array view vs new core primitive;
   allocation goes through the runtime with explicit roots
