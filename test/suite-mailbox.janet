@@ -48,13 +48,13 @@
   (mailbox/quit mb))
 
 # 3. Handler errors re-raise in the caller, worker stays alive.
-(let [mb (mailbox/spawn (fn [tag payload] (error "boom")))]
+(let [mb (mailbox/spawn (fn [_tag _payload] (error "boom")))]
   (assert-error-value "handler error surfaces" "boom" (mailbox/call mb :x nil 5))
   (assert-error-value "worker still alive" "boom" (mailbox/call mb :x nil 5))
   (mailbox/quit mb))
 
 # 4. call timeout fires when the handler is slow.
-(let [mb (mailbox/spawn (fn [tag payload] (ev/sleep 1) :slow))]
+(let [mb (mailbox/spawn (fn [_tag _payload] (ev/sleep 1) :slow))]
   (assert-error "call timeout" (mailbox/call mb :x nil 0.05))
   (mailbox/quit mb))
 
@@ -103,5 +103,70 @@
 (let [mb (mailbox/spawn (fn [_tag payload] payload))]
   (mailbox/quit mb)
   (assert-error "call to dead worker" (mailbox/call mb :x nil 0.05)))
+
+# M2: monitors and links (ev/monitor runtime + mailbox sugar).
+
+# 9. Raw monitor: normal exit delivers [:down tag :normal]; join still
+# collects the value afterwards.
+(let [ch (ev/thread-chan 4)
+      h (thread/new (fn [] (ev/sleep 0.02) :fine))]
+  (ev/monitor h :t9 ch)
+  (assert (deep= [:down :t9 :normal] (ev/take ch)) "monitor normal exit")
+  (assert (= :fine (thread/join h)) "join after monitor"))
+
+# 10. Error exit delivers the error value as the reason, and join
+# still re-raises.
+(let [ch (ev/thread-chan 4)
+      h (thread/new (fn [] (error "went-bad")))]
+  (ev/monitor h :t10 ch)
+  (assert (deep= [:down :t10 "went-bad"] (ev/take ch)) "monitor error exit")
+  (assert-error-value "join re-raises" "went-bad" (thread/join h)))
+
+# 11. Multiple monitors on one handle each get their own message.
+(let [c1 (ev/thread-chan 4)
+      c2 (ev/thread-chan 4)
+      h (thread/new (fn [] :multi))]
+  (ev/monitor h :m1 c1)
+  (ev/monitor h :m2 c2)
+  (assert (deep= [:down :m1 :normal] (ev/take c1)) "first monitor fires")
+  (assert (deep= [:down :m2 :normal] (ev/take c2)) "second monitor fires")
+  (thread/join h))
+
+# 12. Late monitor on a finished thread delivers immediately.
+(let [ch (ev/thread-chan 4)
+      h (thread/new (fn [] 7))]
+  (thread/join h)
+  (ev/monitor h :t12 ch)
+  (assert (deep= [:down :t12 :normal] (ev/take ch)) "late monitor"))
+
+# 13. Mailbox-level monitor: the watcher handler observes
+# (:down [monitor-tag reason]).
+(let [watched (mailbox/spawn (fn [_t p] p))
+      watcher (mailbox/spawn
+                (do (var seen nil)
+                    (fn [tag payload]
+                      (case tag
+                        :down (set seen payload)
+                        :last seen))))]
+  (mailbox/monitor watched watcher :w13)
+  (mailbox/quit watched)
+  (assert (deep= [:w13 :normal] (mailbox/call watcher :last nil 5))
+          "watcher sees peer :normal exit")
+  (mailbox/quit watcher))
+
+# 14. Link chain: B dies, A is notified; A keeps working.
+(let [a (mailbox/spawn
+          (do (var seen nil)
+              (fn [tag payload]
+                (case tag
+                  :down (set seen payload)
+                  :last seen
+                  :ping :pong))))
+      b (mailbox/spawn (fn [_t p] p))]
+  (mailbox/link a b :l14)
+  (mailbox/quit b)
+  (assert (deep= [:l14 :normal] (mailbox/call a :last nil 5)) "link notifies")
+  (assert (= :pong (mailbox/call a :ping nil 5)) "survivor keeps working")
+  (mailbox/quit a))
 
 (end-suite)

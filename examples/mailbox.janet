@@ -30,12 +30,20 @@
         (var running true)
         (while running
           (def [tag payload reply-ch] (ev/take mbx))
-          (if (= tag :mailbox-quit)
+          (cond
+            (= tag :mailbox-quit)
             (do
               (set running false)
               (when reply-ch (ev/give reply-ch :mailbox-stopped)))
+            # M2 monitor traffic (see monitor/link below): the :down tag
+            # is reserved. The handler observes (tag=:down,
+            # payload=[monitor-tag reason]); no reply is ever sent.
+            (= tag :down)
+            (handler :down [payload reply-ch])
             (let [[ok r] (protect (handler tag payload))]
-              (when reply-ch
+              # reply only to real channels: a truthy non-channel in the
+              # reply slot (e.g. a :down reason) is not a reply address.
+              (when (and reply-ch (= :core/channel (type reply-ch)))
                 (ev/give reply-ch (if ok r (table :mailbox-error r))))))))))
   @{:mbx mbx :worker worker})
 
@@ -76,3 +84,26 @@
   (ev/take rch)
   (thread/join (mb :worker))
   mb)
+
+###
+### M2: monitors and links. A watched worker's exit is delivered to a
+### watcher mailbox as monitor traffic: the watcher's handler observes
+### (tag=:down, payload=[monitor-tag reason]), where reason is :normal
+### on clean exit or the worker's error value on failure.
+###
+
+(defn monitor
+  "Watch `watched`'s worker: when it exits, `watcher`'s mailbox
+  receives the :down notification under `tag`. Returns `watcher`."
+  [watched watcher tag]
+  (ev/monitor (watched :worker) tag (watcher :mbx))
+  watcher)
+
+(defn link
+  "Symmetric link between two mailboxes: when either worker exits,
+  the survivor's mailbox receives [:down tag reason]. Returns [a b]."
+  [a b &opt tag]
+  (default tag :link)
+  (monitor a b tag)
+  (monitor b a tag)
+  [a b])

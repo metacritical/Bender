@@ -305,6 +305,30 @@ struct sharing (cross-heap GC).
 
 ### Phase 3 messaging — implementation plan (detail for the tasks above)
 
+**Node/pid model (BEAM-kind, recorded 2026-10-06).** Erlang pids are
+VM-internal (`<node.serial.id>`), never OS pids: a BEAM node is one OS
+process multiplexing green processes N:M onto scheduler threads. Ours
+is the same shape with two tiers:
+- One janet OS process = one **node**. `self()`-style identity is a
+  `[:pid node serial addr]` tuple: `node` is the node id (0 today,
+  nonzero when distribution lands), `serial` comes from a per-root-VM
+  counter, `addr` is the delivery address.
+- **Today** every addressable entity is a cross-VM worker, so `addr`
+  is its `thread-chan` (channels marshal — verified — so pids travel
+  by value, unlike thread handles which refuse marshal and stay
+  owner-local). `thread/new` workers are effectively separate
+  single-process *nodes* (share-nothing + marshal = distributed-Erlang
+  semantics already); the M4 scheduler adds the within-a-node tier,
+  where `addr` resolves to a task queue instead.
+- Bare ev-task fibers own no channel, so fiber pids wait on M4.
+  Mailbox/worker pids need nothing new: counter + channel + `self()`.
+- `monitor`, `link`, `send (!)` and the M3 registry all resolve
+  **pids**, never handles/channels. Reason values: `:normal` |
+  error value | `:noproc` (target already dead).
+- Deliberately deferred: exit *propagation* (trapping), monitor refs/
+  demonitor, remote-node routing. M2 notifies; supervisors (which need
+  propagation + `noproc`) come after pids land.
+
 **M1 — worker-mailbox pattern library** (pure janet, `ev/mailbox.janet`
 or shipped as an example). Surface:
 
@@ -326,12 +350,18 @@ or shipped as an example). Surface:
 - Files: `examples/mailbox.janet` + pins in suite-ev or a new
   `test/suite-mailbox.janet`.
 
-**M2 — links & monitors** (runtime, ev.c + thread.c). Surface:
+**M2 — links & monitors** (runtime, ev.c only — there is no
+thread.c; all thread primitives live in ev.c). Status: SHIPPED
+handle-based (`ev/monitor handle tag chan`, commit M2); pid-shaped
+surface below is the follow-up that unlocks supervisors. Surface:
 
 ```janet
-(ev/monitor mb tag)        # when the worker exits, send [:down tag reason]
-                           # to the monitor's mailbox (default: caller's)
-(ev/link mb-a mb-b)        # symmetric: one dies -> other gets :down
+(ev/monitor pid tag)        # when pid exits, send [:down tag reason]
+                            # to the monitor's own mailbox (pid-implied,
+                            # no channel argument)
+(ev/link pid-a pid-b)       # symmetric: one dies -> other gets :down
+(mailbox/self)              # -> calling worker's pid
+(pid ! msg)                 # send to a pid (mailbox-level sugar)
 ```
 
 - Mechanics: the thread-completion path (the completion posting that
@@ -344,12 +374,25 @@ or shipped as an example). Surface:
 - Tests: normal exit delivers `:normal`; error exit delivers the
   error; monitor survives worker crash; link chain (A<->B, B dies, A
   notified). Gate: full `make test` + threaded-channel stress.
+- Pid follow-up (unlocks supervisors): pid value + `self()` +
+  pid-resolving monitor/send; `:noproc` immediate-down for dead pids;
+  registry (M3) maps names to pids. Bare-fiber pids deferred to M4.
+- Known-open (pre-existing, reproduced on the clean tree 2026-10-06):
+  ASan `stack-use-after-scope` when an `ev/go` task that called
+  `ev/sleep` gives into an `ev/thread-chan`. Minimal repro (no
+  threads, no monitors involved):
+  `(def c (ev/thread-chan 1)) (ev/go (fn [] (ev/sleep 0.01)
+  (ev/give c :x))) (ev/take c)`. Plain channels and sleep-free tasks
+  are clean. M2 monitor paths verified clean under
+  `ASAN_OPTIONS=halt_on_error=0` (12-monitor growth, closed/full
+  drops, late monitors, GC pressure) — the only signature seen is
+  this pre-existing one.
 
 **M3 — named registry** (runtime, state.h + one cfun file). Surface:
 
 ```janet
-(ev/register :physics mb)   # keyword -> mailbox (or thread handle)
-(ev/whereis :physics)       # -> mailbox or nil
+(ev/register :physics pid)   # keyword -> pid (mailbox pid or worker pid)
+(ev/whereis :physics)        # -> pid or nil
 (ev/unregister :physics)
 ```
 

@@ -3372,6 +3372,13 @@ typedef struct {
      * or cancel) and must not be delivered to. Distinguishes a live
      * previous joiner from a concurrent one. */
     uint32_t waiter_sched;
+    /* M2 monitors: flat [chan-wrap tag] pairs, chan of each pair is a
+     * channel abstract wrap, tag is an arbitrary value. Both entries are
+     * gcrooted on register and unrooted on delivery (or handle free).
+     * Only touched on the owner thread. */
+    Janet *monitors;
+    int32_t n_monitors;
+    int32_t cap_monitors;
 } JanetThreadHandle;
 
 typedef struct {
@@ -3391,7 +3398,18 @@ typedef struct {
 
 static int janet_thread_handle_gc(void *p, size_t len) {
     (void) len;
-    (void) p;
+    JanetThreadHandle *h = (JanetThreadHandle *) p;
+    /* Drop undelivered monitors (completion already ran if done, so
+     * this only fires when the handle is collected first). */
+    if (h->monitors != NULL) {
+        for (int32_t i = 0; i < h->n_monitors * 2; i++) {
+            janet_gcunroot(h->monitors[i]);
+        }
+        janet_free(h->monitors);
+        h->monitors = NULL;
+        h->n_monitors = 0;
+        h->cap_monitors = 0;
+    }
     return 0;
 }
 
@@ -3422,6 +3440,44 @@ const JanetAbstractType janet_thread_handle_type = {
     NULL, /* bytes */
     NULL  /* gcperthread */
 };
+
+/* M2: build one [:down tag reason] message. reason is :normal on
+ * clean exit, the (marshaled-back) error value on failure. */
+static Janet janet_thread_down_message(Janet tag, int is_error, Janet result) {
+    Janet tup[3];
+    tup[0] = janet_ckeywordv("down");
+    tup[1] = tag;
+    tup[2] = is_error ? result : janet_ckeywordv("normal");
+    return janet_wrap_tuple(janet_tuple_n(tup, 3));
+}
+
+/* Best-effort delivery of one :down message (at-most-once: dropped
+ * when the channel is closed or full). */
+static void janet_thread_give_down(Janet chanv, Janet msg) {
+    JanetChannel *chan = (JanetChannel *) janet_unwrap_abstract(chanv);
+    if (chan->closed) return;
+    janet_channel_give(chan, msg);
+}
+
+/* M2: deliver pending monitors after completion. Runs on the owner
+ * event loop; each entry is unrooted and the list freed. Takes the
+ * completion result explicitly: the waiter path below clears
+ * h->result once a live joiner is resumed. */
+static void janet_thread_deliver_monitors(JanetThreadHandle *h, int is_error, Janet result) {
+    if (h->monitors == NULL) return;
+    for (int32_t i = 0; i < h->n_monitors; i++) {
+        Janet chanv = h->monitors[i * 2];
+        Janet tag = h->monitors[i * 2 + 1];
+        janet_thread_give_down(chanv,
+            janet_thread_down_message(tag, is_error, result));
+        janet_gcunroot(chanv);
+        janet_gcunroot(tag);
+    }
+    janet_free(h->monitors);
+    h->monitors = NULL;
+    h->n_monitors = 0;
+    h->cap_monitors = 0;
+}
 
 static void janet_thread_new_complete(JanetEVGenericMessage msg) {
     JanetThreadCompletion *c = (JanetThreadCompletion *) msg.argp;
@@ -3459,6 +3515,9 @@ static void janet_thread_new_complete(JanetEVGenericMessage msg) {
             }
         }
     }
+    /* M2: monitors fire after join delivery so the join path is
+     * unaffected; :down messages are best-effort (at-most-once). */
+    janet_thread_deliver_monitors(h, is_error, result);
     janet_ev_dec_refcount();
     /* Release worker ref last; may free handle (with result) if owner
      * dropped it. Do not touch h after this. */
@@ -3693,6 +3752,9 @@ JANET_CORE_FN(cfun_thread_new,
     handle->result = janet_wrap_nil();
     handle->waiter = NULL;
     handle->waiter_sched = 0;
+    handle->monitors = NULL;
+    handle->n_monitors = 0;
+    handle->cap_monitors = 0;
     JanetThreadNewArgs *targs = janet_malloc(sizeof(JanetThreadNewArgs));
     if (NULL == targs) {
         janet_buffer_deinit(buffer);
@@ -3803,6 +3865,47 @@ JANET_CORE_FN(cfun_thread_alive,
         janet_panic("thread/alive? called from non-owner thread");
     }
     return janet_wrap_boolean(!handle->done);
+}
+
+JANET_CORE_FN(cfun_thread_monitor,
+              "(ev/monitor handle tag chan)",
+              "Watch the thread `handle` created by `thread/new`: when the "
+              "worker exits, send `[:down tag reason]` to `chan`, where "
+              "`reason` is `:normal` on clean exit or the thread's error "
+              "value on failure. Delivery is best-effort (at-most-once): "
+              "the message is dropped if `chan` is closed or full. "
+              "Monitoring an already-finished thread delivers immediately. "
+              "Must be called from the creating thread. Returns `handle`.") {
+    janet_sandbox_assert(JANET_SANDBOX_THREADS);
+    janet_fixarity(argc, 3);
+    JanetThreadHandle *handle = janet_getabstract(argv, 0, &janet_thread_handle_type);
+    if (handle->owner != &janet_vm) {
+        janet_panic("ev/monitor called from non-owner thread");
+    }
+    Janet chanv = argv[2];
+    janet_getchannel(argv, 2);
+    Janet tag = argv[1];
+    if (handle->done) {
+        /* Late registration: completion already ran, deliver now. */
+        janet_thread_give_down(chanv,
+            janet_thread_down_message(tag, handle->is_error, handle->result));
+        return argv[0];
+    }
+    if (handle->n_monitors >= handle->cap_monitors) {
+        int32_t ncap = handle->cap_monitors ? handle->cap_monitors * 2 : 4;
+        Janet *nmon = janet_realloc(handle->monitors, (size_t) ncap * 2 * sizeof(Janet));
+        if (NULL == nmon) {
+            JANET_OUT_OF_MEMORY;
+        }
+        handle->monitors = nmon;
+        handle->cap_monitors = ncap;
+    }
+    janet_gcroot(chanv);
+    janet_gcroot(tag);
+    handle->monitors[handle->n_monitors * 2] = chanv;
+    handle->monitors[handle->n_monitors * 2 + 1] = tag;
+    handle->n_monitors++;
+    return argv[0];
 }
 
 JANET_CORE_FN(cfun_ev_give_supervisor,
@@ -4175,6 +4278,7 @@ void janet_lib_ev(JanetTable *env) {
         JANET_CORE_REG("thread/new", cfun_thread_new),
         JANET_CORE_REG("thread/join", cfun_thread_join),
         JANET_CORE_REG("thread/alive?", cfun_thread_alive),
+        JANET_CORE_REG("ev/monitor", cfun_thread_monitor),
         JANET_CORE_REG("ev/give-supervisor", cfun_ev_give_supervisor),
         JANET_CORE_REG("ev/sleep", cfun_ev_sleep),
         JANET_CORE_REG("ev/deadline", cfun_ev_deadline),
