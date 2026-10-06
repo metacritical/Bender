@@ -28,6 +28,9 @@
     (thread/new
       (fn []
         (var running true)
+        # M2c: cooperative trap-exit. Default false (Erlang default).
+        # Set via the :mailbox-trap control message (see trap-exit).
+        (var trapping false)
         (while running
           (def [tag payload reply-ch] (ev/take mbx))
           (cond
@@ -35,17 +38,42 @@
             (do
               (set running false)
               (when reply-ch (ev/give reply-ch :mailbox-stopped)))
+            # Trap flag control: [:mailbox-trap bool nil]. FIFO with all
+            # other traffic, so a :down queued before it keeps the old
+            # flag value.
+            (= tag :mailbox-trap)
+            (set trapping (if payload true false))
             # M2 monitor traffic (see monitor/link below): the :down tag
-            # is reserved. The handler observes (tag=:down,
-            # payload=[monitor-tag reason]); no reply is ever sent.
+            # is reserved. Abnormal exits propagate by killing this
+            # worker with the peer's reason unless trapping (or the
+            # reason is :normal/nil, which never propagates); trapping
+            # workers observe (tag=:down, payload=[monitor-tag reason])
+            # and survive. No reply is ever sent.
             (= tag :down)
-            (handler :down [payload reply-ch])
+            (do
+              (def reason reply-ch)
+              (when (and (not trapping)
+                         (not= reason :normal)
+                         (not (nil? reason)))
+                (error reason))
+              (handler :down [payload reason]))
             (let [[ok r] (protect (handler tag payload))]
               # reply only to real channels: a truthy non-channel in the
               # reply slot (e.g. a :down reason) is not a reply address.
               (when (and reply-ch (= :core/channel (type reply-ch)))
                 (ev/give reply-ch (if ok r (table :mailbox-error r))))))))))
-  @{:mbx mbx :worker worker})
+  @{:mbx mbx :worker worker :trap-exit false})
+
+(defn trap-exit
+  "Set cooperative trap-exit on `mb` (M2c). A trapping worker observes
+  linked/monitored abnormal exits as (:down [tag reason]) messages and
+  survives; a non-trapping worker (default) exits with the peer's
+  reason, cascading through the completion path. `:normal` (and nil)
+  reasons never propagate. Returns the mailbox."
+  [mb flag]
+  (put mb :trap-exit (if flag true false))
+  (ev/give (mb :mbx) [:mailbox-trap (if flag true false) nil])
+  mb)
 
 (defn send
   "Fire-and-forget: enqueue [tag payload reply-ch]. Blocks if the

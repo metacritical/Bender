@@ -221,4 +221,81 @@
   (assert (nil? (ev/monitor h :t19 ch)) "late monitor returns nil")
   (assert (deep= [:down :t19 :normal] (ev/take ch)) "late monitor delivers"))
 
+# M2c: cooperative trap-exit.
+
+# Helper: wait (bounded) for a mailbox worker to exit. Cascades are
+# async — a fixed sleep is flaky under load, polling is not.
+(defn- await-exit [mb timeout]
+  (var t 0)
+  (while (and (thread/alive? (mb :worker)) (< t timeout))
+    (ev/sleep 0.02)
+    (set t (+ t 0.02)))
+  (not (thread/alive? (mb :worker))))
+
+# 20. A trapping worker observes an abnormal peer exit as
+# (:down [tag reason]) and survives.
+(let [w (mailbox/spawn
+          (do (var seen nil)
+              (fn [tag payload]
+                (case tag
+                  :down (set seen payload)
+                  :last seen
+                  :ping :pong))))]
+  (mailbox/trap-exit w true)
+  (def seed (thread/new (fn [] (ev/sleep 0.02) (error "seed-boom"))))
+  (ev/monitor seed :s (w :mbx))
+  (assert-error-value "seed dies" "seed-boom" (thread/join seed))
+  (assert (deep= [:s "seed-boom"] (mailbox/call w :last nil 5))
+          "trapper observes abnormal exit")
+  (assert (= :pong (mailbox/call w :ping nil 5)) "trapper survives")
+  (mailbox/quit w))
+
+# 21. A non-trapping linked worker exits with the peer's reason.
+(let [a (mailbox/spawn (fn [_t p] p))
+      b (mailbox/spawn (fn [_t p] p))
+      watch (ev/thread-chan 4)]
+  (mailbox/link a b :l21)
+  (ev/monitor (a :worker) :wa watch)
+  (def seed (thread/new (fn [] (ev/sleep 0.02) (error "pair-boom"))))
+  (ev/monitor seed :s (b :mbx))
+  (protect (thread/join seed))
+  (assert (await-exit b 5) "linked worker dies")
+  (assert (await-exit a 5) "death propagates to peer")
+  (assert (deep= [:down :wa "pair-boom"] (ev/take watch))
+          "propagated reason preserved"))
+
+# 22. Cascade A->B->C preserves the seed reason end to end.
+(let [a (mailbox/spawn (fn [_t p] p))
+      b (mailbox/spawn (fn [_t p] p))
+      c (mailbox/spawn (fn [_t p] p))
+      watch (ev/thread-chan 4)]
+  (mailbox/link a b :lab)
+  (mailbox/link b c :lbc)
+  (ev/monitor (a :worker) :wa watch)
+  (def seed (thread/new (fn [] (ev/sleep 0.02) (error "deep"))))
+  (ev/monitor seed :s (c :mbx))
+  (protect (thread/join seed))
+  (assert (await-exit c 5) "seed peer dies")
+  (assert (await-exit b 5) "middle dies")
+  (assert (await-exit a 5) "cascade reaches A")
+  (assert (deep= [:down :wa "deep"] (ev/take watch)) "cascade reason intact"))
+
+# 23. :normal exits never propagate: quitting one linked peer leaves
+# the other alive and observing.
+(let [a (mailbox/spawn
+          (do (var seen nil)
+              (fn [tag payload]
+                (case tag
+                  :down (set seen payload)
+                  :last seen
+                  :ping :pong))))
+      b (mailbox/spawn (fn [_t p] p))]
+  (mailbox/link a b :l23)
+  (mailbox/quit b)
+  (assert (thread/alive? (a :worker)) "peer survives :normal exit")
+  (assert (deep= [:l23 :normal] (mailbox/call a :last nil 5))
+          "normal exit observed, not propagated")
+  (assert (= :pong (mailbox/call a :ping nil 5)) "peer keeps working")
+  (mailbox/quit a))
+
 (end-suite)
