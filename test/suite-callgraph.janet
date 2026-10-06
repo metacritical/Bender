@@ -62,6 +62,17 @@
 (assert (has "extern 8 print") "print extern")
 (assert (has "stats 9 11 8 1 1") "stats line exact")
 
+# fixpoint: reachability from thunks, caller sets, recursion, taint
+(assert (has "reach 0 1 2 3 4 5 6 7 8") "all reachable")
+(assert (has "callers 1 2 1 8") "myfib callers (self+main)")
+(assert (has "callers 2 1 3") "myodd caller")
+(assert (has "recursive 1") "myfib recursive")
+(assert (not (has "recursive 3")) "myeven not recursive")
+(assert (has "tainted 7") "risky tainted")
+(assert (has "tainted 8") "main tainted via risky")
+(assert (has "tainted 0") "thunk tainted via contains")
+(assert (has "fix 9 1 3") "fix summary exact")
+
 # same name in two files is ambiguous, not silently first-wins
 (spit "/tmp/cg-amb1.janet" "(defn dup [] 1)\n")
 (spit "/tmp/cg-amb2.janet" "(defn dup [] 2)\n(defn caller [] (dup))\n")

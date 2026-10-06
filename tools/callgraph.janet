@@ -1,8 +1,10 @@
-# tools/callgraph.janet — Phase 4 step 1 (registration).
+# tools/callgraph.janet — Phase 4 steps 1+2 (registration + fixpoint).
 # Extract the whole-program FuncDef graph from Janet source WITHOUT running
 # it: parse -> compile (macros run at compile time, as today) -> disasm ->
-# walk. Prints node/edge lines plus a stats summary. Read-only; no src/
-# changes. Usage: ./build/janet tools/callgraph.janet FILE [FILE...]
+# walk. Prints node/edge lines, a stats summary, and a fixpoint block
+# (reachability from entry thunks, caller sets, recursion, dynamic taint).
+# Read-only; no src/ changes. Usage:
+# ./build/janet tools/callgraph.janet FILE [FILE...]
 #
 # Edge kinds:
 #   def <id> <name> arity <a> slots <s> instrs <n>   every discovered FuncDef
@@ -285,3 +287,87 @@
   (when (or (= (e 0) "ambiguous") (= (e 0) "unknown"))
     (++ unresolved)))
 (print "stats " (length defs) " " callsites " " resolved " " externs " " unresolved)
+
+# Pass 3 (fixpoint): reachability from entry thunks, caller sets,
+# recursion, dynamic taint. Roots are defs named "thunk" — every
+# top-level unit may run. Follows calls + contains; predecessors come
+# from both (a container is a caller of its children for taint).
+(var succ @{})
+(var pred @{})
+(var caller-sets @{})
+(var dynsite @{})
+(each id (range (length defs))
+  (put succ id @[])
+  (put pred id @[])
+  (put caller-sets id @[]))
+(each e edges
+  (cond
+    (= (e 0) "calls")
+    (do (array/push (get succ (e 1)) (e 2))
+      (array/push (get pred (e 2)) (e 1))
+      (array/push (get caller-sets (e 2)) (e 1)))
+    (= (e 0) "contains")
+    (do (array/push (get succ (e 1)) (e 2))
+      (array/push (get pred (e 2)) (e 1)))
+    (= (e 0) "dynamic")
+    (put dynsite (e 1) true)
+    nil))
+(defn reachable-from [roots]
+  (def seen @{})
+  (def work @[])
+  (each r roots
+    (when (nil? (get seen r))
+      (put seen r true)
+      (array/push work r)))
+  (while (not (empty? work))
+    (def id (array/pop work))
+    (each t (get succ id)
+      (when (nil? (get seen t))
+        (put seen t true)
+        (array/push work t))))
+  seen)
+(var roots @[])
+(var ri 0)
+(each info defs
+  (when (= (info :name) "thunk")
+    (array/push roots ri))
+  (++ ri))
+(def reachable (reachable-from roots))
+# recursive: id is re-reached through at least one edge, i.e. some
+# successor reaches back (self-edge counts)
+(var recursive @{})
+(each id (range (length defs))
+  (var found false)
+  (each t (get succ id)
+    (when (get (reachable-from @[t]) id)
+      (set found true)
+      (break)))
+  (when found (put recursive id true)))
+# tainted: has a dynamic site or transitively reaches one (fixpoint
+# backwards from dynamic defs over calls + contains predecessors)
+(var tainted @{})
+(def twork @[])
+(each id (range (length defs))
+  (when (get dynsite id)
+    (put tainted id true)
+    (array/push twork id)))
+(while (not (empty? twork))
+  (def id (array/pop twork))
+  (each p (get pred id)
+    (when (nil? (get tainted p))
+      (put tainted p true)
+      (array/push twork p))))
+# print: reach set, per-def callers, recursive, tainted, summary
+(def reach-list (sorted (keys reachable)))
+(print "reach" (if (empty? reach-list) "" (string " " (string/join (map string reach-list) " "))))
+(each id (range (length defs))
+  (def cs (sorted (distinct (get caller-sets id))))
+  (when (not (empty? cs))
+    (print "callers " id " " (length cs) " " (string/join (map string cs) " "))))
+(each id (range (length defs))
+  (when (get recursive id)
+    (print "recursive " id)))
+(each id (range (length defs))
+  (when (get tainted id)
+    (print "tainted " id)))
+(print "fix " (length reach-list) " " (length recursive) " " (length tainted))

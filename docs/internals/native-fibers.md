@@ -299,9 +299,10 @@ inference falls back to the interpreter inside the same runtime.
 
 ### Phase 4 step 1 — registration (DONE)
 
-`tools/callgraph.janet` (gated by `test/suite-callgraph.janet`, 15 tests):
+`tools/callgraph.janet` (gated by `test/suite-callgraph.janet`, 24 tests):
 whole-file `(do ...)` compile, `disasm` walk, `def`/`contains`/`calls`/
-`extern`/`ambiguous`/`unknown`/`dynamic` edges plus stats. Shallow
+`extern`/`ambiguous`/`unknown`/`dynamic` edges plus stats, with a
+reachability + caller/recursive/taint fixpoint on top. Shallow
 resolution only (symbolmap ranges + nearest-writer scan); the fixpoint
 comes next. Notable semantics, both verified against upstream: a unit
 with cross-form forward references fails exactly like real loading

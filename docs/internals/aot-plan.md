@@ -24,7 +24,7 @@ phase below (currently Phase 2b).
 make                    # default -O2 build -> build/janet
 make test               # full suite: 38/38 (incl. suite-native-fiber 47/47,
                         # suite-gc-stress 21/21, suite-gc-minor 12/12,
-                        # suite-thread 25/25, suite-callgraph 15/15)
+                        # suite-thread 25/25, suite-callgraph 24/24)
 make fibertest          # C call-chain suspension proof: 21 checks green
 mkdir -p /tmp/aot-tests
 printf '(print "hi from janet")\n' > /tmp/aot-tests/hello.janet
@@ -330,13 +330,21 @@ require/… — the inference-defeating set), and uncompiled-unit lines,
 plus a stats summary. Resolution is shallow on purpose: symbolmap
 ranges, backward scan to the nearest slot writer (`ldc` constants with
 core-identity for cfunctions, `clo` children, `lds` self, `ldu` by
-upvalue index). `test/suite-callgraph.janet` (15 tests) runs in
+upvalue index). `test/suite-callgraph.janet` (24 tests) runs in
 `make test`. Semantics verified against upstream (not tool shortcuts):
 forward references fail the unit exactly like real loading; statically
 unreferenced top-level defns are dropped by the compiler's dead-store
 elimination, so the graph is precisely the statically-live code (dynamic
-escape needs the interpreter fallback flagged by `dynamic`). Next:
-call-site widening fixpoint on this graph.
+escape needs the interpreter fallback flagged by `dynamic`).
+
+### Phase 4 step 2 — reachability + flags fixpoint (DONE, this checkout)
+
+Same tool, appended `reach`/`callers`/`recursive`/`tainted`/`fix` lines:
+reachability from entry thunks over calls+contains, per-def caller
+sets, self-reachability through ≥1 edge, and backwards dynamic taint
+(a container taints its holder — the DCE root/keep rule in embryo).
+Exactly-once delivery style, all deterministic and order-stable. Next:
+call-site widening (arity/return-type propagation) on this graph.
 
 - Boxed `Janet` for polymorphic slots; unboxed C (`double`, `int64`) for
   inferred numeric loops/structs; value-type promotion for small immutable
