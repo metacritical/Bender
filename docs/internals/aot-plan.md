@@ -700,9 +700,17 @@ trusted until it agrees byte-for-byte.
   boxed-side keeps the boxed copy (correct, just interpreted).
   Residue (eval, dynamic require) keeps working — eval'd mod code
   demonstrably dispatches to native kernels.
-- **Step 13 — int-overflow policy + DCE.** `wrap` (default)/`promote`
-  flag for native int64 semantics (boxed doubles truncate at 2^53);
-  dead-code elimination via reachability from entry thunks.
+- **Step 13 — int-overflow policy + DCE (DONE).** `--int-policy
+  wrap|promote` (default wrap): wrap computes in exact int widths and
+  shipped/harness builds pass `-fwrapv` (defined two's-complement
+  wrap; C signed overflow is otherwise UB); promote maps int widths
+  to double in kernel signatures/temps (oracle-identical everywhere,
+  exact parity by construction) and reboxes via wrap_number. Extern C
+  declarations keep exact types (foreign signatures are fixed).
+  Boxed janet truncates at 2^53 in both modes — native-vs-boxed
+  divergence past 2^53 is by design, now explicit. DCE is the
+  reachability already in the pipeline (unreachable defns never reach
+  emission — pinned: uncalled hinted fn absent from native.c).
 - **Width hints — DONE.** Full C primitive set on the hint surface:
   :long/:i32/:i16/:i8/:u64/:u32/:u16/:u8/:double/:float plus aliases
   (:i64/:int64, :i32/:int32/:int, :i16/:int16, :i8/:int8, :u64/:uint64,

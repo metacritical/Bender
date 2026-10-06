@@ -360,4 +360,41 @@
 (assert (not (nil? (string/find "len of non-array" badout)))
         "len-of-number skips with reason")
 
+# ---- Step 13: int-overflow policy + DCE ----
+# promote: int widths compute as double (oracle-identical)
+(spit "/tmp/cg-promote.janet" (string
+  "(defn padd {:hint {:params [:long :long] :returns :long}} [a b] (+ a b))\n"
+  "(defn main [] (print (padd 40 2)))\n"))
+(assert (= 0 (os/execute ["/bin/sh" "-c"
+  "rm -rf /tmp/cg-pr && ./build/janet tools/callgraph.janet /tmp/cg-promote.janet --int-policy promote --emit-native /tmp/cg-pr"] :p))
+  "promote emit run")
+(def prtext (slurp "/tmp/cg-pr/native.c"))
+(assert (not (nil? (string/find "double padd(double p0, double p1)" prtext)))
+        "promote maps int kernel to double")
+(assert (= 0 (os/execute ["/bin/sh" "-c"
+  "cc -O2 -w /tmp/cg-pr/native.c -o /tmp/cg-pr/native && /tmp/cg-pr/native > /tmp/cg-pr/actual.txt && cmp /tmp/cg-pr/expected.txt /tmp/cg-pr/actual.txt"] :p))
+  "promote parity")
+# wrap (default): -fwrapv gives defined two's-complement wrap
+(assert (= 0 (os/execute ["/bin/sh" "-c"
+  "rm -rf /tmp/cg-wr && ./build/janet tools/callgraph.janet /tmp/cg-promote.janet --emit-native /tmp/cg-wr && cc -O2 -w -fwrapv /tmp/cg-wr/native.c -o /tmp/cg-wr/native && /tmp/cg-wr/native > /tmp/cg-wr/actual.txt && cmp /tmp/cg-wr/expected.txt /tmp/cg-wr/actual.txt"] :p))
+  "wrap parity under -fwrapv")
+(def wrtext (slurp "/tmp/cg-wr/native.c"))
+(assert (not (nil? (string/find "int64_t padd(int64_t p0, int64_t p1)" wrtext)))
+        "wrap keeps int64 kernel")
+# bad policy value is rejected
+(assert (= 4 (os/execute ["/bin/sh" "-c"
+  "./build/janet tools/callgraph.janet /tmp/cg-promote.janet --int-policy explode --emit-native /tmp/cg-bad >/dev/null 2>&1"] :p))
+  "bad int-policy rejected")
+# DCE: unreachable hinted defns never reach the output
+(spit "/tmp/cg-dce.janet" (string
+  "(defn used {:hint {:params [:long] :returns :long}} [x] (+ x 1))\n"
+  "(defn dead {:hint {:params [:long] :returns :long}} [x] (* x 2))\n"
+  "(defn main [] (print (used 41)))\n"))
+(assert (= 0 (os/execute ["/bin/sh" "-c"
+  "rm -rf /tmp/cg-dce && ./build/janet tools/callgraph.janet /tmp/cg-dce.janet --emit-native /tmp/cg-dce >/dev/null 2>&1"] :p))
+  "dce emit run")
+(def dcetext (slurp "/tmp/cg-dce/native.c"))
+(assert (not (nil? (string/find "used(" dcetext))) "reachable kernel emitted")
+(assert (nil? (string/find "dead" dcetext)) "unreachable kernel eliminated")
+
 (end-suite)

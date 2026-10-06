@@ -46,6 +46,13 @@
 (var emit-native-dir nil)
 (var emit-native-lib-dir nil)
 (var externs-file nil)
+# Step 13: int-overflow policy. wrap (default): kernels compute in
+# exact int widths with two's-complement wrap (shipped/harness builds
+# must pass -fwrapv: C signed overflow is otherwise UB). promote:
+# int widths compute as double (oracle-identical everywhere, no
+# overflow below 2^53... same as boxed — exact parity by
+# construction, at some speed cost for int-heavy kernels).
+(var int-policy :wrap)
 (var filtered @[])
 (var i 0)
 (while (< i (length args))
@@ -57,6 +64,13 @@
     (do (set emit-native-lib-dir (args (+ i 1))) (++ i))
     (and (= a "--externs") (< (+ i 1) (length args)))
     (do (set externs-file (args (+ i 1))) (++ i))
+    (and (= a "--int-policy") (< (+ i 1) (length args)))
+    (do (def pv (keyword (args (+ i 1))))
+      (unless (or (= pv :wrap) (= pv :promote))
+        (eprint "int-policy must be wrap or promote")
+        (os/exit 4))
+      (set int-policy pv)
+      (++ i))
     (array/push filtered a))
   (++ i))
 (set args filtered)
@@ -757,6 +771,14 @@
 (def emit-cond-jumps @{'jmpif true 'jmpno true})
 
 (defn emit-c-type [t] (get emit-c-type-map t "double"))
+# Step 13: kernel-side type mapping honors --int-policy. promote
+# runs int widths as double (oracle-identical); extern C declarations
+# keep exact types (foreign signatures are fixed).
+(defn emit-kernel-type [t &opt fb]
+  (default fb "double")
+  (if (and (= int-policy :promote) (get int-hints t))
+    "double"
+    (get emit-c-type-map t fb)))
 (defn emit-c-name [nm] (string/replace-all "-" "_" nm))
 (defn emit-c-num [v] (string/format "%.17g" v))
 (defn emit-slot [a arity] (if (< a arity) (string "p" a) (string "s" a)))
@@ -908,7 +930,7 @@
   (def n (length code))
   (def cmap (or (get call-map id) @{}))
   (def pdecls (seq [i :range [0 arity]]
-                (string (emit-c-type (pt i)) " p" i)))
+                (string (emit-kernel-type (pt i)) " p" i)))
   # collect written slots (loop bodies reassign) -> declare once at top.
   # Step 11: declarations carry each temp's own type (array temps are
   # JanetArray*, not the return width). The sweep mirrors the trackers
@@ -954,11 +976,11 @@
     (when wpos
       (def dst (ins wpos))
       (when (>= dst arity) (put written dst true))))
-  (def ct (emit-c-type rt))
+  (def ct (emit-kernel-type rt))
   (def lines @[])
   (var used-externs @[])
   (each slot (sort (keys written))
-    (array/push lines (string "    " (get emit-c-type-map (get wtypes slot :double) ct)
+    (array/push lines (string "    " (emit-kernel-type (get wtypes slot :double) ct)
                              " s" slot ";")))
   (var bad nil)
   (each start leaders
@@ -1344,7 +1366,9 @@
                            (string "(JanetArray *)janet_unwrap_array(argv[" i "])")
                            (string "janet_unwrap_number(argv[" i "])")))
                   ", "))
-  (def rv (if (get int-hints rt) "janet_wrap_integer" "janet_wrap_number"))
+  (def rv (if (and (get int-hints rt) (not= int-policy :promote))
+              "janet_wrap_integer"
+              "janet_wrap_number"))
   (string "static Janet " cn "_wrapper(int32_t argc, Janet *argv) {\n"
           "    (void) argc;\n"
           "    return " rv "(" cn "(" ps "));\n}\n"))
