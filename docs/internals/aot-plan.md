@@ -262,13 +262,46 @@ Gates for all of 2b: `make test`, `test/suite-gc-stress.janet`,
 suite-boot, `1024` for suite-thread — also green now, closing the
 Phase 2a macro-path audit).
 
-## Phase 3 — M:N threads (after GC)
+## Phase 3 — threads (slices)
 
 Replace `ev.c` cooperation with an M:N scheduler (`sp_sched.c` analogue):
 green threads as fibers + scheduling records, work-stealing runqueues,
 preemption at interpreter-loop poll points (`SIGURG`-style), scheduler-aware
-parking for blocking IO (`net.c`, `ev.c`, `os.c`). `Thread.new/join/kill`
-API on top. Single-threaded semantics unchanged until this phase.
+parking for blocking IO (`net.c`, `ev.c`, `os.c`). Single-threaded
+semantics unchanged until this phase.
+
+Done slices (this checkout): native-stack fiber substrate (phases 1/1.1),
+1:1 OS threads — `thread/new` / `thread/join` / `thread/alive?` — running
+isolated thread-local VMs, share-nothing, values marshaled across (the
+Ractor one-shot model), plus threaded channels (`ev/thread-chan`) for
+streaming.
+
+### Phase 3 — messaging layer roadmap (NEW tasks)
+
+Two messaging styles over the share-nothing base, both first-class:
+
+- **Ractor-style (one-shot)** — DONE as the base: spawn with marshaled
+  args, join for the marshaled result. Remaining refinements:
+  - *Shareable immutable values*: janet structs are immutable — pass them
+    across without deep copy (needs cross-heap GC ownership: transfer or
+    refcount). Design doc before implementing.
+- **Erlang-style (addresses + mailboxes)** — the addressable-process
+  layer. The address primitive is the channel; workers are long-lived
+  threads with a receive loop. Tasks:
+  - *Worker-mailbox pattern library* (janet level): `spawn-worker`/
+    `send`/`receive`/`:quit` over threaded channels — ~30 lines, makes
+    the pattern first-class; plus a user-managed name registry table.
+  - *Links & monitors* (runtime): "notify me when worker X died" —
+    needs thread-exit events plumbed through the completion path and a
+    monitor table in the spawner env. Enables supervision trees.
+  - *Named registry* (runtime): VM-level table mapping keywords to
+    thread handles + mailboxes, `register`/`whereis`/`unregister` —
+    games address the physics worker by name, not by passing handles
+    through every layer.
+
+Order: pattern library first (pure janet, immediately useful), then
+monitors (small runtime feature), then the M:N scheduler core, then
+struct sharing (cross-heap GC).
 
 ### Phase 3 slice — value-returning thread/new + thread/join (DONE, this checkout)
 
