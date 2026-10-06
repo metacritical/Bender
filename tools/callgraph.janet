@@ -106,8 +106,38 @@
 # the thunk constants; params maps positionally onto the arglist.
 # :long and :double are unboxed; absent (or :number) stays boxed.
 # Validation only here — consumption (unboxed codegen) is the next phase.
-# :float is an alias for :double (janet numbers are doubles)
-(def valid-hints @{:long true :double true :number true :float true})
+# :float is true float32 computation; :double stays float64.
+(def valid-hints
+  @{:long true :double true :number true :float true
+    :i32 true :i16 true :i8 true
+    :u64 true :u32 true :u16 true :u8 true})
+# Full C primitive width set (step 13/width): 64-bit is the default
+# integer (:long); narrower widths are opt-in contracts honored at the
+# FFI boundary; casts are automatic (C implicit conversion).
+# Canonical: :long :i32 :i16 :i8 :u64 :u32 :u16 :u8 :double :float
+# Aliases: :i64/:int64, :i32/:int32/:int, :i16/:int16, :i8/:int8,
+# :u64/:uint64, :u32/:uint32, :u16/:uint16, :u8/:uint8,
+# :f64/:double, :f32/:float.
+(def hint-canonical
+  @{:i64 :long :int64 :long
+    :i32 :i32 :int32 :i32 :int :i32
+    :i16 :i16 :int16 :i16
+    :i8 :i8 :int8 :i8
+    :u64 :u64 :uint64 :u64
+    :u32 :u32 :uint32 :u32
+    :u16 :u16 :uint16 :u16
+    :u8 :u8 :uint8 :u8
+    :f64 :double :f32 :float})
+(def int-hints
+  @{:long true :i32 true :i16 true :i8 true
+    :u64 true :u32 true :u16 true :u8 true})
+(def float-hints @{:double true :float true})
+(def emit-c-type-map
+  @{:long "int64_t" :i32 "int32_t" :i16 "int16_t" :i8 "int8_t"
+    :u64 "uint64_t" :u32 "uint32_t" :u16 "uint16_t" :u8 "uint8_t"
+    :double "double" :float "float" :number "double"})
+# alias spellings fold to the canonical width keyword
+(defn canon-hint [k] (get hint-canonical k k))
 (defn hint-of [id]
   (def info (get defs id))
   (when (nil? info) (break nil))
@@ -151,7 +181,7 @@
                   (var pnm (string/slice (string a) 1))
                   (if (= 58 (get pnm 0)) (set pnm (string/slice pnm 1)))
                   (def pk (keyword pnm))
-                  (array/push ph (if (= pk :float) :double pk))
+                  (array/push ph (canon-hint pk))
                   (++ k) (++ k))
                 (do (array/push ph :number) (++ k))))
             (put hm :params (tuple ;ph))
@@ -174,7 +204,7 @@
                 (var pnm (string/slice (string a) 1))
                 (if (= 58 (get pnm 0)) (set pnm (string/slice pnm 1)))
                 (def pk (keyword pnm))
-                (array/push ph (if (= pk :float) :double pk))
+                (array/push ph (canon-hint pk))
                 (++ k)
                 (++ k))
               (do
@@ -182,6 +212,14 @@
                 (++ k))))
           (put hm :params (tuple ;ph))
           (set h hm))
+        # canonicalize alias spellings (:int -> :i32, :f32 -> :float)
+        # so every consumer sees one width vocabulary
+        (when h
+          (when (struct? h) (set h (table ;(kvs h))))
+          (when (get h :params)
+            (put h :params (tuple ;(map canon-hint (get h :params)))))
+          (when (get h :returns)
+            (put h :returns (canon-hint (get h :returns)))))
         (when h
           (def nm (string (form 1)))
           (def ids (get name-ids nm))
@@ -715,7 +753,7 @@
 (def emit-term-ops @{'ret true 'retn true 'err true})
 (def emit-cond-jumps @{'jmpif true 'jmpno true})
 
-(defn emit-c-type [t] (if (= t :long) "int64_t" "double"))
+(defn emit-c-type [t] (get emit-c-type-map t "double"))
 (defn emit-c-name [nm] (string/replace-all "-" "_" nm))
 (defn emit-c-num [v] (string/format "%.17g" v))
 (defn emit-slot [a arity] (if (< a arity) (string "p" a) (string "s" a)))
@@ -820,9 +858,10 @@
           (merge-to endx st)))))
   (when (get changed-box :v)
     (break @{:ok false :reason "dataflow did not converge"}))
-  # per-tier slot purity: a :long function must never see a :double
-  # value in a slot (the emitter types temps by the return type)
-  (when (= rt :long)
+  # per-tier slot purity: an int-width function must never see a
+  # float-family value in a slot (the emitter types temps by the
+  # return width; implicit conversion would silently truncate)
+  (when (get int-hints rt)
     (var impure nil)
     (each start leaders
       (if impure
@@ -830,8 +869,8 @@
         (do (def st (get in-states start))
           (when st
             (eachp [k v] st
-              (when (and (not= v :long) (not= v :bool) (>= k (length pt)) (nil? impure))
-                (set impure (string "non-long slot " k " (" v ") in long fn"))))))))
+              (when (and (not (get int-hints v)) (not= v :bool) (>= k (length pt)) (nil? impure))
+                (set impure (string "non-int slot " k " (" v ") in int fn"))))))))
   (if impure
     @{:ok false :reason impure}
     nil))
@@ -910,12 +949,14 @@
               (array/push lines (string "    s" (ins 1) " = " (emit-c-num cval) ";")))
             (= op 'ret)
             (do (def rvt (get st (ins 1) :unknown))
-              # :double fns commit all numeric temps to double, so a
-              # :number/:long slot promotes; :long fns require exact long
-              (def eff (if (= rt :double)
-                         (if (get infer/numeric-types rvt) :double rvt)
-                         rvt))
-              (unless (= eff rt)
+              # family check: int fn returns int-family values, float fn
+              # returns any numeric (int promotes); C converts the width
+              (def ok (cond
+                        (get int-hints rt) (get int-hints rvt)
+                        (get float-hints rt)
+                        (or (get infer/numeric-types rvt) (= rvt :bool))
+                        nil))
+              (unless ok
                 (set bad (string "ret slot is " rvt " not " rt))
                 (break))
               (array/push lines (string "    return " (emit-slot (ins 1) arity) ";")))
@@ -949,13 +990,15 @@
                                   (emit-slot (ins 2) arity) " " (emit-cmp-c op) " "
                                   (emit-slot (ins 3) arity) ";")))
             (= op 'div)
-            (if (= rt :double)
+            # int-family: C integer division truncates (needs a
+            # documented policy in step 13); float-family: real division
+            (if (get float-hints rt)
               (do (set pending @[])
                 (array/push lines
                             (string "    s" (ins 1) " = "
                                     (emit-slot (ins 2) arity) " / "
                                     (emit-slot (ins 3) arity) ";")))
-              (do (set bad "div on long")
+              (do (set bad "div on int width (policy TBD)")
                 (break)))
             (= op 'movn)
             (array/push lines (string "    s" (ins 1) " = "
@@ -1075,7 +1118,10 @@
     (eprint "emit-native: no emittable functions")
     (os/exit 1))
   (defn samples-for [pt2]
-    (def per (map (fn [t] (if (= t :long) @[-3 -1 0 1 3] @[-2.5 0.5 1.5 2.5])) pt2))
+    (def per (map (fn [t] (cond
+                            (get int-hints t) @[-3 -1 0 1 3]
+                            (get float-hints t) @[-2.5 0.5 1.5 2.5]
+                            @[-2.5 0.5 1.5 2.5])) pt2))
     (var combos @[@[]])
     (each opts per
       (def nxt @[])
@@ -1133,12 +1179,15 @@
 
 (defn wrapper-for [nm pt rt]
   (def cn (emit-c-name nm))
+  # boundary casts: every int width unboxes/wraps as integer (C
+  # implicit conversion narrows/widens to the kernel's exact width),
+  # float widths as number
   (def ps (string/join (seq [i :range [0 (length pt)]]
                      (string "janet_unwrap_"
-                             (if (= (pt i) :long) "integer" "number")
+                             (if (get int-hints (pt i)) "integer" "number")
                              "(argv[" i "])"))
                   ", "))
-  (def rv (if (= rt :long) "janet_wrap_integer" "janet_wrap_number"))
+  (def rv (if (get int-hints rt) "janet_wrap_integer" "janet_wrap_number"))
   (string "static Janet " cn "_wrapper(int32_t argc, Janet *argv) {\n"
           "    (void) argc;\n"
           "    return " rv "(" cn "(" ps "));\n}\n"))

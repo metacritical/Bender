@@ -11,9 +11,24 @@
 # :bool/:nil. Everything conservative: unknown wins ties, inference
 # only ever refines toward concrete numeric types.
 
-(def numeric-types @{:long true :double true :number true})
+# The full C primitive width set joins the numeric lattice; family
+# normalization folds widths to int64/float64 for arithmetic joining —
+# exact widths are FFI-boundary contracts (params/returns), computation
+# runs at the kernel's declared return width.
+(def numeric-types
+  @{:long true :double true :number true
+    :i32 true :i16 true :i8 true
+    :u64 true :u32 true :u16 true :u8 true
+    :float true})
+(def width-family
+  @{:i32 :long :i16 :long :i8 :long
+    :u64 :long :u32 :long :u16 :long :u8 :long
+    :float :double})
 
-(defn type-join [a b]
+(defn type-join [a0 b0]
+  # widths normalize to their family before joining
+  (def a (get width-family a0 a0))
+  (def b (get width-family b0 b0))
   (cond
     (= a b) a
     (= a :unknown) b

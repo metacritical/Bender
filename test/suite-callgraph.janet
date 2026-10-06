@@ -294,4 +294,27 @@
 (assert (not (nil? (string/find "extern double game_clamp(double, double, double);" etext)))
         "extern decl hoisted")
 
+# ---- width hints: full C primitive set ----
+(spit "/tmp/cg-width.janet" (string
+  "(defn add-i32 {:hint {:params [:i32 :i32] :returns :i32}} [a b] (+ a b))\n"
+  "(defn mulf {:hint {:params [:float :float] :returns :float}} [a b] (* a b))\n"
+  "(defn mix {:hint {:params [:int :double] :returns :double}} [n x] (+ x n))\n"
+  "(defn main [] (print (add-i32 2 3) \" \" (mulf 1.5 2.5) \" \" (mix 7 0.5)))\n"))
+(assert (= 0 (os/execute ["/bin/sh" "-c"
+  "rm -rf /tmp/cg-w && ./build/janet tools/callgraph.janet /tmp/cg-width.janet --emit-native /tmp/cg-w"] :p))
+  "width emit run")
+(assert (= 0 (os/execute ["/bin/sh" "-c"
+  "cc -w -O2 /tmp/cg-w/native.c -o /tmp/cg-w/native && /tmp/cg-w/native > /tmp/cg-w/actual.txt && cmp /tmp/cg-w/expected.txt /tmp/cg-w/actual.txt"] :p))
+  "width parity (i32/float/mixed)")
+(def wtext (slurp "/tmp/cg-w/native.c"))
+(assert (not (nil? (string/find "int32_t add_i32(int32_t p0, int32_t p1)" wtext)))
+        "i32 kernel exact width")
+(assert (not (nil? (string/find "float mulf(float p0, float p1)" wtext)))
+        "float kernel true float32")
+(assert (not (nil? (string/find "double mix(int32_t p0, double p1)" wtext)))
+        "mixed widths + :int alias canonicalized")
+# int-width kernels get integer samples in the harness (no float
+# literals coerced at the call boundary)
+(assert (nil? (string/find "add_i32(-2.5" wtext)) "int-width harness samples integral")
+
 (end-suite)

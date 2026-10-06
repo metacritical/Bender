@@ -574,9 +574,23 @@ trusted until it agrees byte-for-byte.
   boxed-side keeps the boxed copy (correct, just interpreted).
   Residue (eval, dynamic require) keeps working — eval'd mod code
   demonstrably dispatches to native kernels.
-- **Step 13 — int-overflow policy + DCE.** `raise`/`wrap`/`promote`
+- **Step 13 — int-overflow policy + DCE.** `wrap` (default)/`promote`
   flag for native int64 semantics (boxed doubles truncate at 2^53);
-  dead-code elimination via reachability + section-GC.
+  dead-code elimination via reachability from entry thunks.
+- **Width hints — DONE.** Full C primitive set on the hint surface:
+  :long/:i32/:i16/:i8/:u64/:u32/:u16/:u8/:double/:float plus aliases
+  (:i64/:int64, :i32/:int32/:int, :i16/:int16, :i8/:int8, :u64/:uint64,
+  :u32/:uint32, :u16/:uint16, :u8/:uint8, :f64/:double, :f32/:float),
+  canonicalized at extraction (`^:keyword` and `^float` caret
+  spellings too). 64-bit is the default integer; narrower widths are
+  opt-in FFI-boundary contracts — computation runs at the kernel's
+  declared return width, casts are automatic at call boundaries
+  (harness samples, lib wrappers). :float is true float32 arithmetic;
+  janet's oracle computes in doubles, so :float parity is documented
+  divergence by opt-in. Infer lattice: widths join via family
+  normalization (:i32 etc -> :long, :float -> :double); mixed widths
+  widen conservatively. Purity/ret/div checks family-aware; int-width
+  kernels get integer harness samples.
 
 Order serves the games workload: branches and loops unblock every
 real loop body; external C calls unblock raylib; arrays unblock
