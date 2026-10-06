@@ -256,8 +256,9 @@
       watch (ev/thread-chan 4)]
   (mailbox/link a b :l21)
   (ev/monitor (a :worker) :wa watch)
+  # seed simulates link traffic: a linked peer's death arrives marked.
   (def seed (thread/new (fn [] (ev/sleep 0.02) (error "pair-boom"))))
-  (ev/monitor seed :s (b :mbx))
+  (ev/monitor seed [:link :s] (b :mbx))
   (protect (thread/join seed))
   (assert (await-exit b 5) "linked worker dies")
   (assert (await-exit a 5) "death propagates to peer")
@@ -272,8 +273,9 @@
   (mailbox/link a b :lab)
   (mailbox/link b c :lbc)
   (ev/monitor (a :worker) :wa watch)
+  # seed simulates link traffic (see test 21).
   (def seed (thread/new (fn [] (ev/sleep 0.02) (error "deep"))))
-  (ev/monitor seed :s (c :mbx))
+  (ev/monitor seed [:link :s] (c :mbx))
   (protect (thread/join seed))
   (assert (await-exit c 5) "seed peer dies")
   (assert (await-exit b 5) "middle dies")
@@ -336,5 +338,90 @@
   (assert (deep= [:l25 :normal] (mailbox/call a :last nil 5))
           "link tags consistent")
   (mailbox/quit a))
+
+# M2e: pids.
+
+# 26. Pid shape, predicate, and distinct serials.
+(let [a (mailbox/spawn (fn [_t p] p))
+      b (mailbox/spawn (fn [_t p] p))]
+  (def pa (a :pid))
+  (def pb (b :pid))
+  (assert (mailbox/pid? pa) "pid predicate")
+  (assert (not (mailbox/pid? a)) "mailbox is not a pid")
+  (assert (not (mailbox/pid? [:pid 0 1])) "short tuple is not a pid")
+  (assert (= :pid (pa 0)) "pid head")
+  (assert (= 0 (pa 1)) "single-node id")
+  (assert (not= (pa 2) (pb 2)) "serials distinct")
+  (assert (not (deep= pa pb)) "pids distinct")
+  (mailbox/quit a)
+  (mailbox/quit b))
+
+# 27. self() inside a worker is its pid; outside workers it is nil.
+(let [w (mailbox/spawn (fn [t p] (case t :who (mailbox/self) :echo p)))]
+  (assert (deep= (w :pid) (mailbox/call w :who nil 5)) "self is stable pid")
+  (assert (nil? (mailbox/self)) "self outside workers is nil")
+  (mailbox/quit w))
+
+# 28. Pids round-trip through marshal by value (channel identity kept).
+(let [w (mailbox/spawn (fn [t p] (case t :who (mailbox/self) :echo p)))]
+  (def pid (w :pid))
+  (assert (deep= pid (mailbox/call w :echo pid 5)) "pid marshal round-trip")
+  (mailbox/quit w))
+
+# 29. send/call accept pids.
+(let [w (mailbox/spawn (fn [t p] (case t :who (mailbox/self) :echo p)))]
+  (def pid (w :pid))
+  (mailbox/send pid :echo :ping)
+  (assert (deep= pid (mailbox/call pid :who nil 5)) "call by pid")
+  (mailbox/quit pid))
+
+# 30. Monitor by pid: live worker watched through its pid.
+(let [watched (mailbox/spawn (fn [_t p] p))
+      watcher (mailbox/spawn
+                (do (var seen nil)
+                    (fn [tag payload]
+                      (case tag
+                        :down (set seen payload)
+                        :last seen))))]
+  (mailbox/monitor (watched :pid) watcher :wp30)
+  (mailbox/quit watched)
+  (assert (deep= [:wp30 :normal] (mailbox/call watcher :last nil 5))
+          "monitor by pid")
+  (mailbox/quit watcher))
+
+# 31. Unknown pid monitors deliver :noproc immediately, and the
+# watcher — not trapping — survives: monitor notifications never
+# propagate, only link legs do.
+(let [watcher (mailbox/spawn
+                (do (var seen nil)
+                    (fn [tag payload]
+                      (case tag
+                        :down (set seen payload)
+                        :last seen
+                        :ping :pong))))]
+  (mailbox/monitor [:pid 0 9999 (ev/thread-chan 1)] watcher :ghost)
+  (assert (deep= [:ghost :noproc] (mailbox/call watcher :last nil 5))
+          "unknown pid gives :noproc")
+  (assert (= :pong (mailbox/call watcher :ping nil 5))
+          "watcher survives :noproc")
+  (mailbox/quit watcher))
+
+# 32. Plain monitor notifications of abnormal exits are observed, not
+# propagated — even by non-trapping workers.
+(let [watcher (mailbox/spawn
+                (do (var seen nil)
+                    (fn [tag payload]
+                      (case tag
+                        :down (set seen payload)
+                        :last seen
+                        :ping :pong))))]
+  (def seed (thread/new (fn [] (ev/sleep 0.02) (error "plain-boom"))))
+  (ev/monitor seed :m32 (watcher :mbx))
+  (protect (thread/join seed))
+  (assert (deep= [:m32 "plain-boom"] (mailbox/call watcher :last nil 5))
+          "abnormal monitor notification observed")
+  (assert (= :pong (mailbox/call watcher :ping nil 5))
+          "non-trapper survives monitor traffic")
+  (mailbox/quit watcher))
 
 (end-suite)
