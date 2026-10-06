@@ -303,6 +303,87 @@ Order: pattern library first (pure janet, immediately useful), then
 monitors (small runtime feature), then the M:N scheduler core, then
 struct sharing (cross-heap GC).
 
+### Phase 3 messaging — implementation plan (detail for the tasks above)
+
+**M1 — worker-mailbox pattern library** (pure janet, `ev/mailbox.janet`
+or shipped as an example). Surface:
+
+```janet
+(def mb (mailbox/spawn handler-fn &opt capacity))  # -> mailbox address
+(mailbox/send mb tag payload)                       # async, fire-and-forget
+(mailbox/call  mb tag payload &opt timeout)         # send + wait for reply
+(mailbox/quit  mb)                                  # graceful stop
+```
+
+- `mailbox/spawn` = `(ev/thread-chan cap)` + `(thread/new loop :n)`; the
+  loop is `while running: [tag payload reply-ch] = ev/take mb; dispatch`.
+- `send` = `ev/give mb [tag payload reply-ch]`; `call` attaches a
+  fresh reply channel and `ev/take`s it with a deadline.
+- Semantics: at-most-once per message (no acks); a dead worker makes
+  sends block at capacity — monitors (M2) turn that into an error.
+- Tests: spawn/quit lifecycle, backpressure at capacity, call/timeout,
+  concurrent senders (2+ producer threads), marshal of payloads.
+- Files: `examples/mailbox.janet` + pins in suite-ev or a new
+  `test/suite-mailbox.janet`.
+
+**M2 — links & monitors** (runtime, ev.c + thread.c). Surface:
+
+```janet
+(ev/monitor mb tag)        # when the worker exits, send [:down tag reason]
+                           # to the monitor's mailbox (default: caller's)
+(ev/link mb-a mb-b)        # symmetric: one dies -> other gets :down
+```
+
+- Mechanics: the thread-completion path (the completion posting that
+  thread/join consumes) already reaches the spawner — extend it: each
+  thread carries a monitor list (mailbox + tag pairs); on exit,
+  deliver `[:down handle reason]` messages. Reason: `:normal` |
+  `:error` (marshaled error value).
+- Data: a monitor table in the thread handle (registered mailboxes are
+  channel handles — marshal-safe).
+- Tests: normal exit delivers `:normal`; error exit delivers the
+  error; monitor survives worker crash; link chain (A<->B, B dies, A
+  notified). Gate: full `make test` + threaded-channel stress.
+
+**M3 — named registry** (runtime, state.h + one cfun file). Surface:
+
+```janet
+(ev/register :physics mb)   # keyword -> mailbox (or thread handle)
+(ev/whereis :physics)       # -> mailbox or nil
+(ev/unregister :physics)
+```
+
+- Mechanics: per-thread-local VM tables would be invisible across
+  threads — the registry must live in the MAIN/root env and store
+  channel handles (thread-safe queues are the shareable object).
+  `register` overwrites atomically (table put under a lock, mirroring
+  threaded channels' locking).
+- Games: `(ev/whereis :physics)` — the physics worker is addressed by
+  name from any layer, including eval'd mod code.
+- Tests: register/whereis/unregister round-trip, overwrite, lookup
+  from a worker thread (cross-thread visibility).
+
+**M4 — M:N scheduler core** (runtime, sp_sched.c analogue). As the
+Phase 3 text above: work-stealing runqueues, SIGURG preemption at
+poll points, scheduler-aware parking. Prereq: everything above is
+schedulable on 1:N; M:N changes WHERE fibers run, not how they
+communicate — the messaging layer is deliberately scheduler-agnostic.
+
+**M5 — shareable immutable structs** (runtime + GC). Janet structs are
+immutable — candidates for zero-copy sharing. Blocker: two isolated
+heaps/GCs — who owns the memory? Options: (a) ownership transfer
+(sender loses it — destructive send, Erlang-style), (b) refcounted
+immortal page (allocate struct + contents in a shared slab, refcount
+per referencing VM). Requires: cross-heap GC protocol, marshal-free
+fast path, and a `shareable` predicate (deep-immutability check:
+no tables/arrays/buffers/objects inside). Design doc + GC review
+BEFORE implementing — this touches the collector.
+
+**Dependency chain:** M1 (pure janet) -> M2 (runtime) -> M3 (runtime)
+-> M4 (scheduler core); M5 independent of M2-M4, gated on the GC
+design review. Each task: feature branch, suite pins, full gates
+(`make test`, `make fibertest`, oracle x6), feature commit.
+
 ### Phase 3 slice — value-returning thread/new + thread/join (DONE, this checkout)
 
 `ev/thread` suspends until completion but always returns nil. New
