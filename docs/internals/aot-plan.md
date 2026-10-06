@@ -441,13 +441,25 @@ trusted until it agrees byte-for-byte.
   Design-heavy: buffer-as-typed-array view vs new core primitive;
   allocation goes through the runtime with explicit roots
   (janet_gcshadow). Design doc + parity spike before committing.
-- **Step 12 — hybrid binary integration (call planning).** janet-aot
-  emits BOTH the boxed image and native.c; proven functions become
-  native cfunctions (wrapper: unbox args → call → rebox result)
-  bound via an extern-cfun registry, so boxed callers pay one
-  conversion at the boundary and native internals stay native.
-  Residue (eval, dynamic require) keeps working — boxed tier ships
-  eval in the binary already.
+- **Step 12 — hybrid binary integration (DONE, this checkout).**
+  `emit-native-lib` emits kernels + janet-cfunction wrappers (unbox →
+  kernel → rebox) + `native_init(JanetTable*)` registering them.
+  `mkimage --native names.txt` strips proven defns from the unit and
+  prepends a prelude rebind: `(def name (:value (get (curenv)
+  (quote native/name))))` — so same-unit call sites compile against
+  the wrappers (native internals stay native-to-native), while boxed
+  code and eval'd mod code dispatch through env with one conversion
+  at the boundary. mkimage emits the native_init hook under
+  JANET_AOT_NATIVE_INIT (called post-core-env, pre-unmarshal).
+  `janet-aot.sh --native` builds the full hybrid. Verified: the
+  hybrid binary runs boxed and eval'd paths through native kernels
+  (env-registered wrappers). Known boundary: same-unit call sites
+  that the compiler resolves to embedded boxed constants before the
+  prelude exists are covered by the prelude rebind because stripping
+  removes the boxed def; truly dynamic aliasing of a kernel value
+  boxed-side keeps the boxed copy (correct, just interpreted).
+  Residue (eval, dynamic require) keeps working — eval'd mod code
+  demonstrably dispatches to native kernels.
 - **Step 13 — int-overflow policy + DCE.** `raise`/`wrap`/`promote`
   flag for native int64 semantics (boxed doubles truncate at 2^53);
   dead-code elimination via reachability + section-GC.
