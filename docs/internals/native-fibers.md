@@ -64,7 +64,8 @@ Pieces (all in `src/`):
    (`janet_fiber_trampoline` in `src/core/vm.c`); every `janet_try` jmp_buf
    now lives on the fiber's native stack, so no longjmp crosses stacks.
 5. `janet_mark_fiber` (`src/core/gc.c`) marks the new `in_value` /
-   `out_payload` slots; unmarshalled fibers get stacks via
+   `out_payload` slots (plus `interrupt_value` since M4b-1);
+   unmarshalled fibers get stacks via
    `janet_fiber_ensure_native_stack` (`src/core/marsh.c`).
 6. VM frames/memory model (`fiber->data`, `JanetStackFrame`, fiber marshal)
    kept as-is.
@@ -251,7 +252,10 @@ parking for blocking ops, `Thread.new`/`join`/`kill`/`[]` API.
 
 Mechanics (`src/core/ev.c`): `JanetThreadHandle` threaded abstract
 (owner VM, done/joined/is_error, result Janet, waiter fiber; mark covers
-result + waiter; no per-thread state so gcperthread is NULL); worker args
+result + waiter; no per-thread state so gcperthread is NULL) plus,
+since M2, a gcrooted monitor list (`[chan tag]` pairs, tombstonable
+via refs since M2b, delivered best-effort on the completion path,
+freed/unrooted on delivery or handle free); worker args
 (`JanetThreadNewArgs`: marshalled input, handle, owner, flags — mirrors
 `cfun_ev_thread` layout minus supervisor); worker runs `janet_init`,
 unmarshals registries + function + arg, `janet_fiber` (error/user masks),
@@ -317,3 +321,26 @@ statically-live code by construction.
 - No collector replacement yet (still the list-of-blocks sweep).
 - Semantics of signals, `JANET_FIBER_MASK_*`, debug stack traces and ev
   fiber scheduling stay identical.
+
+## Addendum — where the later work lives (2026-10-07)
+
+This document stays scoped to Phases 0–4 step 1 mechanics. Everything
+after it is recorded in its own notes file:
+
+- Messaging layer API + examples + decision guide (mailbox, pool,
+  monitors/links/trap-exit, pids, registry, shared blobs, interrupt,
+  timeslice): `docs/internals/messaging-guide.md`.
+- AOT pipeline reference (hint surface, widths, arrays, int policy,
+  externs, hybrid binaries, harness/parity, divergences, CLI):
+  `docs/internals/aot-notes.md`.
+- Shareable-values GC review + per-proof outcomes:
+  `docs/internals/shared-structs-design.md`.
+- Roadmap status for every step (M1–M5, Phase 4 steps 1–13, M4b
+  slices): `docs/internals/aot-plan.md`.
+- Runtime additions since this doc: `ev/monitor` + `ev/demonitor`
+  (handle monitor lists), `ev/register`/`whereis`/`unregister`
+  (process-global marshaled-copy registry), `core/shared` blobs,
+  `ev/interrupt` (per-fiber resume-boundary delivery),
+  `ev/timeslice` (quantum driver: per-resume poll budgets +
+  scheduler re-queue); fiber fields `interrupt_requested` /
+  `interrupt_value`, VM fields `quantum` / `quantum_remaining`.
