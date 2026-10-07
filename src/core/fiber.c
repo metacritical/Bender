@@ -37,7 +37,7 @@
 /* Stack size for a fiber's native C stack. The fibers here back VM frames
  * (as of Phase 1 the VM values live in fiber->data, so this serves the C
  * calls made while running a fiber -- cfuns, janet_call children, ev), so
- * it can be substantially larger than the 256 KB Spinel uses for generated
+ * it can be substantially larger than the 256 KB a generated-code fiber uses
  * code with tight -O2 frames. */
 #ifndef JANET_FIBER_STACK_BYTES
 #define JANET_FIBER_STACK_BYTES (2 * 1024 * 1024)
@@ -98,7 +98,7 @@ void janet_fiber_native_stack_free(JanetFiber *fiber) {
     }
 }
 
-/* Portable coroutine context switch, adapted from Spinel's sp_fiber_ctx.
+/* Portable coroutine context switch for native-stack fibers.
  *
  * On x86_64/aarch64 we use a tiny cooperative register switch written as
  * file-scope inline asm; it lands in .text (W^X-safe), saves only the

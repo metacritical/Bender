@@ -1,3 +1,4 @@
+<img src="https://static.wikitide.net/greatcharacterswiki/thumb/c/c5/BenderBendingRodr%C3%ADguez.png/600px-BenderBendingRodr%C3%ADguez.png" alt="Bender Bending Rodriguez" width=200 align="left">
 <img src="assets/bender.svg" alt="Bender logo" width=200 align="left">
 
 <pre>
@@ -20,7 +21,7 @@
 
 **Bender** is a fork of [Janet](https://janet-lang.org) (by Calvin Rose)
 with the same syntax and ecosystem compatibility, rebuilt underneath as
-a full-fledged compiler: Spinel-style widening type inference with
+a full-fledged compiler: widening type inference with
 optional `{:hint}` contracts compiles numeric code to native C kernels,
 a hybrid boxed/native VM runs the rest, Erlang-style actors handle
 concurrency, and a profile-guided (PGO) loop learns types from real

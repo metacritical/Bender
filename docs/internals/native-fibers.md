@@ -1,9 +1,8 @@
-# Native-stack fibers, M:N threads, and the Spinel-style collector
+# Native-stack fibers, M:N threads, and the precise collector
 
-This document records the direction for bringing Janet's runtime to the model
-Spinel uses for its own `Fiber` / `Thread` / GC, so that Janet programs can
-eventually be compiled ahead of time (Spinel-style) without the interpreter
-underneath.
+This document records the direction for bringing Janet's runtime to native
+fibers and threads with its own GC, so that Janet programs can eventually
+be compiled ahead of time without the interpreter underneath.
 
 The end state looks like this:
 
@@ -18,7 +17,7 @@ janet VM runs its fiber on that native stack
         │  values / frames stay in the fiber's growable buffer (Phase 1: kept;
         │  Phase 2: frames live in the VM state, values in the buffer)
         ▼
-Spinel-style collector: precise, non-moving, explicit roots,
+Precise collector: precise, non-moving, explicit roots,
 object heap + immutable-string heap with marker bytes
 ```
 
@@ -53,7 +52,7 @@ Status: implemented on the `janet` checkout; full suite passes
 Pieces (all in `src/`):
 
 1. `janet_fiber_ctx_*` (`src/core/fiber.c`, decls in `src/include/janet.h`) —
-   portable context switch, ported from `spinel/lib/sp_fiber_ctx.h`: fast
+   portable coroutine context switch: fast
    register swap on x86_64/aarch64, `swapcontext()` fallback elsewhere.
 2. `JanetFiber` gains: `native_stack`, `native_stack_base`,
    `native_stack_size` (2 MiB usable + 64 KiB `PROT_NONE` guard via mmap),
@@ -176,7 +175,7 @@ Pieces:
 
 ## Phase 2 — GC swap (option B+C)
 
-- Port the Spinel collector's discipline: precise mark/sweep, explicit
+- Collector discipline: precise mark/sweep, explicit
   `JANET_GC_ROOT`-style roots (include a string marker-bit heap), per-worker
   root arrays.
 - The collector's root walks become: fibers' `data` buffers as today (until
@@ -296,7 +295,7 @@ results round-trip too (probed both directions, 20/20 stable).
 
 ## Phase 4 — AOT compiler
 
-Spinel-style: parse via `src/core/parse.c`, macroexpand as today, then a
+Pipeline: parse via `src/core/parse.c`, macroexpand as today, then a
 whole-program type analysis and C codegen (`value`/`Janet` for boxed values,
 unboxed C for inferred numeric/struct cases). `eval` and code that defeats
 inference falls back to the interpreter inside the same runtime.

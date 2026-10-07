@@ -1,10 +1,10 @@
 # tools/infer.janet — shared type inference (Phase 4 steps 6-7).
-# Spinel-analyzer model (analyze_pass.c bind_args_params / slot_take):
+# Analyzer model (bind_args_params / slot_take):
 #   - at every call site, each pushed argument's type is bound
 #     (monotonically narrowed) into the callee's parameter slot;
 #   - annotation-seeded params/returns are contracts and are never
-#     weakened (Spinel's rbs_seeded);
-#   - conflicting call sites widen to :number (Spinel's poly) — boxed;
+#     weakened (seeded widening);
+#   - conflicting call sites widen to :number (polymorphic) — boxed;
 #   - return types flow out of RETURN sites and through tail calls,
 #     whole-program, until the fixpoint stabilizes.
 # Lattice: :unknown (boxed top) > :number > {:long, :double}; leaves

@@ -616,7 +616,7 @@ void janet_sweep(void) {
 }
 
 /* Allocate some memory that is tracked for garbage collection */
-/* Phase 2b-iii slab allocator, generational (Spinel storage model).
+/* Phase 2b-iii slab allocator, generational (slab storage model).
  * Same lists, same deinit -- only the backing store changes from
  * one-malloc-per-object to carved pages with free lists. Objects larger
  * than the biggest class still use malloc (large path, always treated as
