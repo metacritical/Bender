@@ -82,6 +82,25 @@ profile behave exactly as today.
 4. Evaluate: does PGO move any ttfx bench row? Keep only what
    measures. Long-term interplay with Phase 3 value types below.
 
+## Measured baseline (2026-10-07, M2 Pro, decrypt/logo.txt seed 42)
+
+| input | impl | frames | wall | per frame |
+|---|---|---|---|---|
+| `hi` (2x1 canvas) | interp `--bench` | 545 | 4 ms | 7.3 us |
+| `hi` | `--native` binary | 545 | 3 ms | 5.5 us |
+| logo.txt 1525 B (256x256 canvas) | binary | 895 | ~710 ms | 0.79 ms |
+| logo.txt, steady-state in-process | interp | 929 | ~740 ms | 0.80 ms |
+
+Attribution (200 logo frames, in-process): `next-frame` engine
+stepping 76 ms, `ctx-frame-string` ANSI building 75 ms,
+`ctx-frame-cells` 12 ms. `sample` profile: 96% in `run_vm`
+(interpreter dispatch), ~3% GC marking. A clean 50/50 split: engine
+stepping needs numeric kernels (reshape scenes to arrays + hints);
+string building needs allocation-light reuse (persistent output buffer
+rewritten per frame, not fresh strings). Canvas is 256x256 for any
+input (cost scales with canvas, not text) -- sparse/live-cell
+iteration is the algorithmic win on top.
+
 ## Kernel shaping (per the bench table, not per effect)
 
 `native-skip <fn> <reason>` + profiler dictate a small list of shared
