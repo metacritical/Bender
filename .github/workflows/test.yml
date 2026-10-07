@@ -1,0 +1,192 @@
+name: Test
+
+on: [push, pull_request]
+
+permissions:
+  contents: read
+
+jobs:
+
+  test-posix:
+    name: Build and test on POSIX systems
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ ubuntu-latest, ubuntu-24.04-arm, macos-latest, macos-14, macos-15-intel ]
+    steps:
+      - name: Checkout the repository
+        uses: actions/checkout@master
+      - name: Compile the project
+        run: make clean && make
+      - name: Test the project
+        run: make test
+
+  test-posix-sanitizers:
+    name: Build and test on POSIX systems with sanitizers turned on
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ ubuntu-latest ]
+    steps:
+      - name: Checkout the repository
+        uses: actions/checkout@master
+      - name: Compile the project
+        run: make clean && CFLAGS="-g -O2 -fsanitize=address,undefined" make
+      - name: Test the project
+        run: make test
+
+  test-windows:
+    name: Build and test on Windows
+    strategy:
+      matrix:
+        os: [ windows-latest, windows-2022 ]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout the repository
+        uses: actions/checkout@master
+      - name: Setup MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+      - name: Build the project
+        shell: cmd
+        run: build_win
+      - name: Test the project
+        shell: cmd
+        run: build_win test
+      - name: Test installer build
+        shell: cmd
+        run: build_win dist
+
+  test-windows-sanitizers:
+    name: Build and test on Windows with sanitizers
+    strategy:
+      matrix:
+        os: [ windows-latest ]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout the repository
+        uses: actions/checkout@master
+      - name: Setup MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+      - name: Build the project
+        shell: cmd
+        run: set SANITIZE=1 & build_win
+      - name: Test the project
+        shell: cmd
+        run: set VERBOSE=1 & build_win test
+      - name: Test installer build
+        shell: cmd
+        run: build_win dist
+
+  test-windows-min:
+    name: Build and test on Windows Minimal build
+    strategy:
+      matrix:
+        os: [ windows-2022 ]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout the repository
+        uses: actions/checkout@master
+      - name: Setup MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+      - name: Setup Python
+        uses: actions/setup-python@v2
+        with:
+          python-version: '3.x'
+      - name: Install Python Dependencies
+        run: pip install meson ninja
+      - name: Build
+        shell: cmd
+        run: |
+          meson setup build_meson_min --buildtype=release -Dsingle_threaded=true -Dnanbox=false -Ddynamic_modules=false -Ddocstrings=false -Dnet=false -Dsourcemaps=false -Dpeg=false -Dassembler=false -Dint_types=false -Dreduced_os=true -Dffi=false
+          cd build_meson_min
+          ninja
+
+  test-mingw:
+    name: Build on Windows with Mingw
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    strategy:
+      matrix:
+        msystem: [ UCRT64, CLANG64 ]
+    steps:
+      - name: Checkout the repository
+        uses: actions/checkout@master
+      - name: Setup Mingw
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: ${{ matrix.msystem }}
+          update: true
+          install: >-
+            base-devel
+            git
+            gcc
+      - name: Build
+        shell: cmd
+        run: make -j4 CC=gcc
+      - name: Test
+        shell: cmd
+        run: make -j4 CC=gcc test
+
+  test-mingw-linux:
+    name: Build and test with Mingw on Linux + Wine
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout the repository
+        uses: actions/checkout@master
+      - name: Setup Mingw and wine
+        run: |
+          sudo dpkg --add-architecture i386
+          sudo apt-get update
+          sudo apt-get install libstdc++6:i386 libgcc-s1:i386
+          sudo apt-get install gcc-mingw-w64-x86-64-win32 wine wine32 wine64
+      - name: Compile the project
+        run: make clean && make CC=x86_64-w64-mingw32-gcc LD=x86_64-w64-mingw32-gcc UNAME=MINGW RUN=wine
+      - name: Test the project
+        run: make test UNAME=MINGW RUN=wine VERBOSE=1
+
+  test-arm-linux:
+    name: Build and test ARM32 cross compilation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout the repository
+        uses: actions/checkout@master
+      - name: Setup qemu and cross compiler
+        run: |
+          sudo apt-get update
+          sudo apt-get install gcc-arm-linux-gnueabi qemu-user
+      - name: Compile the project
+        run: make RUN="qemu-arm -L /usr/arm-linux-gnueabi/" CC=arm-linux-gnueabi-gcc LD=arm-linux-gnueabi-gcc
+      - name: Test the project
+        run: make RUN="qemu-arm -L /usr/arm-linux-gnueabi/" SUBRUN="qemu-arm -L /usr/arm-linux-gnueabi/" test VERBOSE=1
+
+  test-s390x-linux:
+    name: Build and test s390x in qemu
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout the repository
+      uses: actions/checkout@master
+    - name: Enable qemu
+      run: docker run --privileged --rm tonistiigi/binfmt --install s390x
+    - name: Build and run on emulated architecture
+      run: docker run --rm -v .:/janet --platform linux/s390x alpine sh -c "apk update && apk add --no-interactive git build-base && cd /janet && make -j3 && make test"
+
+  test-cosmo:
+    name: Test build for Cosmo
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout the repository
+        uses: actions/checkout@master
+      - name: create build folder
+        run: |
+          sudo mkdir -p /sc
+          sudo chmod -R 0777 /sc
+      - name: setup Cosmopolitan Libc
+        run: bash ./.github/cosmo/setup
+      - name: Set the version
+        run: echo "version=${GITHUB_REF/refs\/tags\//}" >> $GITHUB_ENV
+      - name: Set the platform
+        run: echo "platform=cosmo" >> $GITHUB_ENV
+      - name: build Janet APE binary
+        run: bash ./.github/cosmo/build

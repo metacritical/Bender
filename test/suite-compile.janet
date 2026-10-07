@@ -1,0 +1,207 @@
+# Copyright (c) 2026 Calvin Rose
+#
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to
+# deal in the Software without restriction, including without limitation the
+# rights to use, copy, modify, merge, publish, distribute, sublicense, and/or
+# sell copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in
+# all copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+# FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
+# IN THE SOFTWARE.
+
+(import ./helper :prefix "" :exit true)
+(start-suite)
+
+(setdyn *optimize* 1)
+
+# Regression Test
+# 0378ba78
+(assert (= 1 (((compile '(fn [] 1) @{})))) "regression test")
+
+# Fix a compiler bug in the do special form
+# 3e1e2585
+(defn myfun [x]
+  (var a 10)
+  (set a (do
+         (def _y x)
+         (if x 8 9))))
+
+(assert (= (myfun true) 8) "check do form regression")
+(assert (= (myfun false) 9) "check do form regression")
+
+# Check x:digits: works as symbol and not a hex number
+# 5baf70f4
+(def x1 100)
+(assert (= x1 100) "x1 as symbol")
+(def X1 100)
+(assert (= X1 100) "X1 as symbol")
+
+# Edge case should cause old compilers to fail due to
+# if statement optimization
+# 17283241
+(setdyn *lint-warn* :relaxed)
+(var var-a 1)
+(var var-b (if false 2 (string "hello")))
+(setdyn *lint-warn* nil)
+
+(assert (= var-b "hello") "regression 1")
+
+# d28925fda
+(assert (= (string '()) (string [])) "empty bracket tuple literal")
+
+# Bracket tuple issue
+# 340a6c4
+(let [do 3]
+  (assert (= [3 1 2 3] [do 1 2 3]) "bracket tuples are never special forms"))
+(assert (= ~(,defn 1 2 3) [defn 1 2 3]) "bracket tuples are never macros")
+(assert (= ~(,+ 1 2 3) [+ 1 2 3]) "bracket tuples are never function calls")
+
+# Crash issue #1174 - bad debug info
+# e97299f
+(defn crash []
+  (debug/stack (fiber/current)))
+(do
+  (math/random)
+  (defn foo [_]
+    (crash)
+    1)
+  (foo 0)
+  10)
+
+# Issue #1699 - fuzz case with bad def
+(def result
+  (compile '(defn sum3
+              "Solve the 3SUM problem in O(n^2) time."
+              [s]
+              (def)tab @{})))
+(assert (get result :error) "bad sum3 fuzz issue valgrind")
+
+# Issue #1700
+(def result1
+  (compile
+    '(defn fuzz-case-1
+      [start end &]
+      (if end
+        (if e start (lazy-range (+ 1 start) end)))
+      1)))
+(assert (get result1 :error) "fuzz case issue #1700")
+
+# Issue #1702 - fuzz case with upvalues
+(def result2
+  (compile
+  '(each item [1 2 3]
+    # Generate a lot of upvalues (more than 224)
+    (def ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;out-buf @"")
+    (with-dyns [:out out-buf] 1))))
+(assert result2 "bad upvalues fuzz case")
+
+# Named argument linting
+# Enhancement for #1654
+
+(defn fnamed [&named x y z] [x y z])
+(defn fkeys [&keys ks] ks)
+(defn fnamed2 [_a _b _c &named x y z] [x y z])
+(defn fkeys2 [_a _b _c &keys ks] ks)
+(defn fnamed3 [{:x x} &named a b c] [x a b c])
+(defn fnamed4 [_y &opt _z &named a b c] [a b c])
+(defn fnamed5 [&opt _z &named a b c] [a b c])
+(defn g [x &opt y &named z] [x y z])
+
+(defn check-good-compile
+  [code msg]
+  (each opt [0 1 2 3]
+    (setdyn *optimize* opt)
+    (def lints @[])
+    (def result4 (compile code (curenv) "suite-compile.janet" lints))
+    (assert (and (function? result4) (empty? lints)) (string msg " optimization " opt))))
+
+(defn check-bad-compile
+  [code msg]
+  (each opt [0 1 2 3]
+    (setdyn *optimize* opt)
+    (def lints @[])
+    (def result4 (compile code (curenv) "suite-compile.janet" lints))
+    (assert (not (and (function? result4) (empty? lints))) (string msg " optimization " opt))))
+
+(defn check-lint-compile
+  [code msg]
+  (each opt [0 1 2 3]
+    (setdyn *optimize* opt)
+    (def lints @[])
+    (def result4 (compile code (curenv) "suite-compile.janet" lints))
+    (assert (and (function? result4) (next lints)) (string msg " optimization " opt))))
+
+(check-good-compile '(fnamed) "named no args")
+(check-good-compile '(fnamed :x 1 :y 2 :z 3) "named full args")
+(check-lint-compile '(fnamed :x) "named odd args")
+(check-lint-compile '(fnamed :w 0) "named wrong key args")
+(check-good-compile '(fkeys :a 1) "keys even args")
+(check-lint-compile '(fkeys :a 1 :b) "keys odd args")
+(check-good-compile '(fnamed2 nil nil nil) "named 2 no args")
+(check-good-compile '(fnamed2 nil nil nil :x 1 :y 2 :z 3) "named 2 full args")
+(check-lint-compile '(fnamed2 nil nil nil :x) "named 2 odd args")
+(check-lint-compile '(fnamed2 nil nil nil :w 0) "named 2 wrong key args")
+(check-good-compile '(fkeys2 nil nil nil :a 1) "keys 2 even args")
+(check-lint-compile '(fkeys2 nil nil nil :a 1 :b) "keys 2 odd args")
+(check-good-compile '(fnamed3 {:x 1} :a 1 :b 2 :c 3) "named 3 good")
+(check-lint-compile '(fnamed3 {:x 1} :a 1 :b 2 :d 3) "named 3 lint")
+(check-good-compile '(fnamed4 10 20 :a 1 :b 2 :c 3) "named 4 good")
+(check-lint-compile '(fnamed4 10 20 :a 1 :b 2 :d 3) "named 4 lint")
+(check-good-compile '(fnamed5 10 :a 1 :b 2 :c 3) "named 5 good")
+(check-lint-compile '(fnamed5 10 :a 1 :b 2 :d 3) "named 5 lint")
+(check-good-compile '(g 1) "g good 1")
+(check-good-compile '(g 1 2) "g good 2")
+(check-good-compile '(g 1 2 :z 10) "g good 3")
+(check-lint-compile '(g 1 2 :z) "g lint 1")
+(check-lint-compile '(g 1 2 :z 4 5) "g lint 2")
+
+# Variable shadowing linting
+(def outer1 "a")
+(check-lint-compile '(def outer1 "b") "shadow global-to-global")
+(check-lint-compile '(let [outer1 "b"] outer1) "shadow local-to-global")
+(check-lint-compile '(do (def x "b") (def x "c")) "shadow local-to-local")
+
+(check-lint-compile '(def [xxx [xxx yyy]] [1 [2 3]]) "shadow global-to-global one form")
+
+# Fuzz issue - odd keys
+(defn f [x &keys ks] [x ks])
+(check-lint-compile
+  '(f 1
+      = = = = = = = = = =
+      = = = = = = = = = =
+      = = = = = = = = = =
+      = = = = = = = = = =
+      = = =)
+  "odd keys")
+
+# Test for any issues with valgrind/asan
+(setdyn *lint-warn* :relaxed)
+(assert-no-error
+  "odd keys runtime"
+    (f 1
+       = = = = = = = = = =
+       = = = = = = = = = =
+       = = = = = = = = = =
+       = = = = = = = = = =
+       = = =))
+(setdyn *lint-warn* nil)
+
+# Handle bad eachp
+(check-good-compile '(eachp () 5) "good compile eachp 1")
+(check-good-compile '(do (def [] [1]) nil) "def with empty tuple binding 1")
+(check-good-compile '(do (def x (def [] [1])) x) "def with empty tuple binding 2")
+
+# Optimization edge cases
+(check-lint-compile '|(when-with [_ nil] (print $200)) "dead code + upvalues 1")
+(check-lint-compile '|(when-with [_ nil] (print $255)) "dead code + upvalues 2")
+
+(end-suite)

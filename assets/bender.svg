@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200">
+  <defs>
+    <linearGradient id="steel" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#9aa3ab"/>
+      <stop offset="0.5" stop-color="#6e757c"/>
+      <stop offset="1" stop-color="#4a4f54"/>
+    </linearGradient>
+    <linearGradient id="visor" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#20242a"/>
+      <stop offset="1" stop-color="#0c0e11"/>
+    </linearGradient>
+  </defs>
+  <rect x="8" y="8" width="184" height="184" rx="28" fill="#14161c"/>
+  <!-- antenna -->
+  <line x1="100" y1="34" x2="100" y2="58" stroke="#9aa3ab" stroke-width="5" stroke-linecap="round"/>
+  <circle cx="100" cy="28" r="8" fill="#ffd23f"/>
+  <!-- head -->
+  <rect x="48" y="58" width="104" height="96" rx="20" fill="url(#steel)"/>
+  <!-- visor -->
+  <rect x="58" y="72" width="84" height="30" rx="12" fill="url(#visor)"/>
+  <circle cx="82" cy="87" r="8" fill="#7df9ff"/>
+  <circle cx="118" cy="87" r="8" fill="#7df9ff"/>
+  <circle cx="82" cy="87" r="3" fill="#0c0e11"/>
+  <circle cx="118" cy="87" r="3" fill="#0c0e11"/>
+  <!-- grill mouth -->
+  <g stroke="#2b2f34" stroke-width="4" stroke-linecap="round">
+    <line x1="72" y1="116" x2="72" y2="140"/>
+    <line x1="86" y1="116" x2="86" y2="140"/>
+    <line x1="100" y1="116" x2="100" y2="140"/>
+    <line x1="114" y1="116" x2="114" y2="140"/>
+    <line x1="128" y1="116" x2="128" y2="140"/>
+  </g>
+  <!-- neck -->
+  <rect x="86" y="154" width="28" height="14" fill="#4a4f54"/>
+</svg>

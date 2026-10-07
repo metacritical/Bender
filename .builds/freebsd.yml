@@ -1,0 +1,18 @@
+image: freebsd/14.x
+sources:
+- https://git.sr.ht/~bakpakin/janet
+packages:
+- gmake
+tasks:
+- build: |
+    cd janet
+    gmake
+    gmake test
+    sudo gmake install
+    sudo gmake uninstall
+- build-sanitizers: |
+    cd janet
+    CFLAGS="-g -O2 -fsanitize=address,undefined" gmake
+    gmake test
+    sudo gmake install
+    sudo gmake uninstall
