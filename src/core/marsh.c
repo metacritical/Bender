@@ -1120,6 +1120,9 @@ static const uint8_t *unmarshal_one_fiber(
 #ifdef JANET_EV
     fiber->sched_id = 0;
     fiber->supervisor_channel = NULL;
+    /* Interrupts do not cross VMs. */
+    fiber->interrupt_requested = 0;
+    fiber->interrupt_value = janet_wrap_nil();
     fiber->ev_state = NULL;
     fiber->ev_callback = NULL;
     fiber->ev_stream = NULL;

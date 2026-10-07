@@ -1055,6 +1055,13 @@ struct JanetFiber {
     JanetStream *ev_stream; /* which stream we are waiting on */
     void *ev_state; /* Extra data for ev callback state. On windows, first element must be OVERLAPPED. */
     void *supervisor_channel; /* Channel to push self to when complete */
+    /* M4b-1 cooperative interrupt: set by ev/interrupt, delivered as a
+     * forced YIELD at the next resume boundary in janet_continue_no_check
+     * — before a single instruction runs, so delivery can never land
+     * mid-instruction, inside pcall, or in C. A racing wakeup value is
+     * dropped (interrupt wins); interrupts do not cross VMs. */
+    int interrupt_requested;
+    Janet interrupt_value;
 #endif
 };
 

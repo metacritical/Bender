@@ -218,6 +218,8 @@ static void fiber_reset(JanetFiber *fiber) {
     fiber->ev_state = NULL;
     fiber->ev_stream = NULL;
     fiber->supervisor_channel = NULL;
+    fiber->interrupt_requested = 0;
+    fiber->interrupt_value = janet_wrap_nil();
 #endif
     janet_fiber_set_status(fiber, JANET_STATUS_NEW);
 }
@@ -301,6 +303,8 @@ JanetFiber *janet_fiber_reset(JanetFiber *fiber, JanetFunction *callee, int32_t 
     janet_fiber_frame(fiber)->flags |= JANET_STACKFRAME_ENTRANCE;
 #ifdef JANET_EV
     fiber->supervisor_channel = NULL;
+    fiber->interrupt_requested = 0;
+    fiber->interrupt_value = janet_wrap_nil();
 #endif
     return fiber;
 }

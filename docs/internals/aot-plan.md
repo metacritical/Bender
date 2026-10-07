@@ -479,7 +479,17 @@ can just yield; cross-thread request has no VM handle to target).
 Turning it into quanta means per-fiber pending state + the loop
 re-queueing interrupted tasks instead of unwinding + a request
 API + chaos proving — i.e. the scheduler redesign itself, which is
-the epic, not a slice. No dead-code API was added on top. As the
+the epic, not a slice. No dead-code API was added on top.
+M4b-1 SHIPPED 2026-10-06: per-fiber interrupt-pending state
+(`ev/interrupt fiber &opt payload`) delivered as a forced YIELD at
+the resume funnel (`janet_continue_no_check` head — before a single
+instruction, never inside pcall/try, never in C). Semantics pinned:
+interrupt wins over the continuation and over a racing wakeup (the
+in-flight take value is dropped); in-loop tasks park exactly like
+a bare yield (supervisor sees it; interrupt + cancel = cooperative
+kill); interrupts do not cross VMs (cleared on unmarshal); pending
+value GC-marked. REMAINS: quantum driver (re-queue instead of
+park), work-stealing queues, task migration, SIGURG injection. As the
 Phase 3 text above: work-stealing runqueues, SIGURG preemption at
 poll points, scheduler-aware parking. Prereq: everything above is
 schedulable on 1:N; M:N changes WHERE fibers run, not how they

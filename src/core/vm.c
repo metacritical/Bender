@@ -1689,6 +1689,22 @@ static JanetSignal janet_continue_no_check(JanetFiber *fiber, Janet in, Janet *o
     /* Clear last value */
     fiber->last_value = janet_wrap_nil();
 
+#ifdef JANET_EV
+    /* M4b-1 cooperative interrupt (see ev/interrupt): a pending
+     * request suspends here — before a single instruction runs — so
+     * delivery can never land mid-instruction, inside pcall, or in C.
+     * A racing wakeup value in `in` is dropped (interrupt wins). */
+    if (fiber->interrupt_requested) {
+        fiber->interrupt_requested = 0;
+        Janet iv = fiber->interrupt_value;
+        fiber->interrupt_value = janet_wrap_nil();
+        fiber->last_value = iv;
+        *out = iv;
+        janet_fiber_set_status(fiber, JANET_SIGNAL_YIELD);
+        return JANET_SIGNAL_YIELD;
+    }
+#endif
+
     /* Continue child fiber if it exists */
     if (fiber->child) {
         if (janet_vm.root_fiber == NULL) janet_vm.root_fiber = fiber;

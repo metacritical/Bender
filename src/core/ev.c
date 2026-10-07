@@ -4604,6 +4604,20 @@ JANET_CORE_FN(cfun_shared_materialize,
     return shared_decode(&c, 0);
 }
 
+JANET_CORE_FN(cfun_ev_interrupt,
+              "(ev/interrupt fiber &opt payload)",
+              "Request `fiber` (same VM) suspend with a yield of `payload` "
+              "(default nil) at its next resume boundary: before running "
+              "another instruction, never inside pcall, never in C. A "
+              "racing wakeup value is dropped (interrupt wins); interrupts "
+              "do not cross VMs (cleared on unmarshal). Returns `fiber`.") {
+    janet_arity(argc, 1, 2);
+    JanetFiber *fiber = janet_getfiber(argv, 0);
+    fiber->interrupt_requested = 1;
+    fiber->interrupt_value = (argc >= 2) ? argv[1] : janet_wrap_nil();
+    return argv[0];
+}
+
 JANET_CORE_FN(cfun_ev_give_supervisor,
               "(ev/give-supervisor tag & payload)",
               "Send a message to the current supervisor channel if there is one. The message will be a "
@@ -4985,6 +4999,7 @@ void janet_lib_ev(JanetTable *env) {
         JANET_CORE_REG("shared/get", cfun_shared_get),
         JANET_CORE_REG("shared/materialize", cfun_shared_materialize),
         JANET_CORE_REG("ev/give-supervisor", cfun_ev_give_supervisor),
+        JANET_CORE_REG("ev/interrupt", cfun_ev_interrupt),
         JANET_CORE_REG("ev/sleep", cfun_ev_sleep),
         JANET_CORE_REG("ev/deadline", cfun_ev_deadline),
         JANET_CORE_REG("ev/cancel", cfun_ev_cancel),

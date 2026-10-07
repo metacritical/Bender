@@ -328,6 +328,9 @@ recur:
      * resume could free them. */
     janet_mark(fiber->in_value);
     janet_mark(fiber->out_payload);
+#ifdef JANET_EV
+    janet_mark(fiber->interrupt_value);
+#endif
     /* Phase 1.1: the resumer link keeps a suspended fiber's resume party
      * alive across collections while swapped out. */
     if (fiber->resume_fiber) {
