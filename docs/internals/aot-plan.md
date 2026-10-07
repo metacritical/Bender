@@ -463,7 +463,23 @@ M one-shot tasks over N long-lived VMs on a shared queue, zero
 runtime code) deliver the cheap-restart half of M4's promise
 today. REMAINS (M4b, multi-session epic): the preemptive core —
 work-stealing runqueues, SIGURG preemption at poll points,
-scheduler-aware parking. As the
+scheduler-aware parking.
+M4b-i FINDING (recorded 2026-10-06, investigated in-tree): the
+poll-point half of preemption ALREADY EXISTS — `vm_maybe_auto_suspend`
+fires on backward jumps + calls (vm.c), suspending with the real
+`JANET_SIGNAL_INTERRUPT`, requested via `janet_interpreter_interrupt`
+(atomic, state.c), and the ev loop unwinds on it (ev.c: suspends the
+task, returns the fiber, and refuses to schedule further tasks while
+`auto_suspend` is nonzero). But it is a QUIESCE primitive by design
+(pause-the-world until `interrupt_handled`), not a quantum: the
+flag is VM-wide (no per-fiber targeting), setting it stops ALL
+further scheduling until cleared, and there is no Janet-level
+requester (self-request is pointless — a fiber that can run code
+can just yield; cross-thread request has no VM handle to target).
+Turning it into quanta means per-fiber pending state + the loop
+re-queueing interrupted tasks instead of unwinding + a request
+API + chaos proving — i.e. the scheduler redesign itself, which is
+the epic, not a slice. No dead-code API was added on top. As the
 Phase 3 text above: work-stealing runqueues, SIGURG preemption at
 poll points, scheduler-aware parking. Prereq: everything above is
 schedulable on 1:N; M:N changes WHERE fibers run, not how they
