@@ -864,3 +864,30 @@ optimizations, which must still be `same`.
   One folded cosmetic divergence: single-thunk images render one fewer
   ` (tail call)` frame note than per-form dobytes on error paths
   (identical bytecode; runtime frame-reuse artifact — Phase 1.1 closes it).
+
+## Post-M5 addendum — generational GC promotion barrier (fixed 2026-10-07)
+
+The M4b-1 layout shift exposed a latent minor-GC liveness bug in the
+ttfx workload (uncapped `--dump-frames` decrypt crashed at ~frame 461
+with garbage doubles read from swept slab slots; ASan: heap-use-after-free
+reading a freed array data buffer via a still-referenced JanetArray).
+
+Root cause: edges stored into a container while its slab page was YOUNG
+are never write-barriered (correctly — young pages are always traversed).
+When the page AGED to old, the minor-skip gate treated it as old+clean
+and pruned it, losing those unbarriered edges; young objects reachable
+only through them were swept while still referenced.
+
+Fix (gc.c): promotion barrier — the aging loop sets `dirty = 1` exactly
+once at the young→old transition, so the page's first minor as an old
+page traverses its pre-existing edges; stores made while old are covered
+by the regular `janet_gc_barrier`. Also closed the matching
+`JANET_GC_VERIFY` blind spot: old unmarked holders are not garbage
+(they float until the next major), so the verifier now walks their
+edges too instead of filtering on `JANET_MEM_REACHABLE`.
+
+Isolation evidence: minor→major forcing passed 3/3; never-skip-arrays
+passed 3/3; mark-neuter and interrupt-neuter still failed 3/3 (M4b-1's
+fields/checks exonerated — layout only shifted timing). Post-fix:
+uncapped CLI 5/5, ttfx decrypt+wipe byte-identical to live Ruby,
+43/43 suites, fibertest green, AOT oracle same ×6.

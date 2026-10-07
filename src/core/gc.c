@@ -1115,7 +1115,8 @@ static int janet_gc_verify_minor(void) {
              * garbage as a whole (its young referents are correctly
              * unmarked too). Disabled objects are always kept+traversed,
              * so their edges count as live. */
-            if (!(m->flags & (JANET_MEM_REACHABLE | JANET_MEM_DISABLED))) continue;
+            if (!(m->flags & (JANET_MEM_REACHABLE | JANET_MEM_DISABLED)) &&
+                    !janet_slab_obj_old(m)) continue;
             int32_t type = m->flags & JANET_MEM_TYPEBITS;
             if (type == JANET_MEMORY_TABLE || type == JANET_MEMORY_TABLE_WEAKK ||
                     type == JANET_MEMORY_TABLE_WEAKV || type == JANET_MEMORY_TABLE_WEAKKV) {
@@ -1212,7 +1213,17 @@ void janet_collect_minor(void) {
     if (NULL != ss) {
         for (int i = 0; i < JANET_SLAB_NCLASSES; i++) {
             for (JanetSlabPage *p = ss->pages[i]; NULL != p; p = p->next) {
-                if (p->age < JANET_SLAB_OLD_AGE) p->age++;
+                if (p->age < JANET_SLAB_OLD_AGE) {
+                    p->age++;
+                    /* Promotion barrier (Phase 2b-iii): edges stored while
+                     * the page was young were never write-barriered (young
+                     * pages are always traversed, so the barrier correctly
+                     * early-outs). Dirty the page exactly once at the
+                     * young->old transition so its first minor as an old
+                     * page traverses those edges; stores made while old are
+                     * covered by the regular janet_gc_barrier. */
+                    if (p->age == JANET_SLAB_OLD_AGE) p->dirty = 1;
+                }
             }
         }
         janet_vm.gc_young_bytes = 0;
