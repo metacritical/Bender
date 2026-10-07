@@ -807,7 +807,7 @@ JANET_CORE_FN(janet_core_sandbox,
               "* :exit - disallow calling `os/exit` or otherwise early exiting the process in trivial ways.\n"
               "* :ffi - disallow FFI (recommended if disabling anything else)\n"
               "* :ffi-define - disallow loading new FFI modules and binding new functions\n"
-              "* :ffi-jit - disallow calling `ffi/jitfn`\n"
+              "* :ffi-jit - disallow calling `unsafe/jitfn`\n"
               "* :ffi-use - disallow using any previously bound FFI functions and memory-unsafe functions.\n"
               "* :fs - disallow access to the file system\n"
               "* :fs-read - disallow read access to the file system\n"

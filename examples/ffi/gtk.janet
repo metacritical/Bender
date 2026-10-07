@@ -37,7 +37,7 @@
   gtk-button-set-label :void
   [a :ptr b :ptr])
 
-(def cb (delay (ffi/trampoline :default)))
+(def cb (delay (unsafe/trampoline :default)))
 
 (defn ffi/array
   ``Convert a janet array to a buffer that can be passed to FFI functions.

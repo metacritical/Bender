@@ -271,7 +271,7 @@ static size_t janet_ffijit_length(void *p, size_t s) {
 }
 
 const JanetAbstractType janet_type_ffijit = {
-    .name = "ffi/jitfn",
+    .name = "unsafe/jitfn",
     .gc = janet_ffijit_gc,
     .bytes = janet_ffijit_getbytes,
     .length = janet_ffijit_length
@@ -1740,7 +1740,7 @@ static Janet janet_ffi_aapcs64(JanetFFISignature *signature, void *function_poin
 #define FFI_PAGE_MASK 0xFFF
 
 JANET_CORE_FN(cfun_ffi_jitfn,
-              "(ffi/jitfn bytes)",
+              "(unsafe/jitfn bytes)",
               "Create an abstract type that can be used as the pointer argument to `ffi/call`. The content "
               "of `bytes` is architecture specific machine code that will be copied into executable memory.") {
     janet_sandbox_assert(JANET_SANDBOX_FFI_JIT);
@@ -1793,7 +1793,7 @@ JANET_CORE_FN(cfun_ffi_jitfn,
     fn->function_pointer = ptr;
     return janet_wrap_abstract(fn);
 #else
-    janet_panic("ffi/jitfn not available on this platform");
+    janet_panic("unsafe/jitfn not available on this platform");
 #endif
 }
 
@@ -1873,7 +1873,7 @@ JANET_CORE_FN(cfun_ffi_buffer_read,
 }
 
 JANET_CORE_FN(cfun_ffi_get_callback_trampoline,
-              "(ffi/trampoline cc)",
+              "(unsafe/trampoline cc)",
               "Get a native function pointer that can be used as a callback "
               "and passed to C libraries. This callback trampoline has the "
               "signature `void trampoline(void *ctx, void *userdata)` in "
@@ -1953,7 +1953,7 @@ JANET_CORE_FN(janet_core_native_close,
 }
 
 JANET_CORE_FN(cfun_ffi_malloc,
-              "(ffi/malloc size)",
+              "(unsafe/malloc size)",
               "Allocates memory directly using the janet memory allocator. Memory allocated in this way must be freed manually! Returns a raw pointer, or nil if size = 0.") {
     janet_sandbox_assert(JANET_SANDBOX_FFI_USE);
     janet_fixarity(argc, 1);
@@ -1963,9 +1963,9 @@ JANET_CORE_FN(cfun_ffi_malloc,
 }
 
 JANET_CORE_FN(cfun_ffi_free,
-              "(ffi/free ptr)",
+              "(unsafe/free ptr)",
               "Free memory reachable from `ptr` allocated with "
-              "`ffi/malloc`. Returns nil.") {
+              "`unsafe/malloc`. Returns nil.") {
     janet_sandbox_assert(JANET_SANDBOX_FFI_USE);
     janet_fixarity(argc, 1);
     if (janet_checktype(argv[0], JANET_NIL)) return janet_wrap_nil();
@@ -1981,7 +1981,7 @@ JANET_CORE_FN(cfun_ffi_free,
  * net. Documented in docs/internals/native-memory.md. */
 
 JANET_CORE_FN(cfun_ffi_ptr_add,
-              "(ffi/ptr-add ptr nbytes)",
+              "(unsafe/ptr-add ptr nbytes)",
               "Pointer arithmetic: return a new pointer `nbytes` (signed, "
               "may be negative) past `ptr`. No bounds checking is possible; "
               "out-of-range results are instant undefined behavior. "
@@ -1994,7 +1994,7 @@ JANET_CORE_FN(cfun_ffi_ptr_add,
 }
 
 JANET_CORE_FN(cfun_ffi_ptr_sub,
-              "(ffi/ptr-sub ptr nbytes)",
+              "(unsafe/ptr-sub ptr nbytes)",
               "Pointer arithmetic: return a new pointer `nbytes` (signed) "
               "before `ptr`. Same caveats as `ffi/ptr-add`. Returns a pointer.") {
     janet_sandbox_assert(JANET_SANDBOX_FFI_USE);
@@ -2005,7 +2005,7 @@ JANET_CORE_FN(cfun_ffi_ptr_sub,
 }
 
 JANET_CORE_FN(cfun_ffi_ptr_eq,
-              "(ffi/ptr-eq a b)",
+              "(unsafe/ptr-eq a b)",
               "Pointer identity: true when `a` and `b` (pointers or nil) "
               "are the same address. Nil compares equal to nil only.") {
     janet_sandbox_assert(JANET_SANDBOX_FFI_USE);
@@ -2016,7 +2016,7 @@ JANET_CORE_FN(cfun_ffi_ptr_eq,
 }
 
 JANET_CORE_FN(cfun_ffi_poke,
-              "(ffi/poke ffi-type ptr value &opt offset)",
+              "(unsafe/poke ffi-type ptr value &opt offset)",
               "Write `value` through raw pointer `ptr` (+ byte `offset`) "
               "as `ffi-type`. The inverse of `ffi/read` on pointers: no "
               "bounds checking, misaligned or wild writes corrupt memory. "
@@ -2031,7 +2031,7 @@ JANET_CORE_FN(cfun_ffi_poke,
 }
 
 JANET_CORE_FN(cfun_ffi_calloc,
-              "(ffi/calloc nitems size)",
+              "(unsafe/calloc nitems size)",
               "Allocate `nitems` * `size` zeroed bytes (C calloc). Must be "
               "released with `ffi/free`. Returns a raw pointer.") {
     janet_sandbox_assert(JANET_SANDBOX_FFI_USE);
@@ -2044,7 +2044,7 @@ JANET_CORE_FN(cfun_ffi_calloc,
 }
 
 JANET_CORE_FN(cfun_ffi_realloc,
-              "(ffi/realloc ptr size)",
+              "(unsafe/realloc ptr size)",
               "Resize a `ffi/malloc` (or `ffi/calloc`, `ffi/realloc`) "
               "block to `size` bytes, preserving contents. A nil `ptr` "
               "allocates fresh; the old pointer is invalid afterwards. "
@@ -2060,7 +2060,7 @@ JANET_CORE_FN(cfun_ffi_realloc,
 }
 
 JANET_CORE_FN(cfun_ffi_exec_alloc,
-              "(ffi/exec-alloc size)",
+              "(unsafe/exec-alloc size)",
               "Map at least `size` bytes of read/write (not yet executable) "
               "memory for hand-rolled JITs. Write machine code into it "
               "(e.g. via `ffi/poke` on a `ffi/pointer-buffer`), then flip it "
@@ -2089,7 +2089,7 @@ JANET_CORE_FN(cfun_ffi_exec_alloc,
 }
 
 JANET_CORE_FN(cfun_ffi_exec_protect,
-              "(ffi/exec-protect ptr size)",
+              "(unsafe/exec-protect ptr size)",
               "Flip a `ffi/exec-alloc` mapping (rounded up to whole pages "
               "like the allocator) to read/execute. Call only after all "
               "writes are done; writing afterwards faults. Returns nil.") {
@@ -2113,7 +2113,7 @@ JANET_CORE_FN(cfun_ffi_exec_protect,
 }
 
 JANET_CORE_FN(cfun_ffi_pointer_buffer,
-              "(ffi/pointer-buffer ptr capacity &opt n offset)",
+              "(unsafe/pointer-buffer ptr capacity &opt n offset)",
               "Create a buffer from a pointer `ptr`. The underlying memory "
               "of the buffer will not be reallocated or freed by the "
               "garbage collector, allowing unmanaged, mutable memory to be "
@@ -2133,7 +2133,7 @@ JANET_CORE_FN(cfun_ffi_pointer_buffer,
 }
 
 JANET_CORE_FN(cfun_ffi_pointer_cfunction,
-              "(ffi/pointer-cfunction ptr &opt name source line)",
+              "(unsafe/pointer-cfunction ptr &opt name source line)",
               "Create a C Function from a raw pointer `ptr`. Optionally "
               "give the cfunction a name and source location for stack "
               "traces and debugging.") {
@@ -2187,20 +2187,20 @@ void janet_lib_ffi(JanetTable *env) {
         JANET_CORE_REG("ffi/read", cfun_ffi_buffer_read),
         JANET_CORE_REG("ffi/size", cfun_ffi_size),
         JANET_CORE_REG("ffi/align", cfun_ffi_align),
-        JANET_CORE_REG("ffi/trampoline", cfun_ffi_get_callback_trampoline),
-        JANET_CORE_REG("ffi/jitfn", cfun_ffi_jitfn),
-        JANET_CORE_REG("ffi/malloc", cfun_ffi_malloc),
-        JANET_CORE_REG("ffi/free", cfun_ffi_free),
-        JANET_CORE_REG("ffi/calloc", cfun_ffi_calloc),
-        JANET_CORE_REG("ffi/realloc", cfun_ffi_realloc),
-        JANET_CORE_REG("ffi/ptr-add", cfun_ffi_ptr_add),
-        JANET_CORE_REG("ffi/ptr-sub", cfun_ffi_ptr_sub),
-        JANET_CORE_REG("ffi/ptr-eq", cfun_ffi_ptr_eq),
-        JANET_CORE_REG("ffi/poke", cfun_ffi_poke),
-        JANET_CORE_REG("ffi/exec-alloc", cfun_ffi_exec_alloc),
-        JANET_CORE_REG("ffi/exec-protect", cfun_ffi_exec_protect),
-        JANET_CORE_REG("ffi/pointer-buffer", cfun_ffi_pointer_buffer),
-        JANET_CORE_REG("ffi/pointer-cfunction", cfun_ffi_pointer_cfunction),
+        JANET_CORE_REG("unsafe/trampoline", cfun_ffi_get_callback_trampoline),
+        JANET_CORE_REG("unsafe/jitfn", cfun_ffi_jitfn),
+        JANET_CORE_REG("unsafe/malloc", cfun_ffi_malloc),
+        JANET_CORE_REG("unsafe/free", cfun_ffi_free),
+        JANET_CORE_REG("unsafe/calloc", cfun_ffi_calloc),
+        JANET_CORE_REG("unsafe/realloc", cfun_ffi_realloc),
+        JANET_CORE_REG("unsafe/ptr-add", cfun_ffi_ptr_add),
+        JANET_CORE_REG("unsafe/ptr-sub", cfun_ffi_ptr_sub),
+        JANET_CORE_REG("unsafe/ptr-eq", cfun_ffi_ptr_eq),
+        JANET_CORE_REG("unsafe/poke", cfun_ffi_poke),
+        JANET_CORE_REG("unsafe/exec-alloc", cfun_ffi_exec_alloc),
+        JANET_CORE_REG("unsafe/exec-protect", cfun_ffi_exec_protect),
+        JANET_CORE_REG("unsafe/pointer-buffer", cfun_ffi_pointer_buffer),
+        JANET_CORE_REG("unsafe/pointer-cfunction", cfun_ffi_pointer_cfunction),
         JANET_CORE_REG("ffi/calling-conventions", cfun_ffi_supported_calling_conventions),
         JANET_REG_END
     };
