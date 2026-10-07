@@ -1605,6 +1605,10 @@ JanetFiber *janet_loop1(void) {
         task.fiber->gc.flags &= ~(JANET_FIBER_EV_GCFLAG_CANCELED | JANET_FIBER_EV_GCFLAG_SUSPENDED);
         if (task.expected_sched_id != task.fiber->sched_id) continue;
         Janet res;
+        /* M4b-2 quantum driver: budget is granted per resume inside
+         * janet_continue_no_check (covers loop-scheduled and direct
+         * runs alike), so every run below starts full. Off = existing
+         * behavior exact. */
         JanetSignal sig = janet_continue_signal(task.fiber, task.value, &res, task.sig);
         if (!janet_fiber_can_resume(task.fiber)) {
             janet_table_remove(&janet_vm.active_tasks, janet_wrap_fiber(task.fiber));
@@ -1614,6 +1618,19 @@ JanetFiber *janet_loop1(void) {
         if (is_suspended) {
             task.fiber->gc.flags |= JANET_FIBER_EV_GCFLAG_SUSPENDED;
             janet_ev_inc_refcount();
+        }
+        if (sig == JANET_SIGNAL_INTERRUPT && janet_vm.quantum &&
+                !janet_atomic_load_relaxed(&janet_vm.auto_suspend)) {
+            /* Budget exhausted (not external quiesce — that leaves
+             * auto_suspend set): re-queue at the back with the original
+             * wake value/signal (transparent deferral — takes/sleeps
+             * already materialized before any poll could fire) and BREAK
+             * to event polling (not continue: a re-queued hog would
+             * otherwise starve timers/channel-polling forever — the
+             * spawn queue never drains). No supervisor event: nothing
+             * completed. Resume value ignored via RESUME_NO_USEVAL. */
+            janet_schedule_signal(task.fiber, task.value, task.sig);
+            break;
         }
         if (NULL == sv) {
             if (!is_suspended) {
@@ -1652,8 +1669,17 @@ JanetFiber *janet_loop1(void) {
             }
             break;
         }
-        /* Run polling implementation only if pending timeouts or pending events */
-        if (janet_vm.tq_count || janet_atomic_load(&janet_vm.listener_count)) {
+        /* Run polling implementation only if pending timeouts or pending events.
+         * M4b-2: under quanta with runnable tasks queued (and no external
+         * quiesce pending), never block here — a re-queued quantum would
+         * otherwise stall till the next deadline despite ready work.
+         * Expired timers above were already serviced without blocking,
+         * and the loop re-enters spawn immediately. Quantum off, or
+         * external quiesce active: identical to before. */
+        if ((janet_vm.tq_count || janet_atomic_load(&janet_vm.listener_count)) &&
+                !(janet_vm.quantum &&
+                  !janet_atomic_load_relaxed(&janet_vm.auto_suspend) &&
+                  janet_vm.spawn.head != janet_vm.spawn.tail)) {
             janet_loop1_impl(has_timeout, to.when);
         }
     }
@@ -4604,6 +4630,24 @@ JANET_CORE_FN(cfun_shared_materialize,
     return shared_decode(&c, 0);
 }
 
+JANET_CORE_FN(cfun_ev_timeslice,
+              "(ev/timeslice &opt on?)",
+              "Enable (truthy) or disable (false/nil) preemptive "
+              "round-robin quanta for the current VM, and return the new "
+              "setting. With quanta on, every scheduled task runs at most "
+              "JANET_QUANTUM_BUDGET back-edge/call polls before it is "
+              "transparently re-queued: compute hogs can no longer starve "
+              "sleepers and takers, with results bit-exact. Quanta never "
+              "land inside C calls or pcall regions (poll points are Janet "
+              "ops only). Incompatible with external C quiesce while on. "
+              "Per-VM; workers opt in independently.") {
+    janet_arity(argc, 0, 1);
+    if (argc >= 1) {
+        janet_vm.quantum = janet_truthy(argv[0]) ? 1 : 0;
+    }
+    return janet_wrap_boolean(janet_vm.quantum);
+}
+
 JANET_CORE_FN(cfun_ev_interrupt,
               "(ev/interrupt fiber &opt payload)",
               "Request `fiber` (same VM) suspend with a yield of `payload` "
@@ -5000,6 +5044,7 @@ void janet_lib_ev(JanetTable *env) {
         JANET_CORE_REG("shared/materialize", cfun_shared_materialize),
         JANET_CORE_REG("ev/give-supervisor", cfun_ev_give_supervisor),
         JANET_CORE_REG("ev/interrupt", cfun_ev_interrupt),
+        JANET_CORE_REG("ev/timeslice", cfun_ev_timeslice),
         JANET_CORE_REG("ev/sleep", cfun_ev_sleep),
         JANET_CORE_REG("ev/deadline", cfun_ev_deadline),
         JANET_CORE_REG("ev/cancel", cfun_ev_cancel),

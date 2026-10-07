@@ -105,6 +105,16 @@ struct JanetVM {
      * When this occurs, this flag will be reset to 0. */
     volatile JanetAtomicInt auto_suspend;
 
+    /* M4b-2 quantum driver: nonzero enables preemptive round-robin.
+     * Each scheduled task run gets QUANTUM_BUDGET back-edge/call polls;
+     * exhaustion suspends with INTERRUPT (transparent: NO_USEVAL /
+     * NO_SKIP make resume continue exactly). auto_suspend stays purely
+     * for external quiesce — a nonzero auto_suspend at delivery means
+     * quiesce (unwind), otherwise quantum (re-queue). Per-VM,
+     * default 0 (existing behavior exact). */
+    int32_t quantum;
+    int32_t quantum_remaining;
+
     /* The current running fiber on the current thread.
      * Set and unset by functions in vm.c */
     JanetFiber *fiber;
@@ -253,6 +263,11 @@ struct JanetVM {
 };
 
 extern JANET_THREAD_LOCAL JanetVM janet_vm;
+
+/* M4b-2 quantum driver: back-edge/call polls granted per task run.
+ * One poll ≈ one loop iteration or call; 200 keeps scheduling
+ * overhead near 1% while preempting hogs within microseconds. */
+#define JANET_QUANTUM_BUDGET 200
 
 #ifdef JANET_NET
 void janet_net_init(void);

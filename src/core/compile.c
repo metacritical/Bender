@@ -257,7 +257,13 @@ static int lookup_missing(
     fiberp->env = c->env;
     int lock = janet_gclock();
     Janet tempOut;
-    JanetSignal status = janet_continue(fiberp, janet_wrap_nil(), &tempOut);
+    JanetSignal status;
+    /* M4b-2: quantum-INTERRUPT is transparent here (compile must
+     * complete) — resume again. Quiesce still unwinds. */
+    do {
+        status = janet_continue(fiberp, janet_wrap_nil(), &tempOut);
+    } while (status == JANET_SIGNAL_INTERRUPT && janet_vm.quantum &&
+            !janet_atomic_load_relaxed(&janet_vm.auto_suspend));
     janet_gcunlock(lock);
     if (status != JANET_SIGNAL_OK) {
         janetc_error(c, janet_formatc("(lookup) %V", tempOut));
@@ -967,7 +973,13 @@ static int macroexpand1(
      * root fiber is already running, but host-driven compiles (no fiber)
      * would otherwise leave it exposed to collections mid-expansion. */
     janet_gcroot(janet_wrap_fiber(fiberp));
-    JanetSignal status = janet_continue(fiberp, janet_wrap_nil(), &tempOut);
+    JanetSignal status;
+    /* M4b-2: quantum-INTERRUPT is transparent here (compile must
+     * complete) — resume again. Quiesce still unwinds. */
+    do {
+        status = janet_continue(fiberp, janet_wrap_nil(), &tempOut);
+    } while (status == JANET_SIGNAL_INTERRUPT && janet_vm.quantum &&
+            !janet_atomic_load_relaxed(&janet_vm.auto_suspend));
     janet_gcunroot(janet_wrap_fiber(fiberp));
     janet_table_put(c->env, mf_kw, janet_wrap_nil());
     janet_table_put(c->env, ml_kw, janet_wrap_nil());

@@ -205,7 +205,13 @@ Janet janet_next_impl(Janet ds, Janet key, int is_interpreter) {
                 return janet_wrap_nil();
             }
             janet_vm.fiber->child = child;
-            JanetSignal sig = janet_continue(child, janet_wrap_nil(), &retreg);
+            JanetSignal sig;
+            /* M4b-2: quantum-INTERRUPT is transparent here (iteration
+             * must complete) — resume again. Quiesce still unwinds. */
+            do {
+                sig = janet_continue(child, janet_wrap_nil(), &retreg);
+            } while (sig == JANET_SIGNAL_INTERRUPT && janet_vm.quantum &&
+                    !janet_atomic_load_relaxed(&janet_vm.auto_suspend));
             if (sig != JANET_SIGNAL_OK && !(child->flags & (1 << sig))) {
                 if (is_interpreter) {
                     janet_signalv(sig, retreg);

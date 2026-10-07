@@ -53,7 +53,13 @@ int janet_dobytes(JanetTable *env, const uint8_t *bytes, int32_t len, const char
                 JanetFunction *f = janet_thunk(cres.funcdef);
                 fiber = janet_fiber(f, 64, 0, NULL);
                 fiber->env = env;
-                JanetSignal status = janet_continue(fiber, janet_wrap_nil(), &ret);
+                JanetSignal status;
+                /* M4b-2: quantum-INTERRUPT is transparent here (bare run
+                 * must complete) — resume again. Quiesce still unwinds. */
+                do {
+                    status = janet_continue(fiber, janet_wrap_nil(), &ret);
+                } while (status == JANET_SIGNAL_INTERRUPT && janet_vm.quantum &&
+                        !janet_atomic_load_relaxed(&janet_vm.auto_suspend));
                 if (status != JANET_SIGNAL_OK && status != JANET_SIGNAL_EVENT) {
                     janet_stacktrace_ext(fiber, ret, "");
                     errflags |= JANET_DO_ERROR_RUNTIME;

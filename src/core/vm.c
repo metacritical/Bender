@@ -116,7 +116,8 @@
 #define vm_maybe_auto_suspend(COND)
 #else
 #define vm_maybe_auto_suspend(COND) do { \
-    if ((COND) && janet_atomic_load_relaxed(&janet_vm.auto_suspend)) { \
+    if ((COND) && (janet_atomic_load_relaxed(&janet_vm.auto_suspend) || \
+            (janet_vm.quantum && --janet_vm.quantum_remaining <= 0))) { \
         fiber->flags |= (JANET_FIBER_RESUME_NO_USEVAL | JANET_FIBER_RESUME_NO_SKIP); \
         vm_return(JANET_SIGNAL_INTERRUPT, janet_wrap_nil()); \
     } \
@@ -1680,6 +1681,13 @@ void janet_fiber_trampoline(void) {
 
 static JanetSignal janet_continue_no_check(JanetFiber *fiber, Janet in, Janet *out) {
 
+    /* M4b-2 quantum driver: every resume — loop-scheduled or direct —
+     * starts with a fresh poll budget. UNCONDITIONAL (not gated on
+     * quantum): anyone may enable quanta mid-run, and a stale zero
+     * budget would suspend at the next poll with zero progress. One
+     * predictable store per resume. */
+    janet_vm.quantum_remaining = JANET_QUANTUM_BUDGET;
+
     JanetFiberStatus old_status = janet_fiber_status(fiber);
 
 #ifdef JANET_EV
@@ -1920,6 +1928,10 @@ int janet_init(void) {
 
     /* Auto suspension */
     janet_vm.auto_suspend = 0;
+
+    /* M4b-2 quantum driver: off unless ev/timeslice enables it. */
+    janet_vm.quantum = 0;
+    janet_vm.quantum_remaining = 0;
 
     /* Dynamic bindings */
     janet_vm.top_dyns = NULL;

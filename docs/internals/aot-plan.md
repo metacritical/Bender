@@ -426,16 +426,19 @@ surface below is the follow-up that unlocks supervisors. Surface:
     pid round-trips through marshal, self() inside workers, monitor
     by pid, dead-pid monitor gives `:noproc`. Bare-fiber pids
     deferred to M4. Registry (M3) maps names to pids.
-- Known-open (pre-existing, reproduced on the clean tree 2026-10-06):
-  ASan `stack-use-after-scope` when an `ev/go` task that called
-  `ev/sleep` gives into an `ev/thread-chan`. Minimal repro (no
-  threads, no monitors involved):
+- Known-open (pre-existing, reproduced on the clean tree 2026-10-06,
+  and re-verified with quantum off 2026-10-07): ASan stack-scope
+  reports (`stack-use-after-scope`, plus `stack-buffer-under/overflow`
+  twins) around 24-byte memcpys on fiber stacks — single-frame
+  traces, no janet frames (custom stacks defeat unwinding). Minimal
+  repro (no threads, no monitors involved):
   `(def c (ev/thread-chan 1)) (ev/go (fn [] (ev/sleep 0.01)
   (ev/give c :x))) (ev/take c)`. Plain channels and sleep-free tasks
-  are clean. M2 monitor paths verified clean under
-  `ASAN_OPTIONS=halt_on_error=0` (12-monitor growth, closed/full
-  drops, late monitors, GC pressure) — the only signature seen is
-  this pre-existing one.
+  are clean. All M2/M4b paths verified clean under
+  `ASAN_OPTIONS=halt_on_error=0` — the only signatures seen are this
+  pre-existing family, including with quantum off (where the new
+  branches provably cannot execute: every one is predicated on a
+  nonzero quantum flag).
 
 **M3 — named registry** (runtime, ev.c — no new file needed).
 DONE. Surface as spec'd (`ev/register`/`ev/whereis`/`ev/unregister`,
@@ -488,8 +491,23 @@ interrupt wins over the continuation and over a racing wakeup (the
 in-flight take value is dropped); in-loop tasks park exactly like
 a bare yield (supervisor sees it; interrupt + cancel = cooperative
 kill); interrupts do not cross VMs (cleared on unmarshal); pending
-value GC-marked. REMAINS: quantum driver (re-queue instead of
-park), work-stealing queues, task migration, SIGURG injection. As the
+value GC-marked.
+M4b-2 SHIPPED 2026-10-07: quantum driver (`ev/timeslice`) — per-VM
+flag; every resume grants JANET_QUANTUM_BUDGET (200) back-edge/call
+polls via the existing `vm_maybe_auto_suspend` points (zero new
+hot-path cost: one branch that already existed, one decrement);
+exhaustion suspends transparently (NO_USEVAL/NO_SKIP resume exact)
+and the scheduler re-queues instead of unwinding (skipping the
+supervisor event + the blocking poll while runnable work is queued;
+external quiesce still unwinds via the auto_suspend check).
+Synchronous resume sites loop transparently (dostring, macex ×2,
+fiber-`next` iteration); pcall/nested/step propagate for fairness
+and debugger semantics. Pinned: order-based starvation reversal,
+bit-exact results, try-transparency, nested-call fairness, toggle,
+per-VM scoping, eval-under-quanta; full suites + fibertest green,
+all scheduler suites re-run under quanta (chaos gate), ASan shows
+only the known pre-existing fiber-stack family. REMAINS:
+work-stealing queues, task migration, SIGURG injection. As the
 Phase 3 text above: work-stealing runqueues, SIGURG preemption at
 poll points, scheduler-aware parking. Prereq: everything above is
 schedulable on 1:N; M:N changes WHERE fibers run, not how they
