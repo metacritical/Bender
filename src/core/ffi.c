@@ -227,11 +227,18 @@ typedef struct {
     size_t size;
 } JanetFFIJittedFn;
 
+static void janet_ffi_struct_marshal(void *p, JanetMarshalContext *ctx);
+static void *janet_ffi_struct_unmarshal(JanetMarshalContext *ctx);
+
 static const JanetAbstractType janet_struct_type = {
     "core/ffi-struct",
     NULL,
     struct_mark,
-    JANET_ATEND_GCMARK
+    NULL, /* get */
+    NULL, /* put */
+    janet_ffi_struct_marshal,
+    janet_ffi_struct_unmarshal,
+    JANET_ATEND_TOSTRING
 };
 
 static int janet_ffijit_gc(void *p, size_t s) {
@@ -380,6 +387,86 @@ void janet_ffi_trampoline(void *ctx, void *userdata) {
     Janet context = janet_wrap_pointer(ctx);
     JanetFunction *fun = userdata;
     janet_call(fun, 1, &context);
+}
+
+/* Marshal support for ffi-struct abstracts. AOT images bake struct type
+ * constants (ffi/defbind signatures close over them); without this, any
+ * program using struct-typed FFI bindings fails image compilation.
+ * Encoding per struct: field count, align, size, is_aligned, then per
+ * field (prim, array_count, offset), recursing into nested struct
+ * descriptors. Layout values are restored verbatim (exact under :pack).
+ * GC safety: every fresh shell gets all prim fields initialized before
+ * any further allocation, so struct_mark never follows a garbage
+ * pointer even if a collection runs mid-reconstruction. */
+static void janet_ffi_struct_marshal_one(JanetMarshalContext *ctx, JanetFFIStruct *st) {
+    janet_marshal_int(ctx, (int32_t) st->field_count);
+    janet_marshal_int(ctx, (int32_t) st->align);
+    janet_marshal_int(ctx, (int32_t) st->size);
+    janet_marshal_int(ctx, (int32_t) st->is_aligned);
+    for (uint32_t i = 0; i < st->field_count; i++) {
+        JanetFFIType t = st->fields[i].type;
+        janet_marshal_int(ctx, (int32_t) t.prim);
+        janet_marshal_int(ctx, t.array_count);
+        janet_marshal_int(ctx, (int32_t) st->fields[i].offset);
+        if (t.prim == JANET_FFI_TYPE_STRUCT) {
+            janet_ffi_struct_marshal_one(ctx, t.st);
+        }
+    }
+}
+
+static void janet_ffi_struct_marshal(void *p, JanetMarshalContext *ctx) {
+    janet_marshal_abstract(ctx, p);
+    janet_ffi_struct_marshal_one(ctx, p);
+}
+
+static JanetFFIStruct *janet_ffi_struct_unmarshal_one(JanetMarshalContext *ctx, int is_top) {
+    uint32_t nfields = (uint32_t) janet_unmarshal_int(ctx);
+    uint32_t align = (uint32_t) janet_unmarshal_int(ctx);
+    uint32_t size = (uint32_t) janet_unmarshal_int(ctx);
+    uint32_t is_aligned = (uint32_t) janet_unmarshal_int(ctx);
+    size_t memsize = sizeof(JanetFFIStruct) + nfields * sizeof(JanetFFIStructMember);
+    JanetFFIStruct *st;
+    Janet root = janet_wrap_nil();
+    if (is_top) {
+        /* Consumes the context's single abstract slot and registers
+         * identity for the (acyclic) descriptor graph. */
+        st = janet_unmarshal_abstract(ctx, memsize);
+    } else {
+        /* Nested descriptors bypass the single-use slot (equality, not
+         * identity, is what matters for immutable descriptors); root
+         * explicitly until attached to the parent. */
+        st = janet_abstract(&janet_struct_type, memsize);
+        root = janet_wrap_abstract(st);
+        janet_gcroot(root);
+    }
+    for (uint32_t i = 0; i < nfields; i++) {
+        st->fields[i].type.prim = JANET_FFI_TYPE_VOID;
+        st->fields[i].type.array_count = -1;
+        st->fields[i].type.st = NULL;
+        st->fields[i].offset = 0;
+    }
+    st->field_count = nfields;
+    st->align = align;
+    st->size = size;
+    st->is_aligned = is_aligned;
+    for (uint32_t i = 0; i < nfields; i++) {
+        JanetFFIType t;
+        t.prim = (JanetFFIPrimType) janet_unmarshal_int(ctx);
+        t.array_count = janet_unmarshal_int(ctx);
+        st->fields[i].offset = (size_t) janet_unmarshal_int(ctx);
+        if (t.prim == JANET_FFI_TYPE_STRUCT) {
+            t.st = janet_ffi_struct_unmarshal_one(ctx, 0);
+        } else {
+            t.st = NULL;
+        }
+        st->fields[i].type = t;
+    }
+    if (!is_top) janet_gcunroot(root);
+    return st;
+}
+
+static void *janet_ffi_struct_unmarshal(JanetMarshalContext *ctx) {
+    return janet_ffi_struct_unmarshal_one(ctx, 1);
 }
 
 static JanetFFIType decode_ffi_type(Janet x);
@@ -1972,6 +2059,9 @@ void janet_lib_ffi(JanetTable *env) {
         JANET_REG_END
     };
     janet_core_cfuns_ext(env, NULL, ffi_cfuns);
+    /* Registered so ffi-struct descriptors resolve by name when
+     * unmarshalling (AOT images, message passing). */
+    janet_register_abstract_type(&janet_struct_type);
 }
 
 #endif
