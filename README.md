@@ -1,15 +1,17 @@
 <pre>
-            ___
-           |___|   <-- antenna (it picks up alien channels)
-         _________
-        |  o   o  |  <-- visor eyes (they see your types)
-        |  _____  |
-        | |_|_|_| |  <-- grill mouth (it eats slow code)
-         \_______/
-           |   |
-          _|   |_
-         |___ ___|
-             Bender says: BITE MY SHINY METAL COMPILER
+        O
+        |
+      ,'~'.
+     /     \
+    |   ____|_
+    |  '___,,_'    .----------------------------.
+    |  ||(o |o)|  ( BYTE MY SHINY METAL COMPILER! )
+    |   -------   ,-----------------------------'
+    |  ______|  -'
+    \  '####| "
+     --------`
+ Bender Bending Rodriguez.
+ (banner adapted from src/banner.cr of the original Bender attempt)
 </pre>
 
 # Bender
