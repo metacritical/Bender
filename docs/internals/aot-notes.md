@@ -188,3 +188,24 @@ Step 13's DCE is the reachability already in the pipeline
 mechanism. `test/suite-callgraph.janet` (105 pins) locks all of
 the above: exact C text, parity runs, alias canonicalization,
 fail-closed reasons, policy modes, DCE absence.
+
+## 10. FFI struct fixes that AOT GUI work required (2026-10-07)
+
+- **AAPCS64 HFAs** (`src/core/ffi.c`): all-float struct args take one
+  FP register per element (was: one packed register, x86-64 SysV
+  behavior); HFA returns parsed element-wise from the FP return slots.
+  Without this, any float-composite argument silently mis-marshalled
+  (raylib `DrawTextEx`/`MeasureTextEx` drew nothing). Pins:
+  `v2/v3/v4` add, HFA return, mixed int/string/HFA/float signature in
+  `examples/ffi` (fail on unfixed core, pass on fixed); `DrawTextEx`
+  renders byte-identically to pure C.
+- **ffi-struct marshalling**: `core/ffi-struct` descriptors now
+  marshal (field count/align/size/is-aligned + per-field
+  prim/array-count/offset, nested recursion; layout restored verbatim,
+  GC-safe reconstruction). Without this, any program using
+  struct-typed `ffi/defbind` fails image compilation. Enables the GUI
+  `--native` binary. Type registered for unmarshal lookup.
+- **Multi-module AOT** (`tools/`): script-dir syspath, scoped
+  `:current-file`, import pre-execution mirroring loader ordering,
+  import-form stripping from images, `(dyn :args)` install in the
+  harness, extern-decl hoisting for `--native`.
