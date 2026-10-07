@@ -443,6 +443,50 @@ JANET_CORE_FN(cfun_debug_step,
     return out;
 }
 
+/* PGO type-profile collector controls (see profile collection in
+ * vm.c). JANET_PROFILE=1 in the environment auto-starts collection for
+ * script runs (see cli-main in boot.janet); dump with an explicit path. */
+JANET_CORE_FN(cfun_debug_profile_start,
+              "(debug/profile-start)",
+              "Start the VM type-profile collector (PGO phase 1). Records "
+              "observed parameter and return types per function while "
+              "active. Returns nil.") {
+    janet_fixarity(argc, 0);
+    (void) argv;
+    janet_profile_start();
+    return janet_wrap_nil();
+}
+
+JANET_CORE_FN(cfun_debug_profile_stop,
+              "(debug/profile-stop)",
+              "Stop collection, keeping the data. Returns the profile "
+              "table (nil if never started).") {
+    janet_fixarity(argc, 0);
+    (void) argv;
+    return janet_profile_stop();
+}
+
+JANET_CORE_FN(cfun_debug_profile_reset,
+              "(debug/profile-reset)",
+              "Clear collected data (keeps recording if active). Returns nil.") {
+    janet_fixarity(argc, 0);
+    (void) argv;
+    janet_profile_reset();
+    return janet_wrap_nil();
+}
+
+JANET_CORE_FN(cfun_debug_profile_dump,
+              "(debug/profile-dump path)",
+              "Write the collected type profile to `path` as Janet data: "
+              "an array of [[source line name] {:calls n :params [...] "
+              ":rets [...]}] rows with observed types as keywords. "
+              "Panics if profiling was never started. Returns nil.") {
+    janet_fixarity(argc, 1);
+    const char *path = janet_getcstring(argv, 0);
+    janet_profile_dump(path);
+    return janet_wrap_nil();
+}
+
 /* Module entry point */
 void janet_lib_debug(JanetTable *env) {
     JanetRegExt debug_cfuns[] = {
@@ -455,6 +499,10 @@ void janet_lib_debug(JanetTable *env) {
         JANET_CORE_REG("debug/stacktrace", cfun_debug_stacktrace),
         JANET_CORE_REG("debug/lineage", cfun_debug_lineage),
         JANET_CORE_REG("debug/step", cfun_debug_step),
+        JANET_CORE_REG("debug/profile-start", cfun_debug_profile_start),
+        JANET_CORE_REG("debug/profile-stop", cfun_debug_profile_stop),
+        JANET_CORE_REG("debug/profile-reset", cfun_debug_profile_reset),
+        JANET_CORE_REG("debug/profile-dump", cfun_debug_profile_dump),
         JANET_REG_END
     };
     janet_core_cfuns_ext(env, NULL, debug_cfuns);

@@ -5275,7 +5275,14 @@
             (if compile-only
               (flycheck arg :exit exit-on-error :env env)
               (do
+                # PGO type-profile collector (Phase 1): JANET_PROFILE=1
+                # records observed types for the whole run; dump with
+                # JANET_PROFILE_OUT=path (or debug/profile-dump).
+                (when (getenv-alias "JANET_PROFILE")
+                  (debug/profile-start))
                 (dofile arg :exit exit-on-error :env env)
+                (when-let [pout (getenv-alias "JANET_PROFILE_OUT")]
+                  (debug/profile-dump pout))
                 (run-main env subargs)))))
         (set i lenargs))))
 

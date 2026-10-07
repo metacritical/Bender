@@ -157,6 +157,12 @@ struct JanetVM {
     uint32_t cache_deleted;
     uint8_t gensym_counter[8];
 
+    /* PGO type-profile collector (Phase 1): when profile_table is
+     * non-NULL, the VM records observed param/return types per function
+     * (collector lives in vm.c). The table is marked as a root while
+     * active. */
+    JanetTable *profile_table;
+
     /* Garbage collection */
     void *blocks;
     void *weak_blocks;
@@ -263,6 +269,12 @@ struct JanetVM {
 };
 
 extern JANET_THREAD_LOCAL JanetVM janet_vm;
+
+/* PGO type-profile collector (implemented in vm.c). */
+void janet_profile_start(void);
+Janet janet_profile_stop(void);
+void janet_profile_reset(void);
+void janet_profile_dump(const char *path);
 
 /* M4b-2 quantum driver: back-edge/call polls granted per task run.
  * One poll ≈ one loop iteration or call; 200 keeps scheduling

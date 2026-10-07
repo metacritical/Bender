@@ -55,6 +55,34 @@
 (compwhen has-ffi
   (assert-error "bad struct issue #1512" (ffi/struct :void)))
 
+# native memory primitives: pointer arithmetic, typed poke, calloc,
+# realloc, executable pages (allocation + protection only -- executing
+# hand-written machine code is arch-specific, see docs).
+(compwhen has-full-ffi
+  (def nm-p (ffi/malloc 64))
+  (assert (ffi/ptr-eq nm-p nm-p) "ptr-eq self")
+  (assert (not (ffi/ptr-eq nm-p nil)) "ptr-eq nil")
+  (def nm-q (ffi/ptr-add nm-p 16))
+  (assert (ffi/ptr-eq (ffi/ptr-sub nm-q 16) nm-p) "ptr add/sub round-trip")
+  (assert (ffi/ptr-eq (ffi/ptr-add nm-p -8) (ffi/ptr-sub nm-p 8)) "signed offsets")
+  (ffi/poke :int nm-p 0x12345678)
+  (ffi/poke :double nm-p 2.5 8)
+  (assert (= 0x12345678 (ffi/read :int nm-p)) "poke/peek int")
+  (assert (= 2.5 (ffi/read :double nm-p 8)) "poke/peek double+offset")
+  (assert (= 0x12345678 (ffi/read :int (ffi/ptr-add nm-q -16))) "peek via derived ptr")
+  (ffi/free nm-p)
+  (def nm-c (ffi/calloc 4 8))
+  (each i (range 4) (assert (= 0 (ffi/read :int nm-c (* i 8))) "calloc zeroed"))
+  (ffi/poke :int nm-c 99)
+  (def nm-c2 (ffi/realloc nm-c 64))
+  (assert (= 99 (ffi/read :int nm-c2)) "realloc preserves")
+  (ffi/poke :int nm-c2 77 60)
+  (assert (= 77 (ffi/read :int nm-c2 60)) "realloc extended")
+  (ffi/free nm-c2)
+  (def nm-x (ffi/exec-alloc 4096))
+  (assert (not (ffi/ptr-eq nm-x nil)) "exec-alloc")
+  (assert (nil? (ffi/exec-protect nm-x 100)) "exec-protect"))
+
 (compwhen has-ffi
   (def buf @"")
   (ffi/write :u8 10 buf)

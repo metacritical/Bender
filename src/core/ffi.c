@@ -1974,6 +1974,144 @@ JANET_CORE_FN(cfun_ffi_free,
     return janet_wrap_nil();
 }
 
+/* High-risk native memory primitives (PGO companion work): pointer
+ * arithmetic, typed peek/poke through raw pointers, calloc/realloc, and
+ * explicit executable-page control for hand-rolled JITs. These are
+ * deliberately low-level -- wrong use corrupts memory with no safety
+ * net. Documented in docs/internals/native-memory.md. */
+
+JANET_CORE_FN(cfun_ffi_ptr_add,
+              "(ffi/ptr-add ptr nbytes)",
+              "Pointer arithmetic: return a new pointer `nbytes` (signed, "
+              "may be negative) past `ptr`. No bounds checking is possible; "
+              "out-of-range results are instant undefined behavior. "
+              "Returns a pointer.") {
+    janet_sandbox_assert(JANET_SANDBOX_FFI_USE);
+    janet_arity(argc, 2, 2);
+    uint8_t *pointer = janet_getpointer(argv, 0);
+    int64_t off = janet_getinteger64(argv, 1);
+    return janet_wrap_pointer(pointer + off);
+}
+
+JANET_CORE_FN(cfun_ffi_ptr_sub,
+              "(ffi/ptr-sub ptr nbytes)",
+              "Pointer arithmetic: return a new pointer `nbytes` (signed) "
+              "before `ptr`. Same caveats as `ffi/ptr-add`. Returns a pointer.") {
+    janet_sandbox_assert(JANET_SANDBOX_FFI_USE);
+    janet_arity(argc, 2, 2);
+    uint8_t *pointer = janet_getpointer(argv, 0);
+    int64_t off = janet_getinteger64(argv, 1);
+    return janet_wrap_pointer(pointer - off);
+}
+
+JANET_CORE_FN(cfun_ffi_ptr_eq,
+              "(ffi/ptr-eq a b)",
+              "Pointer identity: true when `a` and `b` (pointers or nil) "
+              "are the same address. Nil compares equal to nil only.") {
+    janet_sandbox_assert(JANET_SANDBOX_FFI_USE);
+    janet_arity(argc, 2, 2);
+    void *a = janet_checktype(argv[0], JANET_NIL) ? NULL : janet_getpointer(argv, 0);
+    void *b = janet_checktype(argv[1], JANET_NIL) ? NULL : janet_getpointer(argv, 1);
+    return janet_wrap_boolean(a == b);
+}
+
+JANET_CORE_FN(cfun_ffi_poke,
+              "(ffi/poke ffi-type ptr value &opt offset)",
+              "Write `value` through raw pointer `ptr` (+ byte `offset`) "
+              "as `ffi-type`. The inverse of `ffi/read` on pointers: no "
+              "bounds checking, misaligned or wild writes corrupt memory. "
+              "Returns nil.") {
+    janet_sandbox_assert(JANET_SANDBOX_FFI_USE);
+    janet_arity(argc, 3, 4);
+    JanetFFIType type = decode_ffi_type(argv[0]);
+    uint8_t *ptr = janet_getpointer(argv, 1);
+    size_t offset = (size_t) janet_optnat(argv, argc, 3, 0);
+    janet_ffi_write_one((char *) ptr + offset, argv, 2, type, JANET_FFI_MAX_RECUR);
+    return janet_wrap_nil();
+}
+
+JANET_CORE_FN(cfun_ffi_calloc,
+              "(ffi/calloc nitems size)",
+              "Allocate `nitems` * `size` zeroed bytes (C calloc). Must be "
+              "released with `ffi/free`. Returns a raw pointer.") {
+    janet_sandbox_assert(JANET_SANDBOX_FFI_USE);
+    janet_arity(argc, 2, 2);
+    size_t nitems = janet_getsize(argv, 0);
+    size_t size = janet_getsize(argv, 1);
+    void *p = janet_calloc(nitems, size);
+    if (NULL == p && nitems != 0 && size != 0) JANET_OUT_OF_MEMORY;
+    return janet_wrap_pointer(p);
+}
+
+JANET_CORE_FN(cfun_ffi_realloc,
+              "(ffi/realloc ptr size)",
+              "Resize a `ffi/malloc` (or `ffi/calloc`, `ffi/realloc`) "
+              "block to `size` bytes, preserving contents. A nil `ptr` "
+              "allocates fresh; the old pointer is invalid afterwards. "
+              "Release with `ffi/free`. Returns the (possibly moved) pointer.") {
+    janet_sandbox_assert(JANET_SANDBOX_FFI_USE);
+    janet_arity(argc, 2, 2);
+    void *pointer = janet_checktype(argv[0], JANET_NIL)
+        ? NULL : janet_getpointer(argv, 0);
+    size_t size = janet_getsize(argv, 1);
+    void *p = janet_realloc(pointer, size);
+    if (NULL == p && size != 0) JANET_OUT_OF_MEMORY;
+    return janet_wrap_pointer(p);
+}
+
+JANET_CORE_FN(cfun_ffi_exec_alloc,
+              "(ffi/exec-alloc size)",
+              "Map at least `size` bytes of read/write (not yet executable) "
+              "memory for hand-rolled JITs. Write machine code into it "
+              "(e.g. via `ffi/poke` on a `ffi/pointer-buffer`), then flip it "
+              "executable with `ffi/exec-protect` and call it through "
+              "`ffi/call` or `ffi/pointer-cfunction`. There is no free: "
+              "mappings live until process exit. Returns a raw pointer.") {
+    janet_sandbox_assert(JANET_SANDBOX_FFI_JIT);
+    janet_fixarity(argc, 1);
+    size_t size = janet_getsize(argv, 0);
+    size_t alloc_size = (size + FFI_PAGE_MASK) & ~FFI_PAGE_MASK;
+    if (alloc_size == 0) alloc_size = FFI_PAGE_MASK + 1;
+#ifdef JANET_WINDOWS
+    void *ptr = VirtualAlloc(NULL, alloc_size, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+    if (NULL == ptr) janet_panic("failed to allocate writable memory");
+#else
+#ifdef MAP_ANONYMOUS
+    void *ptr = mmap(0, alloc_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+#elif defined(MAP_ANON)
+    void *ptr = mmap(0, alloc_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
+#else
+    void *ptr = mmap(0, alloc_size, PROT_READ | PROT_WRITE, MAP_PRIVATE, -1, 0);
+#endif
+    if (ptr == MAP_FAILED) janet_panic("failed to memory map writable memory");
+#endif
+    return janet_wrap_pointer(ptr);
+}
+
+JANET_CORE_FN(cfun_ffi_exec_protect,
+              "(ffi/exec-protect ptr size)",
+              "Flip a `ffi/exec-alloc` mapping (rounded up to whole pages "
+              "like the allocator) to read/execute. Call only after all "
+              "writes are done; writing afterwards faults. Returns nil.") {
+    janet_sandbox_assert(JANET_SANDBOX_FFI_JIT);
+    janet_arity(argc, 2, 2);
+    void *ptr = janet_getpointer(argv, 0);
+    size_t size = janet_getsize(argv, 1);
+    size_t alloc_size = (size + FFI_PAGE_MASK) & ~FFI_PAGE_MASK;
+    if (alloc_size == 0) alloc_size = FFI_PAGE_MASK + 1;
+#ifdef JANET_WINDOWS
+    {
+        DWORD old = 0;
+        if (!VirtualProtect(ptr, alloc_size, PAGE_EXECUTE_READ, &old))
+            janet_panic("failed to make mapped memory executable");
+    }
+#else
+    if (mprotect(ptr, alloc_size, PROT_READ | PROT_EXEC) == -1)
+        janet_panic("failed to make mapped memory executable");
+#endif
+    return janet_wrap_nil();
+}
+
 JANET_CORE_FN(cfun_ffi_pointer_buffer,
               "(ffi/pointer-buffer ptr capacity &opt n offset)",
               "Create a buffer from a pointer `ptr`. The underlying memory "
@@ -2053,6 +2191,14 @@ void janet_lib_ffi(JanetTable *env) {
         JANET_CORE_REG("ffi/jitfn", cfun_ffi_jitfn),
         JANET_CORE_REG("ffi/malloc", cfun_ffi_malloc),
         JANET_CORE_REG("ffi/free", cfun_ffi_free),
+        JANET_CORE_REG("ffi/calloc", cfun_ffi_calloc),
+        JANET_CORE_REG("ffi/realloc", cfun_ffi_realloc),
+        JANET_CORE_REG("ffi/ptr-add", cfun_ffi_ptr_add),
+        JANET_CORE_REG("ffi/ptr-sub", cfun_ffi_ptr_sub),
+        JANET_CORE_REG("ffi/ptr-eq", cfun_ffi_ptr_eq),
+        JANET_CORE_REG("ffi/poke", cfun_ffi_poke),
+        JANET_CORE_REG("ffi/exec-alloc", cfun_ffi_exec_alloc),
+        JANET_CORE_REG("ffi/exec-protect", cfun_ffi_exec_protect),
         JANET_CORE_REG("ffi/pointer-buffer", cfun_ffi_pointer_buffer),
         JANET_CORE_REG("ffi/pointer-cfunction", cfun_ffi_pointer_cfunction),
         JANET_CORE_REG("ffi/calling-conventions", cfun_ffi_supported_calling_conventions),

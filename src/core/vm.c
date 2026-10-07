@@ -352,6 +352,162 @@ static JanetSignal janet_check_can_resume(JanetFiber *fiber, Janet *out, int is_
 static JanetSignal janet_continue_no_check(JanetFiber *fiber, Janet in, Janet *out);
 static void janet_suspend_swap(JanetFiber *fiber, JanetSignal sig, Janet payload);
 
+/* PGO type-profile collector (Phase 1). Records observed param/return
+ * types per function while janet_vm.profile_table is non-NULL. Keyed by
+ * JanetFuncDef* identity; each entry holds a strong function reference so
+ * profiled defs survive. Masks are uint32 bit sets over JanetType (16
+ * types fit). Zero cost when off: callers guard on the NULL table. */
+#define JANET_PROFILE_MAXPARAMS 8
+
+static JanetTable *janet_profile_entry(JanetFunction *func) {
+    JanetTable *pt = janet_vm.profile_table;
+    Janet key = janet_wrap_pointer(func->def);
+    Janet v = janet_table_get(pt, key);
+    if (janet_checktype(v, JANET_NIL)) {
+        int i;
+        JanetTable *e = janet_table(4);
+        JanetArray *pa;
+        Janet eroot;
+        /* Root until inserted: table_put can trigger a collection that
+         * would otherwise sweep the still-floating entry. */
+        eroot = janet_wrap_table(e);
+        janet_gcroot(eroot);
+        pa = janet_array(JANET_PROFILE_MAXPARAMS);
+        janet_gcroot(janet_wrap_array(pa));
+        janet_table_put(e, janet_ckeywordv("func"), janet_wrap_function(func));
+        janet_table_put(e, janet_ckeywordv("calls"), janet_wrap_integer(0));
+        for (i = 0; i < JANET_PROFILE_MAXPARAMS; i++)
+            janet_array_push(pa, janet_wrap_integer(0));
+        janet_table_put(e, janet_ckeywordv("params"), janet_wrap_array(pa));
+        janet_table_put(e, janet_ckeywordv("rets"), janet_wrap_integer(0));
+        janet_table_put(pt, key, janet_wrap_table(e));
+        janet_gcunroot(janet_wrap_array(pa));
+        janet_gcunroot(eroot);
+        return e;
+    }
+    return janet_unwrap_table(v);
+}
+
+static void janet_profile_call(JanetFunction *func, const Janet *argv, int32_t argc) {
+    int32_t n, i;
+    JanetTable *e = janet_profile_entry(func);
+    int64_t calls = janet_unwrap_integer(janet_table_get(e, janet_ckeywordv("calls")));
+    JanetArray *pa;
+    janet_table_put(e, janet_ckeywordv("calls"), janet_wrap_integer(calls + 1));
+    pa = janet_unwrap_array(janet_table_get(e, janet_ckeywordv("params")));
+    n = argc < JANET_PROFILE_MAXPARAMS ? argc : JANET_PROFILE_MAXPARAMS;
+    for (i = 0; i < n; i++) {
+        uint32_t m = (uint32_t) janet_unwrap_integer(pa->data[i]);
+        m |= (1u << (uint32_t) janet_type(argv[i]));
+        pa->data[i] = janet_wrap_integer((int64_t) m);
+    }
+}
+
+static void janet_profile_return(JanetFunction *func, Janet retval) {
+    JanetTable *e = janet_profile_entry(func);
+    uint32_t m = (uint32_t) janet_unwrap_integer(janet_table_get(e, janet_ckeywordv("rets")));
+    m |= (1u << (uint32_t) janet_type(retval));
+    janet_table_put(e, janet_ckeywordv("rets"), janet_wrap_integer((int64_t) m));
+}
+
+void janet_profile_start(void) {
+    janet_vm.profile_table = janet_table(0);
+}
+
+Janet janet_profile_stop(void) {
+    JanetTable *pt = janet_vm.profile_table;
+    janet_vm.profile_table = NULL;
+    return NULL == pt ? janet_wrap_nil() : janet_wrap_table(pt);
+}
+
+void janet_profile_reset(void) {
+    if (NULL != janet_vm.profile_table) {
+        janet_vm.profile_table = janet_table(0);
+    }
+}
+
+/* Serialize the profile as Janet data: @[[source line name]
+ * {:calls n :params [[:number :string] ...] :rets [...]}], with one
+ * entry per observed function. Type sets decode to keyword lists. */
+static Janet janet_profile_mask_types(uint32_t m) {
+    JanetArray *a = janet_array(4);
+    int t;
+    for (t = 0; t < 16; t++) {
+        if (m & (1u << (uint32_t) t)) {
+            janet_array_push(a, janet_ckeywordv(janet_type_names[t]));
+        }
+    }
+    return janet_wrap_array(a);
+}
+
+void janet_profile_dump(const char *path) {
+    JanetTable *pt = janet_vm.profile_table;
+    JanetArray *out;
+    JanetBuffer *buf;
+    FILE *f;
+    if (NULL == pt) janet_panic("profiling not active");
+    out = janet_array(0);
+    janet_gcroot(janet_wrap_array(out));
+    {
+        const JanetKV *kvs;
+        int32_t cap, count, i;
+        janet_dictionary_view(janet_wrap_table(pt), &kvs, &count, &cap);
+        for (i = 0; i < cap; i++) {
+            const JanetKV *kv = kvs + i;
+            JanetTable *e;
+            JanetFunction *func;
+            JanetFuncDef *def;
+            JanetArray *row, *params;
+            JanetArray *pa;
+            int32_t j, n;
+            if (janet_checktype(kv->key, JANET_NIL)) continue;
+            e = janet_unwrap_table(kv->value);
+            func = janet_unwrap_function(janet_table_get(e, janet_ckeywordv("func")));
+            def = func->def;
+            row = janet_array(2);
+            {
+                JanetArray *id = janet_array(3);
+                int32_t defline = -1;
+                janet_array_push(id, NULL == def->source
+                    ? janet_wrap_nil() : janet_wrap_string(def->source));
+                if (NULL != def->sourcemap && def->bytecode_length > 0)
+                    defline = def->sourcemap[0].line;
+                janet_array_push(id, janet_wrap_integer((int64_t) defline));
+                janet_array_push(id, NULL == def->name
+                    ? janet_wrap_nil() : janet_wrap_string(def->name));
+                janet_array_push(row, janet_wrap_array(id));
+            }
+            {
+                JanetTable *info = janet_table(3);
+                int64_t calls = janet_unwrap_integer(janet_table_get(e, janet_ckeywordv("calls")));
+                uint32_t rm = (uint32_t) janet_unwrap_integer(janet_table_get(e, janet_ckeywordv("rets")));
+                janet_table_put(info, janet_ckeywordv("calls"), janet_wrap_integer(calls));
+                params = janet_array(0);
+                pa = janet_unwrap_array(janet_table_get(e, janet_ckeywordv("params")));
+                n = pa->count;
+                for (j = 0; j < n; j++) {
+                    uint32_t m = (uint32_t) janet_unwrap_integer(pa->data[j]);
+                    if (m) janet_array_push(params, janet_profile_mask_types(m));
+                }
+                janet_table_put(info, janet_ckeywordv("params"), janet_wrap_array(params));
+                janet_table_put(info, janet_ckeywordv("rets"), janet_profile_mask_types(rm));
+                janet_array_push(row, janet_wrap_table(info));
+            }
+            janet_array_push(out, janet_wrap_array(row));
+        }
+    }
+    buf = janet_buffer(0);
+    janet_gcroot(janet_wrap_buffer(buf));
+    janet_pretty(buf, 8, JANET_PRETTY_NOTRUNC, janet_wrap_array(out));
+    f = fopen(path, "wb");
+    if (NULL == f) janet_panicf("could not open profile output %s", path);
+    fwrite(buf->data, 1, (size_t) buf->count, f);
+    fputc('\n', f);
+    fclose(f);
+    janet_gcunroot(janet_wrap_buffer(buf));
+    janet_gcunroot(janet_wrap_array(out));
+}
+
 /* Interpreter main loop */
 static JanetSignal run_vm(JanetFiber *fiber, Janet in) {
 
@@ -681,7 +837,10 @@ static JanetSignal run_vm(JanetFiber *fiber, Janet in) {
     VM_OP(JOP_RETURN) {
         Janet retval = stack[D];
         int entrance_frame = janet_stack_frame(stack)->flags & JANET_STACKFRAME_ENTRANCE;
+        JanetFunction *retfunc = janet_stack_frame(stack)->func;
         janet_fiber_popframe(fiber);
+        if (NULL != janet_vm.profile_table)
+            janet_profile_return(retfunc, retval);
         if (entrance_frame) vm_return_no_restore(JANET_SIGNAL_OK, retval);
         vm_restore();
         stack[A] = retval;
@@ -691,7 +850,10 @@ static JanetSignal run_vm(JanetFiber *fiber, Janet in) {
     VM_OP(JOP_RETURN_NIL) {
         Janet retval = janet_wrap_nil();
         int entrance_frame = janet_stack_frame(stack)->flags & JANET_STACKFRAME_ENTRANCE;
+        JanetFunction *retfunc = janet_stack_frame(stack)->func;
         janet_fiber_popframe(fiber);
+        if (NULL != janet_vm.profile_table)
+            janet_profile_return(retfunc, retval);
         if (entrance_frame) vm_return_no_restore(JANET_SIGNAL_OK, retval);
         vm_restore();
         stack[A] = retval;
@@ -1056,10 +1218,16 @@ static JanetSignal run_vm(JanetFiber *fiber, Janet in) {
                 vm_do_trace(func, fiber->stacktop - fiber->stackstart, fiber->data + fiber->stackstart);
             }
             vm_commit();
-            if (janet_fiber_funcframe(fiber, func)) {
-                int32_t n = fiber->stacktop - fiber->stackstart;
-                janet_panicf("%v called with %d argument%s, expected %d",
-                             callee, n, n == 1 ? "" : "s", func->def->arity);
+            {
+                Janet *callargv = fiber->data + fiber->stackstart;
+                int32_t callargc = fiber->stacktop - fiber->stackstart;
+                if (janet_fiber_funcframe(fiber, func)) {
+                    int32_t n = fiber->stacktop - fiber->stackstart;
+                    janet_panicf("%v called with %d argument%s, expected %d",
+                                 callee, n, n == 1 ? "" : "s", func->def->arity);
+                }
+                if (NULL != janet_vm.profile_table)
+                    janet_profile_call(func, callargv, callargc);
             }
             stack = fiber->data + fiber->frame;
             pc = func->def->bytecode;
@@ -1095,11 +1263,17 @@ static JanetSignal run_vm(JanetFiber *fiber, Janet in) {
             if (func->gc.flags & JANET_FUNCFLAG_TRACE) {
                 vm_do_trace(func, fiber->stacktop - fiber->stackstart, fiber->data + fiber->stackstart);
             }
-            if (janet_fiber_funcframe_tail(fiber, func)) {
-                janet_stack_frame(fiber->data + fiber->frame)->pc = pc;
-                int32_t n = fiber->stacktop - fiber->stackstart;
-                janet_panicf("%v called with %d argument%s, expected %d",
-                             callee, n, n == 1 ? "" : "s", func->def->arity);
+            {
+                Janet *callargv = fiber->data + fiber->stackstart;
+                int32_t callargc = fiber->stacktop - fiber->stackstart;
+                if (janet_fiber_funcframe_tail(fiber, func)) {
+                    janet_stack_frame(fiber->data + fiber->frame)->pc = pc;
+                    int32_t n = fiber->stacktop - fiber->stackstart;
+                    janet_panicf("%v called with %d argument%s, expected %d",
+                                 callee, n, n == 1 ? "" : "s", func->def->arity);
+                }
+                if (NULL != janet_vm.profile_table)
+                    janet_profile_call(func, callargv, callargc);
             }
             stack = fiber->data + fiber->frame;
             pc = func->def->bytecode;
@@ -1974,6 +2148,16 @@ void janet_sandbox_assert(uint32_t forbidden_flags) {
 
 /* Clear all memory associated with the VM */
 void janet_deinit(void) {
+    /* PGO auto-dump: JANET_PROFILE_OUT=path writes the type profile on
+     * every exit path (scripts ending in os/exit included), before any
+     * teardown. Explicit debug/profile-dump covers the rest. */
+    if (NULL != janet_vm.profile_table) {
+        const char *pout = getenv("JANET_PROFILE_OUT");
+        if (NULL != pout && '\0' != *pout) {
+            janet_profile_dump(pout);
+            janet_vm.profile_table = NULL;
+        }
+    }
     janet_clear_memory();
     janet_symcache_deinit();
     janet_free(janet_vm.roots);
