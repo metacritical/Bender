@@ -512,6 +512,20 @@ Phase 3 text above: work-stealing runqueues, SIGURG preemption at
 poll points, scheduler-aware parking. Prereq: everything above is
 schedulable on 1:N; M:N changes WHERE fibers run, not how they
 communicate — the messaging layer is deliberately scheduler-agnostic.
+EPIC SCOPING (recorded 2026-10-07, verified against this tree):
+work-stealing and task migration largely hold BY CONSTRUCTION here
+and need no implementation — the pool multiplexes over ONE shared
+queue (balanced by definition; nothing private to steal from), and
+pending work migrates trivially (any thread takes from the shared
+queue). Mailbox workers are pinned by design (state locality).
+What remains genuinely missing is ASYNC preemption: waking threads
+parked in blocking syscalls and interrupting non-cooperating C code
+(SIGURG + signal-safe handler discipline across ev.c/net.c/os.c),
+plus migration of RUNNING tasks (suspended stacks + VM-local waits:
+channels, timeouts, supervisors — the semantics surface is the work).
+No current workload needs either (quantum covers Janet-level hogs;
+cross-thread wakeups already post via self-pipe); both stay tracked
+until a workload demands them.
 M4 additionally unlocks what cooperation cannot: Erlang-exact signal
 semantics (preemptive/untrappable kill via interpreter safepoints),
 strict cross-task ordering, cheap task restart (fresh task in a warm
