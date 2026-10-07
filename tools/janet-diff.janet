@@ -1,10 +1,10 @@
-# tools/janet-diff.janet — AOT spike oracle (Spinel `diff` analogue).
+# tools/janet-diff.janet — AOT spike oracle (native/boxed diff).
 # Compares the host interpreter against a janet-aot binary on the same program:
 #   ./build/janet tools/janet-diff.janet app.janet -- arg1 arg2...
 # Labels: same | output-diff | exception-diff | compile-error | timeout.
 # Exit: 0 same, 1 difference, 2 could not build/run AOT, 4 tool error.
-# Folds per-run values the way spinel diff does (addresses, temp paths);
-# note: janet's math/rng is deterministic, unlike Spinel-vs-CRuby RNG.
+# Folds per-run values the way a native/boxed diff does (addresses, temp paths);
+# note: janet's math/rng is deterministic across tiers.
 
 (def args (tuple/slice (dyn :args) 1)) # :args[0] is this script's path
 (var prog nil)

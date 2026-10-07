@@ -1,4 +1,4 @@
-# Janet AOT plan (Spinel-style) — spike → 1.1 → 2 → threads/AOT
+# Janet AOT plan — spike → 1.1 → 2 → threads/AOT
 
 ## Handoff — read this first
 
@@ -9,10 +9,9 @@ start by verifying the checkout, then pick up at the first unchecked
 phase below (currently Phase 2b).
 
 - This repo: the `janet` checkout (`janet-lang/janet` plus local work).
-- Spinel reference: `/Users/pankajdoharey/Development/Projects/spinel_test`
-  (`matz/spinel`; the installed `spinel` binary matches it). Relevant
-  first reads there: `README.md` (pipeline + limitations), `src/main.c`
-  (single-binary driver shape), `docs/` (FFI, limitations, threads).
+- Reference driver shape: single-binary driver (parse+analyze+codegen+cc
+  in one process, no helper chain at compile time). Relevant first reads
+  in any AOT: pipeline + limitations, driver shape, FFI, threads.
 - Work status: phases 0–2a are implemented but UNCOMMITTED in the working
   tree (13 modified files, new files under `tools/`, `docs/internals/`,
   `test/`). Commit before starting new work so the next change has a
@@ -56,7 +55,7 @@ before each phase below. See `docs/internals/native-fibers.md` for Phase 1 detai
 Goal: a `janet-aot` single binary that compiles Janet source to a standalone
 native executable: parse → macroexpand → analyze → emit one `.c` → `cc` →
 binary, with the interpreter embedded as fallback for dynamic code.
-Clone of the `spinel` driver shape (`spinel_test/src/main.c`):
+Single-binary driver shape:
 parse+analyze+codegen+cc in one process, no helper chain at compile time.
 
 ## Janet pipeline today (what we reuse)
@@ -90,16 +89,16 @@ Build `tools/janet-aot` (C, linked against `build/libjanet.a` at first):
    YIELD/CLOSURE` lower to existing `janet_call/continue` entry points.
 4. `cc -O2 -ffunction-sections -fdata-sections -Wl,--gc-sections` (macOS:
    `-Wl,-dead_strip`) against a `libjanet_rt.a` split (header-inline hot
-   paths vs archived `src/core/*.c`, mirroring `lib/spinel_rt.h` vs
-   `lib/sp_*.c`). Static roots only; no VM-stack scanning for constants.
-5. Refusals (compile error with file:line list, Spinel-style): `eval`,
+   paths vs archived `src/core/*.c`, mirroring `lib/rt.h` vs
+   `lib/rt_*.c`). Static roots only; no VM-stack scanning for constants.
+5. Refusals (compile error with file:line list): `eval`,
    `compile`, `dobytes/dostring` on runtime strings, runtime `require` with
    computed paths, `dyn *redef*` redefinition, live `marshal` of code,
    `ffi`/`dlopen` natives, `ev` threading beyond smoke. `--defer-fallback`
    keeps building and routes refused forms to the embedded interpreter.
 6. Oracle: `tools/janet-diff` — run `janet app.janet` vs `janet-aot -E`
    (fold addresses/paths/times), labels `same/output-diff/exception-diff/
-   compile-error/crash`, exit 0/1/2/3 like `spinel diff`.
+   compile-error/crash`, exit 0/1/2/3 like a native/boxed diff oracle.
 
 Accept: `print "hi"`, `fib(20)`, file IO, one fiber yield/resume program,
 one `ev/chan` smoke program, and one `thread/new` + `thread/join` program
@@ -145,15 +144,15 @@ and clean marshal refusal (`make fibertest`, 17 checks green).
 
 ## Phase 2 — explicit GC roots + collector discipline
 
-Goal: Spinel-style precise, non-moving mark/sweep with explicit roots so
+Goal: precise, non-moving mark/sweep with explicit roots so
 generated C never depends on scanning `janet_vm`/VM stacks.
 
 - Introduce `JANET_GC_ROOT`-style root registration; per-fiber native-stack
   ranges + generated-code roots join the root set; `fiber->data` buffers
   (or their Phase-1.1 successors) walked as explicit roots.
 - Retire the `janet_vm.fiber` traversal (`janet_gcmark`); VM-local state
-  reached only through roots. Immutable-string heap with marker bits
-  (Spinel model); per-worker root arrays land with Phase 3.
+  reached only through roots. Immutable-string heap with marker bits;
+  per-worker root arrays land with Phase 3.
 - Regression: full suite under `make test` + `make valtest` (leak/over-mark
   check), marshal + `weak` table tests explicitly.
 
@@ -594,7 +593,7 @@ Fixed along the way (both pre-existing, both crashers):
 ## Phase 4 — full AOT (inference + unboxed codegen)
 
 Only after 1.1+2: whole-program type analysis over the `FuncDef` graph
-(Spinel `analyze*.c` analogue: registration → call-site widening →
+(analysis pipeline: registration → call-site widening →
 fixpoint on returns/slots → feature/DCE flags → per-node type cache shared
 with codegen in one process), then:
 
@@ -651,12 +650,11 @@ path. Tool-side validation only so far (extraction, `hint` lines,
 ### Phase 4 step 6 — hybrid inference: returns fixpoint + call-site
 widening (DONE, this checkout)
 
-`tools/infer.janet` (shared by analysis and emission), modeled on
-Spinel's `bind_args_params`/`slot_take`: at every call site, each
+`tools/infer.janet` (shared by analysis and emission): at every call site, each
 pushed argument's type narrows monotonically into the callee's param
 slot (intersection; conflicting widths widen to `:number` = boxed
-poly; annotation-seeded slots are contracts and never touched —
-Spinel's `rbs_seeded`). Returns flow from RETURN sites and tail
+poly; annotation-seeded slots are contracts and never touched.
+Returns flow from RETURN sites and tail
 calls; whole-program fixpoint (≤8 rounds). Lattice
 `:unknown > :number > {long, double}` + bool/nil leaves; intra-fn
 forward slot scan seeded from param types. THE HYBRID: hints are
@@ -822,7 +820,7 @@ DONE (hybrid: hints direct, inference fills the rest).
 - Boxed `Janet` for polymorphic slots; unboxed C (`double`, `int64`) for
   inferred numeric loops/structs; value-type promotion for small immutable
   records; int-overflow mode flag (`raise` default / `wrap` / `promote`
-  to bignum discipline, cf. Spinel `--int-overflow`).
+  to bignum discipline).
 - DCE via section-GC + reachability from `main`; `--emit-types` diagnostics.
 - `eval` and inference-defeating code permanently fall back to the embedded
   interpreter in the same runtime (Phase 4 in `native-fibers.md`).
@@ -850,7 +848,7 @@ optimizations, which must still be `same`.
 - `tools/mkimage.janet`: whole file compiles as ONE `(do ...)` thunk
   (correct cross-form refs, zero build-time execution), marshals with a
   rev-lookup registry, emits `.c` with image bytes + registry names.
-- `tools/janet-aot.sh`: driver (`-o/-c/-S/-E`, spinel CLI shape).
+- `tools/janet-aot.sh`: driver (`-o/-c/-S/-E`, standard CLI shape).
 - `tools/janet-diff.janet`: oracle (`same/output-diff/exception-diff/
   compile-error`, exits 0/1/2/4; folds `0xHEX`, tmp paths, ` (tail call)`).
 - Findings: env entries are binding descriptors — registry must map

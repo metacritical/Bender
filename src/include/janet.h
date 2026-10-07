@@ -982,7 +982,7 @@ struct JanetGCObject {
 /* A lightweight green thread in janet. Does not correspond to
  * operating system threads. */
 
-/* Native-stack switch context for a fiber (Spinel-style fibers). On
+/* Native-stack switch context for a fiber. On
  * x86_64/aarch64 the context is just the saved stack pointer (the callee-
  * saved registers live on the coroutine's own stack, see janet_fiber_ctx_swap
  * in src/core/fiber.c); elsewhere it is a POSIX ucontext_t. One slot is
@@ -1016,7 +1016,7 @@ struct JanetFiber {
     Janet *data; /* Dynamically resized stack memory */
     JanetFiber *child; /* Keep linked list of fibers for restarting pending fibers */
     Janet last_value; /* Last returned value from a fiber */
-    /* Native-stack state for Spinel-style fibers: this fiber's VM entries run
+    /* Native-stack state for fibers: this fiber's VM entries run
      * on native_stack, suspending is a context switch out via ctx, and
      * resume_ctx is where the switch returns control to. in_value,
      * out_payload, and out_signal carry values across the switch boundary. */
