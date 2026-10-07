@@ -20,7 +20,7 @@ phase below (currently Phase 2b).
 ## Verify the checkout (must all pass before new work)
 
 ```sh
-make                    # default -O2 build -> build/janet
+make                    # default -O2 build -> build/bender
 make test               # full suite: 38/38 (incl. suite-native-fiber 47/47,
                         # suite-gc-stress 21/21, suite-gc-minor 12/12,
                         # suite-thread 25/25, suite-callgraph 66/66)
@@ -33,7 +33,7 @@ printf '(def ch (ev/chan 0))\n(ev/go (fn [] (ev/sleep 0.01) (ev/give ch :ping)))
 printf '(error "boom")\n' > /tmp/aot-tests/err.janet
 printf '(def hs (map (fn [i] (thread/new (fn [x] (* x x)) i)) (range 5)))\n(pp (map thread/join hs))\n(print (thread/join (thread/new (fn [x] (string "n=" x)) 7)))\n' > /tmp/aot-tests/thread.janet
 for t in hello fib yield ev err thread; do
-  ./build/janet tools/janet-diff.janet /tmp/aot-tests/$t.janet
+  ./build/bender tools/janet-diff.janet /tmp/aot-tests/$t.janet
 done                    # AOT oracle: same × 6
 make clean && make CFLAGS="-O0 -g" && make test   # same gates, -O0 build
 ```
@@ -49,7 +49,7 @@ make clean && make CFLAGS="-O0 -g" && make test   # same gates, -O0 build
   (runtime direction + per-phase mechanics/pitfalls).
 
 Status: Phase 1 (native-stack substrate) DONE on this checkout, uncommitted.
-`build/janet test/suite-native-fiber.janet` → 28/28. Full suite is the gate
+`build/bender test/suite-native-fiber.janet` → 28/28. Full suite is the gate
 before each phase below. See `docs/internals/native-fibers.md` for Phase 1 detail.
 
 Goal: a `janet-aot` single binary that compiles Janet source to a standalone

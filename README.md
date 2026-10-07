@@ -35,7 +35,7 @@ There is an interactive REPL with line editing, persistent history
 ship compiled:
 
 ```
-$ ./build/janet
+$ ./build/bender
 Bender 1.43.0-dev ... - '(doc)' for help
 repl:1:> (+ 1 2 3)
 6
@@ -366,7 +366,7 @@ meson setup build \
 ninja -C build
 
 # Run the binary
-build/janet
+build/bender
 
 # Installation
 ninja -C build install

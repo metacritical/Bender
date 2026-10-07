@@ -4,7 +4,7 @@
 # walk. Prints node/edge lines, a stats summary, and a fixpoint block
 # (reachability from entry thunks, caller sets, recursion, dynamic taint).
 # Read-only; no src/ changes. Usage:
-# ./build/janet tools/callgraph.janet FILE [FILE...]
+# ./build/bender tools/callgraph.janet FILE [FILE...]
 #
 # Edge kinds:
 #   def <id> <name> arity <a> slots <s> instrs <n>   every discovered FuncDef

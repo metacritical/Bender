@@ -5,7 +5,7 @@
 # boxed; JOP_* ops still execute in the bytecode VM. Run under host janet
 # (macros expand at build time, as today):
 #
-#   ./build/janet tools/mkimage.janet app.janet app.c
+#   ./build/bender tools/mkimage.janet app.janet app.c
 #
 # Model: the whole file compiles as ONE implicit (do ...) thunk, so
 # cross-form references resolve Naturally with no build-time execution.

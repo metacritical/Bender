@@ -233,7 +233,7 @@ if get_option('shared')
   else
     extra_cflags = ['-DJANET_DLL_IMPORT']
   endif
-  janet_mainclient = executable('janet', mainclient_src,
+  janet_mainclient = executable('bender', mainclient_src,
     include_directories : incdir,
     dependencies : janet_dependencies,
     link_with: [libjanet],
@@ -241,7 +241,7 @@ if get_option('shared')
     install : true)
 else
   # No shared library
-  janet_mainclient = executable('janet', mainclient_src, janetc,
+  janet_mainclient = executable('bender', mainclient_src, janetc,
     include_directories : incdir,
     dependencies : janet_dependencies,
     c_args : lib_cflags,

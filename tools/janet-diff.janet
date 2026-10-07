@@ -1,6 +1,6 @@
 # tools/janet-diff.janet — AOT spike oracle (native/boxed diff).
 # Compares the host interpreter against a janet-aot binary on the same program:
-#   ./build/janet tools/janet-diff.janet app.janet -- arg1 arg2...
+#   ./build/bender tools/janet-diff.janet app.janet -- arg1 arg2...
 # Labels: same | output-diff | exception-diff | compile-error | timeout.
 # Exit: 0 same, 1 difference, 2 could not build/run AOT, 4 tool error.
 # Folds per-run values the way a native/boxed diff does (addresses, temp paths);
@@ -19,7 +19,7 @@
 (def root
   (do (def p (os/realpath "tools/janet-diff.janet"))
       (string/slice p 0 (- (length p) (length "tools/janet-diff.janet")))))
-(def janet (string root "build/janet"))
+(def janet (string root "build/bender"))
 (def driver (string root "tools/janet-aot.sh"))
 (def tmp (string "/tmp/janet-diff-" (os/getpid)))
 (os/mkdir tmp)

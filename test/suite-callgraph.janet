@@ -38,7 +38,7 @@
   "(defn main [] (print (myfib 10) (myeven 10) ((mk-adder 5) 1) (usem nil) (risky 1)))\n"))
 (spit "/tmp/cg-suite-fixture.janet" fixture)
 (assert (= 0 (os/execute ["/bin/sh" "-c"
-  "./build/janet tools/callgraph.janet /tmp/cg-suite-fixture.janet > /tmp/cg-suite-out.txt"] :p))
+  "./build/bender tools/callgraph.janet /tmp/cg-suite-fixture.janet > /tmp/cg-suite-out.txt"] :p))
   "callgraph runs")
 (def text (slurp "/tmp/cg-suite-out.txt"))
 (defn has [s] (not (nil? (string/find s text))))
@@ -77,7 +77,7 @@
 (spit "/tmp/cg-amb1.janet" "(defn dup [] 1)\n")
 (spit "/tmp/cg-amb2.janet" "(defn dup [] 2)\n(defn caller [] (dup))\n")
 (assert (= 0 (os/execute ["/bin/sh" "-c"
-  "./build/janet tools/callgraph.janet /tmp/cg-amb1.janet /tmp/cg-amb2.janet > /tmp/cg-amb-out.txt"] :p))
+  "./build/bender tools/callgraph.janet /tmp/cg-amb1.janet /tmp/cg-amb2.janet > /tmp/cg-amb-out.txt"] :p))
   "callgraph multi-file runs")
 (assert (not (nil? (string/find "ambiguous 4 dup"
   (slurp "/tmp/cg-amb-out.txt")))) "duplicate def ambiguous")
@@ -90,7 +90,7 @@
   "(defn varf [& xs] (length xs))\n"
   "(defn main [] (print (f2 1 2) (opt3 1 2) (opt3 1 2 3) (varf 1 2 3)))\n"))
 (assert (= 0 (os/execute ["/bin/sh" "-c"
-  "./build/janet tools/callgraph.janet /tmp/cg-arity.janet > /tmp/cg-arity-out.txt"] :p))
+  "./build/bender tools/callgraph.janet /tmp/cg-arity.janet > /tmp/cg-arity-out.txt"] :p))
   "callgraph arity run")
 (def atext (slurp "/tmp/cg-arity-out.txt"))
 (defn ahas [s] (not (nil? (string/find s atext))))
@@ -104,7 +104,7 @@
   "(defn g3 [a b c] (+ a b c))\n"
   "(defn main [] (print (g3 1 2)))\n"))
 (assert (= 0 (os/execute ["/bin/sh" "-c"
-  "./build/janet tools/callgraph.janet /tmp/cg-bad.janet > /tmp/cg-bad-out.txt"] :p))
+  "./build/bender tools/callgraph.janet /tmp/cg-bad.janet > /tmp/cg-bad-out.txt"] :p))
   "callgraph bad run")
 (def btext (slurp "/tmp/cg-bad-out.txt"))
 (assert (not (nil? (string/find "arity-bad 2 1 2" btext))) "too-few flagged")
@@ -117,7 +117,7 @@
   "(defn half {:hint {:returns :double}} [x] (/ x 2))\n"
   "(defn main [] (print (add2 1.5 2.5) (half 4)))\n"))
 (assert (= 0 (os/execute ["/bin/sh" "-c"
-  "./build/janet tools/callgraph.janet /tmp/cg-hint.janet > /tmp/cg-hint-out.txt"] :p))
+  "./build/bender tools/callgraph.janet /tmp/cg-hint.janet > /tmp/cg-hint-out.txt"] :p))
   "callgraph hint run")
 (def htext (slurp "/tmp/cg-hint-out.txt"))
 (assert (not (nil? (string/find "hint 1 double double -> double" htext))) "add2 hint line")
@@ -130,7 +130,7 @@
   "(defn f {:hint {:params [:double] :returns :bogus}} [x] x)\n"
   "(defn main [] (print (f 1)))\n"))
 (assert (= 0 (os/execute ["/bin/sh" "-c"
-  "./build/janet tools/callgraph.janet /tmp/cg-hintbad.janet > /tmp/cg-hintbad-out.txt"] :p))
+  "./build/bender tools/callgraph.janet /tmp/cg-hintbad.janet > /tmp/cg-hintbad-out.txt"] :p))
   "callgraph hintbad run")
 (def hbtext (slurp "/tmp/cg-hintbad-out.txt"))
 (assert (not (nil? (string/find "hint-bad 1 bad-returns-hint" hbtext))) "bad returns flagged")
@@ -141,7 +141,7 @@
   "(defn add3 ^long [a ^double b] (+ a b))\n"
   "(defn main [] (print (add3 1 2.5)))\n"))
 (assert (= 0 (os/execute ["/bin/sh" "-c"
-  "./build/janet tools/callgraph.janet /tmp/cg-caret.janet > /tmp/cg-caret-out.txt"] :p))
+  "./build/bender tools/callgraph.janet /tmp/cg-caret.janet > /tmp/cg-caret-out.txt"] :p))
   "callgraph caret run")
 (def ctext (slurp "/tmp/cg-caret-out.txt"))
 (assert (not (nil? (string/find "hint 1 number double -> long" ctext))) "caret hints match dict form")
@@ -150,7 +150,7 @@
 # raw fn with ^ params is a compile error, not a silent arity change
 (spit "/tmp/cg-guard.janet" "(def bad (fn [x ^long y] x))\n")
 (assert (= 0 (os/execute ["/bin/sh" "-c"
-  "./build/janet tools/callgraph.janet /tmp/cg-guard.janet > /tmp/cg-guard-out.txt"] :p))
+  "./build/bender tools/callgraph.janet /tmp/cg-guard.janet > /tmp/cg-guard-out.txt"] :p))
   "callgraph guard run")
 (def gtext (slurp "/tmp/cg-guard-out.txt"))
 (assert (not (nil? (string/find "uncompiled" gtext))) "raw fn ^ param refused")
@@ -166,7 +166,7 @@
   "(defn poly [x] (if (> x 0) x nil))\n"
   "(defn main [] (print (inc-l 1) (wrap2 2) (mul-d 1 2.5) (use-d 3)))\n"))
 (assert (= 0 (os/execute ["/bin/sh" "-c"
-  "./build/janet tools/callgraph.janet /tmp/cg-ret.janet > /tmp/cg-ret-out.txt"] :p))
+  "./build/bender tools/callgraph.janet /tmp/cg-ret.janet > /tmp/cg-ret-out.txt"] :p))
   "callgraph ret run")
 (def rtext (slurp "/tmp/cg-ret-out.txt"))
 (assert (not (nil? (string/find "ret 1 long" rtext))) "hinted long")
@@ -187,7 +187,7 @@
   "(defn scale ^double [a ^double b] (+ (* a a) (* b b)))\n"
   "(defn main [] (print (quad 1) (scale 3 4) (twice 5)))\n"))
 (assert (= 0 (os/execute ["/bin/sh" "-c"
-  "./build/janet tools/callgraph.janet /tmp/cg-hybrid.janet > /tmp/cg-hybrid-out.txt"] :p))
+  "./build/bender tools/callgraph.janet /tmp/cg-hybrid.janet > /tmp/cg-hybrid-out.txt"] :p))
   "callgraph hybrid run")
 (def htext (slurp "/tmp/cg-hybrid-out.txt"))
 (assert (not (nil? (string/find "ret 2 long" htext))) "unhinted twice inferred long")
@@ -199,7 +199,7 @@
 # Step 7 parity: hinted AND unhinted-inferred fns emit to unboxed C;
 # native results must byte-match the janet interpreter on samples
 (assert (= 0 (os/execute ["/bin/sh" "-c"
-  "rm -rf /tmp/cg-em && ./build/janet tools/callgraph.janet /tmp/cg-hybrid.janet --emit-native /tmp/cg-em"] :p))
+  "rm -rf /tmp/cg-em && ./build/bender tools/callgraph.janet /tmp/cg-hybrid.janet --emit-native /tmp/cg-em"] :p))
   "emit-native run")
 (assert (= 0 (os/execute ["/bin/sh" "-c" "cc -O2 /tmp/cg-em/native.c -o /tmp/cg-em/native"] :p))
   "native.c compiles")
@@ -218,7 +218,7 @@
   "  (if (< x lo) lo (if (> x hi) hi x)))\n"
   "(defn main [] (print (iabs -5) (maxi 2 7) (clamp 15 0 10)))\n"))
 (assert (= 0 (os/execute ["/bin/sh" "-c"
-  "rm -rf /tmp/cg-br && ./build/janet tools/callgraph.janet /tmp/cg-branch.janet --emit-native /tmp/cg-br"] :p))
+  "rm -rf /tmp/cg-br && ./build/bender tools/callgraph.janet /tmp/cg-branch.janet --emit-native /tmp/cg-br"] :p))
   "branch emit run")
 (assert (= 0 (os/execute ["/bin/sh" "-c"
   "cc -O2 -w /tmp/cg-br/native.c -o /tmp/cg-br/native"] :p)) "branch native compiles")
@@ -236,7 +236,7 @@
   "(defn f {:hint {:params [:long] :returns :long}} [x] (if x 1 2))\n"
   "(defn main [] (print (f 1)))\n"))
 (os/execute ["/bin/sh" "-c"
-  "rm -rf /tmp/cg-bc && ./build/janet tools/callgraph.janet /tmp/cg-badcond.janet --emit-native /tmp/cg-bc > /tmp/cg-bc-out.txt"])
+  "rm -rf /tmp/cg-bc && ./build/bender tools/callgraph.janet /tmp/cg-badcond.janet --emit-native /tmp/cg-bc > /tmp/cg-bc-out.txt"])
 # the tool legitimately exits nonzero (nothing emittable); the report is the contract
 (assert (not (nil? (string/find "branch condition is long not bool"
   (slurp "/tmp/cg-bc-out.txt")))) "truthy-on-number refused")
@@ -253,7 +253,7 @@
   "  r)\n"
   "(defn main [] (print (sum-to 10) (fact 5)))\n"))
 (assert (= 0 (os/execute ["/bin/sh" "-c"
-  "rm -rf /tmp/cg-lp && ./build/janet tools/callgraph.janet /tmp/cg-loop.janet --emit-native /tmp/cg-lp"] :p))
+  "rm -rf /tmp/cg-lp && ./build/bender tools/callgraph.janet /tmp/cg-loop.janet --emit-native /tmp/cg-lp"] :p))
   "loop emit run")
 (assert (= 0 (os/execute ["/bin/sh" "-c"
   "cc -O2 /tmp/cg-lp/native.c -o /tmp/cg-lp/native"] :p)) "loop native compiles")
@@ -282,7 +282,7 @@
   "  if (x > hi) return hi;\n"
   "  return x; }\n"))
 (assert (= 0 (os/execute ["/bin/sh" "-c"
-  "rm -rf /tmp/cg-ex && ./build/janet tools/callgraph.janet /tmp/cg-ext.janet --externs /tmp/cg-ext-decls.janet --emit-native /tmp/cg-ex"] :p))
+  "rm -rf /tmp/cg-ex && ./build/bender tools/callgraph.janet /tmp/cg-ext.janet --externs /tmp/cg-ext-decls.janet --emit-native /tmp/cg-ex"] :p))
   "extern emit run")
 (assert (= 0 (os/execute ["/bin/sh" "-c"
   "cc -O2 /tmp/cg-ex/native.c /tmp/cg-ext-impl.c -o /tmp/cg-ex/native"] :p))
@@ -301,7 +301,7 @@
   "(defn mix {:hint {:params [:int :double] :returns :double}} [n x] (+ x n))\n"
   "(defn main [] (print (add-i32 2 3) \" \" (mulf 1.5 2.5) \" \" (mix 7 0.5)))\n"))
 (assert (= 0 (os/execute ["/bin/sh" "-c"
-  "rm -rf /tmp/cg-w && ./build/janet tools/callgraph.janet /tmp/cg-width.janet --emit-native /tmp/cg-w"] :p))
+  "rm -rf /tmp/cg-w && ./build/bender tools/callgraph.janet /tmp/cg-width.janet --emit-native /tmp/cg-w"] :p))
   "width emit run")
 (assert (= 0 (os/execute ["/bin/sh" "-c"
   "cc -w -O2 /tmp/cg-w/native.c -o /tmp/cg-w/native && /tmp/cg-w/native > /tmp/cg-w/actual.txt && cmp /tmp/cg-w/expected.txt /tmp/cg-w/actual.txt"] :p))
@@ -330,7 +330,7 @@
   "  (get a 0))\n"
   "(defn main [] (print (asum @[1.5 2.5]) (ascale @[1 2 3] 10)))\n"))
 (assert (= 0 (os/execute ["/bin/sh" "-c"
-  "rm -rf /tmp/cg-arr && ./build/janet tools/callgraph.janet /tmp/cg-arr.janet --emit-native /tmp/cg-arr"] :p))
+  "rm -rf /tmp/cg-arr && ./build/bender tools/callgraph.janet /tmp/cg-arr.janet --emit-native /tmp/cg-arr"] :p))
   "array emit run")
 (assert (= 0 (os/execute ["/bin/sh" "-c"
   (string "cc -O2 -w -Isrc/include -Isrc/conf /tmp/cg-arr/native.c build/janet.o"
@@ -353,7 +353,7 @@
   "# reachable (else dropped pre-analysis) but never run: emit fails first\n"
   "(defn main [] (print (gbad @[1] 0.5) (lns 3)))\n"))
 (os/execute ["/bin/sh" "-c"
-  "rm -rf /tmp/cg-arrbad && ./build/janet tools/callgraph.janet /tmp/cg-arrbad.janet --emit-native /tmp/cg-arrbad >/tmp/cg-arrbad.log 2>&1"] :p)
+  "rm -rf /tmp/cg-arrbad && ./build/bender tools/callgraph.janet /tmp/cg-arrbad.janet --emit-native /tmp/cg-arrbad >/tmp/cg-arrbad.log 2>&1"] :p)
 (def badout (slurp "/tmp/cg-arrbad.log"))
 (assert (not (nil? (string/find "get requires array and int index" badout)))
         "float-index get skips with reason")
@@ -366,7 +366,7 @@
   "(defn padd {:hint {:params [:long :long] :returns :long}} [a b] (+ a b))\n"
   "(defn main [] (print (padd 40 2)))\n"))
 (assert (= 0 (os/execute ["/bin/sh" "-c"
-  "rm -rf /tmp/cg-pr && ./build/janet tools/callgraph.janet /tmp/cg-promote.janet --int-policy promote --emit-native /tmp/cg-pr"] :p))
+  "rm -rf /tmp/cg-pr && ./build/bender tools/callgraph.janet /tmp/cg-promote.janet --int-policy promote --emit-native /tmp/cg-pr"] :p))
   "promote emit run")
 (def prtext (slurp "/tmp/cg-pr/native.c"))
 (assert (not (nil? (string/find "double padd(double p0, double p1)" prtext)))
@@ -376,14 +376,14 @@
   "promote parity")
 # wrap (default): -fwrapv gives defined two's-complement wrap
 (assert (= 0 (os/execute ["/bin/sh" "-c"
-  "rm -rf /tmp/cg-wr && ./build/janet tools/callgraph.janet /tmp/cg-promote.janet --emit-native /tmp/cg-wr && cc -O2 -w -fwrapv /tmp/cg-wr/native.c -o /tmp/cg-wr/native && /tmp/cg-wr/native > /tmp/cg-wr/actual.txt && cmp /tmp/cg-wr/expected.txt /tmp/cg-wr/actual.txt"] :p))
+  "rm -rf /tmp/cg-wr && ./build/bender tools/callgraph.janet /tmp/cg-promote.janet --emit-native /tmp/cg-wr && cc -O2 -w -fwrapv /tmp/cg-wr/native.c -o /tmp/cg-wr/native && /tmp/cg-wr/native > /tmp/cg-wr/actual.txt && cmp /tmp/cg-wr/expected.txt /tmp/cg-wr/actual.txt"] :p))
   "wrap parity under -fwrapv")
 (def wrtext (slurp "/tmp/cg-wr/native.c"))
 (assert (not (nil? (string/find "int64_t padd(int64_t p0, int64_t p1)" wrtext)))
         "wrap keeps int64 kernel")
 # bad policy value is rejected
 (assert (= 4 (os/execute ["/bin/sh" "-c"
-  "./build/janet tools/callgraph.janet /tmp/cg-promote.janet --int-policy explode --emit-native /tmp/cg-bad >/dev/null 2>&1"] :p))
+  "./build/bender tools/callgraph.janet /tmp/cg-promote.janet --int-policy explode --emit-native /tmp/cg-bad >/dev/null 2>&1"] :p))
   "bad int-policy rejected")
 # DCE: unreachable hinted defns never reach the output
 (spit "/tmp/cg-dce.janet" (string
@@ -391,7 +391,7 @@
   "(defn dead {:hint {:params [:long] :returns :long}} [x] (* x 2))\n"
   "(defn main [] (print (used 41)))\n"))
 (assert (= 0 (os/execute ["/bin/sh" "-c"
-  "rm -rf /tmp/cg-dce && ./build/janet tools/callgraph.janet /tmp/cg-dce.janet --emit-native /tmp/cg-dce >/dev/null 2>&1"] :p))
+  "rm -rf /tmp/cg-dce && ./build/bender tools/callgraph.janet /tmp/cg-dce.janet --emit-native /tmp/cg-dce >/dev/null 2>&1"] :p))
   "dce emit run")
 (def dcetext (slurp "/tmp/cg-dce/native.c"))
 (assert (not (nil? (string/find "used(" dcetext))) "reachable kernel emitted")

@@ -174,7 +174,7 @@ tools/janet-aot.sh app.janet [-o app] [-c] [-S] [-E args...] [--native]
 ```
 
 ```sh
-./build/janet tools/callgraph.janet w.janet --emit-native /tmp/gw
+./build/bender tools/callgraph.janet w.janet --emit-native /tmp/gw
 # native 1 fns ... /tmp/gw   (+ native-skip lines for thunk/main)
 grep -E "int32_t add_i32" /tmp/gw/native.c
 # int32_t add_i32(int32_t p0, int32_t p1) {

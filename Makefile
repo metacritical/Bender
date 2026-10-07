@@ -30,7 +30,7 @@ BINDIR?=$(PREFIX)/bin
 LIBDIR?=$(PREFIX)/lib
 JANET_BUILD?="\"$(shell git log --pretty=format:'%h' -n 1 2> /dev/null || echo local)\""
 CLIBS=-lm -lpthread
-JANET_TARGET=build/janet
+JANET_TARGET=build/bender
 JANET_BOOT=build/janet_boot
 JANET_IMPORT_LIB=build/janet.lib
 JANET_LIBRARY_IMPORT_LIB=build/libjanet.lib

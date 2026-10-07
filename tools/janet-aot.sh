@@ -7,7 +7,7 @@
 # -E       build to a temp dir, run it with leftover args, discard binary
 set -u
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-JANET="$ROOT/build/janet"
+JANET="$ROOT/build/bender"
 CC=${CC:-cc}
 
 SRC=""
