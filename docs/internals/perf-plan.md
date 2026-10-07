@@ -75,7 +75,9 @@ profile behave exactly as today.
 ### Phases
 
 1. Collector: param/return type table behind `JANET_PROFILE`,
-   file format + hash invalidation. No compiler changes.
+   file format + hash invalidation. No compiler changes. SHIPPED
+   2026-10-08 (debug/profile-start|stop|reset|dump, deinit auto-dump;
+   378-row deterministic ttfx profile verified).
 2. Seeding: callgraph reads the profile, seeds the fixpoint,
    reports `profile-seed` vs `profile-conflict` per defn.
 3. Hot-store profiling + invalidation UX (stale-profile warnings).
