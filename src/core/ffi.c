@@ -1996,7 +1996,7 @@ JANET_CORE_FN(cfun_ffi_ptr_add,
 JANET_CORE_FN(cfun_ffi_ptr_sub,
               "(unsafe/ptr-sub ptr nbytes)",
               "Pointer arithmetic: return a new pointer `nbytes` (signed) "
-              "before `ptr`. Same caveats as `ffi/ptr-add`. Returns a pointer.") {
+              "before `ptr`. Same caveats as `unsafe/ptr-add`. Returns a pointer.") {
     janet_sandbox_assert(JANET_SANDBOX_FFI_USE);
     janet_arity(argc, 2, 2);
     uint8_t *pointer = janet_getpointer(argv, 0);
@@ -2033,7 +2033,7 @@ JANET_CORE_FN(cfun_ffi_poke,
 JANET_CORE_FN(cfun_ffi_calloc,
               "(unsafe/calloc nitems size)",
               "Allocate `nitems` * `size` zeroed bytes (C calloc). Must be "
-              "released with `ffi/free`. Returns a raw pointer.") {
+              "released with `unsafe/free`. Returns a raw pointer.") {
     janet_sandbox_assert(JANET_SANDBOX_FFI_USE);
     janet_arity(argc, 2, 2);
     size_t nitems = janet_getsize(argv, 0);
@@ -2045,10 +2045,10 @@ JANET_CORE_FN(cfun_ffi_calloc,
 
 JANET_CORE_FN(cfun_ffi_realloc,
               "(unsafe/realloc ptr size)",
-              "Resize a `ffi/malloc` (or `ffi/calloc`, `ffi/realloc`) "
+              "Resize a `unsafe/malloc` (or `unsafe/calloc`, `unsafe/realloc`) "
               "block to `size` bytes, preserving contents. A nil `ptr` "
               "allocates fresh; the old pointer is invalid afterwards. "
-              "Release with `ffi/free`. Returns the (possibly moved) pointer.") {
+              "Release with `unsafe/free`. Returns the (possibly moved) pointer.") {
     janet_sandbox_assert(JANET_SANDBOX_FFI_USE);
     janet_arity(argc, 2, 2);
     void *pointer = janet_checktype(argv[0], JANET_NIL)
@@ -2063,9 +2063,9 @@ JANET_CORE_FN(cfun_ffi_exec_alloc,
               "(unsafe/exec-alloc size)",
               "Map at least `size` bytes of read/write (not yet executable) "
               "memory for hand-rolled JITs. Write machine code into it "
-              "(e.g. via `ffi/poke` on a `ffi/pointer-buffer`), then flip it "
-              "executable with `ffi/exec-protect` and call it through "
-              "`ffi/call` or `ffi/pointer-cfunction`. There is no free: "
+              "(e.g. via `unsafe/poke` on a `unsafe/pointer-buffer`), then flip it "
+              "executable with `unsafe/exec-protect` and call it through "
+              "`ffi/call` or `unsafe/pointer-cfunction`. There is no free: "
               "mappings live until process exit. Returns a raw pointer.") {
     janet_sandbox_assert(JANET_SANDBOX_FFI_JIT);
     janet_fixarity(argc, 1);
@@ -2090,7 +2090,7 @@ JANET_CORE_FN(cfun_ffi_exec_alloc,
 
 JANET_CORE_FN(cfun_ffi_exec_protect,
               "(unsafe/exec-protect ptr size)",
-              "Flip a `ffi/exec-alloc` mapping (rounded up to whole pages "
+              "Flip a `unsafe/exec-alloc` mapping (rounded up to whole pages "
               "like the allocator) to read/execute. Call only after all "
               "writes are done; writing afterwards faults. Returns nil.") {
     janet_sandbox_assert(JANET_SANDBOX_FFI_JIT);
@@ -2153,7 +2153,7 @@ JANET_CORE_FN(cfun_ffi_supported_calling_conventions,
               "(ffi/calling-conventions)",
               "Get an array of all supported calling conventions on the "
               "current architecture. Some architectures may have some FFI "
-              "functionality (`ffi/malloc`, `ffi/free`, `ffi/read`, "
+              "functionality (`unsafe/malloc`, `unsafe/free`, `unsafe/read`, "
               "`ffi/write`, etc.) but not support any calling conventions. "
               "This function can be used to get all supported calling "
               "conventions that can be used on this architecture. All "
