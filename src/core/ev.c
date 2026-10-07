@@ -4094,6 +4094,315 @@ JANET_CORE_FN(cfun_registry_unregister,
     return janet_wrap_boolean(found);
 }
 
+/* M5: shareable immutable blobs (see
+ * docs/internals/shared-structs-design.md). A threaded abstract whose
+ * payload is a self-contained flattened encoding — never GC pointers
+ * — so it is sound in every VM at once: lifetime is the abstract's
+ * atomic refcount, cross-thread movement rides the existing UNSAFE
+ * threaded passthrough, and reads copy out. Layout is little-endian
+ * fixed-width throughout (same-machine sharing; cross-machine stays
+ * marshal-based). Tags: 0 nil, 1 false, 2 true, 3 f64, 4 string,
+ * 5 keyword, 6 symbol, 7 struct, 8 tuple, 9 nested-shared. */
+static const JanetAbstractType janet_shared_type;
+#define SHARED_MAX_DEPTH 256
+
+typedef struct {
+    uint32_t len;
+    uint8_t data[];
+} JanetSharedBlob;
+
+static void shared_push_u32(JanetBuffer *buf, uint32_t v) {
+    uint8_t b[4];
+    b[0] = (uint8_t) (v & 0xFF);
+    b[1] = (uint8_t) ((v >> 8) & 0xFF);
+    b[2] = (uint8_t) ((v >> 16) & 0xFF);
+    b[3] = (uint8_t) ((v >> 24) & 0xFF);
+    janet_buffer_push_bytes(buf, b, 4);
+}
+
+static int shared_is_blob(Janet x) {
+    return janet_checktype(x, JANET_ABSTRACT) &&
+        janet_abstract_type(janet_unwrap_abstract(x)) == &janet_shared_type;
+}
+
+/* Forward declarations (encoder/decoder recurse). */
+static void shared_encode(JanetBuffer *buf, Janet x, int depth);
+
+/* Deep shareability check: only immutable, heap-free leaves. */
+static int shared_checkable(Janet x, int depth) {
+    if (depth > SHARED_MAX_DEPTH) return 0;
+    switch (janet_type(x)) {
+        case JANET_NIL:
+        case JANET_BOOLEAN:
+        case JANET_NUMBER:
+            return 1;
+        case JANET_STRING:
+        case JANET_SYMBOL:
+        case JANET_KEYWORD:
+            return 1;
+        case JANET_TUPLE: {
+            JanetTuple t = janet_unwrap_tuple(x);
+            int32_t n = janet_tuple_length(t);
+            for (int32_t i = 0; i < n; i++) {
+                if (!shared_checkable(t[i], depth + 1)) return 0;
+            }
+            return 1;
+        }
+        case JANET_STRUCT: {
+            /* Structs are open-addressed hash tables: iterate to
+             * CAPACITY skipping nil keys (length counts live only).
+             * Prototypes change lookup semantics and do not flatten,
+             * so protos are rejected. */
+            JanetStruct s = janet_unwrap_struct(x);
+            if (NULL != janet_struct_proto(s)) return 0;
+            int32_t cap = janet_struct_capacity(s);
+            for (int32_t i = 0; i < cap; i++) {
+                if (janet_checktype(s[i].key, JANET_NIL)) continue;
+                if (!shared_checkable(s[i].key, depth + 1)) return 0;
+                if (!shared_checkable(s[i].value, depth + 1)) return 0;
+            }
+            return 1;
+        }
+        case JANET_ABSTRACT:
+            return shared_is_blob(x);
+        default:
+            return 0;
+    }
+}
+
+static void shared_encode_str(JanetBuffer *buf, uint8_t tag, const uint8_t *s) {
+    int32_t len = janet_string_length(s);
+    janet_buffer_push_u8(buf, tag);
+    shared_push_u32(buf, (uint32_t) len);
+    janet_buffer_push_bytes(buf, s, len);
+}
+
+static void shared_encode(JanetBuffer *buf, Janet x, int depth) {
+    if (depth > SHARED_MAX_DEPTH) janet_panic("shared value too deep");
+    switch (janet_type(x)) {
+        case JANET_NIL:
+            janet_buffer_push_u8(buf, 0);
+            break;
+        case JANET_BOOLEAN:
+            janet_buffer_push_u8(buf, janet_unwrap_boolean(x) ? 2 : 1);
+            break;
+        case JANET_NUMBER: {
+            double d = janet_unwrap_number(x);
+            janet_buffer_push_u8(buf, 3);
+            janet_buffer_push_bytes(buf, (uint8_t *) &d, 8);
+            break;
+        }
+        case JANET_STRING:
+            shared_encode_str(buf, 4, janet_unwrap_string(x));
+            break;
+        case JANET_SYMBOL:
+            shared_encode_str(buf, 6, janet_unwrap_symbol(x));
+            break;
+        case JANET_KEYWORD:
+            shared_encode_str(buf, 5, janet_unwrap_keyword(x));
+            break;
+        case JANET_TUPLE: {
+            JanetTuple t = janet_unwrap_tuple(x);
+            int32_t n = janet_tuple_length(t);
+            janet_buffer_push_u8(buf, 8);
+            shared_push_u32(buf, (uint32_t) n);
+            for (int32_t i = 0; i < n; i++) shared_encode(buf, t[i], depth + 1);
+            break;
+        }
+        case JANET_STRUCT: {
+            JanetStruct s = janet_unwrap_struct(x);
+            int32_t n = janet_struct_length(s);
+            int32_t cap = janet_struct_capacity(s);
+            janet_buffer_push_u8(buf, 7);
+            shared_push_u32(buf, (uint32_t) n);
+            for (int32_t i = 0; i < cap; i++) {
+                if (janet_checktype(s[i].key, JANET_NIL)) continue;
+                shared_encode(buf, s[i].key, depth + 1);
+                shared_encode(buf, s[i].value, depth + 1);
+            }
+            break;
+        }
+        case JANET_ABSTRACT: {
+            /* Nested shared: inline expansion (deep copy — sharing is
+             * by value, still immutable so semantics hold). */
+            JanetSharedBlob *nb = janet_unwrap_abstract(x);
+            janet_buffer_push_u8(buf, 9);
+            shared_push_u32(buf, nb->len);
+            janet_buffer_push_bytes(buf, nb->data, nb->len);
+            break;
+        }
+        default:
+            janet_panicf("cannot share value of type %s", janet_type_names[janet_type(x)]);
+    }
+}
+
+/* Defensive cursor decoder: every read bounds-checked, truncation
+ * panics instead of over-reading (marshal bytes cross threads). */
+typedef struct {
+    const uint8_t *p;
+    const uint8_t *end;
+} JanetSharedCursor;
+
+static void shared_need(JanetSharedCursor *c, size_t n) {
+    if ((size_t)(c->end - c->p) < n) janet_panic("truncated shared value");
+}
+
+static uint8_t shared_rd_u8(JanetSharedCursor *c) {
+    shared_need(c, 1);
+    return *(c->p)++;
+}
+
+static uint32_t shared_rd_u32(JanetSharedCursor *c) {
+    shared_need(c, 4);
+    uint32_t v = ((uint32_t) c->p[0]) | ((uint32_t) c->p[1] << 8) |
+        ((uint32_t) c->p[2] << 16) | ((uint32_t) c->p[3] << 24);
+    c->p += 4;
+    return v;
+}
+
+static const uint8_t *shared_rd_bytes(JanetSharedCursor *c, size_t n) {
+    shared_need(c, n);
+    const uint8_t *p = c->p;
+    c->p += n;
+    return p;
+}
+
+static Janet shared_decode(JanetSharedCursor *c, int depth) {
+    if (depth > SHARED_MAX_DEPTH) janet_panic("shared value too deep");
+    uint8_t tag = shared_rd_u8(c);
+    switch (tag) {
+        case 0:
+            return janet_wrap_nil();
+        case 1:
+            return janet_wrap_boolean(0);
+        case 2:
+            return janet_wrap_boolean(1);
+        case 3: {
+            double d = 0;
+            memcpy(&d, shared_rd_bytes(c, 8), 8);
+            return janet_wrap_number(d);
+        }
+        case 4: {
+            uint32_t n = shared_rd_u32(c);
+            const uint8_t *b = shared_rd_bytes(c, n);
+            return janet_stringv(b, (int32_t) n);
+        }
+        case 5: {
+            uint32_t n = shared_rd_u32(c);
+            const uint8_t *b = shared_rd_bytes(c, n);
+            return janet_keywordv(b, (int32_t) n);
+        }
+        case 6: {
+            uint32_t n = shared_rd_u32(c);
+            const uint8_t *b = shared_rd_bytes(c, n);
+            return janet_symbolv(b, (int32_t) n);
+        }
+        case 7: {
+            uint32_t n = shared_rd_u32(c);
+            JanetTable *t = janet_table(0);
+            for (uint32_t i = 0; i < n; i++) {
+                Janet k = shared_decode(c, depth + 1);
+                Janet v = shared_decode(c, depth + 1);
+                janet_table_put(t, k, v);
+            }
+            return janet_wrap_struct(janet_table_to_struct(t));
+        }
+        case 8: {
+            uint32_t n = shared_rd_u32(c);
+            Janet *items = janet_malloc(sizeof(Janet) * (n ? n : 1));
+            if (NULL == items) JANET_OUT_OF_MEMORY;
+            uint32_t i = 0;
+            for (; i < n; i++) items[i] = shared_decode(c, depth + 1);
+            Janet ret = janet_wrap_tuple(janet_tuple_n(items, (int32_t) n));
+            janet_free(items);
+            return ret;
+        }
+        case 9: {
+            /* Nested blob: rebuild fresh (deep-copy semantics). */
+            uint32_t n = shared_rd_u32(c);
+            const uint8_t *b = shared_rd_bytes(c, n);
+            JanetSharedBlob *nb = janet_abstract_threaded(&janet_shared_type,
+                sizeof(JanetSharedBlob) + n);
+            nb->len = n;
+            if (n) memcpy(nb->data, b, n);
+            return janet_wrap_abstract(nb);
+        }
+        default:
+            janet_panicf("invalid shared tag %d", tag);
+            return janet_wrap_nil();
+    }
+}
+
+/* Navigation without full decode: skip any encoded value (NULL
+ * on truncation), then compare canonical key bytes directly. */
+static const uint8_t *shared_skip_value(const uint8_t *p, const uint8_t *end) {
+    if (p >= end) return NULL;
+    uint8_t t = *p++;
+    uint32_t n = 0;
+    switch (t) {
+        case 0:
+        case 1:
+        case 2:
+            return p;
+        case 3:
+            return ((size_t)(end - p) >= 8) ? p + 8 : NULL;
+        case 4:
+        case 5:
+        case 6:
+        case 9:
+            if ((size_t)(end - p) < 4) return NULL;
+            n = ((uint32_t) p[0]) | ((uint32_t) p[1] << 8) |
+                ((uint32_t) p[2] << 16) | ((uint32_t) p[3] << 24);
+            p += 4;
+            return ((size_t)(end - p) >= n) ? p + n : NULL;
+        case 7: {
+            if ((size_t)(end - p) < 4) return NULL;
+            n = ((uint32_t) p[0]) | ((uint32_t) p[1] << 8) |
+                ((uint32_t) p[2] << 16) | ((uint32_t) p[3] << 24);
+            p += 4;
+            for (uint32_t i = 0; i < n * 2; i++) {
+                p = shared_skip_value(p, end);
+                if (NULL == p) return NULL;
+            }
+            return p;
+        }
+        case 8: {
+            if ((size_t)(end - p) < 4) return NULL;
+            n = ((uint32_t) p[0]) | ((uint32_t) p[1] << 8) |
+                ((uint32_t) p[2] << 16) | ((uint32_t) p[3] << 24);
+            p += 4;
+            for (uint32_t i = 0; i < n; i++) {
+                p = shared_skip_value(p, end);
+                if (NULL == p) return NULL;
+            }
+            return p;
+        }
+        default:
+            return NULL;
+    }
+}
+
+/* Find key in an encoded struct (base at u32 count). On hit sets
+ * *valp to the value start and returns 1. */
+static int shared_struct_find(const uint8_t *base, const uint8_t *end,
+        const uint8_t *skey, uint32_t skeylen, const uint8_t **valp) {
+    if ((size_t)(end - base) < 4) return 0;
+    uint32_t n = ((uint32_t) base[0]) | ((uint32_t) base[1] << 8) |
+        ((uint32_t) base[2] << 16) | ((uint32_t) base[3] << 24);
+    const uint8_t *p = base + 4;
+    for (uint32_t i = 0; i < n; i++) {
+        const uint8_t *kend = shared_skip_value(p, end);
+        if (NULL == kend) return 0;
+        if ((uint32_t)(kend - p) == skeylen && !memcmp(p, skey, skeylen)) {
+            *valp = kend;
+            return 1;
+        }
+        p = shared_skip_value(kend, end);
+        if (NULL == p) return 0;
+    }
+    return 0;
+}
+
 JANET_CORE_FN(cfun_thread_demonitor,
               "(ev/demonitor handle ref)",
               "Remove the monitor `ref` (returned by `ev/monitor`) from "
@@ -4129,6 +4438,170 @@ JANET_CORE_FN(cfun_thread_demonitor,
     handle->monitors[ref * 2] = janet_wrap_nil();
     handle->monitors[ref * 2 + 1] = janet_wrap_nil();
     return janet_wrap_nil();
+}
+
+/* Blob construction + type-level (un)marshal + accessors. */
+
+static JanetSharedBlob *shared_blob_new(const uint8_t *data, uint32_t len) {
+    JanetSharedBlob *b = janet_abstract_threaded(&janet_shared_type,
+        sizeof(JanetSharedBlob) + (len ? len : 1));
+    b->len = len;
+    if (len) memcpy(b->data, data, len);
+    return b;
+}
+
+static void janet_shared_marshal(void *p, JanetMarshalContext *ctx) {
+    JanetSharedBlob *b = p;
+    janet_marshal_int(ctx, (int32_t) b->len);
+    if (b->len) janet_marshal_bytes(ctx, b->data, b->len);
+}
+
+static void *janet_shared_unmarshal(JanetMarshalContext *ctx) {
+    int32_t len = janet_unmarshal_int(ctx);
+    if (len < 0) janet_panic("invalid shared length");
+    JanetSharedBlob *b = janet_abstract_threaded(&janet_shared_type,
+        sizeof(JanetSharedBlob) + (len ? (uint32_t) len : 1));
+    b->len = (uint32_t) len;
+    if (len) {
+        uint8_t *tmp = janet_malloc((size_t) len);
+        if (NULL == tmp) JANET_OUT_OF_MEMORY;
+        janet_unmarshal_bytes(ctx, tmp, (size_t) len);
+        memcpy(b->data, tmp, (size_t) len);
+        janet_free(tmp);
+    }
+    /* Register in the lookup table (alias/cycle tracking + the
+     * framework's completion check); stays threaded either way. */
+    janet_unmarshal_abstract_reuse(ctx, b);
+    return b;
+}
+
+static int janet_shared_mark(void *p, size_t len) {
+    /* Payload holds no GC pointers — nothing to mark. */
+    (void) p;
+    (void) len;
+    return 0;
+}
+
+static void janet_shared_tostring(void *p, JanetBuffer *buffer) {
+    (void) p;
+    janet_buffer_push_cstring(buffer, "<shared>");
+}
+
+static const JanetAbstractType janet_shared_type = {
+    "core/shared",
+    NULL, /* gc (inline payload frees with the allocation) */
+    janet_shared_mark,
+    NULL, /* get (use shared/get) */
+    NULL, /* put */
+    janet_shared_marshal,
+    janet_shared_unmarshal,
+    janet_shared_tostring,
+    NULL, /* compare */
+    NULL, /* hash */
+    NULL, /* next */
+    NULL, /* call */
+    NULL, /* length (use shared/length) */
+    NULL, /* bytes */
+    NULL  /* gcperthread (no nested refs to drop) */
+};
+
+static JanetSharedBlob *shared_get_blob(Janet x) {
+    if (!shared_is_blob(x)) janet_panic("expected shared blob");
+    return janet_unwrap_abstract(x);
+}
+
+JANET_CORE_FN(cfun_shared_new,
+              "(shared/new x)",
+              "Freeze the shareable value `x` into an immutable blob "
+              "that is sound in every VM at once (lifetime is atomic "
+              "refcounting, cross-thread movement is by pointer). "
+              "Allowed leaves: nil, booleans, numbers, strings, symbols, "
+              "keywords, tuples, structs, and nested shared blobs. "
+              "Anything else (tables, arrays, buffers, functions, fibers, "
+              "other abstracts) raises. Returns the blob.") {
+    janet_fixarity(argc, 1);
+    if (!shared_checkable(argv[0], 0)) {
+        janet_panicf("cannot share value of type %s",
+            janet_type_names[janet_type(argv[0])]);
+    }
+    JanetBuffer buf;
+    janet_buffer_init(&buf, 0);
+    shared_encode(&buf, argv[0], 0);
+    JanetSharedBlob *b = shared_blob_new(buf.data, buf.count);
+    janet_buffer_deinit(&buf);
+    return janet_wrap_abstract(b);
+}
+
+JANET_CORE_FN(cfun_shared_shareable,
+              "(shared/shareable? x)",
+              "True when `x` can be frozen with shared/new (deep check).") {
+    janet_fixarity(argc, 1);
+    return janet_wrap_boolean(shared_checkable(argv[0], 0));
+}
+
+JANET_CORE_FN(cfun_shared_length,
+              "(shared/length b)",
+              "Element count of a struct/tuple blob, else nil.") {
+    janet_fixarity(argc, 1);
+    JanetSharedBlob *b = shared_get_blob(argv[0]);
+    if (b->len < 1) return janet_wrap_nil();
+    uint8_t tag = b->data[0];
+    if (tag != 7 && tag != 8) return janet_wrap_nil();
+    if (b->len < 5) return janet_wrap_nil();
+    uint32_t n = ((uint32_t) b->data[1]) | ((uint32_t) b->data[2] << 8) |
+        ((uint32_t) b->data[3] << 16) | ((uint32_t) b->data[4] << 24);
+    return janet_wrap_integer((int32_t) n);
+}
+
+JANET_CORE_FN(cfun_shared_get,
+              "(shared/get b k)",
+              "Look up key `k` in a struct blob (or index a tuple blob) "
+              "without decoding the whole value. Missing keys, "
+              "out-of-range indices, and scalar blobs give nil. "
+              "Unshareable key types also give nil.") {
+    janet_fixarity(argc, 2);
+    JanetSharedBlob *b = shared_get_blob(argv[0]);
+    const uint8_t *end = b->data + b->len;
+    if (b->len < 1) return janet_wrap_nil();
+    uint8_t tag = b->data[0];
+    if (tag == 8) {
+        /* Tuple index. */
+        if (!janet_checkint(argv[1])) return janet_wrap_nil();
+        int32_t idx = janet_unwrap_integer(argv[1]);
+        if (b->len < 5 || idx < 0) return janet_wrap_nil();
+        uint32_t n = ((uint32_t) b->data[1]) | ((uint32_t) b->data[2] << 8) |
+            ((uint32_t) b->data[3] << 16) | ((uint32_t) b->data[4] << 24);
+        if ((uint32_t) idx >= n) return janet_wrap_nil();
+        const uint8_t *p = b->data + 5;
+        for (int32_t i = 0; i < idx; i++) {
+            p = shared_skip_value(p, end);
+            if (NULL == p) return janet_wrap_nil();
+        }
+        JanetSharedCursor c = {p, end};
+        return shared_decode(&c, 0);
+    }
+    if (tag != 7) return janet_wrap_nil();
+    if (!shared_checkable(argv[1], 0)) return janet_wrap_nil();
+    JanetBuffer kb;
+    janet_buffer_init(&kb, 0);
+    shared_encode(&kb, argv[1], 0);
+    const uint8_t *valp = NULL;
+    int found = shared_struct_find(b->data + 1, end, kb.data, kb.count, &valp);
+    janet_buffer_deinit(&kb);
+    if (!found) return janet_wrap_nil();
+    JanetSharedCursor c = {valp, end};
+    return shared_decode(&c, 0);
+}
+
+JANET_CORE_FN(cfun_shared_materialize,
+              "(shared/materialize b)",
+              "Decode a whole blob back to ordinary caller-heap values "
+              "(structs, tuples, re-interned keywords). The blob itself "
+              "is unchanged.") {
+    janet_fixarity(argc, 1);
+    JanetSharedBlob *b = shared_get_blob(argv[0]);
+    JanetSharedCursor c = {b->data, b->data + b->len};
+    return shared_decode(&c, 0);
 }
 
 JANET_CORE_FN(cfun_ev_give_supervisor,
@@ -4506,6 +4979,11 @@ void janet_lib_ev(JanetTable *env) {
         JANET_CORE_REG("ev/register", cfun_registry_register),
         JANET_CORE_REG("ev/whereis", cfun_registry_whereis),
         JANET_CORE_REG("ev/unregister", cfun_registry_unregister),
+        JANET_CORE_REG("shared/new", cfun_shared_new),
+        JANET_CORE_REG("shared/shareable?", cfun_shared_shareable),
+        JANET_CORE_REG("shared/length", cfun_shared_length),
+        JANET_CORE_REG("shared/get", cfun_shared_get),
+        JANET_CORE_REG("shared/materialize", cfun_shared_materialize),
         JANET_CORE_REG("ev/give-supervisor", cfun_ev_give_supervisor),
         JANET_CORE_REG("ev/sleep", cfun_ev_sleep),
         JANET_CORE_REG("ev/deadline", cfun_ev_deadline),
@@ -4533,6 +5011,7 @@ void janet_lib_ev(JanetTable *env) {
     janet_register_abstract_type(&janet_mutex_type);
     janet_register_abstract_type(&janet_rwlock_type);
     janet_register_abstract_type(&janet_thread_handle_type);
+    janet_register_abstract_type(&janet_shared_type);
 }
 
 #endif

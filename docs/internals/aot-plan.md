@@ -474,17 +474,15 @@ strict cross-task ordering, cheap task restart (fresh task in a warm
 VM — supervision at scale), and bare-fiber pids (every scheduled task
 owns a queue).
 
-**M5 — shareable immutable structs.** REVIEWED 2026-10-06 — see
-`docs/internals/shared-structs-design.md` (the plan-gated
-prerequisite, now delivered). Verdict: option (a) ownership
-transfer is REJECTED (slab arenas make single-object transfer
-impossible — a "transfer" would copy anyway); option (b) is
-FEASIBLE as refcounted off-heap flattened blobs following the
-threaded-abstract pattern (atomic refcount, wrapper-gc decref,
-UNSAFE marshal passthrough for free, `shareable?` deep predicate)
-— Erlang-refc-binary shaped, zero collector changes. Implementation
-waits on the four open proofs in §5 of the review (finalizer
-reliability, refcount audit, marshal coverage, predicate edges).
+**M5 — shareable immutable structs.** IMPLEMENTED 2026-10-06
+(`core/shared` in ev.c + 34 pins in test/suite-shared.janet):
+review verdict followed exactly — threaded abstract with inline
+flattened payload (no nested refs, so no finalizers needed),
+`shareable?` deep predicate (fail-closed; structs iterated to
+capacity skipping nil keys, protos rejected), navigation without
+full decode, safe-mode marshal/unmarshal via payload bytes.
+Review doc carries per-proof outcomes, including the real trap
+found in testing (struct capacity iteration).
 
 **Dependency chain:** M1 (pure janet) -> M2 (runtime) -> M2b/c/d/e
 (cooperative supervision: refs, trapping, link, pids — each gated

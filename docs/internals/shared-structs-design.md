@@ -1,8 +1,8 @@
 # M5 design review: shareable immutable values across VMs
 
-Status: REVIEW (the plan-gated prerequisite for any M5 code — no
-implementation yet). Question: can two isolated Janet VMs share one
-immutable struct with zero copies?
+Status: IMPLEMENTED 2026-10-06 (`core/shared` in src/core/ev.c +
+test/suite-shared.janet, 34 pins). This document is the review that
+preceded it; §5 verdicts below each carry their outcome.
 
 ## 1. GC facts (this tree)
 
@@ -71,21 +71,28 @@ the GC at all (this is Erlang's refc-binary shape, not shared-heap):
   when a value is read in N VMs with N large (broadcast constants,
   static game data) — same break-even as refc binaries.
 
-## 5. Open proofs required before M5 code
+## 5. Open proofs required before M5 code — OUTCOMES
 
-1. Wrapper-finalizer reliability: confirm the type `gc` hook runs
-   on every wrapper-collection path (minor, major, VM teardown) —
-   else payloads leak. Aimed test: create/collect/dispose loop
-   under ASan + allocation counters.
-2. Refcount discipline audit: every incref site (construction,
-   marshal passthrough, explicit retain if any) paired against a
-   decref site (wrapper gc, explicit release, entry removal).
-3. Marshal-passthrough coverage: confirm the THREADED_ABSTRACT
-   flag path applies to the new type with no marsh.c changes, in
-   both directions, including nested inside tuples/tables.
-4. Predicate edge cases: tables with protos, functions closing
-   over mutables, abstract payloads, cyclic structures (reject),
-   huge-but-shallow values (copy budget).
+1. Wrapper-finalizer reliability: NOT NEEDED as designed — the
+   payload is inline in the abstract allocation (no nested refs),
+   so `gc`/`gcperthread` are both NULL and freeing is automatic
+   with the allocation. Verified by collection + post-GC-read pins
+   and ASan runs.
+2. Refcount discipline audit: ntau — the abstract's own atomic
+   refcount owns the lifetime; marshal-passthrough increfs pair
+   with wrapper-collection decrefs (existing machinery, unchanged).
+3. Marshal-passthrough coverage: CONFIRMED — cross-thread mailbox
+   transfer works with zero new marshal code; safe-mode
+   marshal/unmarshal implemented via payload bytes (plus abstract
+   registry registration, which the first cut missed — safe
+   unmarshal needs `janet_register_abstract_type`, and the
+   framework requires `janet_unmarshal_abstract_reuse`).
+4. Predicate edge cases: CONFIRMED with one real trap found in
+   testing — structs are open-addressed hash tables, so iteration
+   MUST go to `janet_struct_capacity` skipping nil keys (iterating
+   to `length` silently skips entries whose slots hash past the
+   front — single-entry structs validated vacuously and encoded
+   garbage). Fixed + pinned. Protos rejected (fail-closed).
 
 ## 6. Explicit non-goals
 
