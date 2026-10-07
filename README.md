@@ -1,22 +1,88 @@
-[![Join the chat](https://img.shields.io/badge/zulip-join_chat-brightgreen.svg)](https://janet.zulipchat.com)
-&nbsp;
-[![builds.sr.ht status](https://builds.sr.ht/~bakpakin/janet/commits/master/freebsd.yml.svg)](https://builds.sr.ht/~bakpakin/janet/commits/master/freebsd.yml?)
-[![builds.sr.ht status](https://builds.sr.ht/~bakpakin/janet/commits/master/openbsd.yml.svg)](https://builds.sr.ht/~bakpakin/janet/commits/master/openbsd.yml?)
-[![Actions Status](https://github.com/janet-lang/janet/actions/workflows/test.yml/badge.svg)](https://github.com/janet-lang/janet/actions/workflows/test.yml)
+<pre>
+            ___
+           |___|   <-- antenna (it picks up alien channels)
+         _________
+        |  o   o  |  <-- visor eyes (they see your types)
+        |  _____  |
+        | |_|_|_| |  <-- grill mouth (it eats slow code)
+         \_______/
+           |   |
+          _|   |_
+         |___ ___|
+             Bender says: BITE MY SHINY METAL COMPILER
+</pre>
 
-<img src="https://raw.githubusercontent.com/janet-lang/janet/master/assets/janet-w200.png" alt="Janet logo" width=200 align="left">
+# Bender
 
-**Janet** is a programming language for system scripting, expressive automation, and
-extending programs written in C or C++ with user scripting capabilities.
+**Bender** is a fork of [Janet](https://janet-lang.org) (by Calvin Rose)
+with the same syntax and ecosystem compatibility, rebuilt underneath as
+a full-fledged compiler: Spinel-style widening type inference with
+optional `{:hint}` contracts compiles numeric code to native C kernels,
+a hybrid boxed/native VM runs the rest, Erlang-style actors handle
+concurrency, and a profile-guided (PGO) loop learns types from real
+runs. Ease of use above all — performance above backward
+compatibility. Named for the hardest-working robot in television; the
+`janet` function names, file extensions, and C API stay untouched, so
+every existing Janet program keeps working.
 
-Janet makes a good system scripting language, or a language to embed in other programs.
-It's like Lua and GNU Guile in that regard. It has more built-in functionality and a richer core language than
-Lua, but smaller than GNU Guile or Python. However, it is much easier to embed and port than Python or Guile.
+There is an interactive REPL with line editing, persistent history
+(`JANET_HISTFILE`), inline docs, and a debugger — develop dynamically,
+ship compiled:
 
-There is a REPL for trying out the language, as well as the ability
-to run script files. This client program is separate from the core runtime, so
-Janet can be embedded in other programs. Try Janet in your browser at
-<https://janet-lang.org>.
+```
+$ ./build/janet
+Bender 1.43.0-dev ... - '(doc)' for help
+repl:1:> (+ 1 2 3)
+6
+repl:2:> (doc map)
+...
+```
+
+Type-driven development without leaving the language: run with
+`JANET_PROFILE=1 JANET_PROFILE_OUT=types.jdn` to record observed types,
+then `debug/profile-dump`; the next widening cycle seeds from evidence
+instead of `:unknown`. What the compiler can't prove stays in the VM;
+hints move more into static kernels; higher-level values stay boxed.
+
+<br>
+
+## Goals (imported from the original Bender attempt, ticked as landed)
+
+- [x] Nimble startup times, no JIT by default (AOT images, fast binaries)
+- [~] As fast as or faster than Lua (faster than CRuby measured; Lua next)
+- [x] Hindley-Milner-style type inference (widening inference + fixpoint)
+- [x] Immutable data structures (tuple/struct)
+- [x] Tail call optimisation
+- [~] Lazy/delayed evaluation (fibers, generators)
+- [x] Optional types through metadata (`{:hint}` contracts)
+- [x] Compiled to native code (`janet-aot.sh --native`, hybrid binaries)
+- [x] Interpreted while developing (REPL + scripts, boxed tier)
+- [x] Linked with C/C++ libs (built-in FFI, extern declarations)
+- [x] Efficient GC (generational slab collector + promotion barrier)
+- [x] Designed with game development in mind (raylib proven end to end)
+- [~] Cross platform (macOS/Linux/Windows build; mobile/consoles later)
+- [~] Smallest JIT available (`ffi/jitfn`, `unsafe/exec-alloc`, trampolines; full JIT later)
+- [ ] Faster than Chez by a factor of 3 at least (unmeasured)
+- [x] Ease of use over dogma and tradition
+- [~] Profiler and database for type detection (collector + dump shipped; seeded widening next)
+- [x] Easier function names over stdlib dogma
+- [x] Ease of use above performance, performance above backward compatibility
+- [x] Erlang-styled concurrency (threads, mailboxes, monitors, shared structs)
+- [ ] Use ML to detect types
+- [~] Automatic deterministic memory management (GC exists; optional/deterministic modes later)
+- [x] Inferred static types for speed (native kernels)
+- [ ] Rust-styled optional borrowed ownership
+- [ ] Logic programming (Shen-compatible)
+- [x] No hidden performance penalties, explicit allocation (`unsafe/` module)
+- [x] Straightforward integration with existing C code
+- [x] Lisp macros, compile-time scripting, helpful REPL
+- [~] Threads and atomic references (threads shipped; atomics partial)
+- [x] Async programming via fibers and the event loop
+- [ ] Functional Reactive Programming
+- [ ] Software-Transactional Memory
+- [x] The actor model
+- [ ] JVM/CLR/Neko targets (C target only)
+- [ ] Clojure syntax compatibility (superseded: Janet syntax kept instead)
 
 <br>
 
