@@ -44,9 +44,52 @@
   (eprint "mkimage: cannot read " srcpath)
   (os/exit 1))
 
+
+# Pre-execute top-level import/require/use forms into the unit env -- the
+# same thing normal loading does (compile+exec each form in turn) before
+# later forms compile. Single-thunk compilation otherwise never merges
+# prefixed module bindings (WIPEMOD/GROUPS etc.), so multi-module programs
+# fail with "unknown symbol". Modules load through the real loader
+# (require: cached, resolves relatives recursively), then merge-module
+# applies :as/:prefix/:only/:export exactly like import*. Runtime requires
+# inside functions are out of scope (same as the one-thunk model).
+# Keep in sync between tools/callgraph.janet and tools/mkimage.janet.
+(defn preimport-unit-imports [env unitfile forms]
+  (def prev-current-file (dyn :current-file))
+  (setdyn :current-file unitfile)
+  (each form forms
+    (when (and (tuple? form) (>= (length form) 2))
+      (def head (form 0))
+      (when (and (symbol? head)
+                 (or (= head (quote import))
+                     (= head (quote use))
+                     (= head (quote require))))
+        (try
+          (do (def path (string (form 1)))
+            (def modenv (require path))
+            (when (or (= head (quote import)) (= head (quote use)))
+              (def kargs (table ;(tuple/slice form 2)))
+              (def as (get kargs :as))
+              (def prefix (get kargs :prefix))
+              (def only (get kargs :only))
+              (def ep (or (get kargs :export) (= head (quote use))))
+              (def pfx (or (and as (string as "/")) prefix
+                           (string (last (string/split "/" (string path))) "/")))
+              (merge-module env modenv pfx ep only)))
+          ([e] (eprint "aot: import pre-execution failed for " (form 1) ": " e)
+               (os/exit 2))))))
+  (setdyn :current-file prev-current-file))
+
 # Fresh core env. make-env protos to root-env, so walk the whole chain for
 # the pristine snapshot (keys sees own entries only).
 (def env (make-env))
+# Mirror the janet CLI: the script's directory joins the module syspath so
+# relative imports (../src/...) resolve the way a normal `janet f.janet`
+# run resolves them.
+(do (def ssrc srcpath)
+  (def slash-idx (string/find "/" (string/reverse ssrc)))
+  (module/add-syspath
+    (if (nil? slash-idx) "." (string/slice ssrc 0 (- (length ssrc) slash-idx 1)))))
 (def snap @{})
 (var t env)
 (while t
@@ -62,6 +105,7 @@
 (var forms
   (try (parse-all src)
     ([err] (eprint srcpath ": parse error: " err) (os/exit 1))))
+(preimport-unit-imports env srcpath forms)
 
 # --native names.txt (step 12 hybrid): names in the file were compiled to
 # native kernels (native.c, sibling of output). Strip their defn forms —
@@ -93,6 +137,23 @@
                 (tuple 'def nm
                        (tuple ':value
                               (tuple 'get '(curenv) (tuple 'quote nm)))))))
+
+# AOT images bake modules in at build time: the preimport pass above
+# already loaded every top-level import and merged its bindings, so the
+# import/require/use forms themselves are stripped from the emitted thunk
+# (at runtime there is no :current-file for :cur: resolution, and the
+# module top-levels must not run twice). Runtime requires inside function
+# bodies are left alone.
+(do (def kept2 @[])
+  (each f forms
+    (if (and (tuple? f) (>= (length f) 1)
+             (symbol? (get f 0))
+             (or (= (get f 0) (quote import))
+                 (= (get f 0) (quote require))
+                 (= (get f 0) (quote use))))
+      nil
+      (array/push kept2 f)))
+  (set forms kept2))
 
 # One thunk for the whole file: correct cross-form refs, zero build-time run.
 (def program (tuple/slice @['do ;forms] 0))
@@ -134,7 +195,6 @@
 (buffer/push-string out
   ```
   int main(int argc, char **argv) {
-      (void) argc; (void) argv;
       janet_init();
       JanetTable *env = janet_core_env(NULL);
       janet_table_put(env, janet_ckeywordv("executable"), janet_cstringv(argv[0]));
@@ -144,6 +204,13 @@
       extern void native_init(JanetTable *env);
       native_init(env);
 #endif
+      /* CLI parity: install (dyn :args) as [program, ...argv], the way
+       * run.c exposes script arguments (mkimage note: :args[0] is the
+       * script path). */
+      JanetArray *cliargs = janet_array(argc > 0 ? argc : 1);
+      for (int ai = 0; ai < argc; ai++)
+          janet_array_push(cliargs, janet_cstringv(argv[ai]));
+      janet_table_put(env, janet_ckeywordv("args"), janet_wrap_array(cliargs));
       JanetTable *reg = janet_table((int32_t) janet_aot_names_len);
       for (unsigned long i = 0; i < janet_aot_names_len; i++) {
           Janet v = janet_resolve_core(janet_aot_names[i]);

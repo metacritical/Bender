@@ -24,6 +24,13 @@ typedef struct {
     int u, v, w, x, y, z;
 } SixInts;
 
+/* Homogeneous float aggregates (Vector2/3/4, Rectangle shapes). AAPCS64
+ * passes one element per FP register -- regression cover for the HFA
+ * argument/return fix (DrawTextEx-class signatures). */
+typedef struct { float x, y; } V2;
+typedef struct { float x, y, z; } V3;
+typedef struct { float x, y, z, w; } V4;
+
 typedef struct {
     int a;
     int b;
@@ -190,6 +197,40 @@ SplitFlip split_flip_ret_fn(int x, float y) {
     ret.c = y;
     ret.d = y;
     return ret;
+}
+
+EXPORTER
+V2 v2_add(V2 a, V2 b) {
+    V2 r = { a.x + b.x, a.y + b.y };
+    return r;
+}
+
+EXPORTER
+V3 v3_add(V3 a, V3 b) {
+    V3 r = { a.x + b.x, a.y + b.y, a.z + b.z };
+    return r;
+}
+
+EXPORTER
+V4 v4_add(V4 a, V4 b) {
+    V4 r = { a.x + b.x, a.y + b.y, a.z + b.z, a.w + b.w };
+    return r;
+}
+
+EXPORTER
+V2 v2_ret(float x, float y) {
+    V2 r = { x, y };
+    return r;
+}
+
+EXPORTER
+float v2_mixed(int tag, const char *name, V2 p, float size, float spacing) {
+    /* DrawTextEx-shaped signature: int, string, HFA, float, float.
+     * Returns tag + strlen + positions so every arg is verified. */
+    if (tag != 7) return -1.0f;
+    if (p.x != 60.0f || p.y != 80.0f) return -2.0f;
+    if (size != 64.0f || spacing != 2.0f) return -3.0f;
+    return (float)(tag + (int)strlen(name));
 }
 
 EXPORTER

@@ -536,11 +536,53 @@
 # fails (e.g. it needs ran siblings, like boot's setup stanzas, or has
 # cross-form forward references, which real loading rejects too)
 # records one `uncompiled` line.
+
+# Pre-execute top-level import/require/use forms into the unit env -- the
+# same thing normal loading does (compile+exec each form in turn) before
+# later forms compile. Single-thunk compilation otherwise never merges
+# prefixed module bindings (WIPEMOD/GROUPS etc.), so multi-module programs
+# fail with "unknown symbol". Modules load through the real loader
+# (require: cached, resolves relatives recursively), then merge-module
+# applies :as/:prefix/:only/:export exactly like import*. Runtime requires
+# inside functions are out of scope (same as the one-thunk model).
+# Keep in sync between tools/callgraph.janet and tools/mkimage.janet.
+(defn preimport-unit-imports [env unitfile forms]
+  (def prev-current-file (dyn :current-file))
+  (setdyn :current-file unitfile)
+  (each form forms
+    (when (and (tuple? form) (>= (length form) 2))
+      (def head (form 0))
+      (when (and (symbol? head)
+                 (or (= head (quote import))
+                     (= head (quote use))
+                     (= head (quote require))))
+        (try
+          (do (def path (string (form 1)))
+            (def modenv (require path))
+            (when (or (= head (quote import)) (= head (quote use)))
+              (def kargs (table ;(tuple/slice form 2)))
+              (def as (get kargs :as))
+              (def prefix (get kargs :prefix))
+              (def only (get kargs :only))
+              (def ep (or (get kargs :export) (= head (quote use))))
+              (def pfx (or (and as (string as "/")) prefix
+                           (string (last (string/split "/" (string path))) "/")))
+              (merge-module env modenv pfx ep only)))
+          ([e] (eprint "aot: import pre-execution failed for " (form 1) ": " e)
+               (os/exit 2))))))
+  (setdyn :current-file prev-current-file))
+
 (var core-names @{})
 (each f args
   (def text (slurp f))
   (def forms (parse-all text))
   (def env (make-env))
+  # mirror the janet CLI: the script's directory joins the module syspath
+  # so relative imports (../src/...) resolve like a normal `janet f.janet`
+  (def slash-idx (string/find "/" (string/reverse f)))
+  (def dirname (if (nil? slash-idx) "." (string/slice f 0 (- (length f) slash-idx 1))))
+  (module/add-syspath dirname)
+  (preimport-unit-imports env f forms)
   # extern fallbacks pre-bind their names so the unit compiles and
   # provides the parity oracle
   (each name (keys externs)
@@ -1413,10 +1455,20 @@
           (def nm (string (d :name)))
           (put emitted-names id nm)
           (array/push kernels {:name nm :code (res :code)
+                               :externs (res :externs)
                                :wrapper (wrapper-for nm (get pts id) (rts id))})
           (set changed true)))))
   (def cout @"")
   (buffer/push-string cout "#include <janet.h>\n#include <inttypes.h>\n\n")
+  # extern C declarations used by the emitted kernels (raylib story)
+  (each k kernels
+    (each en (k :externs)
+      (def ext (get externs en))
+      (buffer/push-string cout
+        (string "extern " (emit-c-type (get ext :returns)) " "
+                (get ext :c) "("
+                (string/join (map emit-c-type (get ext :params)) ", ") ");\n"))))
+  (buffer/push-string cout "\n")
   (each k kernels
     (buffer/push-string cout (k :code))
     (buffer/push-string cout "\n")

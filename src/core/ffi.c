@@ -1130,7 +1130,14 @@ JANET_CORE_FN(cfun_ffi_signature,
                         ref_stack_offset += arg_size;
                         break;
                     case JANET_AAPCS64_SSE: {
-                        uint32_t needed_registers = (arg_size + 7) / 8;
+                        /* AAPCS64: an HFA (homogeneous float aggregate) is
+                         * passed one element per FP register -- a Vector2
+                         * takes v[n] and v[n+1], not one packed register
+                         * like x86-64 SysV. Scalars stay one-per. */
+                        uint32_t needed_registers = 1;
+                        if (mappings[i].type.prim == JANET_FFI_TYPE_STRUCT) {
+                            needed_registers = mappings[i].type.st->field_count;
+                        }
                         if (next_fp_reg + needed_registers <= 8) {
                             mappings[i].offset = next_fp_reg;
                             next_fp_reg += needed_registers;
@@ -1554,7 +1561,21 @@ static Janet janet_ffi_aapcs64(JanetFFISignature *signature, void *function_poin
                 regs[arg.offset] = (uint64_t) to;
                 break;
             case JANET_AAPCS64_SSE:
-                to = fp_regs + arg.offset;
+                if (arg.type.prim == JANET_FFI_TYPE_STRUCT) {
+                    /* HFA: one float element per FP register. */
+                    JanetView els = janet_getindexed(argv, n);
+                    JanetFFIStruct *st = arg.type.st;
+                    if ((uint32_t) els.len != st->field_count) {
+                        janet_panicf("wrong number of fields in struct, expected %d, got %d",
+                                     (int32_t) st->field_count, els.len);
+                    }
+                    for (uint32_t k = 0; k < st->field_count; k++) {
+                        janet_ffi_write_one(fp_regs + arg.offset + k, els.items, k,
+                                            st->fields[k].type, JANET_FFI_MAX_RECUR);
+                    }
+                } else {
+                    to = fp_regs + arg.offset;
+                }
                 break;
             case JANET_AAPCS64_STACK:
                 to = stack + arg.offset;
@@ -1597,6 +1618,30 @@ static Janet janet_ffi_aapcs64(JanetFFISignature *signature, void *function_poin
         }
     }
 
+    /* AAPCS64 HFA returns come back one element per FP register
+     * (x in v0, y in v1, ...), which the variant-1 union captures as
+     * sse_return.a..d. Parse element-wise instead of a C-layout read;
+     * float elements sit in the low half of each slot. */
+    if (signature->variant == 1 &&
+            signature->ret.type.prim == JANET_FFI_TYPE_STRUCT) {
+        JanetFFIStruct *st = signature->ret.type.st;
+        Janet *tup = janet_tuple_begin(st->field_count);
+        float *fslots = (float *) &retu.sse_return;
+        /* each double slot is 2 floats; element k of a float HFA lives in
+         * the low half of slot k */
+        for (uint32_t k = 0; k < st->field_count; k++) {
+            JanetFFIType ft = st->fields[k].type;
+            if (ft.prim == JANET_FFI_TYPE_FLOAT) {
+                tup[k] = janet_wrap_number((double) fslots[2 * k]);
+            } else if (ft.prim == JANET_FFI_TYPE_DOUBLE) {
+                double *dslots = (double *) &retu.sse_return;
+                tup[k] = janet_wrap_number(dslots[k]);
+            } else {
+                janet_panic("unsupported mixed HFA return");
+            }
+        }
+        return janet_wrap_tuple(janet_tuple_end(tup));
+    }
     return janet_ffi_read_one(ret_mem, signature->ret.type, JANET_FFI_MAX_RECUR);
 }
 
