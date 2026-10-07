@@ -1,3 +1,5 @@
+<img src="assets/bender.svg" alt="Bender logo" width=200 align="left">
+
 <pre>
         O
         |
