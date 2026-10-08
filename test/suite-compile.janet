@@ -204,4 +204,21 @@
 (check-lint-compile '|(when-with [_ nil] (print $200)) "dead code + upvalues 1")
 (check-lint-compile '|(when-with [_ nil] (print $255)) "dead code + upvalues 2")
 
+# string literal folding: all-constant string args concatenate at
+# compile time (ldc, no call); anything else keeps the dynamic call
+(defn strfold-bc [src]
+  (get (disasm (compile (parse src))) :bytecode))
+(let [bc (strfold-bc "(string \"a\" \"b\" \"c\")")]
+  (assert (= 2 (length bc)) "folded to ldc+ret")
+  (assert (= 'ldc ((bc 0) 0)) "folded head is ldc"))
+(let [d (disasm (compile (parse "(defn f [x] (string \"a\" x))")))]
+  (var saw-call false)
+  (each sub (get d :defs)
+    (each ins (get sub :bytecode)
+      (when (or (= (ins 0) 'call) (= (ins 0) 'tcall)) (set saw-call true))))
+  (assert saw-call "dynamic string keeps call"))
+(assert (= "ab" (eval (parse "(string \"a\" \"b\")"))) "folded value")
+(assert (= "" (eval (parse "(string)"))) "empty string")
+(assert (= "12" (eval (parse "(string 1 2)"))) "numbers unfold")
+
 (end-suite)

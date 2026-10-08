@@ -31,6 +31,10 @@
 #include "regalloc.h"
 #endif
 
+/* Core `string` cfunction (defined in corelib.c): identified by pointer
+ * for call-site constant folding below. */
+Janet janet_core_string(int32_t argc, Janet *argv);
+
 JanetFopts janetc_fopts_default(JanetCompiler *c) {
     JanetFopts ret;
     ret.compiler = c;
@@ -633,6 +637,27 @@ static int function_can_inline(JanetFopts opts, JanetFunction *func, JanetSlot *
     return 1;
 }
 
+/* Fold (string "a" "b" ...) with all-literal string args into one
+ * constant. Only unwraps JANET_STRING constants (numbers, keywords
+ * etc. format through `describe`/`to-string` paths whose exact output
+ * is deliberately left to runtime). GC-safe: the compiler interns
+ * strings throughout compilation already. */
+static int janetc_fold_string(JanetFopts opts, JanetSlot *slots, JanetSlot *out) {
+    (void) opts;
+    int32_t i, len = janet_v_count(slots);
+    if (len < 1) return 0;
+    for (i = 0; i < len; i++) {
+        if (!(slots[i].flags & JANET_SLOT_CONSTANT)) return 0;
+        if (!janet_checktype(slots[i].constant, JANET_STRING)) return 0;
+    }
+    JanetBuffer *b = janet_buffer(0);
+    for (i = 0; i < len; i++) {
+        janet_buffer_push_string(b, janet_unwrap_string(slots[i].constant));
+    }
+    *out = janetc_cslot(janet_stringv(b->data, b->count));
+    return 1;
+}
+
 /* Compile a call or tailcall instruction */
 static JanetSlot janetc_call(JanetFopts opts, JanetSlot *slots, JanetSlot fun, const Janet *form) {
     JanetSlot retslot;
@@ -713,6 +738,14 @@ static JanetSlot janetc_call(JanetFopts opts, JanetSlot *slots, JanetSlot fun, c
                     ;
                 }
                 janetc_regalloc_free_n(&c->scope->ra, slot_delta, nslots);
+            }
+        } else if (janet_checktype(fun.constant, JANET_CFUNCTION) &&
+                   janet_unwrap_cfunction(fun.constant) == janet_core_string) {
+            /* Fold (string "a" "b") with all-literal string args.
+             * Pointer-compared against the core binding: user shadowing
+             * resolves to a different value and never folds. */
+            if (janetc_fold_string(opts, slots, &retslot)) {
+                specialized = 1;
             }
         }
     }
