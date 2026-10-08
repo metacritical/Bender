@@ -384,6 +384,8 @@ install: $(JANET_TARGET) $(JANET_LIBRARY) $(JANET_STATIC_LIBRARY) build/janet.pc
 	cp $(JANET_STATIC_LIBRARY) '$(DESTDIR)$(LIBDIR)/libjanet.a'
 	mkdir -p '$(DESTDIR)$(JANET_MANPATH)'
 	cp janet.1 '$(DESTDIR)$(JANET_MANPATH)'
+	mkdir -p '$(DESTDIR)$(LIBDIR)/janet/tools'
+	cp tools/callgraph.janet tools/mkimage.janet tools/infer.janet '$(DESTDIR)$(LIBDIR)/janet/tools'
 	mkdir -p '$(DESTDIR)$(JANET_PKG_CONFIG_PATH)'
 	cp build/janet.pc '$(DESTDIR)$(JANET_PKG_CONFIG_PATH)/janet.pc'
 	cp '$(JANET_IMPORT_LIB)' '$(DESTDIR)$(LIBDIR)' || echo 'no import lib to install (mingw only)'
@@ -415,6 +417,7 @@ uninstall:
 	-rm -rf '$(DESTDIR)$(LIBDIR)'/libjanet.*
 	-rm '$(DESTDIR)$(JANET_PKG_CONFIG_PATH)/janet.pc'
 	-rm '$(DESTDIR)$(JANET_MANPATH)/janet.1'
+	-rm -rf '$(DESTDIR)$(LIBDIR)/janet/tools'
 	# -rm -rf '$(DESTDIR)$(JANET_PATH)'/* - err on the side of correctness here
 
 #################

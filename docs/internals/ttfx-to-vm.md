@@ -100,7 +100,7 @@ of the work — L3 adds field-name ergonomics and per-record layout).
 ## Order and gates
 
 0. Auto-PGO pipeline (from: every lesson needed manual steps) — one
-   command closes the loop: `janet-aot.sh --pgo app.janet` runs the
+   command closes the loop: `bender --aot app.janet --native --pgo "workload args"` runs the
    program under the collector, dumps the profile, recompiles with
    seeding + L2 visibility, re-verifies byte parity, and only then
    replaces the binary. Detection, not annotation: hot patterns

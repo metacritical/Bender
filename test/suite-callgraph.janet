@@ -534,4 +534,43 @@
 (assert (not (nil? (string/find "double k_move(void* p0, double p1, double p2)" sttext))) "pointer params emit")
 (assert (not (nil? (string/find "(*(double*)((char*)(p0) + 0))" sttext))) "field access is direct")
 
+# ---- L0: --pgo auto-PGO loop (collect -> seed -> parity-gate -> install) ----
+# validation: --pgo without --native refuses
+(assert (= 2 (os/execute ["/bin/sh" "-c"
+  "./build/bender --aot /tmp/cg-hybrid.janet --pgo '' -o /tmp/cg-pgo-no 2>/tmp/cg-pgo-no.log"] :p))
+  "pgo without native exits 2")
+(def nolog (slurp "/tmp/cg-pgo-no.log"))
+(assert (not (nil? (string/find "needs --native" nolog))) "pgo without native says why")
+# validation: --pgo with -c refuses (no binary, nothing to gate on)
+(assert (= 2 (os/execute ["/bin/sh" "-c"
+  "./build/bender --aot /tmp/cg-hybrid.janet --native --pgo '' -c -o /tmp/cg-pgo-c 2>/tmp/cg-pgo-c.log"] :p))
+  "pgo with -c exits 2")
+# full pipeline on a tiny deterministic program (empty workload args
+# also proves --pgo '' still triggers the loop)
+(spit "/tmp/cg-pgo.janet" (string
+  "(defn k-double {:hint {:params [:long] :returns :long}} [x] (+ x x))\n"
+  "(defn main [&] (print (k-double 21)) 0)\n"
+  "# AOT images run the thunk only: entry must invoke main itself, and\n"
+  "# (os/exit (main)) also shields the interpreter run from run-main's\n"
+  "# second call, so both sides print exactly once.\n"
+  "(os/exit (main))\n"))
+(assert (= 0 (os/execute ["/bin/sh" "-c"
+  "rm -f /tmp/cg-pgo-app && ./build/bender --aot /tmp/cg-pgo.janet --native --pgo '' -o /tmp/cg-pgo-app > /tmp/cg-pgo.log 2>&1"] :p))
+  "pgo pipeline exits 0")
+(def pgolog (slurp "/tmp/cg-pgo.log"))
+(assert (not (nil? (string/find "pgo parity ok" pgolog))) "pgo parity gate passed")
+(assert (= 0 (os/execute ["/bin/sh" "-c" "/tmp/cg-pgo-app > /tmp/cg-pgo-app.out"] :p))
+  "pgo-installed binary runs")
+(assert (= "42\n" (string (slurp "/tmp/cg-pgo-app.out"))) "pgo-installed binary output correct")
+# the gate bites: os/clock always differs between the two runs
+(spit "/tmp/cg-pgofail.janet" (string
+  "(defn main [&] (print (os/clock)) 0)\n"
+  "(os/exit (main))\n"))
+(assert (= 1 (os/execute ["/bin/sh" "-c"
+  "rm -f /tmp/cg-pgofail-app && ./build/bender --aot /tmp/cg-pgofail.janet --native --pgo '' -o /tmp/cg-pgofail-app > /tmp/cg-pgofail.log 2>&1"] :p))
+  "pgo parity failure exits 1")
+(def pgofaillog (slurp "/tmp/cg-pgofail.log"))
+(assert (not (nil? (string/find "PGO PARITY FAILED" pgofaillog))) "pgo failure says why")
+(assert (nil? (os/stat "/tmp/cg-pgofail-app")) "broken binary never installs")
+
 (end-suite)

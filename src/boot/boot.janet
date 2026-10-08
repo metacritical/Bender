@@ -5196,6 +5196,255 @@
   (file/flush stdout)
   (file/read stdin :line buf))
 
+###
+###
+### AOT driver (bender --aot): the compiler driver lives in the binary.
+### tools/janet-aot.sh is a thin shim over this. Mirrors the shell
+### grammar 1:1: app.janet [-o app] [-c] [-S] [-E args...] [--native]
+### [--externs F] [--include F]... [-x F] [--ldflags S] [--pgo S]
+### [--pgo-stdin F]. Tools (callgraph/mkimage) run in-process via dofile;
+### only cc and profile/parity workloads spawn subprocesses, like any
+### cc-style driver.
+###
+
+(defn- aot-die [msg &opt code]
+  (eprint "bender --aot: " msg)
+  (os/exit (or code 2))
+  nil)
+
+(defn- aot-words [s]
+  (filter (fn [w] (not (empty? w))) (string/split " " (or s ""))))
+
+(defn- aot-exe-root
+  `Best-effort repo/install root from the running executable path,
+  always absolute (so -I flags and tool paths survive cwd changes).`
+  []
+  (def exe0 (dyn *executable* ""))
+  (def exe (if (or (string/has-prefix? "/" exe0) (nil? (string/find "/" exe0)))
+             exe0 # absolute, or bare name (no relative info)
+             (string (os/cwd) "/" exe0)))
+  (def parts (string/split "/" exe))
+  (if (< (length parts) 2)
+    nil # bare name from PATH: no relative info
+    (do (def dir (string/join (tuple/slice parts 0 (- (length parts) 1)) "/"))
+      (def base (last (string/split "/" dir)))
+      (if (or (= base "build") (= base "bin"))
+        (let [pparts (string/split "/" dir)
+              parent (string/join (tuple/slice pparts 0 (- (length pparts) 1)) "/")]
+          (if (empty? parent) "." parent))
+        (if (empty? dir) "." dir)))))
+
+(defn- aot-tools-dir
+  `Locate callgraph.janet + mkimage.janet.`
+  []
+  (def cands @[])
+  (when-let [e (os/getenv "JANET_TOOLS")] (array/push cands e))
+  (when-let [r (aot-exe-root)] (array/push cands (string r "/tools")))
+  (array/push cands "/usr/local/lib/janet/tools")
+  (array/push cands "/usr/lib/janet/tools")
+  (var found nil)
+  (each d cands
+    (when (and (nil? found)
+               (= :file (os/stat (string d "/callgraph.janet") :mode))
+               (= :file (os/stat (string d "/mkimage.janet") :mode)))
+      (set found d)))
+  found)
+
+(defn- aot-run-tool [tooldir name toolargs]
+  (def toolpath (string tooldir "/" name))
+  (def env (make-env))
+  (put env *args* (tuple toolpath ;toolargs))
+  (dofile toolpath :exit true :env env))
+
+(defn- aot-abs-exe []
+  (def exe (dyn *executable* "bender"))
+  (if (or (string/has-prefix? "/" exe) (nil? (string/find "/" exe)))
+    exe # absolute, or bare name (PATH search via :p at spawn)
+    (string (os/cwd) "/" exe)))
+
+(defn- aot-run-cc [parts]
+  # :p so a bare "cc"/"$CC" resolves via PATH (absolute paths pass through).
+  (def code (os/execute parts :p))
+  (when (not= code 0)
+    (eprint "bender --aot: cc failed with exit " code)
+    (os/exit 1))
+  code)
+
+(defn- aot-clean [files dirs]
+  (each f files (try (os/rm f) ([_] nil)))
+  (each d dirs (try (os/rmdir d) ([_] nil))))
+
+(defn- aot-next [aotargs i what]
+  (def v (in aotargs (+ i 1)))
+  (when (nil? v) (aot-die (string what " needs a value")))
+  v)
+
+(defn- aot-compile [aotargs]
+  (var src "")
+  (var out "")
+  (var includes @[])
+  (var externs nil)
+  (var extrac @[])
+  (var ldflags "")
+  (var native false)
+  (var only-c false)
+  (var print-c false)
+  (var run-mode false)
+  (var pgo false)
+  (var pgo-args "")
+  (var pgo-stdin "")
+  (var appargs @[])
+  (var i 0)
+  (def n (length aotargs))
+  (while (< i n)
+    (def a (in aotargs i))
+    (cond
+      (= a "-o") (do (set out (aot-next aotargs i "-o")) (+= i 2))
+      (= a "-c") (do (set only-c true) (++ i))
+      (= a "-S") (do (set print-c true) (++ i))
+      (= a "-E") (do (set run-mode true) (++ i)
+                     (while (< i n) (array/push appargs (in aotargs i)) (++ i)))
+      (= a "--native") (do (set native true) (++ i))
+      (= a "--externs") (do (set externs (aot-next aotargs i "--externs")) (+= i 2))
+      (= a "--include") (do (array/push includes (aot-next aotargs i "--include")) (+= i 2))
+      (= a "--pgo") (do (set pgo true) (set pgo-args (aot-next aotargs i "--pgo")) (+= i 2))
+      (= a "--pgo-stdin") (do (set pgo-stdin (aot-next aotargs i "--pgo-stdin")) (+= i 2))
+      (= a "-x") (do (array/push extrac (aot-next aotargs i "-x")) (+= i 2))
+      (= a "--ldflags") (do (set ldflags (aot-next aotargs i "--ldflags")) (+= i 2))
+      (string/has-prefix? "-" a) (aot-die (string "unknown flag " a))
+      (do (when (not (empty? src)) (aot-die "one input only"))
+          (set src a) (++ i))))
+  (when (empty? src)
+    (aot-die "usage: bender --aot app.janet [-o app] [-c] [-S] [-E args...] [--native] [--externs FILE] [--include FILE] [-x FILE] [--ldflags STR] [--pgo ARGS] [--pgo-stdin FILE]"))
+  (when pgo
+    (unless native (aot-die "--pgo needs --native (profiling seeds kernel shaping)"))
+    (when (or only-c print-c run-mode)
+      (aot-die "--pgo needs a real binary build (no -c/-S/-E)"))
+    (when (and (not (empty? pgo-stdin)) (nil? (os/stat pgo-stdin)))
+      (aot-die (string "--pgo-stdin file not found: " pgo-stdin))))
+  (when (empty? out)
+    (def parts (string/split "/" src))
+    (def base (last parts))
+    (def stem (if (string/has-suffix? ".janet" base)
+                (string/slice base 0 (- (length base) 6))
+                base))
+    (def dirparts (tuple/slice parts 0 (- (length parts) 1)))
+    (set out (if (empty? dirparts) stem
+               (string (string/join dirparts "/") "/" stem))))
+  # -E builds into a staging dir that is removed after the run.
+  (var stage nil)
+  (when run-mode
+    (set stage (string out ".aotrun-" (os/getpid)))
+    (os/mkdir stage)
+    (set out (string stage "/app")))
+  (def tooldir (or (aot-tools-dir)
+                   (aot-die "AOT tools not found (set JANET_TOOLS to the tools/ dir)")))
+  (def root (string/slice tooldir 0 (- (length tooldir) 6))) # strip "/tools"
+  (def cc (os/getenv "CC" "cc"))
+  (def inc-args includes) # callgraph takes extra files bare (no flag)
+  (def cfile (string out ".c"))
+  (if (not native)
+    # plain image build (also serves -E below)
+    (do (aot-run-tool tooldir "mkimage.janet" [src cfile])
+      (when print-c (file/write stdout (slurp cfile)) (os/rm cfile))
+      (unless print-c
+        (when only-c (print "wrote " cfile))
+        (unless only-c
+          (aot-run-cc [cc "-O2" "-I" (string root "/build")
+                       "-I" (string root "/src/include")
+                       cfile (string root "/build/libjanet.a")
+                       "-lm" "-lpthread" "-o" out])
+          (unless run-mode (print "built " out)))))
+    # native (hybrid) build
+    (do (def ndir (string out "-native"))
+      (var profile-args @[])
+      (var expected nil)
+      (when pgo
+        # phase 0 (collect): interpreter under the type collector;
+        # stdout doubles as the parity oracle. Runs in the caller's
+        # cwd, like a manual run.
+        (unless (os/stat ndir) (os/mkdir ndir))
+        (def prof (string ndir "/profile.jdn"))
+        (set expected (string ndir "/expected.out"))
+        (eprint "bender --aot: pgo collect: " src " " pgo-args)
+        (def exe (aot-abs-exe))
+        (def penv (merge @{} (os/environ)
+                         {"JANET_PROFILE" "1" "JANET_PROFILE_OUT" prof}))
+        (def pargs (aot-words pgo-args))
+        (var infile nil)
+        (when (not (empty? pgo-stdin))
+          (set infile (file/open pgo-stdin :r))
+          (put penv :in infile))
+        (def pout (file/open expected :w))
+        (put penv :out pout)
+        (def expargs [exe src ;pargs])
+        (def pcode (os/execute expargs (if (string/find "/" exe) :e :ep) penv))
+        (file/close pout)
+        (when infile (file/close infile))
+        (when (not= pcode 0)
+          (aot-die (string "profile run failed with exit " pcode) 1))
+        (when (nil? (os/stat prof))
+          (aot-die "collector produced no profile (is JANET_PROFILE wired?)" 1))
+        (eprint "bender --aot: pgo collected profile")
+        (set profile-args ["--profile" prof]))
+      (aot-run-tool tooldir "callgraph.janet"
+                    [src ;inc-args ;profile-args "--emit-native-lib" ndir
+                     ;(if externs ["--externs" externs] [])])
+      (aot-run-tool tooldir "mkimage.janet"
+                    [src "--native" (string ndir "/native-names.txt") cfile])
+      (when print-c
+        (file/write stdout (slurp cfile))
+        (file/write stdout (slurp (string ndir "/native.c"))))
+      (unless print-c
+        (when only-c (print "wrote " cfile " + " ndir "/native.c"))
+        (unless only-c
+          (def native-c (string ndir "/native.c"))
+          (def libjanet (string root "/build/libjanet.a"))
+          (def ccbase [cc "-O2" "-w" "-DJANET_AOT_NATIVE_INIT"
+                       "-I" (string root "/build")
+                       "-I" (string root "/src/include")
+                       cfile native-c ;extrac libjanet
+                       ;(aot-words ldflags) "-lm" "-lpthread" "-o"])
+          (if pgo
+            # phase 1+2 (seeded build, parity gate): binary goes to a
+            # temp name first; stdout must match the interpreter
+            # byte-for-byte or nothing installs.
+            (do (def candidate (string out ".pgo-tmp"))
+              (aot-run-cc [;ccbase candidate])
+              (def actual (string ndir "/actual.out"))
+              (def aout (file/open actual :w))
+              (def aenv (merge @{} (os/environ)))
+              (var ainfile nil)
+              (when (not (empty? pgo-stdin))
+                (set ainfile (file/open pgo-stdin :r))
+                (put aenv :in ainfile))
+              (put aenv :out aout)
+              (def acode (os/execute [candidate ;(aot-words pgo-args)] :e aenv))
+              (file/close aout)
+              (when ainfile (file/close ainfile))
+              (when (not= acode 0)
+                (aot-die (string "pgo-built binary exited " acode) 1))
+              # slurp yields buffers (identity-compared); stringify first.
+              (if (= (string (slurp expected)) (string (slurp actual)))
+                (do (os/rename candidate out)
+                  (eprint "bender --aot: pgo parity ok, installed " out))
+                (do (eprint "bender --aot: PGO PARITY FAILED (artifacts kept in " ndir ")")
+                  (os/exit 1))))
+            (do (aot-run-cc [;ccbase out])
+              (unless run-mode (print "built " out))))))))
+  (when run-mode
+    # -E: run the staged app with the remaining args, clean up, and
+    # propagate its exit code (like exec in the shell driver).
+    (def code (os/execute [out ;appargs]))
+    (if native
+      (do (def ndir (string out "-native"))
+        (aot-clean [out cfile (string ndir "/native.c")
+                     (string ndir "/native-names.txt")]
+                   [ndir stage]))
+      (aot-clean [out cfile] [stage]))
+    (os/exit code))
+  math/inf)
+
 (defn cli-main
   `Entrance for the Janet CLI tool. Call this function with the command line
   arguments as an array or tuple of strings to invoke the CLI interface.`
@@ -5260,10 +5509,14 @@
                --install (-b) dirpath  : Install a bundle from a directory
                --reinstall (-B) name   : Reinstall a bundle by bundle name
                --uninstall (-u) name   : Uninstall a bundle by bundle name
-               --update-all (-U)       : Reinstall all installed bundles
-               --prune (-P)            : Uninstall all bundles that are orphaned
-               --list (-L)             : List all installed bundles
-               --                      : Stop handling options
+                --update-all (-U)       : Reinstall all installed bundles
+                --prune (-P)            : Uninstall all bundles that are orphaned
+                --list (-L)             : List all installed bundles
+                --aot args...           : AOT-compile a script to a native binary
+                                          (usage: --aot app.janet [-o app] [-c] [-S] [-E args...]
+                                          [--native] [--externs F] [--include F] [-x F]
+                                          [--ldflags S] [--pgo ARGS] [--pgo-stdin F])
+                --                      : Stop handling options
              ```)
            (os/exit 0)
            1)
@@ -5340,7 +5593,12 @@
      (compif (dyn 'bundle/list)
        (fn [i &] (each l (bundle/list) (print l)) (set no-file false) (if (= nil should-repl) (set should-repl false)) 1)
        (fn [i &] (eprint "--list not supported with reduced os") 1))
-     "d" (fn [&] (setdyn *debug* true) (setdyn *redef* true) 1)
+      "d" (fn [&] (setdyn *debug* true) (setdyn *redef* true) 1)
+      "-aot" (fn [i &]
+               (set no-file false)
+               (set should-repl false)
+               (aot-compile (array/slice args (+ i 1)))
+               math/inf)
      "w" (fn [i &] (setdyn *lint-warn* (get-lint-level i)) 2)
      "x" (fn [i &] (setdyn *lint-error* (get-lint-level i)) 2)
      "R" (fn [&] (setdyn *profilepath* nil) 1)})
