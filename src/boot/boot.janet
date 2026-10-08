@@ -5350,7 +5350,15 @@
       (unless print-c
         (when only-c (print "wrote " cfile))
         (unless only-c
-          (aot-run-cc [cc "-O2" "-I" (string root "/build")
+          # -O3: kernels are numeric loops, optimizer pays off.
+          # -fwrapv: :wrap int policy needs defined two's-complement
+          # wrap (C signed overflow is otherwise UB).
+          # -fno-math-errno/-fno-trapping-math: safe fast-math subset,
+          # lets LLVM hoist/simplify double code without reassociation
+          # (oracle-identical, unlike -ffast-math).
+          (aot-run-cc [cc "-O3" "-fwrapv"
+                       "-fno-math-errno" "-fno-trapping-math"
+                       "-I" (string root "/build")
                        "-I" (string root "/src/include")
                        cfile (string root "/build/libjanet.a")
                        "-lm" "-lpthread" "-o" out])
@@ -5400,7 +5408,9 @@
         (unless only-c
           (def native-c (string ndir "/native.c"))
           (def libjanet (string root "/build/libjanet.a"))
-          (def ccbase [cc "-O2" "-w" "-DJANET_AOT_NATIVE_INIT"
+          (def ccbase [cc "-O3" "-fwrapv"
+                       "-fno-math-errno" "-fno-trapping-math"
+                       "-w" "-DJANET_AOT_NATIVE_INIT"
                        "-I" (string root "/build")
                        "-I" (string root "/src/include")
                        cfile native-c ;extrac libjanet
