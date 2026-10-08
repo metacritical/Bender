@@ -296,6 +296,42 @@
 (assert (not (nil? (string/find "mod on int width"
   (slurp "/tmp/cg-im-out.txt")))) "int mod refused")
 
+# divim (x / const): float kernels divide exactly like boxed; int refuses
+(spit "/tmp/cg-divim.janet" (string
+  "(defn halve {:hint {:params [:double] :returns :double}} [x] (/ x 2))\n"
+  "(defn main [] (print (halve 7)))\n"))
+(assert (= 0 (os/execute ["/bin/sh" "-c"
+  "rm -rf /tmp/cg-di && ./build/bender tools/callgraph.janet /tmp/cg-divim.janet --emit-native /tmp/cg-di"] :p))
+  "divim emit run")
+(assert (= 0 (os/execute ["/bin/sh" "-c"
+  "cc -O2 /tmp/cg-di/native.c -o /tmp/cg-di/native"] :p)) "divim native compiles")
+(assert (= 0 (os/execute ["/bin/sh" "-c"
+  "/tmp/cg-di/native > /tmp/cg-di/actual.txt && cmp /tmp/cg-di/expected.txt /tmp/cg-di/actual.txt"] :p))
+  "divim parity")
+(def ditext (slurp "/tmp/cg-di/native.c"))
+(assert (not (nil? (string/find "p0 / 2" ditext))) "divim emits immediate divide")
+(spit "/tmp/cg-divimi.janet" (string
+  "(defn halve-i {:hint {:params [:long] :returns :long}} [x] (/ x 2))\n"
+  "(defn main [] (print (halve-i 7)))\n"))
+(os/execute ["/bin/sh" "-c"
+  "rm -rf /tmp/cg-dii && ./build/bender tools/callgraph.janet /tmp/cg-divimi.janet --emit-native /tmp/cg-dii > /tmp/cg-dii-out.txt"])
+(assert (not (nil? (string/find "divim on int width"
+  (slurp "/tmp/cg-dii-out.txt")))) "int divim refused")
+
+# lib path prints skip diagnostics (same contract as --emit-native):
+# real builds use --emit-native-lib via bender --aot --native, and
+# silent skips hide all signal (ttfx: 0 kernels, no reasons).
+(spit "/tmp/cg-libskip.janet" (string
+  "(defn k-ok {:hint {:params [:double] :returns :double}} [x] (+ x 1))\n"
+  "(defn k-bad [t] (t :key))\n"
+  "(defn main [] (print (k-ok 1) (k-bad @{:key 2})))\n"))
+(assert (= 0 (os/execute ["/bin/sh" "-c"
+  "rm -rf /tmp/cg-ls && ./build/bender tools/callgraph.janet /tmp/cg-libskip.janet --emit-native-lib /tmp/cg-ls > /tmp/cg-ls-out.txt 2>&1"] :p))
+  "lib emit run")
+(def lsout (slurp "/tmp/cg-ls-out.txt"))
+(assert (not (nil? (string/find "native-skip" lsout))) "lib path prints skips")
+(assert (not (nil? (string/find "k-bad" lsout))) "lib skip names the refused def")
+
 # Step 10 (extern C calls): declared symbols emitted as direct calls,
 # harness linked against a real C implementation, parity via fallback
 (spit "/tmp/cg-ext.janet" (string

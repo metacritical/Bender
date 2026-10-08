@@ -72,7 +72,7 @@
   @{'add true 'sub true 'mul true 'div true 'divf true
     'mod true 'rem true})
 (def arith-im-ops
-  @{'addim true 'subim true 'mulim true})
+  @{'addim true 'subim true 'mulim true 'divim true})
 # Bitwise ops: int32-domain (boxed errors outside int32, wraps inside).
 # Join rule is int-family-only -- a :double/:number operand refuses
 # (unknown), since C would silently truncate where Janet errors.

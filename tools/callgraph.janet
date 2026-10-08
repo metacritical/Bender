@@ -496,7 +496,7 @@
   @{'ldc true 'clo true 'lds true 'ldu true 'ldi true 'ldn true
     'ldt true 'ldf true 'get true 'in true 'movn true 'movf true
     'geti true 'add true 'sub true 'mul true 'div true 'divf true
-    'mod true 'rem true 'addim true
+    'mod true 'rem true 'divim true 'addim true
     'subim true 'mulim true 'len true 'equ true 'lt true 'gt true
     'ltu true 'gtu true 'equim true 'ltim true 'gtim true})
 (defn call-arity [d pc slot]
@@ -904,7 +904,7 @@
 # real division; C / on int64 truncates).
 (def emit-c-ops
   @{'ldi true 'ldc true 'add true 'sub true 'mul true 'div true
-    'divf true 'mod true 'rem true
+    'divf true 'mod true 'rem true 'divim true
     'addim true 'subim true 'mulim true 'ret true
     'push true 'push2 true 'push3 true 'call true 'tcall true
     'jmp true 'jmpif true 'jmpno true
@@ -927,6 +927,7 @@
 # dest slot operand position per writing op (params excluded from decls)
 (def emit-writers
   @{'ldi 1 'ldc 1 'add 1 'sub 1 'mul 1 'div 1 'divf 1 'mod 1 'rem 1
+    'divim 1
     'addim 1 'subim 1 'mulim 1
     'band 1 'bor 1 'bxor 1 'sl 1 'sr 1 'sru 1 'slim 1 'srim 1 'sruim 1
     'lt 1 'ltim 1 'gt 1 'gtim 1 'lte 1 'gte 1
@@ -1486,6 +1487,18 @@
                                     (emit-slot (ins 3) arity) ";")))
               (do (set bad "div on int width (policy TBD)")
                 (break)))
+            # divim (x / const): same policy as div. The immediate is a
+            # small int constant by construction; float kernels divide
+            # exactly like boxed, int kernels refuse (trunc vs real).
+            (= op 'divim)
+            (if (get float-hints rt)
+              (do (set pending @[])
+                (array/push lines
+                            (string "    s" (ins 1) " = "
+                                    (emit-slot (ins 2) arity) " / "
+                                    (ins 3) ";")))
+              (do (set bad "divim on int width (policy TBD)")
+                (break)))
             # divf/mod/rem: float-family only (C % truncates toward zero
             # but Janet mod is floor-based — they diverge on negatives;
             # doubles via libm match boxed exactly, same op order).
@@ -1964,8 +1977,16 @@
   # (notably eval'd code) then dispatch straight to the natives.
   (os/mkdir outdir)
   # candidates + two-round dependency resolution (same discipline as
-  # emit-native-all): leaves first, then callers of emitted natives
+  # emit-native-all): leaves first, then callers of emitted natives.
+  # Skips print as native-skip lines (same contract as emit-native-all)
+  # so --aot --native builds are diagnosable without re-running the
+  # explicit-file --emit-native path (ttfx lesson: the lib path is the
+  # one real builds use, and silent skips hide all signal).
+  (defn describe-types-lib [pt2 rt2]
+    (def qs (string/join (map (fn [t] (if (= t :unknown) "?" (string t))) pt2) " "))
+    (string "params [" qs "] ret " (if (= rt2 :unknown) "?" (string rt2))))
   (def cand @{})
+  (def lib-skips @[])
   (each id (range (length defs))
     (def info (get defs id))
     (def d (info :d))
@@ -1976,9 +1997,13 @@
     # :array returns are the (in-place) array itself
     (each t pt (unless (or (get infer/numeric-types t) (= t :array) (= t :tuple) (= t :pointer)) (set concrete false)))
     (unless (or (get infer/numeric-types rt) (= rt :array)) (set concrete false))
-    (when concrete (put cand id true)))
+    (when concrete (put cand id true))
+    (unless concrete
+      (array/push lib-skips [id (string (or (d :name) "?"))
+                             (string "types not proven: " (describe-types-lib pt rt))])))
   (def emitted-names @{})
   (def kernels @[])
+  (def lib-skip-reason @{})
   (var round 0)
   (var changed true)
   (while (and changed (< round 4))
@@ -1989,13 +2014,21 @@
         (def info (get defs id))
         (def d (info :d))
         (def [res reason] (emit-fn-c id d (rts id) (get pts id) call-map emitted-names rts))
-        (when res
-          (def nm (string (d :name)))
-          (put emitted-names id nm)
-          (array/push kernels {:name nm :code (res :code)
-                               :externs (res :externs)
-                               :wrapper (wrapper-for nm (get pts id) (rts id))})
-          (set changed true)))))
+        (if res
+          (do
+            (def nm (string (d :name)))
+            (put emitted-names id nm)
+            (array/push kernels {:name nm :code (res :code)
+                                 :externs (res :externs)
+                                 :wrapper (wrapper-for nm (get pts id) (rts id))})
+            (set changed true))
+          (put lib-skip-reason id reason)))))
+  (each id (filter (fn [k] (number? k)) (sort (keys cand)))
+    (unless (get emitted-names id)
+      (def d ((get defs id) :d))
+      (array/push lib-skips [id (string (or (d :name) "?"))
+                             (or (get lib-skip-reason id) "calls non-emitted native")])))
+  (each [id nm r] lib-skips (print "native-skip " id " " nm " " r))
   (def cout @"")
   (buffer/push-string cout "#include <janet.h>\n#include <inttypes.h>\n#include <math.h>\n#include <stdlib.h>\n\n")
   (buffer/push-string cout "/* int32-domain bitwise helpers: boxed Janet errors outside int32\n * (integral doubles accepted); results wrap int32; shift counts mask\n * to 5 bits. Callers range/integrality-check operands (fail loud). */\nstatic int32_t k_band32(int32_t a, int32_t b) { return a & b; }\nstatic int32_t k_bor32(int32_t a, int32_t b) { return a | b; }\nstatic int32_t k_bxor32(int32_t a, int32_t b) { return a ^ b; }\nstatic int32_t k_sl32(int32_t a, int32_t b) { return (int32_t)((uint32_t)a << ((uint32_t)b & 31u)); }\nstatic int32_t k_sr32(int32_t a, int32_t b) { uint32_t n = (uint32_t)b & 31u; int32_t r = (int32_t)((uint32_t)a >> n); if ((a < 0) && (n != 0)) { r |= (int32_t)(~0u << (32u - n)); } return r; }\nstatic int32_t k_sru32(int32_t a, int32_t b) { return (int32_t)((uint32_t)a >> ((uint32_t)b & 31u)); }\n\n")
