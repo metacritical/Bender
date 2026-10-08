@@ -264,6 +264,38 @@
 (assert (not (nil? (string/find "goto L" ltext))) "loops emit back-edge goto")
 (assert (not (nil? (string/find "s1 = s1 + s2;" ltext))) "loop-carried slots reassign")
 
+# divf/mod/rem (float-family): libm emission, parity incl. negatives + div-by-zero
+(spit "/tmp/cg-fmod.janet" (string
+  "(defn fdiv {:hint {:params [:double :double] :returns :double}} [a b] (div a b))\n"
+  "(defn fmod {:hint {:params [:double :double] :returns :double}} [a b] (mod a b))\n"
+  "(defn frem {:hint {:params [:double :double] :returns :double}} [a b] (% a b))\n"
+  "(defn main [] (print (fdiv 7 2) \" \" (fmod 7 2) \" \" (frem 7 2) \" \" (fmod -7 3) \" \" (frem -7 3) \" \" (fmod 5 0)))\n"))
+(assert (= 0 (os/execute ["/bin/sh" "-c"
+  "rm -rf /tmp/cg-fm && ./build/bender tools/callgraph.janet /tmp/cg-fmod.janet --emit-native /tmp/cg-fm"] :p))
+  "fmod emit run")
+(assert (= 0 (os/execute ["/bin/sh" "-c"
+  "cc -O2 /tmp/cg-fm/native.c -o /tmp/cg-fm/native"] :p)) "fmod native compiles")
+(assert (= 0 (os/execute ["/bin/sh" "-c"
+  "/tmp/cg-fm/native > /tmp/cg-fm/actual.txt && cmp /tmp/cg-fm/expected.txt /tmp/cg-fm/actual.txt"] :p))
+  "fmod parity (floor-mod vs fmod, div-by-zero)")
+(def fmtext (slurp "/tmp/cg-fm/native.c"))
+(assert (not (nil? (string/find "floor(" fmtext))) "divf/mod emit floor")
+(assert (not (nil? (string/find "fmod(" fmtext))) "rem emits fmod")
+# reserved C identifiers get a k_ prefix (defining fmod is UB: the C
+# compiler folds fmod(-2.5, 1.5) with builtin semantics, observed -1
+# instead of floor-mod 0.5)
+(assert (not (nil? (string/find "double k_fmod(double p0, double p1)" fmtext)))
+        "reserved name fmod prefixed")
+
+# refusal: divf/mod/rem on int widths (C trunc vs floor-mod divergence)
+(spit "/tmp/cg-imod.janet" (string
+  "(defn imod {:hint {:params [:long :long] :returns :long}} [a b] (mod a b))\n"
+  "(defn main [] (print (imod 7 2)))\n"))
+(os/execute ["/bin/sh" "-c"
+  "rm -rf /tmp/cg-im && ./build/bender tools/callgraph.janet /tmp/cg-imod.janet --emit-native /tmp/cg-im > /tmp/cg-im-out.txt"])
+(assert (not (nil? (string/find "mod on int width"
+  (slurp "/tmp/cg-im-out.txt")))) "int mod refused")
+
 # Step 10 (extern C calls): declared symbols emitted as direct calls,
 # harness linked against a real C implementation, parity via fallback
 (spit "/tmp/cg-ext.janet" (string

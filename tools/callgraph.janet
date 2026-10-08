@@ -495,7 +495,8 @@
 (def load-ops
   @{'ldc true 'clo true 'lds true 'ldu true 'ldi true 'ldn true
     'ldt true 'ldf true 'get true 'in true 'movn true 'movf true
-    'geti true 'add true 'sub true 'mul true 'div true 'addim true
+    'geti true 'add true 'sub true 'mul true 'div true 'divf true
+    'mod true 'rem true 'addim true
     'subim true 'mulim true 'len true 'equ true 'lt true 'gt true
     'ltu true 'gtu true 'equim true 'ltim true 'gtim true})
 (defn call-arity [d pc slot]
@@ -903,6 +904,7 @@
 # real division; C / on int64 truncates).
 (def emit-c-ops
   @{'ldi true 'ldc true 'add true 'sub true 'mul true 'div true
+    'divf true 'mod true 'rem true
     'addim true 'subim true 'mulim true 'ret true
     'push true 'push2 true 'push3 true 'call true 'tcall true
     'jmp true 'jmpif true 'jmpno true
@@ -924,7 +926,8 @@
                   'eq "==" 'eqim "==" 'neq "!=" 'neqim "!="})
 # dest slot operand position per writing op (params excluded from decls)
 (def emit-writers
-  @{'ldi 1 'ldc 1 'add 1 'sub 1 'mul 1 'div 1 'addim 1 'subim 1 'mulim 1
+  @{'ldi 1 'ldc 1 'add 1 'sub 1 'mul 1 'div 1 'divf 1 'mod 1 'rem 1
+    'addim 1 'subim 1 'mulim 1
     'band 1 'bor 1 'bxor 1 'sl 1 'sr 1 'sru 1 'slim 1 'srim 1 'sruim 1
     'lt 1 'ltim 1 'gt 1 'gtim 1 'lte 1 'gte 1
     'eq 1 'eqim 1 'neq 1 'neqim 1 'call 1 'movn 1 'movf 2
@@ -942,18 +945,37 @@
   (if (and (= int-policy :promote) (get int-hints t))
     "double"
     (get emit-c-type-map t fb)))
+(def emit-c-reserved
+  # Defining these as external C symbols is UB (C11 7.31 reserved +
+  # keywords): the compiler folds calls like fmod(-2.5, 1.5) with builtin
+  # semantics instead of calling our kernel (observed: -1 instead of
+  # 0.5). Colliding Janet names get a k_ prefix; everything else keeps
+  # its stable spelling.
+  @{"fmod" true "modf" true "floor" true "ceil" true "round" true
+    "trunc" true "fdiv" true "div" true "rem" true "frem" true
+    "sin" true "cos" true "tan" true "exp" true "log" true "pow" true
+    "sqrt" true "fabs" true "fma" true "fmax" true "fmin" true
+    "abs" true "labs" true "main" true "malloc" true "free" true
+    "abort" true "exit" true "printf" true "auto" true "break" true
+    "case" true "char" true "const" true "continue" true "default" true
+    "do" true "double" true "else" true "enum" true "extern" true
+    "float" true "for" true "goto" true "if" true "int" true "long" true
+    "return" true "short" true "signed" true "sizeof" true "static" true
+    "struct" true "switch" true "typedef" true "union" true "unsigned" true
+    "void" true "while" true})
 (defn emit-c-name [nm]
   # Janet name characters with no C equivalent fold deterministically
   # (! mutation convention, ? predicate convention, / module paths).
   # Character-mapped, not PEG-replaced: ? and ! are PEG-special in
   # string/replace-all.
   (def base (string/replace-all "-" "_" nm))
-  (string/join
-    (map (fn [c] (cond (= c 33) "_bang"
-                       (= c 63) "_q"
-                       (= c 47) "_"
-                       (string/from-bytes c)))
-         (string/bytes base)) ""))
+  (def folded (string/join
+                (map (fn [c] (cond (= c 33) "_bang"
+                                  (= c 63) "_q"
+                                  (= c 47) "_"
+                                  (string/from-bytes c)))
+                     (string/bytes base)) ""))
+  (if (get emit-c-reserved folded) (string "k_" folded) folded))
 (defn emit-c-num [v] (string/format "%.17g" v))
 (defn emit-slot [a arity] (if (< a arity) (string "p" a) (string "s" a)))
 
@@ -1463,6 +1485,38 @@
                                     (emit-slot (ins 2) arity) " / "
                                     (emit-slot (ins 3) arity) ";")))
               (do (set bad "div on int width (policy TBD)")
+                (break)))
+            # divf/mod/rem: float-family only (C % truncates toward zero
+            # but Janet mod is floor-based — they diverge on negatives;
+            # doubles via libm match boxed exactly, same op order).
+            (= op 'divf)
+            (if (get float-hints rt)
+              (do (set pending @[])
+                (array/push lines
+                            (string "    s" (ins 1) " = floor("
+                                    (emit-slot (ins 2) arity) " / "
+                                    (emit-slot (ins 3) arity) ");")))
+              (do (set bad "divf on int width (policy TBD)")
+                (break)))
+            (= op 'rem)
+            (if (get float-hints rt)
+              (do (set pending @[])
+                (array/push lines
+                            (string "    s" (ins 1) " = fmod("
+                                    (emit-slot (ins 2) arity) ", "
+                                    (emit-slot (ins 3) arity) ");")))
+              (do (set bad "rem on int width (policy TBD)")
+                (break)))
+            (= op 'mod)
+            (if (get float-hints rt)
+              (do (set pending @[])
+                (def ma (emit-slot (ins 2) arity))
+                (def mb (emit-slot (ins 3) arity))
+                (array/push lines
+                            (string "    s" (ins 1) " = (" mb ") == 0 ? ("
+                                    ma ") : ((" ma ") - (" mb ") * floor(("
+                                    ma ") / (" mb ")));")))
+              (do (set bad "mod on int width (policy TBD)")
                 (break)))
             (= op 'movn)
             (array/push lines (string "    s" (ins 1) " = "
