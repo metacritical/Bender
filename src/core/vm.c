@@ -50,6 +50,16 @@
 #define DS (*((int32_t *)pc) >> 8)
 #define ES (*((int32_t *)pc) >> 16)
 
+/* Branch prediction for hot interpreter paths. Numbers are the common
+ * case in ALU ops; GC thresholds rarely trip; errors are cold. */
+#if defined(__GNUC__) || defined(__clang__)
+#define JANET_LIKELY(x) __builtin_expect(!!(x), 1)
+#define JANET_UNLIKELY(x) __builtin_expect(!!(x), 0)
+#else
+#define JANET_LIKELY(x) (x)
+#define JANET_UNLIKELY(x) (x)
+#endif
+
 /* How we dispatch instructions. By default, we use
  * a switch inside an infinite loop. For GCC/clang, we use
  * computed gotos. */
@@ -91,8 +101,8 @@
 
 /* Next instruction variations */
 #define maybe_collect() do {\
-    if (janet_vm.gc_young_bytes >= janet_vm.gc_minor_threshold) janet_collect_minor(); \
-    else if (janet_vm.next_collection >= janet_vm.gc_interval) janet_collect(); } while (0)
+    if (JANET_UNLIKELY(janet_vm.gc_young_bytes >= janet_vm.gc_minor_threshold)) janet_collect_minor(); \
+    else if (JANET_UNLIKELY(janet_vm.next_collection >= janet_vm.gc_interval)) janet_collect(); } while (0)
 #define vm_checkgc_next() maybe_collect(); vm_next()
 #define vm_pcnext() pc++; vm_next()
 #define vm_checkgc_pcnext() maybe_collect(); vm_pcnext()
@@ -128,7 +138,7 @@
 #define vm_binop_immediate(op)\
     {\
         Janet op1 = stack[B];\
-        if (!janet_checktype(op1, JANET_NUMBER)) {\
+        if (JANET_UNLIKELY(!janet_checktype(op1, JANET_NUMBER))) {\
             vm_commit();\
             Janet _argv[2] = { op1, janet_wrap_number(CS) };\
             Janet a = janet_mcall(#op, 2, _argv);\
@@ -144,7 +154,7 @@
 #define _vm_bitop_immediate(op, type1, rangecheck, msg)\
     {\
         Janet op1 = stack[B];\
-        if (!janet_checktype(op1, JANET_NUMBER)) {\
+        if (JANET_UNLIKELY(!janet_checktype(op1, JANET_NUMBER))) {\
             vm_commit();\
             Janet _argv[2] = { op1, janet_wrap_number(CS) };\
             Janet a = janet_mcall(#op, 2, _argv);\
@@ -165,7 +175,7 @@
     {\
         Janet op1 = stack[B];\
         Janet op2 = stack[C];\
-        if (janet_checktype(op1, JANET_NUMBER) && janet_checktype(op2, JANET_NUMBER)) {\
+        if (JANET_LIKELY(janet_checktype(op1, JANET_NUMBER) && janet_checktype(op2, JANET_NUMBER))) {\
             double x1 = janet_unwrap_number(op1);\
             double x2 = janet_unwrap_number(op2);\
             stack[A] = wrap(x1 op x2);\
@@ -183,7 +193,7 @@
     {\
         Janet op1 = stack[B];\
         Janet op2 = stack[C];\
-        if (janet_checktype(op1, JANET_NUMBER) && janet_checktype(op2, JANET_NUMBER)) {\
+        if (JANET_LIKELY(janet_checktype(op1, JANET_NUMBER) && janet_checktype(op2, JANET_NUMBER))) {\
             double y1 = janet_unwrap_number(op1);\
             double y2 = janet_unwrap_number(op2);\
             if (!rangecheck(y1)) { vm_commit(); janet_panicf("value %v out of range for " msg, op1); }\
@@ -206,7 +216,7 @@
     {\
         Janet op1 = stack[B];\
         Janet op2 = stack[C];\
-        if (janet_checktype(op1, JANET_NUMBER) && janet_checktype(op2, JANET_NUMBER)) {\
+        if (JANET_LIKELY(janet_checktype(op1, JANET_NUMBER) && janet_checktype(op2, JANET_NUMBER))) {\
             double x1 = janet_unwrap_number(op1);\
             double x2 = janet_unwrap_number(op2);\
             stack[A] = janet_wrap_boolean(x1 op x2);\
