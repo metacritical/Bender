@@ -358,6 +358,7 @@ static void janet_suspend_swap(JanetFiber *fiber, JanetSignal sig, Janet payload
  * profiled defs survive. Masks are uint32 bit sets over JanetType (16
  * types fit). Zero cost when off: callers guard on the NULL table. */
 #define JANET_PROFILE_MAXPARAMS 8
+#define JANET_PROFILE_ELEMSAMPLE 8
 
 static JanetTable *janet_profile_entry(JanetFunction *func) {
     JanetTable *pt = janet_vm.profile_table;
@@ -379,6 +380,18 @@ static JanetTable *janet_profile_entry(JanetFunction *func) {
         for (i = 0; i < JANET_PROFILE_MAXPARAMS; i++)
             janet_array_push(pa, janet_wrap_integer(0));
         janet_table_put(e, janet_ckeywordv("params"), janet_wrap_array(pa));
+        {
+            /* Parallel element-type masks: for array params, the OR of
+             * the first elements' types (heuristic sample, see call
+             * path). Zero for non-arrays. Evidence for SoA-kernel
+             * shaping, not proof. */
+            JanetArray *ea = janet_array(JANET_PROFILE_MAXPARAMS);
+            janet_gcroot(janet_wrap_array(ea));
+            for (i = 0; i < JANET_PROFILE_MAXPARAMS; i++)
+                janet_array_push(ea, janet_wrap_integer(0));
+            janet_table_put(e, janet_ckeywordv("elems"), janet_wrap_array(ea));
+            janet_gcunroot(janet_wrap_array(ea));
+        }
         janet_table_put(e, janet_ckeywordv("rets"), janet_wrap_integer(0));
         janet_table_put(pt, key, janet_wrap_table(e));
         janet_gcunroot(janet_wrap_array(pa));
@@ -400,6 +413,15 @@ static void janet_profile_call(JanetFunction *func, const Janet *argv, int32_t a
         uint32_t m = (uint32_t) janet_unwrap_integer(pa->data[i]);
         m |= (1u << (uint32_t) janet_type(argv[i]));
         pa->data[i] = janet_wrap_integer((int64_t) m);
+        if (janet_checktype(argv[i], JANET_ARRAY)) {
+            JanetArray *av = janet_unwrap_array(argv[i]);
+            JanetArray *ea = janet_unwrap_array(janet_table_get(e, janet_ckeywordv("elems")));
+            int32_t k, nk = av->count < JANET_PROFILE_ELEMSAMPLE ? av->count : JANET_PROFILE_ELEMSAMPLE;
+            uint32_t em = (uint32_t) janet_unwrap_integer(ea->data[i]);
+            for (k = 0; k < nk; k++)
+                em |= (1u << (uint32_t) janet_type(av->data[k]));
+            ea->data[i] = janet_wrap_integer((int64_t) em);
+        }
     }
 }
 
@@ -490,6 +512,17 @@ void janet_profile_dump(const char *path) {
                     if (m) janet_array_push(params, janet_profile_mask_types(m));
                 }
                 janet_table_put(info, janet_ckeywordv("params"), janet_wrap_array(params));
+                {
+                    JanetArray *elems = janet_array(0);
+                    JanetArray *ea = janet_unwrap_array(janet_table_get(e, janet_ckeywordv("elems")));
+                    n = ea->count;
+                    for (j = 0; j < n; j++) {
+                        uint32_t m = (uint32_t) janet_unwrap_integer(ea->data[j]);
+                        if (m) janet_array_push(elems, janet_profile_mask_types(m));
+                        else janet_array_push(elems, janet_wrap_nil());
+                    }
+                    janet_table_put(info, janet_ckeywordv("elems"), janet_wrap_array(elems));
+                }
                 janet_table_put(info, janet_ckeywordv("rets"), janet_profile_mask_types(rm));
                 janet_array_push(row, janet_wrap_table(info));
             }

@@ -850,7 +850,16 @@
   (if (and (= int-policy :promote) (get int-hints t))
     "double"
     (get emit-c-type-map t fb)))
-(defn emit-c-name [nm] (string/replace-all "-" "_" nm))
+(defn emit-c-name [nm]
+  # Janet name characters with no C equivalent fold deterministically
+  # (! mutation convention, ? predicate convention). Character-mapped,
+  # not PEG-replaced: ? and ! are PEG-special in string/replace-all.
+  (def base (string/replace-all "-" "_" nm))
+  (string/join
+    (map (fn [c] (cond (= c 33) "_bang"
+                       (= c 63) "_q"
+                       (string/from-bytes c)))
+         (string/bytes base)) ""))
 (defn emit-c-num [v] (string/format "%.17g" v))
 (defn emit-slot [a arity] (if (< a arity) (string "p" a) (string "s" a)))
 
