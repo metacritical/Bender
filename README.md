@@ -51,6 +51,43 @@ hints move more into static kernels; higher-level values stay boxed.
 
 <br>
 
+## How Bender got 18x faster (a true story)
+
+<table>
+<tr>
+<td align="center" valign="top" width="25%">
+<b>PANEL 1: THE GRIND</b><br>
+<pre>
+  O
+  |
+,'~'.
+| ____|_
+| '___,,_'
+| ||(o |o)|
+  -------
+| ______|
+Bender, running 200,000 RNG draws... boxed.
+</pre>
+<i>1029ms of pure <code>run_vm</code>. Sweating in binary.</i>
+</td>
+<td align="center" valign="top" width="25%">
+<b>PANEL 2: THE SQUINT</b><br>
+<img src="assets/bender.svg" alt="the compiler squints" width="150"><br>
+<i>Widening inference proves every limb an int. No JIT, no warmup. AOT, baby.</i>
+</td>
+<td align="center" valign="top" width="25%">
+<b>PANEL 3: THE HEIST</b><br>
+<img src="assets/bender.png" alt="Bender after fusing the kernel" width="140"><br>
+<i>One fused kernel, 167 unrolled lines, zero allocation: <b>58ms</b>. That's 18x, meatbag.</i>
+</td>
+<td align="center" valign="top" width="25%">
+<b>PANEL 4: THE CATCHPHRASE</b><br><br>
+<b>BITE MY SHINY METAL COMPILER!</b><br><br>
+<i>Every golden still byte-identical. Speed is nothing without correctness.</i>
+</td>
+</tr>
+</table>
+
 ## Goals (imported from the original Bender attempt, ticked as landed)
 
 - [x] Nimble startup times, no JIT by default (AOT images, fast binaries)

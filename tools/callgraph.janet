@@ -1680,7 +1680,7 @@
       (string "    { \"" (k :name) "\", " (emit-c-name (k :name)) "_wrapper, NULL },\n")))
   (buffer/push-string cout "    { NULL, NULL, NULL } };\n")
   (buffer/push-string cout "    janet_cfuns(env, \"native\", regs);\n")
-  (buffer/push-string cout "    janet_cfuns(env, \"native\", regs);\n")  (buffer/push-string cout "    fprintf(stderr, \"native_init: registered %d wrappers\\n\", (int) (sizeof(regs)/sizeof(regs[0]) - 1));\n")
+  (buffer/push-string cout "    fprintf(stderr, \"native_init: registered %d wrappers\\n\", (int) (sizeof(regs)/sizeof(regs[0]) - 1));\n")
   (buffer/push-string cout "}\n")
   (spit (string outdir "/native.c") cout)
   (def nl @"")

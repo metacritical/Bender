@@ -1,6 +1,9 @@
 #!/bin/sh
 # tools/janet-aot.sh — AOT spike driver (see docs/internals/aot-plan.md Phase 0).
-#   tools/janet-aot.sh app.janet [-o app] [-c] [-S] [-E args...]
+#   tools/janet-aot.sh app.janet [-o app] [-c] [-S] [-E args...] [--include extra.janet ...]
+# --include FILE  analyze extra source with the entry (repeatable). Extra
+#   files feed callgraph only (kernel shaping); the image stays entry-only
+#   and extra defns arrive via native_init registration.
 # -o FILE  output binary (default: ./app, sibling of input without extension)
 # -c       emit C only (app.c next to output path)
 # -S       print generated C to stdout (compile nothing)
@@ -11,6 +14,7 @@ JANET="$ROOT/build/bender"
 CC=${CC:-cc}
 
 SRC=""
+INCLUDES=""
 OUT=""
 EXTERNS=""
 EXTRAC=""
@@ -27,13 +31,14 @@ while [ $# -gt 0 ]; do
     -E) RUN_MODE=1; shift; break;;
     --native) NATIVE=1; shift;;
     --externs) EXTERNS="$2"; shift 2;;
+    --include) INCLUDES="$INCLUDES $2"; shift 2;;
     -x) EXTRAC="$EXTRAC $2"; shift 2;;
     --ldflags) LDEXTRA="$2"; shift;;
     -*) echo "janet-aot: unknown flag $1" >&2; exit 2;;
     *) if [ -z "$SRC" ]; then SRC="$1"; else echo "janet-aot: one input only" >&2; exit 2; fi; shift;;
   esac
 done
-[ -n "$SRC" ] || { echo "usage: janet-aot.sh app.janet [-o app] [-c] [-S] [-E args...] [--externs FILE] [-x FILE] [--ldflags STR]" >&2; exit 2; }
+[ -n "$SRC" ] || { echo "usage: janet-aot.sh app.janet [-o app] [-c] [-S] [-E args...] [--externs FILE] [--include FILE] [-x FILE] [--ldflags STR]" >&2; exit 2; }
 
 [ -x "$JANET" ] || { echo "janet-aot: build janet first (make)" >&2; exit 2; }
 
@@ -44,7 +49,7 @@ if [ "$RUN_MODE" -eq 1 ]; then
   TMP=$(mktemp -d)
   trap 'rm -rf "$TMP"' EXIT INT TERM
   if [ -n "$NATIVE" ]; then
-    "$JANET" "$ROOT/tools/callgraph.janet" "$SRC" --emit-native-lib "$TMP" ${EXTERNS:+--externs "$EXTERNS"}
+    "$JANET" "$ROOT/tools/callgraph.janet" "$SRC" $INCLUDES --emit-native-lib "$TMP" ${EXTERNS:+--externs "$EXTERNS"}
     "$JANET" "$ROOT/tools/mkimage.janet" "$SRC" --native "$TMP/native-names.txt" "$TMP/app.c"
     "$CC" -O2 -w -DJANET_AOT_NATIVE_INIT -I"$ROOT/build" -I"$ROOT/src/include" "$TMP/app.c" \
       "$TMP/native.c" $EXTRAC "$ROOT/build/libjanet.a" $LDEXTRA -lm -lpthread -o "$TMP/app"
@@ -59,7 +64,7 @@ fi
 CFILE="${OUT}.c"
 if [ -n "$NATIVE" ]; then
   NDIR="${OUT}-native"
-  "$JANET" "$ROOT/tools/callgraph.janet" "$SRC" --emit-native-lib "$NDIR" ${EXTERNS:+--externs "$EXTERNS"}
+  "$JANET" "$ROOT/tools/callgraph.janet" "$SRC" $INCLUDES --emit-native-lib "$NDIR" ${EXTERNS:+--externs "$EXTERNS"}
   "$JANET" "$ROOT/tools/mkimage.janet" "$SRC" --native "$NDIR/native-names.txt" "$CFILE"
   if [ "$PRINT_C" -eq 1 ]; then cat "$CFILE" "$NDIR/native.c"; exit 0; fi
   if [ "$ONLY_C" -eq 1 ]; then echo "wrote $CFILE + $NDIR/native.c"; exit 0; fi
