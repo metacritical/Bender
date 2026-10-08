@@ -385,6 +385,32 @@
 (assert (= 4 (os/execute ["/bin/sh" "-c"
   "./build/bender tools/callgraph.janet /tmp/cg-promote.janet --int-policy explode --emit-native /tmp/cg-bad >/dev/null 2>&1"] :p))
   "bad int-policy rejected")
+# ---- Step 14: bitwise ops + array returns + puti ----
+# int32-domain checked emission (fail loud like OOB); constant-index
+# puts lower (puti was silently dropped before); array kernels return
+# the in-place array.
+(spit "/tmp/cg-bit.janet" (string
+  "(defn k-xor8 {:hint {:params [:array :array :array] :returns :array}} [r a b]\n"
+  "  (put r 0 (bxor (get a 0) (get b 0)))\n"
+  "  (put r 1 (bxor (get a 1) (get b 1)))\n"
+  "  (put r 2 (bxor (get a 2) (get b 2)))\n"
+  "  (put r 3 (bxor (get a 3) (get b 3)))\n"
+  "  (put r 4 (bxor (get a 4) (get b 4)))\n"
+  "  (put r 5 (bxor (get a 5) (get b 5)))\n"
+  "  (put r 6 (bxor (get a 6) (get b 6)))\n"
+  "  (put r 7 (bxor (get a 7) (get b 7)))\n"
+  "  r)\n"
+  "(defn main [] (print (k-xor8 @[0 0 0 0 0 0 0 0] @[1 2 3 4 5 6 7 8] @[8 7 6 5 4 3 2 1])))\n"))
+(assert (= 0 (os/execute ["/bin/sh" "-c"
+  "rm -rf /tmp/cg-bit && ./build/bender tools/callgraph.janet /tmp/cg-bit.janet --emit-native /tmp/cg-bit"] :p))
+  "bitwise emit run")
+(def bittext (slurp "/tmp/cg-bit/native.c"))
+(assert (not (nil? (string/find "k_bxor32" bittext))) "bxor lowers to helper")
+(assert (not (nil? (string/find "int32 domain error" bittext))) "int32 guard emitted")
+(assert (not (nil? (string/find "JanetArray* k_xor8" bittext))) "array in/out signature")
+(assert (= 0 (os/execute ["/bin/sh" "-c"
+  "cc -O2 -w -fwrapv -Isrc/include -Isrc/conf /tmp/cg-bit/native.c build/janet.o -lm -lpthread -ldl -o /tmp/cg-bit/native && /tmp/cg-bit/native > /tmp/cg-bit/actual.txt && cmp /tmp/cg-bit/expected.txt /tmp/cg-bit/actual.txt"] :p))
+  "bitwise+puti+array-return parity")
 # DCE: unreachable hinted defns never reach the output
 (spit "/tmp/cg-dce.janet" (string
   "(defn used {:hint {:params [:long] :returns :long}} [x] (+ x 1))\n"

@@ -48,6 +48,14 @@
     (type-join t1 t2)
     :unknown))
 
+(defn bit-join [t1 t2]
+  # int32-domain: both sides numeric gives :long. :number operands are
+  # sound because emission inserts integrality + int32-range checks
+  # that abort exactly where boxed errors (fail loud, like OOB).
+  (if (and (get numeric-types t1) (get numeric-types t2))
+    :long
+    :unknown))
+
 # intersection-style slot_take: refine cur toward new; disagreement on
 # concrete widths widens to :number; non-numeric involvement gives up
 (defn narrow [cur new]
@@ -65,6 +73,14 @@
     'mod true 'rem true})
 (def arith-im-ops
   @{'addim true 'subim true 'mulim true})
+# Bitwise ops: int32-domain (boxed errors outside int32, wraps inside).
+# Join rule is int-family-only -- a :double/:number operand refuses
+# (unknown), since C would silently truncate where Janet errors.
+# Emission inserts int32-range + integrality checks (fail loud).
+(def bit-ops
+  @{'band true 'bor true 'bxor true 'sl true 'sr true 'sru true})
+(def bit-im-ops
+  @{'slim true 'srim true 'sruim true})
 (def cmp-ops
   @{'eq true 'eqim true 'lt true 'ltim true 'gt true 'gtim true
     'lte true 'gte true
@@ -105,8 +121,8 @@
       (put pfixed id true))
     (put pts id parr)
     (def hr (if h (get h :returns) nil))
-    (array/push rts (if (get numeric-types hr) hr :unknown))
-    (when (get numeric-types hr) (put rfixed id true)))
+    (array/push rts (if (or (get numeric-types hr) (= hr :array)) hr :unknown))
+    (when (or (get numeric-types hr) (= hr :array)) (put rfixed id true)))
   (def box @{:changed true})
   (defn scan-def [id]
     # single forward pass; returns ret candidate; applies param binds
@@ -139,7 +155,17 @@
         (get arith-ops op)
         (put st (ins 1)
              (arith-join (get st (ins 2) :unknown) (get st (ins 3) :unknown)))
+        (get bit-im-ops op)
+        (put st (ins 1) (bit-join (get st (ins 2) :unknown) :long))
+        (get bit-ops op)
+        (put st (ins 1)
+             (bit-join (get st (ins 2) :unknown) (get st (ins 3) :unknown)))
         (get cmp-ops op) (put st (ins 1) :bool)
+        # ldu (load upvalue: same-unit fn refs, closed-over vars).
+        # Opaque :unknown -- any concrete use refuses downstream. The
+        # load itself is dead in emitted code (static calls go direct
+        # by name); emission skips it explicitly.
+        (= op 'ldu) (put st (ins 1) :unknown)
         # Step 11: array access. get needs an :array base and an
         # int-family index (-> :number); anything else is :unknown
         # (fail-closed: tables/strings stay boxed). put keeps :array
@@ -154,6 +180,13 @@
           (when (= pa :array)
             (unless (and (int-family? (get st (ins 2) :unknown))
                          (get numeric-types (get st (ins 3) :unknown)))
+              (put st (ins 1) :unknown))))
+        # puti: constant-index put (dest=A, value=B, index=C immediate).
+        # Same rule as put; the constant index is always int-family.
+        (= op 'puti)
+        (do (def pa (get st (ins 1) :unknown))
+          (when (= pa :array)
+            (unless (get numeric-types (get st (ins 2) :unknown))
               (put st (ins 1) :unknown))))
         (= op 'push) (array/push pending (get st (ins 1) :unknown))
         (= op 'push2)

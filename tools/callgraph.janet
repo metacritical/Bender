@@ -799,15 +799,21 @@
     'ldu true 'lds true})
 (def emit-arith-c @{'add "+" 'sub "-" 'mul "*" 'div "/"})
 (def emit-arith-im-c @{'addim "+" 'subim "-" 'mulim "*"})
+# Bitwise kernels call helpers (int32-domain, wraparound, masked counts;
+# see k_*32 definitions hoisted into each prelude).
+(def emit-bit-c @{'band "k_band32" 'bor "k_bor32" 'bxor "k_bxor32"
+                   'sl "k_sl32" 'sr "k_sr32" 'sru "k_sru32"})
+(def emit-bit-im-c @{'slim "k_sl32" 'srim "k_sr32" 'sruim "k_sru32"})
 (def emit-cmp-c @{'lt "<" 'ltim "<" 'gt ">" 'gtim ">"
                   'lte "<=" 'gte ">="
                   'eq "==" 'eqim "==" 'neq "!=" 'neqim "!="})
 # dest slot operand position per writing op (params excluded from decls)
 (def emit-writers
   @{'ldi 1 'ldc 1 'add 1 'sub 1 'mul 1 'div 1 'addim 1 'subim 1 'mulim 1
+    'band 1 'bor 1 'bxor 1 'sl 1 'sr 1 'sru 1 'slim 1 'srim 1 'sruim 1
     'lt 1 'ltim 1 'gt 1 'gtim 1 'lte 1 'gte 1
     'eq 1 'eqim 1 'neq 1 'neqim 1 'call 1 'movn 1 'movf 2
-    'len 1 'get 1 'put 1})
+    'len 1 'get 1 'put 1 'puti 1})
 (def emit-cmp-im @{'ltim true 'gtim true 'eqim true 'neqim true})
 (def emit-term-ops @{'ret true 'retn true 'err true})
 (def emit-cond-jumps @{'jmpif true 'jmpno true})
@@ -908,7 +914,14 @@
             (put st (ins 1)
                  (infer/arith-join (get st (ins 2) :unknown)
                                    (get st (ins 3) :unknown)))
+            (get infer/bit-im-ops op)
+            (put st (ins 1) (infer/bit-join (get st (ins 2) :unknown) :long))
+            (get infer/bit-ops op)
+            (put st (ins 1)
+                 (infer/bit-join (get st (ins 2) :unknown)
+                                 (get st (ins 3) :unknown)))
             (get infer/cmp-ops op) (put st (ins 1) :bool)
+            (= op 'ldu) (put st (ins 1) :unknown)
             # Step 11: array access (mirrors infer/scan-def rules)
             (= op 'get)
             (put st (ins 1)
@@ -920,6 +933,11 @@
               (when (= pa :array)
                 (unless (and (infer/int-family? (get st (ins 2) :unknown))
                              (get infer/numeric-types (get st (ins 3) :unknown)))
+                  (put st (ins 1) :unknown))))
+            (= op 'puti)
+            (do (def pa (get st (ins 1) :unknown))
+              (when (= pa :array)
+                (unless (get infer/numeric-types (get st (ins 2) :unknown))
                   (put st (ins 1) :unknown))))
             (= op 'call)
             (do (def tid (get cmap pc))
@@ -959,10 +977,24 @@
     @{:ok false :reason "dataflow did not converge"}
     @{:ok true :leaders leaders :block-end block-end :states in-states}))
 
+# int32-domain checked operand for bitwise emission. Boxed Janet
+# errors outside int32 (integral doubles accepted, results wrap int32);
+# the checks abort exactly where boxed errors (fail loud, like OOB).
+# st: flow slot types; pt: hinted param types; slot: operand index.
+(defn bit-operand-type [st pt arity slot]
+  (if (< slot arity) (get pt slot :unknown) (get st slot :unknown)))
+(defn emit-bit-check [expr t]
+  (if (get int-hints t)
+    (string "    if (" expr " < -2147483647LL - 1 || " expr
+            " > 2147483647LL) { fprintf(stderr, \"int32 domain error\\n\"); abort(); }")
+    (string "    if (" expr " != floor(" expr ") || " expr
+            " < -2147483648.0 || " expr
+            " > 2147483647.0) { fprintf(stderr, \"int32 domain error\\n\"); abort(); }")))
+
 (defn emit-fn-c [id d rt pt call-map emitted-names rts]
   (def arity (length pt))
   (when (d :vararg) (break [nil "vararg"]))
-  (unless (get infer/numeric-types rt) (break [nil "return not concrete"]))
+  (unless (or (get infer/numeric-types rt) (= rt :array)) (break [nil "return not concrete"]))
   (def fl (flow-check id d pt rt call-map rts))
   (unless (fl :ok) (break [nil (fl :reason)]))
   (def leaders (fl :leaders))
@@ -997,7 +1029,14 @@
       (put wtypes (ins 1)
            (infer/arith-join (get wtypes (ins 2) :unknown)
                              (get wtypes (ins 3) :unknown)))
+      (get infer/bit-im-ops wop)
+      (put wtypes (ins 1) (infer/bit-join (get wtypes (ins 2) :unknown) :long))
+      (get infer/bit-ops wop)
+      (put wtypes (ins 1)
+           (infer/bit-join (get wtypes (ins 2) :unknown)
+                           (get wtypes (ins 3) :unknown)))
       (get infer/cmp-ops wop) (put wtypes (ins 1) :bool)
+      (= wop 'ldu) (put wtypes (ins 1) :unknown)
       (= wop 'get)
       (put wtypes (ins 1)
            (if (and (= :array (get wtypes (ins 2) :unknown))
@@ -1008,6 +1047,11 @@
         (when (= wpa :array)
           (unless (and (infer/int-family? (get wtypes (ins 2) :unknown))
                        (get infer/numeric-types (get wtypes (ins 3) :unknown)))
+            (put wtypes (ins 1) :unknown))))
+      (= wop 'puti)
+      (do (def wpa (get wtypes (ins 1) :unknown))
+        (when (= wpa :array)
+          (unless (get infer/numeric-types (get wtypes (ins 2) :unknown))
             (put wtypes (ins 1) :unknown))))
       (= wop 'call)
       (do (def wtid (get cmap wpc))
@@ -1053,7 +1097,14 @@
             (put st (ins 1)
                  (infer/arith-join (get st (ins 2) :unknown)
                                    (get st (ins 3) :unknown)))
+            (get infer/bit-im-ops op)
+            (put st (ins 1) (infer/bit-join (get st (ins 2) :unknown) :long))
+            (get infer/bit-ops op)
+            (put st (ins 1)
+                 (infer/bit-join (get st (ins 2) :unknown)
+                                 (get st (ins 3) :unknown)))
             (get infer/cmp-ops op) (put st (ins 1) :bool)
+            (= op 'ldu) (put st (ins 1) :unknown)
             # Step 11: array access (mirrors infer/scan-def rules)
             (= op 'get)
             (put st (ins 1)
@@ -1065,6 +1116,11 @@
               (when (= pa :array)
                 (unless (and (infer/int-family? (get st (ins 2) :unknown))
                              (get infer/numeric-types (get st (ins 3) :unknown)))
+                  (put st (ins 1) :unknown))))
+            (= op 'puti)
+            (do (def pa (get st (ins 1) :unknown))
+              (when (= pa :array)
+                (unless (get infer/numeric-types (get st (ins 2) :unknown))
                   (put st (ins 1) :unknown))))
             (= op 'call)
             (do (def tid (get cmap pc))
@@ -1082,8 +1138,10 @@
             (= op 'ret)
             (do (def rvt (get st (ins 1) :unknown))
               # family check: int fn returns int-family values, float fn
-              # returns any numeric (int promotes); C converts the width
+              # returns any numeric (int promotes); array fn returns the
+              # array (in place); C converts the width
               (def ok (cond
+                        (= rt :array) (= rvt :array)
                         (get int-hints rt) (get int-hints rvt)
                         (get float-hints rt)
                         (or (get infer/numeric-types rvt) (= rvt :bool))
@@ -1178,6 +1236,22 @@
                           (string "    " (emit-slot (ins 1) arity) "->data[(int64_t)("
                                   (emit-slot (ins 2) arity) ")] = janet_wrap_number("
                                   (emit-slot (ins 3) arity) ");")))
+            (= op 'puti)
+            # puti: constant-index put (dst=ins1, value=ins2, index=ins3).
+            # Bounds abort like put (fail loud); the constant is int32
+            # by construction (compiler range).
+            (do (unless (and (= :array (get st (ins 1) :unknown))
+                             (get infer/numeric-types (get st (ins 2) :unknown)))
+                  (set bad "puti requires array, numeric value")
+                  (break))
+              (array/push lines
+                          (string "    if (" (ins 3) " < 0 || " (ins 3)
+                                  " >= " (emit-slot (ins 1) arity)
+                                  "->count) { fprintf(stderr, \"array index out of bounds\\n\"); abort(); }"))
+              (array/push lines
+                          (string "    " (emit-slot (ins 1) arity) "->data[" (ins 3)
+                                  "] = janet_wrap_number("
+                                  (emit-slot (ins 2) arity) ");")))
             (or (= op 'add) (= op 'sub) (= op 'mul))
             (do (set pending @[])
               (array/push lines
@@ -1190,6 +1264,26 @@
                           (string "    s" (ins 1) " = "
                                   (emit-slot (ins 2) arity) " " (emit-arith-im-c op) " "
                                   (ins 3) ";")))
+            (get emit-bit-c op)
+            (do (set pending @[])
+              (def bt2 (bit-operand-type st pt arity (ins 2)))
+              (def bt3 (bit-operand-type st pt arity (ins 3)))
+              (array/push lines (emit-bit-check (emit-slot (ins 2) arity) bt2))
+              (array/push lines (emit-bit-check (emit-slot (ins 3) arity) bt3))
+              (array/push lines
+                          (string "    s" (ins 1) " = "
+                                  (get emit-bit-c op) "((int32_t)"
+                                  (emit-slot (ins 2) arity) ", (int32_t)"
+                                  (emit-slot (ins 3) arity) ");")))
+            (get emit-bit-im-c op)
+            (do (set pending @[])
+              (def bt2 (bit-operand-type st pt arity (ins 2)))
+              (array/push lines (emit-bit-check (emit-slot (ins 2) arity) bt2))
+              (array/push lines
+                          (string "    s" (ins 1) " = "
+                                  (get emit-bit-im-c op) "((int32_t)"
+                                  (emit-slot (ins 2) arity) ", (int32_t)"
+                                  (ins 3) ");")))
             (or (= op 'call) (= op 'tcall))
             (do (def tid (get cmap pc))
               (if (string? tid)
@@ -1223,7 +1317,16 @@
                         (set pending @[]))
                       (do (set bad "call to non-native or type mismatch")
                         (break)))))))
-            nil)
+            # ldu (load upvalue) is dead in emitted code: static calls
+            # resolve by name, and any live use of the loaded value
+            # carries :unknown through flow, refusing at the use site.
+            # Skipping here is sound; the else below stays fail-closed.
+            (= op 'ldu) nil
+            # fail closed: an unhandled opcode previously vanished
+            # silently (puti proved it), producing wrong C. Refuse with
+            # the op name instead.
+            (do (set bad (string "unhandled op " op))
+              (break)))
           (++ pc)))))
   (if bad
     [nil bad]
@@ -1248,9 +1351,9 @@
     (def rt (rts id))
     (var concrete (and (> (length pt) 0) (not (d :vararg))))
     # Step 11: :array params are opaque-but-emittable (pointer temps);
-    # returns stay numeric-only
+    # :array returns are the (in-place) array itself
     (each t pt (unless (or (get infer/numeric-types t) (= t :array)) (set concrete false)))
-    (unless (get infer/numeric-types rt) (set concrete false))
+    (unless (or (get infer/numeric-types rt) (= rt :array)) (set concrete false))
     # a def named like a declared extern is the compiled fallback
     # artifact — the real implementation lives in C
     (when (get externs (string (or (d :name) "?"))) (set concrete false))
@@ -1328,7 +1431,8 @@
     (each combo (samples-for (e :pt))
       (array/push calls {:e e :args (tuple ;combo) :fn fnval})))
   (def cout @"")
-  (buffer/push-string cout "#include <stdio.h>\n#include <inttypes.h>\n")
+  (buffer/push-string cout "#include <stdio.h>\n#include <inttypes.h>\n#include <math.h>\n#include <stdlib.h>\n")
+  (buffer/push-string cout "/* int32-domain bitwise helpers: boxed Janet errors outside int32\n * (integral doubles accepted); results wrap int32; shift counts mask\n * to 5 bits. Callers range/integrality-check operands (fail loud). */\nstatic int32_t k_band32(int32_t a, int32_t b) { return a & b; }\nstatic int32_t k_bor32(int32_t a, int32_t b) { return a | b; }\nstatic int32_t k_bxor32(int32_t a, int32_t b) { return a ^ b; }\nstatic int32_t k_sl32(int32_t a, int32_t b) { return (int32_t)((uint32_t)a << ((uint32_t)b & 31u)); }\nstatic int32_t k_sr32(int32_t a, int32_t b) { uint32_t n = (uint32_t)b & 31u; int32_t r = (int32_t)((uint32_t)a >> n); if ((a < 0) && (n != 0)) { r |= (int32_t)(~0u << (32u - n)); } return r; }\nstatic int32_t k_sru32(int32_t a, int32_t b) { return (int32_t)((uint32_t)a >> ((uint32_t)b & 31u)); }\n\n")
   # Step 11: array kernels need Janet layouts + wrap macros (header
   # only — no lib link) and abort() for the bounds guard.
   (var anyarr false)
@@ -1350,40 +1454,45 @@
   (when anyext (buffer/push-string cout "\n"))
   (each c c-parts (buffer/push-string cout c) (buffer/push-string cout "\n\n"))
   (buffer/push-string cout "int main(void) {\n")
-  # Step 11: fixed sample arrays, one builder pair per array param.
-  # Variant 0 = [1.5 2.5 3.5], variant 1 = [4 5]; the oracle below
-  # uses the same values.
+  # Step 11: fixed sample arrays, ONE pair shared by every array param
+  # (aliasing matches the eval side, where each variant is a single
+  # shared object -- required for in-place kernels, whose mutations
+  # must propagate identically on both sides).
+  # Variant 0 = [0..7], variant 1 = [7..0]; the oracle below uses the
+  # same values. Elements stay integral (bitwise kernels abort on
+  # fractions by design, and every kernel runs every variant); length
+  # 8 covers fixed-size kernels (u64 limbs) and keeps element values
+  # valid as indices into either variant.
   (when anyarr
-    (each e emitted
-      (each i (range (length (e :pt)))
-        (when (= :array ((e :pt) i))
-          (def an (string "arr_" (emit-c-name (e :name)) "_" i))
-          (buffer/push-string cout
-            (string "    Janet " an "_v0_elts[3];\n"
-                    "    " an "_v0_elts[0] = janet_wrap_number(1.5);\n"
-                    "    " an "_v0_elts[1] = janet_wrap_number(2.5);\n"
-                    "    " an "_v0_elts[2] = janet_wrap_number(3.5);\n"
-                    "    JanetArray " an "_v0 = {{0}, 3, 3, " an "_v0_elts};\n"
-                    "    Janet " an "_v1_elts[2];\n"
-                    "    " an "_v1_elts[0] = janet_wrap_number(4);\n"
-                    "    " an "_v1_elts[1] = janet_wrap_number(5);\n"
-                    "    JanetArray " an "_v1 = {{0}, 2, 2, " an "_v1_elts};\n"))))))
+    (buffer/push-string cout
+      (string "    Janet arr_v0_elts[8];\n"
+              "    for (int _q = 0; _q < 8; _q++) arr_v0_elts[_q] = janet_wrap_number(_q);\n"
+              "    JanetArray arr_v0 = {{0}, 8, 8, arr_v0_elts};\n"
+              "    Janet arr_v1_elts[8];\n"
+              "    for (int _q = 0; _q < 8; _q++) arr_v1_elts[_q] = janet_wrap_number(7 - _q);\n"
+              "    JanetArray arr_v1 = {{0}, 8, 8, arr_v1_elts};\n")))
   (each c calls
     (def ept ((c :e) :pt))
     (def args-c (string/join
                   (seq [i :range [0 (length (c :args))]]
                     (if (= :array (ept i))
-                      (string "&arr_" (emit-c-name ((c :e) :name))
-                                      "_" i "_v" ((c :args) i))
+                      (string "&arr_v" ((c :args) i))
                       (string ((c :args) i))))
                   ", "))
     (buffer/push-string cout
-      (string "    printf(\"%.17g\\n\", (double) " (emit-c-name ((c :e) :name))
-              "(" args-c "));\n")))
+      (if (= :array ((c :e) :rt))
+        (string "    { JanetArray *_r = " (emit-c-name ((c :e) :name))
+                "(" args-c "); printf(\"[\"); "
+                "for (int32_t _k = 0; _k < _r->count; _k++) "
+                "{ if (_k) printf(\" \"); "
+                "printf(\"%.17g\", janet_unwrap_number(_r->data[_k])); } "
+                "printf(\"]\\n\"); }\n")
+        (string "    printf(\"%.17g\\n\", (double) " (emit-c-name ((c :e) :name))
+                "(" args-c "));\n"))))
   (buffer/push-string cout "    return 0;\n}\n")
   (spit (string outdir "/native.c") cout)
   (def expected @[])
-  (def arr-variants [@[1.5 2.5 3.5] @[4 5]])
+  (def arr-variants [@[0 1 2 3 4 5 6 7] @[7 6 5 4 3 2 1 0]])
   (each c calls
     (def ept ((c :e) :pt))
     (def coerced (seq [i :range [0 (length (c :args))]]
@@ -1391,7 +1500,12 @@
                      (get arr-variants ((c :args) i))
                      ((c :args) i))))
     (def v ((c :fn) ;coerced))
-    (array/push expected (string/format "%.17g" v)))
+    # array returns print canonically on both sides: [%.17g ...]
+    # (numeric elements assumed -- the harness only feeds those)
+    (array/push expected
+      (if (= :array ((c :e) :rt))
+        (string "[" (string/join (map (fn [x] (string/format "%.17g" x)) v) " ") "]")
+        (string/format "%.17g" v))))
   (spit (string outdir "/expected.txt") (string (string/join expected "\n") "\n"))
   (print "native " (length emitted) " fns " (length calls) " samples " outdir))
 
@@ -1408,9 +1522,10 @@
                            (string "(JanetArray *)janet_unwrap_array(argv[" i "])")
                            (string "janet_unwrap_number(argv[" i "])")))
                   ", "))
-  (def rv (if (and (get int-hints rt) (not= int-policy :promote))
-              "janet_wrap_integer"
-              "janet_wrap_number"))
+  (def rv (cond (= rt :array) "janet_wrap_array"
+                (and (get int-hints rt) (not= int-policy :promote))
+                "janet_wrap_integer"
+                "janet_wrap_number"))
   (string "static Janet " cn "_wrapper(int32_t argc, Janet *argv) {\n"
           "    (void) argc;\n"
           "    return " rv "(" cn "(" ps "));\n}\n"))
@@ -1435,9 +1550,9 @@
     (def rt (rts id))
     (var concrete (and (> (length pt) 0) (not (d :vararg))))
     # Step 11: :array params are opaque-but-emittable (pointer temps);
-    # returns stay numeric-only
+    # :array returns are the (in-place) array itself
     (each t pt (unless (or (get infer/numeric-types t) (= t :array)) (set concrete false)))
-    (unless (get infer/numeric-types rt) (set concrete false))
+    (unless (or (get infer/numeric-types rt) (= rt :array)) (set concrete false))
     (when concrete (put cand id true)))
   (def emitted-names @{})
   (def kernels @[])
@@ -1459,7 +1574,8 @@
                                :wrapper (wrapper-for nm (get pts id) (rts id))})
           (set changed true)))))
   (def cout @"")
-  (buffer/push-string cout "#include <janet.h>\n#include <inttypes.h>\n\n")
+  (buffer/push-string cout "#include <janet.h>\n#include <inttypes.h>\n#include <math.h>\n#include <stdlib.h>\n\n")
+  (buffer/push-string cout "/* int32-domain bitwise helpers: boxed Janet errors outside int32\n * (integral doubles accepted); results wrap int32; shift counts mask\n * to 5 bits. Callers range/integrality-check operands (fail loud). */\nstatic int32_t k_band32(int32_t a, int32_t b) { return a & b; }\nstatic int32_t k_bor32(int32_t a, int32_t b) { return a | b; }\nstatic int32_t k_bxor32(int32_t a, int32_t b) { return a ^ b; }\nstatic int32_t k_sl32(int32_t a, int32_t b) { return (int32_t)((uint32_t)a << ((uint32_t)b & 31u)); }\nstatic int32_t k_sr32(int32_t a, int32_t b) { uint32_t n = (uint32_t)b & 31u; int32_t r = (int32_t)((uint32_t)a >> n); if ((a < 0) && (n != 0)) { r |= (int32_t)(~0u << (32u - n)); } return r; }\nstatic int32_t k_sru32(int32_t a, int32_t b) { return (int32_t)((uint32_t)a >> ((uint32_t)b & 31u)); }\n\n")
   # extern C declarations used by the emitted kernels (raylib story)
   (each k kernels
     (each en (k :externs)
