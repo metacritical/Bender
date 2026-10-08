@@ -293,7 +293,7 @@
   "(defn main [] (print (imod 7 2)))\n"))
 (os/execute ["/bin/sh" "-c"
   "rm -rf /tmp/cg-im && ./build/bender tools/callgraph.janet /tmp/cg-imod.janet --emit-native /tmp/cg-im > /tmp/cg-im-out.txt"])
-(assert (not (nil? (string/find "mod on int width"
+(assert (not (nil? (string/find "mod needs float operands"
   (slurp "/tmp/cg-im-out.txt")))) "int mod refused")
 
 # divim (x / const): float kernels divide exactly like boxed; int refuses
@@ -315,8 +315,50 @@
   "(defn main [] (print (halve-i 7)))\n"))
 (os/execute ["/bin/sh" "-c"
   "rm -rf /tmp/cg-dii && ./build/bender tools/callgraph.janet /tmp/cg-divimi.janet --emit-native /tmp/cg-dii > /tmp/cg-dii-out.txt"])
-(assert (not (nil? (string/find "divim on int width"
+(assert (not (nil? (string/find "divim needs float operands"
   (slurp "/tmp/cg-dii-out.txt")))) "int divim refused")
+
+# regression (ttfx floor-div miscompile): int64 OPERANDS in a :double
+# fn must refuse — C int-div truncates before floor (-3) where boxed
+# floor-divides real (-4). Checking rt alone is not enough. (Source
+# `div` is opcode `divf`.)
+(spit "/tmp/cg-divmix.janet" (string
+  "(defn fdiv-mix {:hint {:params [:long :long] :returns :double}} [a b] (div a b))\n"
+  "(defn main [] (print (fdiv-mix -7 2)))\n"))
+(os/execute ["/bin/sh" "-c"
+  "rm -rf /tmp/cg-dm && ./build/bender tools/callgraph.janet /tmp/cg-divmix.janet --emit-native /tmp/cg-dm > /tmp/cg-dm-out.txt 2>&1"])
+(assert (not (nil? (string/find "divf needs float operands"
+  (slurp "/tmp/cg-dm-out.txt")))) "int operands in double fn refused")
+
+# Step 14 (call-shaped access): (a i) compiles to push+call with the
+# array as callee; the kernelizer lowers it exactly like get.
+# Same for tail-position (tcall) and tuples.
+(spit "/tmp/cg-shape.janet" (string
+  "(defn asum-c {:hint {:params [:array] :returns :double}} [a]\n"
+  "  (var s 0.0)\n"
+  "  (for i 0 (length a) (+= s (a i)))\n"
+  "  s)\n"
+  "(defn tfirst {:hint {:params [:tuple] :returns :double}} [t] (t 0))\n"
+  "(defn main [] (print (asum-c @[1.5 2.5]) (tfirst (tuple 4 5))))\n"))
+(assert (= 0 (os/execute ["/bin/sh" "-c"
+  "rm -rf /tmp/cg-sh && ./build/bender tools/callgraph.janet /tmp/cg-shape.janet --emit-native /tmp/cg-sh"] :p))
+  "shape emit run")
+(assert (= 0 (os/execute ["/bin/sh" "-c"
+  "cc -O2 -w -Isrc/include -Isrc/conf /tmp/cg-sh/native.c build/janet.o -lm -lpthread -ldl -o /tmp/cg-sh/native"] :p))
+  "shape native compiles+links")
+(assert (= 0 (os/execute ["/bin/sh" "-c"
+  "/tmp/cg-sh/native > /tmp/cg-sh/actual.txt && cmp /tmp/cg-sh/expected.txt /tmp/cg-sh/actual.txt"] :p))
+  "shape parity (call + tcall + tuple)")
+(def shtext (slurp "/tmp/cg-sh/native.c"))
+(assert (not (nil? (string/find "janet_unwrap_number" shtext))) "shape lowers to unwrap")
+# multi-arg call to an array value stays a refused call (not a get)
+(spit "/tmp/cg-shapebad.janet" (string
+  "(defn bad2 {:hint {:params [:array :long] :returns :double}} [a i] (a i 99))\n"
+  "(defn main [] (print (bad2 @[1] 0)))\n"))
+(os/execute ["/bin/sh" "-c"
+  "rm -rf /tmp/cg-shb && ./build/bender tools/callgraph.janet /tmp/cg-shapebad.janet --emit-native /tmp/cg-shb > /tmp/cg-shb-out.txt 2>&1"])
+(assert (not (nil? (string/find "native-skip" (slurp "/tmp/cg-shb-out.txt"))))
+        "multi-arg array call refused")
 
 # lib path prints skip diagnostics (same contract as --emit-native):
 # real builds use --emit-native-lib via bender --aot --native, and

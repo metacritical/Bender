@@ -150,6 +150,14 @@
   @{:long true :i32 true :i16 true :i8 true
     :u64 true :u32 true :u16 true :u8 true})
 (def float-hints @{:double true :float true})
+# Sound real-division needs C-double operands: C int-division
+# truncates toward zero where boxed divides real (floor_div(-7,2) is
+# -4 boxed but -3 in C on int64). :number temps declare as double, so
+# they are fine; int-family or bool operands must refuse. Applies to
+# div/divf/mod/rem (and divim's single operand below).
+(defn float-operand-ok [st slot]
+  (def t (get st slot :unknown))
+  (or (get float-hints t) (= t :number)))
 (def emit-c-type-map
   @{:long "int64_t" :i32 "int32_t" :i16 "int16_t" :i8 "int8_t"
     :u64 "uint64_t" :u32 "uint32_t" :u16 "uint16_t" :u8 "uint8_t"
@@ -980,6 +988,41 @@
 (defn emit-c-num [v] (string/format "%.17g" v))
 (defn emit-slot [a arity] (if (< a arity) (string "p" a) (string "s" a)))
 
+# Step 14: call-shaped array/tuple access. (a i) compiles to
+# push+tcall/call with the array as callee (tcall carries only the
+# callee; call's dst is ins 1, callee ins 2); (t :k) is likewise a
+# call. Returns [callee-slot idx-slot] when code[pc] is a single-index
+# access into a proven :array/:tuple slot, else nil. The single push
+# must immediately precede the call (modulo one callee-slot load);
+# anything else is fail-closed. Mirrors infer/scan-def's pending-based
+# rule; emission lowers to ->data[] exactly like get (bounds abort).
+(defn call-shape-idx [d pc st]
+  (def code (or (d :bytecode) @[]))
+  (def n (length code))
+  (when (or (< pc 0) (>= pc n)) (break nil))
+  (def ins (code pc))
+  (def op (ins 0))
+  (var callee nil)
+  (cond (= op 'call) (set callee (ins 2))
+        (= op 'tcall) (set callee (ins 1))
+        (break nil))
+  (def callee-ty (get st callee :unknown))
+  (unless (or (= callee-ty :array) (= callee-ty :tuple)) (break nil))
+  (var j (- pc 1))
+  # at most one callee-slot load between the push and the call
+  (when (and (>= j 0) (get load-ops ((code j) 0))) (-- j))
+  (when (< j 0) (break nil))
+  (def jn (code j))
+  (unless (= (jn 0) 'push) (break nil))
+  (def idx (jn 1))
+  # a second adjacent push means 2+ args (not our shape)
+  (when (>= (- j 1) 0)
+    (def pj ((code (- j 1)) 0))
+    (when (or (= pj 'push) (= pj 'push2) (= pj 'push3) (= pj 'pusha))
+      (break nil)))
+  (unless (infer/int-family? (get st idx :unknown)) (break nil))
+  [callee idx])
+
 # Step 8: CFG recovery + block-entry slot dataflow + validation.
 # Returns @{:ok true :leaders [...] :block-end {...} :states {pc -> st}}
 # or @{:ok false :reason string}.
@@ -1098,7 +1141,11 @@
                   (put st (ins 1) :unknown))))
             (= op 'call)
             (do (def tid (get cmap pc))
-              (when tid (put st (ins 1) (rts tid))))
+              (if tid
+                (put st (ins 1) (rts tid))
+                # call-shaped access refines the dst like get
+                (do (def sh (call-shape-idx d pc st))
+                  (when sh (put st (ins 1) :number)))))
             nil)
           (++ pc))
         (def lastins (code (- endx 1)))
@@ -1247,6 +1294,13 @@
   (def arity (length pt))
   (when (d :vararg) (break [nil "vararg"]))
   (unless (or (get infer/numeric-types rt) (= rt :array)) (break [nil "return not concrete"]))
+  # Step 14b: polymorphic :number returns code-gen as :double. Sound:
+  # boxed arithmetic IS double arithmetic, int-domain ops carry their
+  # own runtime checks (bit ops) or refuse (int div), and every double
+  # op below matches boxed bit-for-bit. Callers still see the declared
+  # :number in rts, so native-to-native calls into such fns refuse
+  # fail-closed (width unification is future work); roots emit standalone.
+  (def rt (if (= rt :number) :double rt))
   (def fl (flow-check id d pt rt call-map rts))
   (unless (fl :ok) (break [nil (fl :reason)]))
   (def leaders (fl :leaders))
@@ -1322,7 +1376,12 @@
             (wput (ins 1) :unknown))))
       (= wop 'call)
       (do (def wtid (get cmap wpc))
-        (when wtid (wput (ins 1) (rts wtid))))
+        (if wtid
+          (wput (ins 1) (rts wtid))
+          # call-shaped access declares a numeric dst (wtypes stands in
+          # for st in this linear sweep; same rule as flow-check)
+          (do (def wsh (call-shape-idx d wpc wtypes))
+            (when wsh (wput (ins 1) :number)))))
       nil)
     (++ wpc)
     (def wpos (get emit-writers wop))
@@ -1371,6 +1430,16 @@
         (while (and (< pc endx) (nil? bad))
           (def ins (code pc))
           (def op (ins 0))
+          # call-shaped access is resolved ONCE per site, before the
+          # state update below runs: the dest slot often reuses the
+          # index temp ((ldi 2 0) (push 2) (call 2 0)), so testing
+          # after the update would see the :number result instead of
+          # the :long index and refuse. Both the state rule and the
+          # emission arm below share this snapshot.
+          (def sh-now
+            (when (and (or (= op 'call) (= op 'tcall))
+                       (nil? (get cmap pc)))
+              (call-shape-idx d pc st)))
           # keep the slot-type state current (mirrors flow-check)
           (cond
             (= op 'ldi) (put st (ins 1) :long)
@@ -1421,7 +1490,9 @@
                   (put st (ins 1) :unknown))))
             (= op 'call)
             (do (def tid (get cmap pc))
-              (when tid (put st (ins 1) (rts tid))))
+              (if tid
+                (put st (ins 1) (rts tid))
+                (when sh-now (put st (ins 1) :number))))
             nil)
           (cond
             (= op 'ldi)
@@ -1478,50 +1549,62 @@
                                   (emit-slot (ins 3) arity) ";")))
             (= op 'div)
             # int-family: C integer division truncates (needs a
-            # documented policy in step 13); float-family: real division
-            (if (get float-hints rt)
+            # documented policy in step 13); float-family: real division.
+            # The check is on the OPERANDS (int64 operands truncate even
+            # in a :double fn), not just rt.
+            (if (and (get float-hints rt)
+                     (float-operand-ok st (ins 2))
+                     (float-operand-ok st (ins 3)))
               (do (set pending @[])
                 (array/push lines
                             (string "    s" (ins 1) " = "
                                     (emit-slot (ins 2) arity) " / "
                                     (emit-slot (ins 3) arity) ";")))
-              (do (set bad "div on int width (policy TBD)")
+              (do (set bad "div needs float operands (policy TBD)")
                 (break)))
             # divim (x / const): same policy as div. The immediate is a
             # small int constant by construction; float kernels divide
             # exactly like boxed, int kernels refuse (trunc vs real).
             (= op 'divim)
-            (if (get float-hints rt)
+            (if (and (get float-hints rt)
+                     (float-operand-ok st (ins 2)))
               (do (set pending @[])
                 (array/push lines
                             (string "    s" (ins 1) " = "
                                     (emit-slot (ins 2) arity) " / "
                                     (ins 3) ";")))
-              (do (set bad "divim on int width (policy TBD)")
+              (do (set bad "divim needs float operands (policy TBD)")
                 (break)))
             # divf/mod/rem: float-family only (C % truncates toward zero
             # but Janet mod is floor-based — they diverge on negatives;
             # doubles via libm match boxed exactly, same op order).
+            # Operands checked like div: int64 operands would truncate.
             (= op 'divf)
-            (if (get float-hints rt)
+            (if (and (get float-hints rt)
+                     (float-operand-ok st (ins 2))
+                     (float-operand-ok st (ins 3)))
               (do (set pending @[])
                 (array/push lines
                             (string "    s" (ins 1) " = floor("
                                     (emit-slot (ins 2) arity) " / "
                                     (emit-slot (ins 3) arity) ");")))
-              (do (set bad "divf on int width (policy TBD)")
+              (do (set bad "divf needs float operands (policy TBD)")
                 (break)))
             (= op 'rem)
-            (if (get float-hints rt)
+            (if (and (get float-hints rt)
+                     (float-operand-ok st (ins 2))
+                     (float-operand-ok st (ins 3)))
               (do (set pending @[])
                 (array/push lines
                             (string "    s" (ins 1) " = fmod("
                                     (emit-slot (ins 2) arity) ", "
                                     (emit-slot (ins 3) arity) ");")))
-              (do (set bad "rem on int width (policy TBD)")
+              (do (set bad "rem needs float operands (policy TBD)")
                 (break)))
             (= op 'mod)
-            (if (get float-hints rt)
+            (if (and (get float-hints rt)
+                     (float-operand-ok st (ins 2))
+                     (float-operand-ok st (ins 3)))
               (do (set pending @[])
                 (def ma (emit-slot (ins 2) arity))
                 (def mb (emit-slot (ins 3) arity))
@@ -1529,7 +1612,7 @@
                             (string "    s" (ins 1) " = (" mb ") == 0 ? ("
                                     ma ") : ((" ma ") - (" mb ") * floor(("
                                     ma ") / (" mb ")));")))
-              (do (set bad "mod on int width (policy TBD)")
+              (do (set bad "mod needs float operands (policy TBD)")
                 (break)))
             (= op 'movn)
             (array/push lines (string "    s" (ins 1) " = "
@@ -1639,6 +1722,31 @@
                                   (get emit-bit-im-c op) "((int32_t)"
                                   (emit-slot (ins 2) arity) ", (int32_t)"
                                   (ins 3) ");")))
+            # call-shaped array/tuple access (see call-shape-idx):
+            # single-index (a i) into :array/:tuple lowers exactly like
+            # get (bounds abort, fail loud). Checked before the general
+            # call arm; true calls (resolved tid) fall through. Uses the
+            # sh-now snapshot (see above), never re-queries st.
+            (or sh-now)
+            (do (def sh2 sh-now)
+              (def sharr (sh2 0))
+              (def shidx (sh2 1))
+              (def shtup (= (get st sharr :unknown) :tuple))
+              (def sharr-e (emit-slot sharr arity))
+              (def shidx-e (string "(int64_t)(" (emit-slot shidx arity) ")"))
+              (def shbound (if shtup (string "janet_tuple_head(" sharr-e ")->length")
+                                   (string sharr-e "->count")))
+              (def shdata (if shtup (string sharr-e "[" shidx-e "]")
+                                     (string sharr-e "->data[" shidx-e "]")))
+              (def shoob (if shtup "tuple index out of bounds"
+                                    "array index out of bounds"))
+              (array/push lines
+                          (string "    if (" shidx-e " < 0 || " shidx-e
+                                  " >= " shbound ") { fprintf(stderr, \"" shoob "\\n\"); abort(); }"))
+              (if (= op 'tcall)
+                (array/push lines (string "    return janet_unwrap_number(" shdata ");"))
+                (array/push lines (string "    s" (ins 1) " = janet_unwrap_number(" shdata ");")))
+              (set pending @[]))
             (or (= op 'call) (= op 'tcall))
             (do (def tid (get cmap pc))
               # Path 2 struct intrinsic: a call to a def carrying

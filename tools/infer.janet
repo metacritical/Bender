@@ -254,6 +254,16 @@
                       (put box :changed true)))
                   (++ i))))
             (when (number? tid) (put st (ins 1) (rts tid))))
+          # call-shaped array/tuple access: (a i) compiles to
+          # push+tcall/call with the array as callee (tcall carries no
+          # dst; call's dst is ins 1, callee ins 2). Same rule as get:
+          # single int-family index into :array/:tuple -> :number
+          # (emission unwraps fail-loud, like get/OOB).
+          (when (and (nil? tid) (not spread) (= 1 (length pending)))
+            (def callee-ty (get st (ins 2) :unknown))
+            (when (and (or (= callee-ty :array) (= callee-ty :tuple))
+                       (int-family? (pending 0)))
+              (put st (ins 1) :number)))
           (set pending @[])
           (set spread false))
         (= op 'tcall)
@@ -273,6 +283,14 @@
                   (++ i))))
             (when (number? tid)
               (set rtype (type-join rtype (rts tid)))))
+          # call-shaped access in tail position: (a i) as the return
+          # value. tcall carries only the callee (ins 1); same :number
+          # rule as the call arm above.
+          (when (and (nil? tid) (not spread) (= 1 (length pending)))
+            (def callee-ty (get st (ins 1) :unknown))
+            (when (and (or (= callee-ty :array) (= callee-ty :tuple))
+                       (int-family? (pending 0)))
+              (set rtype (type-join rtype :number))))
           (set pending @[])
           (set spread false))
         (= op 'ret) (set rtype (type-join rtype (get st (ins 1) :unknown)))
