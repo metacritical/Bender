@@ -154,7 +154,8 @@
   @{:long "int64_t" :i32 "int32_t" :i16 "int16_t" :i8 "int8_t"
     :u64 "uint64_t" :u32 "uint32_t" :u16 "uint16_t" :u8 "uint8_t"
     :double "double" :float "float" :number "double"
-    :array "JanetArray*" :bool "int"})
+    :array "JanetArray*" :tuple "JanetTuple" :pointer "void*"
+    :bool "int"})
 # alias spellings fold to the canonical width keyword
 (defn canon-hint [k] (get hint-canonical k k))
 (defn hint-of [id]
@@ -162,12 +163,52 @@
   (when (nil? info) (break nil))
   (info :hint))
 (var all-defn-forms @{})
+# Path 2 struct intrinsics: callee name -> [:pread|:pwrite ctype-kw offset].
+# Populated from defn :kernel metadata; calls to these defs emit direct
+# native-memory access instead of calls (the callee itself is never
+# emitted -- its boxed body serves the interpreter).
+(var kernel-intrinsics @{})
+# file -> macroexpanded top-level forms (macro-generating-defns, notably
+# ffi/defstruct, must be visible to registration and the source scans)
+(var unit-forms @{})
+(var unit-envs @{})
+(defn extract-intrinsics []
+  # Path 2 struct intrinsics, second pass over the same unit files:
+  # (defn f {:hint {...} :kernel {:pread [:double OFF]}} ...) marks
+  # calls to f as direct native-memory access instead of calls (the
+  # callee itself is never emitted -- its boxed body serves the
+  # interpreter). Validated here; invalid specs are ignored (the
+  # normal call path then refuses loudly -- fail closed).
+  (var n 0)
+  (each f args
+    (each form (or (get unit-forms f) @[])
+      (when (and (tuple? form) (>= (length form) 3)
+                 (symbol? (form 0))
+                 (or (= (string (form 0)) "defn") (= (string (form 0)) "defn-")))
+        (def m (form 2))
+        (when (and (or (table? m) (struct? m)) (get m :kernel))
+          (def kspec (get m :kernel))
+          (def kk (cond (get kspec :pread)
+                        [:pread (get kspec :pread)]
+                        (get kspec :pwrite)
+                        [:pwrite (get kspec :pwrite)]))
+          (when kk
+            (def kv (get kk 1))
+            (when (and (indexed? kv) (= 2 (length kv))
+                       (or (= (get kv 0) :double)
+                           (= (get kv 0) :long)
+                           (= (get kv 0) :float)
+                           (= (get kv 0) :i32))
+                       (int? (get kv 1)) (>= (get kv 1) 0))
+              (put kernel-intrinsics (string (form 1))
+                   [(get kk 0) (get kv 0) (get kv 1)])
+              (++ n)))))))
+  n)
+
 (defn extract-hints []
   (var nhints 0)
   (each f args
-    (def text (slurp f))
-    (def forms (parse-all text))
-    (each form forms
+    (each form (or (get unit-forms f) @[])
       (when (and (tuple? form) (>= (length form) 3)
                  (symbol? (form 0))
                  (or (= (string (form 0)) "defn") (= (string (form 0)) "defn-")))
@@ -246,7 +287,8 @@
             (each id ids
               (def info (get defs id))
               (put info :hint h))
-            (++ nhints))))))
+            (++ nhints)))
+)))
   nhints)
 
 (defn check-hints []
@@ -602,7 +644,31 @@
       (def mt (try (compile form env f) ([_] nil)))
       (when (= :function (type mt))
         (try (mt) ([e] (eprint "callgraph: macro error in " f ": " e) (os/exit 2))))))
-  (def program (tuple/slice @['do ;forms] 0))
+  # expand top-level macro calls (notably ffi/defstruct) so
+  # macro-generated defns register like hand-written ones. defn/defmacro
+  # heads are NEVER expanded: macex would dissolve the defn shape the
+  # source scans pattern-match. Unexpandable forms stay as they were
+  # (yesterday's behavior, fail-open to no worse).
+  (def noexpand-heads @{"defn" true "defn-" true "defmacro" true})
+  # A macro call expanding to a (do ...) splices: defns nested in a
+  # do-block never register as top-level defs (closures inline), so the
+  # block's body joins the stream as siblings. User-written do-blocks
+  # (head already do) stay intact.
+  (def expanded @[])
+  (each form forms
+    (def res
+      (if (and (tuple? form) (>= (length form) 1) (symbol? (form 0))
+               (not (get noexpand-heads (string (form 0))))
+               (not= (form 0) 'do))
+        (try (with-env env (macex1 form)) ([_] form))
+        form))
+    (if (and (not= res form) (tuple? res) (>= (length res) 1)
+             (= (get res 0) 'do))
+      (each x (tuple/slice res 1) (array/push expanded x))
+      (array/push expanded res)))
+  (put unit-forms f expanded)
+  (put unit-envs f env)
+  (def program (tuple/slice @['do ;expanded] 0))
   (def res
     (try (compile program env f)
       ([e] [:thrown e])))
@@ -616,6 +682,7 @@
 
 # Step 4: extract type hints BEFORE the walk so audit-site sees them.
 (var nhints (extract-hints))
+(var nintrinsics (extract-intrinsics))
 
 # Pass 2: walk every def exactly once (ids are dense 0..n-1).
 (var i 0)
@@ -852,12 +919,14 @@
     (get emit-c-type-map t fb)))
 (defn emit-c-name [nm]
   # Janet name characters with no C equivalent fold deterministically
-  # (! mutation convention, ? predicate convention). Character-mapped,
-  # not PEG-replaced: ? and ! are PEG-special in string/replace-all.
+  # (! mutation convention, ? predicate convention, / module paths).
+  # Character-mapped, not PEG-replaced: ? and ! are PEG-special in
+  # string/replace-all.
   (def base (string/replace-all "-" "_" nm))
   (string/join
     (map (fn [c] (cond (= c 33) "_bang"
                        (= c 63) "_q"
+                       (= c 47) "_"
                        (string/from-bytes c)))
          (string/bytes base)) ""))
 (defn emit-c-num [v] (string/format "%.17g" v))
@@ -964,7 +1033,8 @@
             # Step 11: array access (mirrors infer/scan-def rules)
             (= op 'get)
             (put st (ins 1)
-                 (if (and (= :array (get st (ins 2) :unknown))
+                 (if (and (or (= :array (get st (ins 2) :unknown))
+                              (= :tuple (get st (ins 2) :unknown)))
                           (infer/int-family? (get st (ins 3) :unknown)))
                    :number :unknown))
             (= op 'put)
@@ -1030,6 +1100,101 @@
             " < -2147483648.0 || " expr
             " > 2147483647.0) { fprintf(stderr, \"int32 domain error\\n\"); abort(); }")))
 
+(defn call-arg-slots [d pc]
+  # mirror of call-arity, collecting pushed arg slots in order; nil
+  # unless the walk ends at a clean boundary (fail-closed). Push
+  # operands are authoritative -- interleaved loads only compute the
+  # temps the pushes reference.
+  (def code (or (d :bytecode) @[]))
+  (def slots @[])
+  (var j (- pc 1))
+  (var scanned 0)
+  (var ok true)
+  (while (and (>= j 0) (< scanned 60) (= ok true))
+    (++ scanned)
+    (def ins (code j))
+    (def op (ins 0))
+    (cond
+      (= op 'push) (array/insert slots 0 (ins 1))
+      (= op 'push2) (do (array/insert slots 0 (ins 2))
+                      (array/insert slots 0 (ins 1)))
+      (= op 'push3) (do (array/insert slots 0 (ins 3))
+                      (array/insert slots 0 (ins 2))
+                      (array/insert slots 0 (ins 1)))
+      (get flow-stop-ops op) (set ok false)
+      (= op 'call) (set ok false)
+      (= op 'pusha) (set ok nil)
+      (get load-ops op) nil
+      (set ok nil))
+    (-- j))
+  (if (or (< j 0) (= ok false)) slots nil))
+
+(defn intrinsic-ctype [kty]
+  # C type of the native field; loads convert to the dest slot width
+  (cond (= kty :long) "int64_t" (= kty :float) "float"
+        (= kty :i32) "int32_t" "double"))
+
+(defn intrinsic-boxed [kty]
+  # the Janet type boxed ffi/read returns for the storage width
+  # (only :long survives as an integer -- s64 aside, everything
+  # numeric comes back double)
+  (if (= kty :long) :long :double))
+
+(defn emit-intrinsic-call [kn tid d code pc st arity pending spread op dest]
+  # kn: [kind ty off] from :kernel metadata. Direct native-memory
+  # access for Path 2 struct getters/setters; [lines] or [nil reason].
+  # Fail-closed: callee contract, arg count/types, and value types must
+  # all agree, else the normal call path refuses as non-native.
+  (def kk (kn 0))
+  (def kty (kn 1))
+  (def koff (kn 2))
+  (def cty (intrinsic-ctype kty))
+  (def kargc (if (= kk :pread) 1 2))
+  (if (not= op 'call)
+    (break [nil "intrinsic tail call unsupported"]))
+  (if spread
+    (break [nil "intrinsic spread call"]))
+  (if (not= (length pending) kargc)
+    (break [nil "intrinsic arity mismatch"]))
+  # callee contract agrees with the spec (getter returns ty; setter
+  # takes [pointer ty]-exactly -- implicit conversions stay boxed)
+  (def cpt (get pts tid))
+  (def crt (rts tid))
+  # contract is the BOXED type (what ffi/read/poke observe), not the
+  # storage width: :float/:i32 fields read back double
+  (def bty (intrinsic-boxed kty))
+  (if (= kk :pread)
+    (when (not= crt bty) (break [nil "intrinsic returns mismatch"]))
+    (do (when (or (not= (length cpt) 2) (not= (cpt 0) :pointer)
+                  (not= (cpt 1) bty))
+          (break [nil "intrinsic setter contract mismatch"]))
+        (when (not= crt bty) (break [nil "intrinsic returns mismatch"]))))
+  (def slots (call-arg-slots d pc))
+  (if (or (nil? slots) (not= (length slots) kargc))
+    (break [nil "intrinsic arg slots unclear"]))
+  (if (not= :pointer (get st (slots 0) :unknown))
+    (break [nil "intrinsic base must be :pointer"]))
+  (def pexpr (pending 0))
+  (def mem (string "(*(" cty "*)((char*)(" pexpr ") + " koff "))"))
+  (if (= kk :pread)
+    # load converts to the dest slot width (int-policy promote runs
+    # int widths as double -- the cast keeps the decl honest)
+    (do (def fvt (get st dest :unknown))
+      (def dct (emit-kernel-type fvt))
+      (break [[(string "    s" dest " = (" dct ")(" mem ");")]]))
+    # store the value (cast to field width), dest is the stored value
+    (do (def vslot (slots 1))
+      (def vty (get st vslot :unknown))
+      # value must BE the contract type exactly (no implicit
+      # conversion at the boundary -- stays boxed otherwise)
+      (unless (= vty bty) (break [nil "intrinsic value type mismatch"]))
+      (def vok (if (= kty :long) (get int-hints vty)
+                   (get infer/numeric-types vty)))
+      (unless vok (break [nil "intrinsic value type mismatch"]))
+      (def vexpr (pending 1))
+      (break [[(string "    " mem " = (" cty ")(" vexpr ");")
+               (string "    s" dest " = " vexpr ";")]]))))
+
 (defn emit-fn-c [id d rt pt call-map emitted-names rts]
   (def arity (length pt))
   (when (d :vararg) (break [nil "vararg"]))
@@ -1092,7 +1257,8 @@
       (= wop 'ldu) (wput (ins 1) :unknown)
       (= wop 'get)
       (wput (ins 1)
-           (if (and (= :array (get wtypes (ins 2) :unknown))
+           (if (and (or (= :array (get wtypes (ins 2) :unknown))
+                        (= :tuple (get wtypes (ins 2) :unknown)))
                     (infer/int-family? (get wtypes (ins 3) :unknown)))
              :number :unknown))
       (= wop 'put)
@@ -1190,7 +1356,8 @@
             # Step 11: array access (mirrors infer/scan-def rules)
             (= op 'get)
             (put st (ins 1)
-                 (if (and (= :array (get st (ins 2) :unknown))
+                 (if (and (or (= :array (get st (ins 2) :unknown))
+                              (= :tuple (get st (ins 2) :unknown)))
                           (infer/int-family? (get st (ins 3) :unknown)))
                    :number :unknown))
             (= op 'put)
@@ -1283,26 +1450,39 @@
             # instead (documented opt-in divergence). In-bounds loops of
             # the `for i 0 (length a)` shape never trip it.
             (= op 'len)
-            (do (unless (= :array (get st (ins 2) :unknown))
-                  (set bad "len of non-array")
-                  (break))
+            (do (def lbase (get st (ins 2) :unknown))
+              (unless (or (= lbase :array) (= lbase :tuple))
+                (set bad "len of non-array")
+                (break))
               (array/push lines (string "    s" (ins 1) " = "
-                                        (emit-slot (ins 2) arity) "->count;")))
+                                        (if (= lbase :tuple)
+                                          (string "janet_tuple_head(" (emit-slot (ins 2) arity) ")->length")
+                                          (string (emit-slot (ins 2) arity) "->count")) ";")))
             (= op 'get)
             (do
-              (unless (and (= :array (get st (ins 2) :unknown))
-                             (infer/int-family? (get st (ins 3) :unknown)))
-                  (set bad "get requires array and int index")
-                  (break))
+              (def gbase (get st (ins 2) :unknown))
+              (def gtup (= gbase :tuple))
+              (unless (and (or (= gbase :array) gtup)
+                           (infer/int-family? (get st (ins 3) :unknown)))
+                (set bad (if gtup "get requires tuple and int index"
+                             "get requires array and int index"))
+                (break))
+              # tuples index the inline data directly (JanetTuple IS
+              # const Janet*); length lives in the head. Arrays use
+              # ->data/->count. Bounds abort either way (fail loud).
+              (def garr (emit-slot (ins 2) arity))
+              (def gidx (string "(int64_t)(" (emit-slot (ins 3) arity) ")"))
+              (def gbound (if gtup (string "janet_tuple_head(" garr ")->length")
+                              (string garr "->count")))
+              (def gdata (if gtup (string garr "[" gidx "]")
+                             (string garr "->data[" gidx "]")))
+              (def oobmsg (if gtup "tuple index out of bounds"
+                              "array index out of bounds"))
               (array/push lines
-                          (string "    if ((int64_t)(" (emit-slot (ins 3) arity)
-                                  ") < 0 || (int64_t)(" (emit-slot (ins 3) arity)
-                                  ") >= " (emit-slot (ins 2) arity)
-                                  "->count) { fprintf(stderr, \"array index out of bounds\\n\"); abort(); }"))
+                          (string "    if (" gidx " < 0 || " gidx
+                                  " >= " gbound ") { fprintf(stderr, \"" oobmsg "\\n\"); abort(); }"))
               (array/push lines
-                          (string "    s" (ins 1) " = janet_unwrap_number("
-                                  (emit-slot (ins 2) arity) "->data[(int64_t)("
-                                  (emit-slot (ins 3) arity) ")]);")))
+                          (string "    s" (ins 1) " = janet_unwrap_number(" gdata ");")))
             (= op 'put)
             # (put arr idx val): dst IS the array slot (ins 1)
             (do (unless (and (= :array (get st (ins 1) :unknown))
@@ -1369,7 +1549,22 @@
                                   (ins 3) ");")))
             (or (= op 'call) (= op 'tcall))
             (do (def tid (get cmap pc))
-              (if (string? tid)
+              # Path 2 struct intrinsic: a call to a def carrying
+              # :kernel metadata emits direct native-memory access
+              # instead of a call (the callee is never emitted; its
+              # boxed body serves the interpreter). Anything unclear
+              # falls through to the normal path (refuses as usual).
+              (def kn (when (number? tid)
+                        (def tinfo (get defs tid))
+                        (when tinfo (get kernel-intrinsics (get tinfo :name)))))
+              (if kn
+                (do (def kres (emit-intrinsic-call kn tid d code pc st arity
+                                                  pending spread op (ins 1)))
+                  (if (kres 0)
+                    (do (each l (kres 0) (array/push lines l))
+                      (set pending @[]))
+                    (do (set bad (kres 1)) (break))))
+                (if (string? tid)
                 # declared extern: direct C symbol call
                 (do (def ext (get externs tid))
                   (def extret (get ext :returns))
@@ -1399,7 +1594,7 @@
                                               "(" (string/join pending ", ") ");"))
                         (set pending @[]))
                       (do (set bad "call to non-native or type mismatch")
-                        (break)))))))
+                        (break))))))))
             # ldu (load upvalue) is dead in emitted code: static calls
             # resolve by name, and any live use of the loaded value
             # carries :unknown through flow, refusing at the use site.
@@ -1435,7 +1630,7 @@
     (var concrete (and (> (length pt) 0) (not (d :vararg))))
     # Step 11: :array params are opaque-but-emittable (pointer temps);
     # :array returns are the (in-place) array itself
-    (each t pt (unless (or (get infer/numeric-types t) (= t :array)) (set concrete false)))
+    (each t pt (unless (or (get infer/numeric-types t) (= t :array) (= t :tuple) (= t :pointer)) (set concrete false)))
     (unless (or (get infer/numeric-types rt) (= rt :array)) (set concrete false))
     # a def named like a declared extern is the compiled fallback
     # artifact — the real implementation lives in C
@@ -1481,9 +1676,14 @@
     # Step 11: kernels with array params sample ints from [0 1] — the
     # fixed variants have length >= 2 and indices must stay in-bounds
     # (OOB aborts by design, and nil has no oracle-comparable form).
+    # Tuple params sample the same way (fixed length-8 fixtures below).
     (def arrk (some (fn [t] (= t :array)) pt2))
+    # :pointer fixtures are two malloc'd 8-double blocks ([0..7],
+    # [7..0]); kernels must stay within 64 bytes (documented contract)
     (def per (map (fn [t] (cond
                             (= t :array) @[0 1]
+                            (= t :tuple) @[0 1]
+                            (= t :pointer) @[0 1]
                             (get int-hints t) (if arrk @[0 1] @[-3 -1 0 1 3])
                             (get float-hints t) @[-2.5 0.5 1.5 2.5]
                             @[-2.5 0.5 1.5 2.5])) pt2))
@@ -1504,6 +1704,14 @@
     (def fb (get (get externs name) :fallback))
     # env entries are binding descriptors, not raw values
     (when fb (put (curenv) (symbol name) @{:value fb})))
+  # bind intrinsic accessors (macro-installed into unit envs, invisible
+  # to the analyzer env) so eval'd kernel forms resolve them for parity
+  (each f args
+    (def uenv (get unit-envs f))
+    (when uenv
+      (each kn (keys kernel-intrinsics)
+        (def entry (get uenv (symbol kn)))
+        (when entry (put (curenv) (symbol kn) entry)))))
   (each e emitted
     (array/push c-parts (e :code))
     (def form (get all-defn-forms (e :name)))
@@ -1514,13 +1722,14 @@
     (each combo (samples-for (e :pt))
       (array/push calls {:e e :args (tuple ;combo) :fn fnval})))
   (def cout @"")
-  (buffer/push-string cout "#include <stdio.h>\n#include <inttypes.h>\n#include <math.h>\n#include <stdlib.h>\n")
+  (buffer/push-string cout "#include <stdio.h>\n#include <inttypes.h>\n#include <math.h>\n#include <stdlib.h>\n#include <string.h>\n")
   (buffer/push-string cout "/* int32-domain bitwise helpers: boxed Janet errors outside int32\n * (integral doubles accepted); results wrap int32; shift counts mask\n * to 5 bits. Callers range/integrality-check operands (fail loud). */\nstatic int32_t k_band32(int32_t a, int32_t b) { return a & b; }\nstatic int32_t k_bor32(int32_t a, int32_t b) { return a | b; }\nstatic int32_t k_bxor32(int32_t a, int32_t b) { return a ^ b; }\nstatic int32_t k_sl32(int32_t a, int32_t b) { return (int32_t)((uint32_t)a << ((uint32_t)b & 31u)); }\nstatic int32_t k_sr32(int32_t a, int32_t b) { uint32_t n = (uint32_t)b & 31u; int32_t r = (int32_t)((uint32_t)a >> n); if ((a < 0) && (n != 0)) { r |= (int32_t)(~0u << (32u - n)); } return r; }\nstatic int32_t k_sru32(int32_t a, int32_t b) { return (int32_t)((uint32_t)a >> ((uint32_t)b & 31u)); }\n\n")
   # Step 11: array kernels need Janet layouts + wrap macros (header
-  # only — no lib link) and abort() for the bounds guard.
+  # only — no lib link) and abort() for the bounds guard. Tuple
+  # kernels need the same (JanetTupleHead for fixture construction).
   (var anyarr false)
   (each e emitted
-    (each t (e :pt) (when (= t :array) (set anyarr true))))
+    (each t (e :pt) (when (or (= t :array) (= t :tuple)) (set anyarr true))))
   (when anyarr
     (buffer/push-string cout "#include <janet.h>\n#include <stdlib.h>\n"))
   (buffer/push-string cout "\n")
@@ -1546,6 +1755,33 @@
   # fractions by design, and every kernel runs every variant); length
   # 8 covers fixed-size kernels (u64 limbs) and keeps element values
   # valid as indices into either variant.
+  # Tuple fixtures mirror the arrays (same values, immutable): a
+  # head+data store per variant, JanetTuple aliasing its data (head
+  # layout matches JanetTupleHead member-for-member by construction).
+  (var anytup false)
+  (each e emitted
+    (each t (e :pt) (when (= t :tuple) (set anytup true))))
+  (when anytup
+    (buffer/push-string cout
+      (string "    struct { JanetGCObject gc; int32_t length; int32_t hash;"
+              " int32_t sm_line; int32_t sm_column; Janet tup_data[8]; } tup_v0_store, tup_v1_store;\n"
+              "    memset(&tup_v0_store, 0, sizeof(tup_v0_store));\n"
+              "    memset(&tup_v1_store, 0, sizeof(tup_v1_store));\n"
+              "    tup_v0_store.length = 8;\n"
+              "    tup_v1_store.length = 8;\n"
+              "    for (int _q = 0; _q < 8; _q++) tup_v0_store.tup_data[_q] = janet_wrap_number(_q);\n"
+              "    for (int _q = 0; _q < 8; _q++) tup_v1_store.tup_data[_q] = janet_wrap_number(7 - _q);\n"
+              "    JanetTuple tup_v0 = tup_v0_store.tup_data;\n"
+              "    JanetTuple tup_v1 = tup_v1_store.tup_data;\n")))
+  (var anyptr false)
+  (each e emitted
+    (each t (e :pt) (when (= t :pointer) (set anyptr true))))
+  (when anyptr
+    (buffer/push-string cout
+      (string "    double *ptr_v0 = (double *)malloc(8 * sizeof(double));\n"
+              "    double *ptr_v1 = (double *)malloc(8 * sizeof(double));\n"
+              "    for (int _q = 0; _q < 8; _q++) ptr_v0[_q] = (double)_q;\n"
+              "    for (int _q = 0; _q < 8; _q++) ptr_v1[_q] = (double)(7 - _q);\n")))
   (when anyarr
     (buffer/push-string cout
       (string "    Janet arr_v0_elts[8];\n"
@@ -1558,9 +1794,13 @@
     (def ept ((c :e) :pt))
     (def args-c (string/join
                   (seq [i :range [0 (length (c :args))]]
-                    (if (= :array (ept i))
-                      (string "&arr_v" ((c :args) i))
-                      (string ((c :args) i))))
+                    (cond (= :array (ept i))
+                          (string "&arr_v" ((c :args) i))
+                          (= :tuple (ept i))
+                          (string "tup_v" ((c :args) i))
+                          (= :pointer (ept i))
+                          (string "ptr_v" ((c :args) i))
+                          (string ((c :args) i))))
                   ", "))
     (buffer/push-string cout
       (if (= :array ((c :e) :rt))
@@ -1572,16 +1812,31 @@
                 "printf(\"]\\n\"); }\n")
         (string "    printf(\"%.17g\\n\", (double) " (emit-c-name ((c :e) :name))
                 "(" args-c "));\n"))))
+  (when anyptr
+    (buffer/push-string cout "    free(ptr_v0);\n    free(ptr_v1);\n"))
   (buffer/push-string cout "    return 0;\n}\n")
   (spit (string outdir "/native.c") cout)
   (def expected @[])
   (def arr-variants [@[0 1 2 3 4 5 6 7] @[7 6 5 4 3 2 1 0]])
+  (def tup-variants [(tuple 0 1 2 3 4 5 6 7) (tuple 7 6 5 4 3 2 1 0)])
+  # pointer variants mirror the C fixtures exactly (8 doubles each);
+  # shared across calls like the array pair, so in-place kernels see
+  # identical mutation order on both sides. Freed after sampling.
+  (defn- mkptr [flip]
+    (def p (unsafe/malloc 64))
+    (for i 0 8 (unsafe/poke :double p (if flip (- 7 i) i) (* i 8)))
+    p)
+  (def ptr-variants [(mkptr false) (mkptr true)])
   (each c calls
     (def ept ((c :e) :pt))
     (def coerced (seq [i :range [0 (length (c :args))]]
-                   (if (= :array (ept i))
-                     (get arr-variants ((c :args) i))
-                     ((c :args) i))))
+                   (cond (= :array (ept i))
+                         (get arr-variants ((c :args) i))
+                         (= :tuple (ept i))
+                         (get tup-variants ((c :args) i))
+                         (= :pointer (ept i))
+                         (get ptr-variants ((c :args) i))
+                         ((c :args) i))))
     (def v ((c :fn) ;coerced))
     # array returns print canonically on both sides: [%.17g ...]
     # (numeric elements assumed -- the harness only feeds those)
@@ -1589,6 +1844,7 @@
       (if (= :array ((c :e) :rt))
         (string "[" (string/join (map (fn [x] (string/format "%.17g" x)) v) " ") "]")
         (string/format "%.17g" v))))
+  (each p ptr-variants (unsafe/free p))
   (spit (string outdir "/expected.txt") (string (string/join expected "\n") "\n"))
   (print "native " (length emitted) " fns " (length calls) " samples " outdir))
 
@@ -1596,13 +1852,17 @@
   (def cn (emit-c-name nm))
   # boundary casts: every int width unboxes/wraps as integer (C
   # implicit conversion narrows/widens to the kernel's exact width),
-  # float widths as number, arrays pass through as pointers
+  # float widths as number, arrays/tuples/pointers pass through
   (def ps (string/join (seq [i :range [0 (length pt)]]
                      (def t (pt i))
                      (cond (get int-hints t)
                            (string "janet_unwrap_integer(argv[" i "])")
                            (= t :array)
                            (string "(JanetArray *)janet_unwrap_array(argv[" i "])")
+                           (= t :tuple)
+                           (string "janet_unwrap_tuple(argv[" i "])")
+                           (= t :pointer)
+                           (string "janet_unwrap_pointer(argv[" i "])")
                            (string "janet_unwrap_number(argv[" i "])")))
                   ", "))
   (def rv (cond (= rt :array) "janet_wrap_array"
@@ -1610,7 +1870,8 @@
                 "janet_wrap_integer"
                 "janet_wrap_number"))
   (string "static Janet " cn "_wrapper(int32_t argc, Janet *argv) {\n"
-          "    (void) argc;\n"
+          "    if (argc != " (length pt) ") janet_panicf(\"native " cn
+          " called with %d arguments, expected " (length pt) "\", argc);\n"
           "    return " rv "(" cn "(" ps "));\n}\n"))
 
 (when emit-native-dir (emit-native-all emit-native-dir))
@@ -1634,7 +1895,7 @@
     (var concrete (and (> (length pt) 0) (not (d :vararg))))
     # Step 11: :array params are opaque-but-emittable (pointer temps);
     # :array returns are the (in-place) array itself
-    (each t pt (unless (or (get infer/numeric-types t) (= t :array)) (set concrete false)))
+    (each t pt (unless (or (get infer/numeric-types t) (= t :array) (= t :tuple) (= t :pointer)) (set concrete false)))
     (unless (or (get infer/numeric-types rt) (= rt :array)) (set concrete false))
     (when concrete (put cand id true)))
   (def emitted-names @{})

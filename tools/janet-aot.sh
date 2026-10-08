@@ -8,7 +8,10 @@
 # -c       emit C only (app.c next to output path)
 # -S       print generated C to stdout (compile nothing)
 # -E       build to a temp dir, run it with leftover args, discard binary
+# Fail fast: a broken analysis/image must never produce a stale binary
+# (mkimage once failed while the build still reported success).
 set -u
+set -e
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 JANET="$ROOT/build/bender"
 CC=${CC:-cc}

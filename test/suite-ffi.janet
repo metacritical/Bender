@@ -55,6 +55,22 @@
 (compwhen has-ffi
   (assert-error "bad struct issue #1512" (ffi/struct :void)))
 
+# ffi/defstruct: named C-compatible structs with a full companion kit.
+# Layout is pure (no context needed); native round-trips need ffi.
+(ffi/defstruct DsPoint x :double y :double n :int)
+(assert (deep= DsPoint/descriptor [:double :double :int]) "defstruct descriptor")
+(assert (= DsPoint/size 24) "defstruct size")
+(assert (deep= DsPoint/offsets {:x 0 :y 8 :n 16}) "defstruct offsets")
+(assert (deep= (DsPoint/new 1.5 2.5 3) (tuple 1.5 2.5 3)) "defstruct tuple ctor")
+(compwhen has-ffi
+  (def dsp (DsPoint/malloc 1.5 2.5 3))
+  (assert (= (DsPoint/x dsp) 1.5) "defstruct read x")
+  (assert (= (DsPoint/y dsp) 2.5) "defstruct read y")
+  (assert (= (DsPoint/n dsp) 3) "defstruct read int")
+  (assert (= (DsPoint/set-x dsp 9.5) 9.5) "defstruct setter returns value")
+  (assert (= (DsPoint/x dsp) 9.5) "defstruct write x")
+  (DsPoint/free dsp))
+
 # native memory primitives: pointer arithmetic, typed poke, calloc,
 # realloc, executable pages (allocation + protection only -- executing
 # hand-written machine code is arch-specific, see docs).

@@ -479,4 +479,59 @@
 (assert (not (nil? (string/find "used(" dcetext))) "reachable kernel emitted")
 (assert (nil? (string/find "dead" dcetext)) "unreachable kernel eliminated")
 
+# ---- Path 1: tuples (fixed positional struct-things) in kernels ----
+(spit "/tmp/cg-tuple.janet" (string
+  "(defn k-dot {:hint {:params [:tuple :tuple] :returns :double}} [a b]\n"
+  "  (var acc 0)\n"
+  "  (var i 0)\n"
+  "  (def n (length a))\n"
+  "  (while (< i n)\n"
+  "    (set acc (+ acc (* (get a i) (get b i))))\n"
+  "    (set i (+ i 1)))\n"
+  "  acc)\n"
+  "(defn k-first {:hint {:params [:tuple] :returns :double}} [t]\n"
+  "  (get t 0))\n"
+  "(defn main [&] (print (k-dot (tuple 1 2 3) (tuple 4 5 6))) (print (k-first (tuple 7 8))))\n"))
+(assert (= 0 (os/execute ["/bin/sh" "-c"
+  "rm -rf /tmp/cg-tup && ./build/bender tools/callgraph.janet /tmp/cg-tuple.janet --emit-native /tmp/cg-tup"] :p))
+  "tuple emit run")
+(assert (= 0 (os/execute ["/bin/sh" "-c"
+  "cc -O2 -w -fwrapv -Isrc/include -Isrc/conf /tmp/cg-tup/native.c build/janet.o -lm -lpthread -ldl -o /tmp/cg-tup/native && /tmp/cg-tup/native > /tmp/cg-tup/actual.txt && cmp /tmp/cg-tup/expected.txt /tmp/cg-tup/actual.txt"] :p))
+  "tuple parity")
+(def tuptext (slurp "/tmp/cg-tup/native.c"))
+(assert (not (nil? (string/find "double k_dot(JanetTuple p0, JanetTuple p1)" tuptext))) "tuple params emit")
+(assert (not (nil? (string/find "janet_tuple_head" tuptext))) "tuple length via head")
+# tuples are immutable: put refuses loudly, never miscompiles
+(spit "/tmp/cg-tupbad.janet" (string
+  "(defn k-tput {:hint {:params [:tuple :long] :returns :double}} [t v]\n"
+  "  (put t 0 v)\n"
+  "  1.0)\n"
+  "(defn main [&] (print (k-tput (tuple 1 2) 9)))\n"))
+(assert (= 1 (os/execute ["/bin/sh" "-c"
+  "./build/bender tools/callgraph.janet /tmp/cg-tupbad.janet --emit-native /tmp/cg-tupbad > /tmp/cg-tupbad-out.txt 2>&1"] :p))
+  "tuple put run (nothing emittable)")
+(def tbtext (slurp "/tmp/cg-tupbad-out.txt"))
+(assert (not (nil? (string/find "puti requires array" tbtext))) "tuple put refused")
+
+# ---- Path 2: ffi/defstruct + :kernel intrinsics (native C structs) ----
+(spit "/tmp/cg-struct.janet" (string
+  "(ffi/defstruct Point x :double y :double)\n"
+  "(defn k-move {:hint {:params [:pointer :double :double] :returns :double}} [p dx dy]\n"
+  "  (Point/set-x p (+ (Point/x p) dx))\n"
+  "  (Point/set-y p (+ (Point/y p) dy))\n"
+  "  (+ (Point/x p) (Point/y p)))\n"
+  "(defn main [&]\n"
+  "  (def p (Point/malloc 1 2))\n"
+  "  (print (k-move p 10 20))\n"
+  "  (Point/free p))\n"))
+(assert (= 0 (os/execute ["/bin/sh" "-c"
+  "rm -rf /tmp/cg-st && ./build/bender tools/callgraph.janet /tmp/cg-struct.janet --emit-native /tmp/cg-st"] :p))
+  "struct emit run")
+(assert (= 0 (os/execute ["/bin/sh" "-c"
+  "cc -O2 -w -fwrapv -Isrc/include -Isrc/conf /tmp/cg-st/native.c build/janet.o -lm -lpthread -ldl -o /tmp/cg-st/native && /tmp/cg-st/native > /tmp/cg-st/actual.txt && cmp /tmp/cg-st/expected.txt /tmp/cg-st/actual.txt"] :p))
+  "struct parity")
+(def sttext (slurp "/tmp/cg-st/native.c"))
+(assert (not (nil? (string/find "double k_move(void* p0, double p1, double p2)" sttext))) "pointer params emit")
+(assert (not (nil? (string/find "(*(double*)((char*)(p0) + 0))" sttext))) "field access is direct")
+
 (end-suite)

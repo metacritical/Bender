@@ -4464,6 +4464,101 @@
     [name ret-type & body]
     ~(as-macro ,ffi/defbind-alias ,name ,name ,ret-type ,;body)))
 
+  (defn- ffi/struct-field-hint
+    "Boxed Janet type of an ffi primitive field (what ffi/read returns)."
+    [ft]
+    (cond (= ft :long) :long
+          (or (= ft :double) (= ft :float) (= ft :int)) :double))
+
+  (defn- ffi/struct-kernel-ty
+    "Storage width for kernel-mapped fields, or nil for boxed-only
+     (:long reads back s64, pointers stay opaque -- no exact kernel
+     contract exists, so kernels using them refuse fail-closed)."
+    [ft]
+    (cond (= ft :double) :double
+          (= ft :float) :float
+          (= ft :int) :i32))
+
+  (defmacro ffi/defstruct
+    "Declare a C-compatible struct with positional fields and generate
+     the whole companion kit: descriptor (ffi/defbind-compatible), size,
+     offsets, tuple constructor, native allocator, and field accessors.
+     Accessors work boxed everywhere; fields of type :double, :float,
+     or :int additionally carry :kernel metadata, so AOT kernels read
+     and write them as direct native-memory access (see
+     docs/internals/native-memory.md). Other field types stay
+     boxed-only. Example: (ffi/defstruct Point x :double y :double)."
+    [name & fields]
+    (def pairs (partition 2 fields))
+    (when (or (empty? pairs) (some (fn [pr] (not= 2 (length pr))) pairs))
+      (error (string "ffi/defstruct needs field/type pairs: " name)))
+    (def fnames (map 0 pairs))
+    (def ftypes (map 1 pairs))
+    # layout: align-up walk with ffi size/align (same rules defbind uses)
+    (def offs @[])
+    (var cur 0)
+    (var maxalign 1)
+    (each ft ftypes
+      (def al (ffi/align ft))
+      (def sz (ffi/size ft))
+      (when (> al maxalign) (set maxalign al))
+      (set cur (+ cur (% (- al (% cur al)) al)))
+      (array/push offs cur)
+      (+= cur sz))
+    (def size (+ cur (% (- maxalign (% cur maxalign)) maxalign)))
+    (def descriptor (tuple ;(map (fn [ft] ft) ftypes)))
+    (defn acc-name [kind fnm] (symbol name kind fnm))
+    (def forms @[(tuple 'def (symbol name "/descriptor") (tuple 'quote descriptor))
+                 (tuple 'def (symbol name "/size") size)
+                 (tuple 'def (symbol name "/offsets")
+                        (struct ;(interleave (map keyword fnames) offs)))])
+    # tuple constructor (compat path)
+    (array/push forms
+      (tuple 'defn (symbol name "/new") (tuple ;(map (fn [fnm] fnm) fnames))
+             (tuple 'tuple ;(map (fn [fnm] fnm) fnames))))
+    # native allocator + free
+    (array/push forms
+      (tuple 'defn (symbol name "/malloc") (tuple ;(map (fn [fnm] fnm) fnames))
+             (tuple 'do
+                    (tuple 'def 'p (tuple 'unsafe/calloc 1 size))
+                    ;(map (fn [pr off]
+                           (tuple 'unsafe/poke (pr 1) 'p (pr 0) off))
+                         pairs offs)
+                    'p)))
+    (array/push forms
+      (tuple 'defn (symbol name "/free") (tuple 'p) (tuple 'unsafe/free 'p)))
+    # accessors: boxed bodies (ffi/read / unsafe/poke), kernel metadata
+    # where the field type has an exact kernel contract
+    (eachp [i pr] pairs
+      (def fnm (pr 0))
+      (def ft (pr 1))
+      (def off (offs i))
+      (def ht (ffi/struct-field-hint ft))
+      (def kt (ffi/struct-kernel-ty ft))
+      (def gmeta (if kt
+                   {:hint {:params [:pointer] :returns ht}
+                    :kernel {:pread [kt off]}}
+                   {:hint {:params [:pointer] :returns ht}}))
+      (array/push forms
+        (tuple 'defn (acc-name "/" fnm) gmeta (tuple 'p)
+               (tuple 'ffi/read ft 'p off)))
+      (def smeta (if kt
+                   {:hint {:params [:pointer ht] :returns ht}
+                    :kernel {:pwrite [kt off]}}
+                   {:hint {:params [:pointer ht] :returns ht}}))
+      (array/push forms
+        (tuple 'defn (acc-name "/set-" fnm) smeta (tuple 'p 'v)
+               (tuple 'do (tuple 'unsafe/poke ft 'p 'v off) 'v))))
+    # Install NOW into the compilation env: a returned (do ...) would
+    # keep the defs scope-local (invisible to later forms), so evaluate
+    # each form here like normal loading does. The returned do-block
+    # re-establishes the same bindings for pure-syntax tools (flycheck,
+    # janet -k) that expand without evaluating.
+    (unless (dyn *flychecking*)
+      (def menv (curenv))
+      (each f forms (eval f menv)))
+    (tuple 'do ;forms))
+
 ###
 ###
 ### Flychecking

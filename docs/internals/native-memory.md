@@ -118,3 +118,43 @@ Janet). All three executable-memory bindings require the
 
 Test pins live in `test/suite-ffi.janet` (portable subset) and
 `examples/ffi/` (arch-specific calls). Anything new here gets both.
+
+## 6. `ffi/defstruct`: named structs with kernel-mapped fields
+
+For structs the compiler can see through, declare once and get both
+worlds -- a tuple-compatible descriptor plus native allocation with
+field accessors that AOT kernels inline as direct memory access:
+
+```janet
+(ffi/defstruct Point x :double y :double n :int)
+Point/descriptor  # => (:double :double :int), ffi/defbind-compatible
+Point/size        # => 24
+Point/offsets     # => {:x 0 :y 8 :n 16}
+(Point/new 1.5 2.5 3)  # => (1.5 2.5 3), the compat tuple
+
+(def p (Point/malloc 1.5 2.5 3))  # zeroed native memory, fields poked in
+(Point/x p)        # => 1.5, via ffi/read (works everywhere, boxed)
+(Point/set-x p 9.5)  # => 9.5, via unsafe/poke; setters return the value
+(Point/free p)
+```
+
+Fields of type `:double`, `:float`, or `:int` additionally carry
+`:kernel {:pread ...}` / `{:pwrite ...}` metadata on their accessors,
+so a kernel calling `(Point/x p)` emits `(*(double*)((char*)(p) + 0))`
+instead of a call (8x measured on a stepping loop; parity oracle in
+`test/suite-callgraph.janet`). Other field types (`:long` reads back
+`s64`, `:ptr` stays opaque) get plain boxed accessors -- kernels using
+them refuse fail-closed. Rules that keep this sound:
+
+- Accessor contracts are exact: setters take `[pointer T]` and return
+  `T`, where `T` is the BOXED type (`:double` for `:float`/`:int`
+  storage, matching `ffi/read`). Implicit conversions stay boxed.
+- Intrinsic args must be proven `:pointer` slots pushed in a tight
+  load/push run; anything unclear refuses (never a silent slow call).
+- The callee is never emitted itself (its body is interpreter-only);
+  only direct-access call sites compile. Tail calls refuse for now.
+- Macro-generated defns register via top-level expansion splicing in
+  `tools/callgraph.janet`: a macro call expanding to `(do ...)` joins
+  the stream as siblings, since do-nested defns never register.
+  `defn`/`defmacro` heads are never expanded (their shape is the scan
+  contract).

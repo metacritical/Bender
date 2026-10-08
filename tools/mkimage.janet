@@ -31,8 +31,6 @@
         (++ nai))
     (array/push args a))
   (++ nai))
-(var native-names @{})
-(var native-names-file nil)
 (when (< (length args) 2)
   (eprint "usage: mkimage.janet SRC.janet OUT.c [--native names.txt]")
   (os/exit 1))
@@ -131,12 +129,14 @@
       (array/push kept f)))
   (set forms kept)
   # prelude: rebind each native name from the env (wrapper cfunctions
-  # registered by native_init before the thunk runs)
+  # registered by native_init before the thunk runs). NOTE: unwrap with
+  # (get ... :value), NEVER (:value ...) -- the latter is method-invoke
+  # and would CALL the wrapper with garbage instead of resolving it.
   (each nm (keys native-names)
-    (array/push forms 0
+    (array/insert forms 0
                 (tuple 'def nm
-                       (tuple ':value
-                              (tuple 'get '(curenv) (tuple 'quote nm)))))))
+                       (tuple 'get (tuple 'get '(curenv) (tuple 'quote nm))
+                              ':value)))))
 
 # AOT images bake modules in at build time: the preimport pass above
 # already loaded every top-level import and merged its bindings, so the

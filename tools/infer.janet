@@ -115,9 +115,12 @@
       (var i 0)
       (each p hp
         # Step 11: :array params are opaque-but-known (pointer, never
-        # arithmetized); annotation-seeded either way (pfixed below)
+        # arithmetized); annotation-seeded either way (pfixed below).
+        # :tuple (fixed positional struct-thing) and :pointer (native
+        # memory, never arithmetized) are opaque the same way.
         (when (< i arity)
-          (put parr i (if (or (get numeric-types p) (= p :array)) p :unknown)))
+          (put parr i (if (or (get numeric-types p) (= p :array)
+                              (= p :tuple) (= p :pointer)) p :unknown)))
         (++ i))
       (put pfixed id true))
     (put pts id parr)
