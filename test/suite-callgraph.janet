@@ -293,7 +293,7 @@
   "(defn main [] (print (imod 7 2)))\n"))
 (os/execute ["/bin/sh" "-c"
   "rm -rf /tmp/cg-im && ./build/bender tools/callgraph.janet /tmp/cg-imod.janet --emit-native /tmp/cg-im > /tmp/cg-im-out.txt"])
-(assert (not (nil? (string/find "mod needs float operands"
+(assert (not (nil? (string/find "mod needs float or nonneg-int operands"
   (slurp "/tmp/cg-im-out.txt")))) "int mod refused")
 
 # divim (x / const): float kernels divide exactly like boxed; int refuses
@@ -327,8 +327,38 @@
   "(defn main [] (print (fdiv-mix -7 2)))\n"))
 (os/execute ["/bin/sh" "-c"
   "rm -rf /tmp/cg-dm && ./build/bender tools/callgraph.janet /tmp/cg-divmix.janet --emit-native /tmp/cg-dm > /tmp/cg-dm-out.txt 2>&1"])
-(assert (not (nil? (string/find "divf needs float operands"
+(assert (not (nil? (string/find "divf needs float or nonneg-int operands"
   (slurp "/tmp/cg-dm-out.txt")))) "int operands in double fn refused")
+
+# PGO-nonneg int path: unanimous min >= 0 on unrebound :long params
+# unlocks trunc-division (== floor there) with a fail-loud zero guard.
+# NOTE: the --emit-native sample grid feeds 0 denominators, which the
+# guard aborts by design — so parity goes through the end-to-end PGO
+# gate (profile, build, stdout-compare, install), with a nonzero workload.
+(spit "/tmp/cg-nneg.janet" (string
+  "(defn half {:hint {:params [:long :long] :returns :long}} [a b] (div a b))\n"
+  "(print (half 7 2) \" \" (half 9 4))\n"))
+(assert (= 0 (os/execute ["/bin/sh" "-c"
+  (string "rm -rf /tmp/cg-nn-bin* && ./build/bender --aot /tmp/cg-nneg.janet --native"
+          " --pgo \"\" -o /tmp/cg-nn-bin")] :p))
+  "nonneg PGO end-to-end parity")
+# the gate installs the binary only on byte-parity; double-check output
+(assert (= "3 2" (string/trim (slurp "/tmp/cg-nn-bin-native/expected.out")))
+        "oracle output sane")
+(def nntext (slurp "/tmp/cg-nn-bin-native/native.c"))
+(assert (not (nil? (string/find "int div out of nonneg domain" nntext))) "zero guard emitted")
+(assert (not (nil? (string/find " / " nntext))) "trunc division emitted")
+# negative evidence withholds: re-profile with a negative denominator
+(spit "/tmp/cg-nneg2.janet" (string
+  "(defn half {:hint {:params [:long :long] :returns :long}} [a b] (div a b))\n"
+  "(defn main [&] (half 7 -2))\n"))
+(os/execute ["/bin/sh" "-c"
+  (string "rm -rf /tmp/cg-nn2 && JANET_PROFILE=1 JANET_PROFILE_OUT=/tmp/cg-nn2-prof.jdn"
+          " ./build/bender /tmp/cg-nneg2.janet >/dev/null 2>&1"
+          " && ./build/bender tools/callgraph.janet /tmp/cg-nneg2.janet"
+          " --profile /tmp/cg-nn2-prof.jdn --emit-native /tmp/cg-nn2 > /tmp/cg-nn2-out.txt 2>&1")])
+(assert (not (nil? (string/find "nonneg-int operands" (slurp "/tmp/cg-nn2-out.txt"))))
+        "negative evidence refuses")
 
 # Step 14 (call-shaped access): (a i) compiles to push+call with the
 # array as callee; the kernelizer lowers it exactly like get.

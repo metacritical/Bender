@@ -395,12 +395,29 @@ static JanetTable *janet_profile_entry(JanetFunction *func) {
              * the first elements' types (heuristic sample, see call
              * path). Zero for non-arrays. Evidence for SoA-kernel
              * shaping, not proof. */
-            JanetArray *ea = janet_array(JANET_PROFILE_MAXPARAMS);
+            JanetArray *ea = janet_array(JANET_PROFILE_ELEMSAMPLE);
             janet_gcroot(janet_wrap_array(ea));
-            for (i = 0; i < JANET_PROFILE_MAXPARAMS; i++)
+            for (i = 0; i < JANET_PROFILE_ELEMSAMPLE; i++)
                 janet_array_push(ea, janet_wrap_integer(0));
             janet_table_put(e, janet_ckeywordv("elems"), janet_wrap_array(ea));
             janet_gcunroot(janet_wrap_array(ea));
+        }
+        {
+            /* Parallel min/max for number params (PGO range evidence:
+             * unanimous min >= 0 seeds nonneg int-division shaping).
+             * +inf/-inf sentinels mean unobserved (dumped as nil). */
+            JanetArray *mn = janet_array(JANET_PROFILE_MAXPARAMS);
+            JanetArray *mx = janet_array(JANET_PROFILE_MAXPARAMS);
+            janet_gcroot(janet_wrap_array(mn));
+            janet_gcroot(janet_wrap_array(mx));
+            for (i = 0; i < JANET_PROFILE_MAXPARAMS; i++) {
+                janet_array_push(mn, janet_wrap_number(INFINITY));
+                janet_array_push(mx, janet_wrap_number(-INFINITY));
+            }
+            janet_table_put(e, janet_ckeywordv("mins"), janet_wrap_array(mn));
+            janet_table_put(e, janet_ckeywordv("maxs"), janet_wrap_array(mx));
+            janet_gcunroot(janet_wrap_array(mn));
+            janet_gcunroot(janet_wrap_array(mx));
         }
         janet_table_put(e, janet_ckeywordv("rets"), janet_wrap_integer(0));
         janet_table_put(pt, key, janet_wrap_table(e));
@@ -423,6 +440,13 @@ static void janet_profile_call(JanetFunction *func, const Janet *argv, int32_t a
         uint32_t m = (uint32_t) janet_unwrap_integer(pa->data[i]);
         m |= (1u << (uint32_t) janet_type(argv[i]));
         pa->data[i] = janet_wrap_integer((int64_t) m);
+        if (janet_checktype(argv[i], JANET_NUMBER)) {
+            double v = janet_unwrap_number(argv[i]);
+            JanetArray *mn = janet_unwrap_array(janet_table_get(e, janet_ckeywordv("mins")));
+            JanetArray *mx = janet_unwrap_array(janet_table_get(e, janet_ckeywordv("maxs")));
+            if (v < janet_unwrap_number(mn->data[i])) mn->data[i] = janet_wrap_number(v);
+            if (v > janet_unwrap_number(mx->data[i])) mx->data[i] = janet_wrap_number(v);
+        }
         if (janet_checktype(argv[i], JANET_ARRAY)) {
             JanetArray *av = janet_unwrap_array(argv[i]);
             JanetArray *ea = janet_unwrap_array(janet_table_get(e, janet_ckeywordv("elems")));
@@ -459,8 +483,10 @@ void janet_profile_reset(void) {
 }
 
 /* Serialize the profile as Janet data: @[[source line name]
- * {:calls n :params [[:number :string] ...] :rets [...]}], with one
- * entry per observed function. Type sets decode to keyword lists. */
+ * {:calls n :params [[:number :string] ...] :rets [...] :mins [...]
+ * :maxs [...]}], with one entry per observed function. Type sets
+ * decode to keyword lists; mins/maxs carry observed number ranges
+ * (nil where unobserved). */
 static Janet janet_profile_mask_types(uint32_t m) {
     JanetArray *a = janet_array(4);
     int t;
@@ -532,6 +558,28 @@ void janet_profile_dump(const char *path) {
                         else janet_array_push(elems, janet_wrap_nil());
                     }
                     janet_table_put(info, janet_ckeywordv("elems"), janet_wrap_array(elems));
+                }
+                {
+                    /* Range evidence: observed min/max per param slot;
+                     * unobserved slots serialize as nil (sentinels). */
+                    JanetArray *mins = janet_array(0);
+                    JanetArray *maxs = janet_array(0);
+                    JanetArray *mn = janet_unwrap_array(janet_table_get(e, janet_ckeywordv("mins")));
+                    JanetArray *mx = janet_unwrap_array(janet_table_get(e, janet_ckeywordv("maxs")));
+                    n = mn->count;
+                    for (j = 0; j < n; j++) {
+                        double lo = janet_unwrap_number(mn->data[j]);
+                        double hi = janet_unwrap_number(mx->data[j]);
+                        if (lo <= hi) {
+                            janet_array_push(mins, janet_wrap_number(lo));
+                            janet_array_push(maxs, janet_wrap_number(hi));
+                        } else {
+                            janet_array_push(mins, janet_wrap_nil());
+                            janet_array_push(maxs, janet_wrap_nil());
+                        }
+                    }
+                    janet_table_put(info, janet_ckeywordv("mins"), janet_wrap_array(mins));
+                    janet_table_put(info, janet_ckeywordv("maxs"), janet_wrap_array(maxs));
                 }
                 janet_table_put(info, janet_ckeywordv("rets"), janet_profile_mask_types(rm));
                 janet_array_push(row, janet_wrap_table(info));

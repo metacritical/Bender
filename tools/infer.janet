@@ -98,11 +98,14 @@
 
 (defn analyze [defs call-map &opt profile]
   # defs: array of @{:d disasm :hint ...}; call-map: id -> {pc -> tid};
-  # profile: @{name -> [{:params [...] :calls n}]} from a PGO dump.
-  # returns @{:pts pts :rts rts :rounds rounds}
+  # profile: @{name -> [{:params [...] :mins [...] :maxs [...] :calls n}]}
+  # from a PGO dump.
+  # returns @{:pts pts :rts rts :nnp nnp :rounds rounds}; nnp maps
+  # id -> array of bool (PGO-unanimous observed min >= 0 per param).
   (def n (length defs))
   (def pts @{})
   (def rts @[])
+  (def nnp @{})
   (def pfixed @{})
   (def rfixed @{})
   (each id (range n)
@@ -110,6 +113,7 @@
     (def h (get (get defs id) :hint))
     (def arity (or (get d :arity) 0))
     (def parr (array/new-filled arity :unknown))
+    (def nnarr (array/new-filled arity false))
     (def hp (if h (get h :params) nil))
     (when hp
       (var i 0)
@@ -128,13 +132,18 @@
     # starting point (never pfixed -- later conflicts widen soundly).
     # A slot seeds only if every matching row agrees on exactly one
     # type; unknown/empty slots stay unknown for the fixpoint.
-    (when (and (nil? hp) profile)
+    # Range seeding rides along for ALL fns (hinted or not): unanimous
+    # observed min >= 0 marks the param nonneg (nnp), consumed by int
+    # div/mod shaping. Like types, never pfixed -- any negative
+    # observation withholds the mark.
+    (when profile
       (def rows (get profile (string (or ((get defs id) :name) ""))))
       (when rows
         (var i 0)
         (while (< i arity)
           (var agree nil)
           (var ok true)
+          (var nonneg true)
           (each row rows
             (def ps (get row :params @[]))
             (def sl0 (if (> (length ps) 0) (ps 0) nil))
@@ -143,10 +152,15 @@
               (do (def t (slot 0))
                 (if (nil? agree) (set agree t)
                   (when (not= agree t) (set ok false))))
-              (set ok false)))
-          (when (and ok (not (nil? agree)))
+              (set ok false))
+            (def mns (get row :mins @[]))
+            (def mn (if (< i (length mns)) (mns i) nil))
+            (unless (and (number? mn) (>= mn 0)) (set nonneg false)))
+          (when (and (nil? hp) ok (not (nil? agree)))
             (put parr i agree))
+          (when nonneg (put nnarr i true))
           (++ i))))
+    (put nnp id nnarr)
     (def hr (if h (get h :returns) nil))
     (array/push rts (if (or (get numeric-types hr) (= hr :array)) hr :unknown))
     (when (or (get numeric-types hr) (= hr :array)) (put rfixed id true)))
@@ -310,4 +324,4 @@
           (when (not= nt (rts id))
             (put rts id nt)
             (put box :changed true))))))
-  @{:pts pts :rts rts :rounds rounds})
+  @{:pts pts :rts rts :nnp nnp :rounds rounds})

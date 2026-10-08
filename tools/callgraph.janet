@@ -158,6 +158,14 @@
 (defn float-operand-ok [st slot]
   (def t (get st slot :unknown))
   (or (get float-hints t) (= t :number)))
+# PGO-nonneg int operand: unanimous observed min >= 0 on an unrebound
+# param slot that is int-family now. Rebinding kills the evidence
+# (pwritten); monotonic-counter reasoning is future work.
+(defn nonneg-operand? [nn-vec pw slot st]
+  (and (< slot (length nn-vec))
+       (get nn-vec slot false)
+       (nil? (get pw slot))
+       (get int-hints (get st slot :unknown))))
 (def emit-c-type-map
   @{:long "int64_t" :i32 "int32_t" :i16 "int16_t" :i8 "int8_t"
     :u64 "uint64_t" :u32 "uint32_t" :u16 "uint16_t" :u8 "uint8_t"
@@ -873,6 +881,8 @@
     (when nm
       (def bucket (or (get profile-index nm) @[]))
       (array/push bucket {:params (get info :params @[])
+                          :mins (get info :mins @[])
+                          :maxs (get info :maxs @[])
                           :calls (get info :calls 0)})
       (put profile-index nm bucket)))
   (print "profile " (length rows) " rows"))
@@ -882,6 +892,7 @@
 # unhinted rest. Concrete => unboxed, unproven => boxed.
 (def res (infer/analyze defs call-map profile-index))
 (def rts (res :rts))
+(def nnp (res :nnp))
 (def pts (res :pts))
 (each id (range (length defs))
   (def t (rts id))
@@ -1195,6 +1206,15 @@
             " < -2147483648.0 || " expr
             " > 2147483647.0) { fprintf(stderr, \"int32 domain error\\n\"); abort(); }")))
 
+# Fail-loud guard for PGO-nonneg int division: the evidence is a
+# workload observation, not a proof, so out-of-domain inputs (zero
+# denominator, either operand negative) abort instead of silently
+# miscomputing. Same doctrine as the OOB bounds abort.
+(defn emit-intdiv-guard [sa sb arity]
+  (string "    if (" (emit-slot sb arity) " <= 0 || "
+          (emit-slot sa arity) " < 0) { fprintf(stderr, "
+          "\"int div out of nonneg domain\\n\"); abort(); }"))
+
 (defn call-arg-slots [d pc]
   # mirror of call-arity, collecting pushed arg slots in order; nil
   # unless the walk ends at a clean boundary (fail-closed). Push
@@ -1318,6 +1338,9 @@
   (def written @{})
   (def wtypes @{})
   (def wsets @{})
+  # param slots rebound in the body (nonneg evidence is entry-value
+  # only, so any rebind kills it for int-div shaping below)
+  (def pwritten @{})
   (defn wput [slot ty]
     (put wtypes slot ty)
     (def st (or (get wsets slot) @{}))
@@ -1387,7 +1410,9 @@
     (def wpos (get emit-writers wop))
     (when wpos
       (def dst (ins wpos))
-      (when (>= dst arity) (put written dst true))))
+      (if (>= dst arity)
+        (put written dst true)
+        (put pwritten dst true))))
   (def ct (emit-kernel-type rt))
   # join-aware declarations: collect every written type per slot. All
   # numeric (or singleton) keeps exact current behavior (last-wins);
@@ -1579,32 +1604,55 @@
             # but Janet mod is floor-based — they diverge on negatives;
             # doubles via libm match boxed exactly, same op order).
             # Operands checked like div: int64 operands would truncate.
+            # PGO-nonneg int path below: trunc == floor when both
+            # operands are >= 0. PGO evidence is not proof, so the int
+            # path guards BOTH zero (trap otherwise) and negativity
+            # (silent miscompile otherwise) fail-loud, like OOB.
             (= op 'divf)
-            (if (and (get float-hints rt)
-                     (float-operand-ok st (ins 2))
-                     (float-operand-ok st (ins 3)))
+            (cond
+              (and (get float-hints rt)
+                   (float-operand-ok st (ins 2))
+                   (float-operand-ok st (ins 3)))
               (do (set pending @[])
                 (array/push lines
                             (string "    s" (ins 1) " = floor("
                                     (emit-slot (ins 2) arity) " / "
                                     (emit-slot (ins 3) arity) ");")))
-              (do (set bad "divf needs float operands (policy TBD)")
+              (and (nonneg-operand? (get nnp id) pwritten (ins 2) st)
+                   (nonneg-operand? (get nnp id) pwritten (ins 3) st))
+              (do (set pending @[])
+                (array/push lines (emit-intdiv-guard (ins 2) (ins 3) arity))
+                (array/push lines
+                            (string "    s" (ins 1) " = "
+                                    (emit-slot (ins 2) arity) " / "
+                                    (emit-slot (ins 3) arity) ";")))
+              (do (set bad "divf needs float or nonneg-int operands (policy TBD)")
                 (break)))
             (= op 'rem)
-            (if (and (get float-hints rt)
-                     (float-operand-ok st (ins 2))
-                     (float-operand-ok st (ins 3)))
+            (cond
+              (and (get float-hints rt)
+                   (float-operand-ok st (ins 2))
+                   (float-operand-ok st (ins 3)))
               (do (set pending @[])
                 (array/push lines
                             (string "    s" (ins 1) " = fmod("
                                     (emit-slot (ins 2) arity) ", "
                                     (emit-slot (ins 3) arity) ");")))
-              (do (set bad "rem needs float operands (policy TBD)")
+              (and (nonneg-operand? (get nnp id) pwritten (ins 2) st)
+                   (nonneg-operand? (get nnp id) pwritten (ins 3) st))
+              (do (set pending @[])
+                (array/push lines (emit-intdiv-guard (ins 2) (ins 3) arity))
+                (array/push lines
+                            (string "    s" (ins 1) " = "
+                                    (emit-slot (ins 2) arity) " % "
+                                    (emit-slot (ins 3) arity) ";")))
+              (do (set bad "rem needs float or nonneg-int operands (policy TBD)")
                 (break)))
             (= op 'mod)
-            (if (and (get float-hints rt)
-                     (float-operand-ok st (ins 2))
-                     (float-operand-ok st (ins 3)))
+            (cond
+              (and (get float-hints rt)
+                   (float-operand-ok st (ins 2))
+                   (float-operand-ok st (ins 3)))
               (do (set pending @[])
                 (def ma (emit-slot (ins 2) arity))
                 (def mb (emit-slot (ins 3) arity))
@@ -1612,7 +1660,15 @@
                             (string "    s" (ins 1) " = (" mb ") == 0 ? ("
                                     ma ") : ((" ma ") - (" mb ") * floor(("
                                     ma ") / (" mb ")));")))
-              (do (set bad "mod needs float operands (policy TBD)")
+              (and (nonneg-operand? (get nnp id) pwritten (ins 2) st)
+                   (nonneg-operand? (get nnp id) pwritten (ins 3) st))
+              (do (set pending @[])
+                (array/push lines (emit-intdiv-guard (ins 2) (ins 3) arity))
+                (array/push lines
+                            (string "    s" (ins 1) " = "
+                                    (emit-slot (ins 2) arity) " % "
+                                    (emit-slot (ins 3) arity) ";")))
+              (do (set bad "mod needs float or nonneg-int operands (policy TBD)")
                 (break)))
             (= op 'movn)
             (array/push lines (string "    s" (ins 1) " = "
