@@ -1279,6 +1279,178 @@
       (break nil)))
   [spec slots])
 
+# OOB guard emission with counted-loop upper elision (Step 16):
+# elide? drops the `>= count` half (proven by loop discipline) and
+# keeps `< 0` as defense-in-depth.
+(defn emit-oob-check [lines idx-e bound-e msg elide?]
+  (array/push lines
+    (if elide?
+      (string "    if (" idx-e " < 0) { fprintf(stderr, \"" msg "\\n\"); abort(); }")
+      (string "    if (" idx-e " < 0 || " idx-e
+              " >= " bound-e ") { fprintf(stderr, \"" msg "\\n\"); abort(); }"))))
+
+# Writers of a slot in a pc range: array of [pc ins] via emit-writer
+# positions. No early exits (safe inside any context).
+(defn writes-of [code slot lo hi]
+  (def out @[])
+  (var q (max lo 0))
+  (while (<= q hi)
+    (def qn (code q))
+    (def qp (get emit-writers (qn 0)))
+    (when (and qp (= (qn qp) slot)) (array/push out [q qn]))
+    (++ q))
+  out)
+
+# Step 16: counted-loop upper-guard elision for the `for i 0 (len arr)`
+# idiom: the per-access `idx >= count` abort is redundant when the
+# loop-exit check already proves it. Elides ONLY the upper half; the
+# `< 0` check stays as defense-in-depth. Fail-closed: any deviation
+# (opaque calls in loop, extra jumps, rebound array/counter, const
+# index) keeps both checks. Recognized shape, from `for` codegen:
+#   ldi IDX 0 ... len L ARR ... movn B L ... HEADER: lt C IDX B,
+#   jmpno C EXIT ... accesses ... addim IDX IDX 1, jmp HEADER.
+# Soundness: init-0 + single-+1-increment + dominated exit check +
+# same-array bound + access-before-increment + no count mutation.
+# Calls that lower to loads (call-shaped access, pure libm) are not
+# opaque: anything else that could grow the array refuses.
+(defn loop-elide-upper? [d pcA arr idxslot id st]
+  (def code (or (d :bytecode) @[]))
+  (def n (length code))
+  # 1. innermost enclosing back-edge loop [T, JE] around pcA
+  (def backs @[])
+  (var j 0)
+  (while (< j n)
+    (def jn (code j))
+    (when (and (= (jn 0) 'jmp) (< (+ j (jn 1)) j)
+               (<= (+ j (jn 1)) pcA) (<= pcA j))
+      (array/push backs [(+ j (jn 1)) j]))
+    (++ j))
+  (when (empty? backs) (break false))
+  (var best (backs 0))
+  (each b backs
+    (when (< (- (b 1) (b 0)) (- (best 1) (best 0))) (set best b)))
+  (def T (best 0))
+  (def JE (best 1))
+  # 2. exactly two jumps in (T, JE]: exit cond + back-edge
+  (var njumps 0)
+  (var q (+ T 1))
+  (while (<= q JE)
+    (def qo ((code q) 0))
+    (when (or (= qo 'jmp) (= qo 'jmpif) (= qo 'jmpno)) (++ njumps))
+    (++ q))
+  (unless (= njumps 2) (break false))
+  # 3. no opaque ops in [T, JE]: calls that lower to loads
+  # (call-shaped access, pure libm) cannot mutate the count; any other
+  # call/tcall/pusha/res aborts the elision (a callee could grow ARR).
+  # The access at pcA itself is skipped (its st is post-state-update;
+  # the sh-now snapshot already proved it lowers).
+  (var nopaque 0)
+  (var q2 T)
+  (while (<= q2 JE)
+    (when (not= q2 pcA)
+      (def qo ((code q2) 0))
+      (cond (or (= qo 'pusha) (= qo 'res)
+                (= qo 'ret) (= qo 'retn) (= qo 'err))
+            (++ nopaque)
+            (or (= qo 'call) (= qo 'tcall))
+            (unless (or (call-shape-idx d q2 st)
+                        (pure-call-shape id q2 st d))
+              (++ nopaque))))
+    (++ q2))
+  (unless (= nopaque 0) (break false))
+  # 4. exit is jmpno (for-shape), target outside the loop
+  (var exit-pc nil)
+  (var q3 (+ T 1))
+  (while (<= q3 JE)
+    (when (and (not= q3 JE) (or (= ((code q3) 0) 'jmpif) (= ((code q3) 0) 'jmpno)))
+      (set exit-pc q3))
+    (++ q3))
+  (when (nil? exit-pc) (break false))
+  (def en (code exit-pc))
+  (unless (= (en 0) 'jmpno) (break false))
+  (def C (en 1))
+  (def Ctarget (+ exit-pc (en 2)))
+  (when (and (> Ctarget T) (<= Ctarget JE)) (break false))
+  # 5. C defined in [T, pcA] by a single `lt C IDX2 B`
+  (def cw (writes-of code C T pcA))
+  (unless (= 1 (length cw)) (break false))
+  (def lt-pc ((cw 0) 0))
+  (def cins ((cw 0) 1))
+  (unless (and (= (cins 0) 'lt) (= (cins 1) C)) (break false))
+  (def IDX2 (cins 2))
+  (def B (cins 3))
+  # 6. counter discipline: exactly two writers, `ldi 0` before T and
+  # `addim IDX2 IDX2 1` inside (T, JE]
+  (def iw (writes-of code IDX2 0 (- n 1)))
+  (unless (= 2 (length iw)) (break false))
+  (var init-pc nil)
+  (var incr-pc nil)
+  (each w iw
+    (def wpc (w 0))
+    (def wins (w 1))
+    (cond (and (= (wins 0) 'ldi) (= (wins 2) 0) (< wpc T))
+          (set init-pc wpc)
+          (and (= (wins 0) 'addim) (= (wins 1) IDX2) (= (wins 2) IDX2)
+               (= (wins 3) 1) (> wpc T) (<= wpc JE))
+          (set incr-pc wpc)))
+  (when (or (nil? init-pc) (nil? incr-pc)) (break false))
+  # 7. access index is the counter or its single movn-copy in [T, pcA]
+  (def idx-ok
+    (or (= idxslot IDX2)
+        (do (def xw (writes-of code idxslot T pcA))
+          (and (= 1 (length xw))
+               (let [xi ((xw 0) 1)]
+                 (and (= (xi 0) 'movn) (= (xi 1) idxslot) (= (xi 2) IDX2)))))))
+  (unless idx-ok (break false))
+  # 8. access sees the pre-increment value
+  (unless (< pcA incr-pc) (break false))
+  # 9. bound provenance, nearest-writer-before-use (slots are
+  # reused across the prologue: the `for` macro reuses the len-temp as
+  # the cond-temp, so global-single-writer would refuse the idiom).
+  # B's nearest writer at-or-before the lt is `movn B L` (or direct
+  # `len B ARR`) before T, from L's nearest writer at-or-before it
+  # which is a single `len L ARR` of the SAME array before T.
+  (defn writes-before [slot pc]
+    (def out @[])
+    (var q 0)
+    (while (<= q pc)
+      (def qn (code q))
+      (def qp (get emit-writers (qn 0)))
+      (when (and qp (= (qn qp) slot)) (array/push out [q qn]))
+      (++ q))
+    out)
+  (def bw (writes-before B lt-pc))
+  (unless (= 1 (length bw)) (break false))
+  (def bins ((bw 0) 1))
+  (def bpc ((bw 0) 0))
+  (unless (< bpc T) (break false))
+  (var len-pc nil)
+  (cond (= (bins 0) 'len)
+        (do (unless (= (bins 2) arr) (break false))
+          (set len-pc bpc))
+        (= (bins 0) 'movn)
+        (do (def L (bins 2))
+          (def lw (writes-before L bpc))
+          (unless (= 1 (length lw)) (break false))
+          (def lins ((lw 0) 1))
+          (unless (and (= (lins 0) 'len) (= (lins 2) arr) (< ((lw 0) 0) T))
+            (break false))
+          (set len-pc ((lw 0) 0)))
+        (break false))
+  # 10. the array itself is stable: every rebinding write precedes
+  # the len that bounds it, none inside the loop. `put`/`puti` mutate
+  # in place (identity and count preserved) and never disqualify.
+  (def aw (writes-of code arr 0 (- n 1)))
+  (var astable true)
+  (each w aw
+    (def wpc (w 0))
+    (def wop ((w 1) 0))
+    (unless (or (= wop 'put) (= wop 'puti))
+      (when (or (and (>= wpc T) (<= wpc JE)) (>= wpc len-pc))
+        (set astable false))))
+  (unless astable (break false))
+  true)
+
 (defn intrinsic-ctype [kty]
   # C type of the native field; loads convert to the dest slot width
   (cond (= kty :long) "int64_t" (= kty :float) "float"
@@ -1752,9 +1924,8 @@
                              (string garr "->data[" gidx "]")))
               (def oobmsg (if gtup "tuple index out of bounds"
                               "array index out of bounds"))
-              (array/push lines
-                          (string "    if (" gidx " < 0 || " gidx
-                                  " >= " gbound ") { fprintf(stderr, \"" oobmsg "\\n\"); abort(); }"))
+              (emit-oob-check lines gidx gbound oobmsg
+                              (loop-elide-upper? d pc (ins 2) (ins 3) id st))
               (array/push lines
                           (string "    s" (ins 1) " = janet_unwrap_number(" gdata ");")))
             (= op 'put)
@@ -1764,11 +1935,11 @@
                              (get infer/numeric-types (get st (ins 3) :unknown)))
                   (set bad "put requires array, int index, numeric value")
                   (break))
-              (array/push lines
-                          (string "    if ((int64_t)(" (emit-slot (ins 2) arity)
-                                  ") < 0 || (int64_t)(" (emit-slot (ins 2) arity)
-                                  ") >= " (emit-slot (ins 1) arity)
-                                  "->count) { fprintf(stderr, \"array index out of bounds\\n\"); abort(); }"))
+              (def pidx-e (string "(int64_t)(" (emit-slot (ins 2) arity) ")"))
+              (emit-oob-check lines pidx-e
+                              (string (emit-slot (ins 1) arity) "->count")
+                              "array index out of bounds"
+                              (loop-elide-upper? d pc (ins 1) (ins 2) id st))
               (array/push lines
                           (string "    " (emit-slot (ins 1) arity) "->data[(int64_t)("
                                   (emit-slot (ins 2) arity) ")] = janet_wrap_number("
@@ -1839,9 +2010,8 @@
                                      (string sharr-e "->data[" shidx-e "]")))
               (def shoob (if shtup "tuple index out of bounds"
                                     "array index out of bounds"))
-              (array/push lines
-                          (string "    if (" shidx-e " < 0 || " shidx-e
-                                  " >= " shbound ") { fprintf(stderr, \"" shoob "\\n\"); abort(); }"))
+              (emit-oob-check lines shidx-e shbound shoob
+                              (loop-elide-upper? d pc sharr shidx id st))
               (if (= op 'tcall)
                 (array/push lines (string "    return janet_unwrap_number(" shdata ");"))
                 (array/push lines (string "    s" (ins 1) " = janet_unwrap_number(" shdata ");")))

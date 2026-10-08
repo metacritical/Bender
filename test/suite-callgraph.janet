@@ -390,6 +390,32 @@
 (assert (not (nil? (string/find "native-skip" (slurp "/tmp/cg-shb-out.txt"))))
         "multi-arg array call refused")
 
+# Step 16 (counted-loop upper elision): `for i 0 (len a)` drops the
+# `>= count` half (loop discipline proves it), keeps `< 0`.
+(os/execute ["/bin/sh" "-c"
+  "rm -rf /tmp/cg-el && ./build/bender tools/callgraph.janet /tmp/cg-shape.janet --emit-native /tmp/cg-el"] :p)
+# asum-c's counted loop elides to `< 0` only; tfirst (no loop) keeps
+# the full guard, so assert presence of the elided form, not absence
+# of the full one (covered by the opaque-loop test below).
+(def eltext (slurp "/tmp/cg-el/native.c"))
+(assert (not (nil? (string/find " < 0) {" eltext)))
+        "upper guard elided, lower kept")
+# negative: a true call inside the loop (opaque: the callee could in
+# principle grow the array) keeps both halves, while the loop still
+# emits via native-to-native calls
+(spit "/tmp/cg-noelide.janet" (string
+  "(defn inc1 {:hint {:params [:double] :returns :double}} [x] (+ x 1))\n"
+  "(defn nsum {:hint {:params [:array] :returns :double}} [a]\n"
+  "  (var s 0.0)\n"
+  "  (for i 0 (length a) (+= s (inc1 (a i))))\n"
+  "  s)\n"
+  "(defn main [] (print (nsum @[1 2])))\n"))
+(assert (= 0 (os/execute ["/bin/sh" "-c"
+  "rm -rf /tmp/cg-ne && ./build/bender tools/callgraph.janet /tmp/cg-noelide.janet --emit-native /tmp/cg-ne"] :p))
+  "opaque-loop emit run")
+(assert (not (nil? (string/find "< 0 ||" (slurp "/tmp/cg-ne/native.c"))))
+        "opaque loop keeps full guard")
+
 # lib path prints skip diagnostics (same contract as --emit-native):
 # real builds use --emit-native-lib via bender --aot --native, and
 # silent skips hide all signal (ttfx: 0 kernels, no reasons).
