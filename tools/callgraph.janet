@@ -171,6 +171,8 @@
 # file -> macroexpanded top-level forms (macro-generating-defns, notably
 # ffi/defstruct, must be visible to registration and the source scans)
 (var unit-forms @{})
+(var unit-import-files @[])
+(var analyzed-files @{})
 (var unit-envs @{})
 (defn extract-intrinsics []
   # Path 2 struct intrinsics, second pass over the same unit files:
@@ -180,7 +182,7 @@
   # interpreter). Validated here; invalid specs are ignored (the
   # normal call path then refuses loudly -- fail closed).
   (var n 0)
-  (each f args
+  (each f (array/concat @[] args unit-import-files)
     (each form (or (get unit-forms f) @[])
       (when (and (tuple? form) (>= (length form) 3)
                  (symbol? (form 0))
@@ -207,7 +209,7 @@
 
 (defn extract-hints []
   (var nhints 0)
-  (each f args
+  (each f (array/concat @[] args unit-import-files)
     (each form (or (get unit-forms f) @[])
       (when (and (tuple? form) (>= (length form) 3)
                  (symbol? (form 0))
@@ -604,6 +606,16 @@
         (try
           (do (def path (string (form 1)))
             (def modenv (require path))
+            # L2: remember resolved source files so analysis covers
+            # engine modules, not just the entry (kernel visibility).
+            (try
+              (do (def found (module/find path))
+                (when (and (indexed? found)
+                           (string? (found 0))
+                           (string/has-suffix? ".janet" (found 0))
+                           (nil? (index-of (found 0) unit-import-files)))
+                  (array/push unit-import-files (found 0))))
+              ([_] nil))
             (when (or (= head (quote import)) (= head (quote use)))
               (def kargs (table ;(tuple/slice form 2)))
               (def as (get kargs :as))
@@ -618,7 +630,10 @@
   (setdyn :current-file prev-current-file))
 
 (var core-names @{})
-(each f args
+
+(defn analyze-unit [f]
+  (when (get analyzed-files f) (break))
+  (put analyzed-files f true)
   (def text (slurp f))
   (def forms (parse-all text))
   (def env (make-env))
@@ -679,6 +694,16 @@
     (not= :function (type thunk))
     (array/push edges ["uncompiled" f -1 (string (get thunk :error))])
     (register-def (disasm thunk))))
+
+# entry files first, then L2: drain transitively discovered import
+# source files (engine modules become analyzable: registration,
+# hints, PGO, emission).
+(each f args (analyze-unit f))
+(var import-queue-idx 0)
+(while (< import-queue-idx (length unit-import-files))
+  (def qf (unit-import-files import-queue-idx))
+  (++ import-queue-idx)
+  (analyze-unit qf))
 
 # Step 4: extract type hints BEFORE the walk so audit-site sees them.
 (var nhints (extract-hints))
