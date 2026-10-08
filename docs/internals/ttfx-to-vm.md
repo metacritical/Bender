@@ -17,24 +17,30 @@ single biggest structural win per line of code. Today Janet makes you
 hand-roll parallel `@[]` columns, and kernels see them as opaque
 `:array` (boxed slots).
 
-Mechanism: **typed array constructors** in the VM —
+Mechanism: **arrays stay arrays — no new surface API.** There is one
+array type; layout is a COMPILER DECISION, never a user declaration:
 
-    (ta/new :double n)        # n doubles, one GC-managed block
-    (ta/get a i) (ta/put a i v)
-    (ta/length a)
+    (def xs @[0.0 0.0 0.0])   # ordinary array; boxed today
 
-- Layout: one malloc block + header, elements raw `double`/`int64_t`.
-  GC: one object, numeric fields need no marking (same rule as
-  Level 3; strings/pointers inside typed arrays are a later, traced
-  extension).
-- Kernel side: `:array`-like param that lowers to a raw pointer —
-  `get`/`put` become one indexed load/store (today they pay boxed
-  slot round-trips). This is the Rust `Vec<f64>` shape, exposed
-  dynamically.
-- Files: `src/core/array.c` (or new `ta.c`), `tools/callgraph.janet`
-  (param type `:ta-double` etc.), wrapper unboxing.
-- Gate: ship when a bench loop shows kernels bound by slot round-trip
-  rather than arithmetic (already true for the SoA port loops).
+The backend unboxes when the ELEMENT TYPE is known, from either:
+  a. a static element hint on the binding/def (`^[:double]` style,
+     optional), or
+  b. widening inference over get/put sites (element types unanimous
+     numeric -> unbox), or
+  c. PGO: observed element types from a profiled run (same seeding
+     discipline as params).
+
+- Layout when unboxed: one malloc block + header, elements raw
+  `double`/`int64_t`. GC: one object, numeric fields need no marking.
+  Boxed fallback stays for unknown/mixed elements (widening refuses
+  -> boxed, exactly like kernel refusal today).
+- Kernel side: proven-numeric arrays lower to raw pointers; get/put
+  become one indexed load/store. Rust's `Vec<f64>` shape, discovered
+  not declared.
+- Files: `tools/infer.janet` (element-type lattice), `src/core/gc.c`
+  (unboxed block flavor), `tools/callgraph.janet` (emission).
+- Gate: same bench discipline — unboxing must show up as kernel
+  param/emit lines + fps, or it stays off (flag-gated until proven).
 
 ## L2. Import-aware kernel analysis (from: "PGO added nothing")
 
@@ -93,6 +99,13 @@ of the work — L3 adds field-name ergonomics and per-record layout).
 
 ## Order and gates
 
+0. Auto-PGO pipeline (from: every lesson needed manual steps) — one
+   command closes the loop: `janet-aot.sh --pgo app.janet` runs the
+   program under the collector, dumps the profile, recompiles with
+   seeding + L2 visibility, re-verifies byte parity, and only then
+   replaces the binary. Detection, not annotation: hot patterns
+   (numeric loops, monomorphic gets, table-in-hot-loop) are FOUND by
+   profiling and answered by the mechanisms below, automatically.
 1. L2 (import-aware analysis) — smallest effort, unlocks everything
    else for real programs; no VM changes.
 2. L1 (typed arrays) — the structural Rust-gap closer.
