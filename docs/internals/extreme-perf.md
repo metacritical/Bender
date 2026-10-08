@@ -158,3 +158,51 @@ Baseline (M-series, interpreter): rng-double ~28ns/op, array-sum
    catches the rest.
 3. One mechanism per commit, `feat(scope):` subject, tests in the
    same commit. Revert is always one `git revert`.
+
+## Appendix — ttfx-grounded findings (2026-10-09)
+
+Ran `janet-port` 46x190 decrypt, seed 42: 1819 frames, 637 fps
+interpreter (was 547; branch hints +1.16x). AOT lib path emitted **0
+kernels** with **zero diagnostics** (fixed: lib path now prints
+`native-skip` lines like `--emit-native`). Passing all sources
+explicitly: 148 skips, 1 kernel. PGO top rows: `nil?` 13M,
+`color-string` 2M, `ctx-anim` 2M, `xor64` 1.7M, `shr64/shl64` 1M,
+`next-word-boxed` 339K, `bitlen`/`randbelow` 187K. New items beyond
+the tiers above, ranked for this workload:
+
+1. **Call-shaped access recognition (biggest, new).** `(a i)` compiles
+   to `(push i) (tcall a)`, `(t :k)` to `(ldc k) (push) (tcall t)` —
+   the analyzer only understands `get` (`callgraph.janet` get rule,
+   `infer.janet` scan-def). The whole port (rng limb arrays, scene
+   records, SoA rows) is therefore invisible: hot fns like `xor64`
+   are *called* directly (resolvable) but their *bodies* never prove.
+   Fix in two stages: (a) inference-level — a `call`/`tcall` whose
+   callee slot is `:array`/`:table` with a constant-or-int arg refines
+   like `get` (sound: slot type already proves the callee); (b)
+   emission-level — lower to `->data[]` / `janet_table_get`. (a) is
+   zero-risk (emission still fail-closes); (b) unlocks dozens of ttfx
+   kernels without touching port sources.
+2. **Immediate-opcode symmetry (shipped: `divim`).** `(/ x 2)` folds
+   to `divim`, which had no emission while `addim/subim/mulim` did —
+   blocked `bitlen`. Rule: every `*im` the compiler can emit must
+   have an inference + emission arm (audit: `eqim/neqim/ltim/gtim`,
+   `slim/srim/sruim` done; `divim` done; none remain unhandled).
+3. **Non-negative int range analysis (specified).** `floor-div`
+   (`canvas.janet`, canvas dims) and `bitlen` refuse on `divf/divim
+   on int width`. Operands are ≥0 in practice (dims, counts,
+   `length`), where trunc == floor. Track `≥0` from `ldi 0`,
+   `length`/`len`, `band`-masks, and monotonic `for` counters; allow
+   trunc-div/mod on proven-`≥0` int slots. Interim stays refused.
+4. **Pure-core-call intrinsics (specified).** `(math/floor (/ x 256))`
+   (`seed-limbs`), `math/sqrt`, `math/abs`: calls to known-pure core
+   fns with a type rule (`:number -> :number`) + libm emission.
+   Small table in `cfuns.c` style; unlocks seed/gradient/easing code
+   with no inference changes.
+5. **String-format fusion (specified).** `color-string` 2M calls +
+   per-cell `buffer/push-string` is the other 50% of frame time.
+   Fuse constant format strings at compile time (`cfuns.c`) and sink
+   appends into the frame buffer (L4 concretized for this workload).
+6. **Counted-loop versioning (Tier 3, concretized).**
+   `ctx-frame-string` loops `(for i 0 nrows)` over SoA rows with
+   `len`/`get`/`put`: hoist one bounds/type guard, elide per-iter
+   checks. Profitable only after (1) makes the bodies visible.
