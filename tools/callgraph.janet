@@ -85,6 +85,7 @@
     (eprint "externs file must define an `externs` dictionary")
     (os/exit 4)))
 (var extern-call-map @{})  # id -> {pc -> extern janet name}
+(var core-call-map @{})   # id -> {pc -> core cfunction name} (pure-call shaping)
 (when (empty? args)
   (eprint "usage: callgraph.janet FILE [FILE...] [--emit-native DIR]")
   (os/exit 4))
@@ -472,7 +473,14 @@
               (do (def ct (const-target d (ins 2) core-names))
                 (cond
                   (= (ct 0) :fn) (set target (resolve-name caller-id (ct 1) pc))
-                  (= (ct 0) :core) (array/push edges ["extern" caller-id (ct 1)])
+                  (= (ct 0) :core)
+                  (do (array/push edges ["extern" caller-id (ct 1)])
+                    # record core-cfunction call sites for pure-call
+                    # shaping (math/floor etc.): name keyed by pc, like
+                    # extern-call-map but without --externs declarations.
+                    (put (or (get core-call-map caller-id)
+                             (do (def t2 @{}) (put core-call-map caller-id t2) t2))
+                         pc (ct 1)))
                   (= (ct 0) :key) (array/push edges ["extern" caller-id (ct 1)])
                   (array/push edges ["unknown" caller-id slot])))
               (= op 'clo)
@@ -890,7 +898,7 @@
 # Step 6+ (hybrid inference): hints are direct contracts (used as-is for
 # unboxing, never weakened); call-site widening + fixpoint prove the
 # unhinted rest. Concrete => unboxed, unproven => boxed.
-(def res (infer/analyze defs call-map profile-index))
+(def res (infer/analyze defs call-map profile-index core-call-map))
 (def rts (res :rts))
 (def nnp (res :nnp))
 (def pts (res :pts))
@@ -1034,6 +1042,15 @@
   (unless (infer/int-family? (get st idx :unknown)) (break nil))
   [callee idx])
 
+# Pure core-call dest type: recorded core-cfunction call sites (ldc
+# constants) typed from infer/pure-calls. Arity is NOT checked here —
+# emission re-verifies strictly and refuses; intermediate optimism
+# never escapes a refused fn.
+(defn pure-dest-type [id pc]
+  (def pn (get (get core-call-map id) pc))
+  (def ps (and pn (get infer/pure-calls pn)))
+  (and ps (ps :returns)))
+
 # Step 8: CFG recovery + block-entry slot dataflow + validation.
 # Returns @{:ok true :leaders [...] :block-end {...} :states {pc -> st}}
 # or @{:ok false :reason string}.
@@ -1154,9 +1171,11 @@
             (do (def tid (get cmap pc))
               (if tid
                 (put st (ins 1) (rts tid))
-                # call-shaped access refines the dst like get
-                (do (def sh (call-shape-idx d pc st))
-                  (when sh (put st (ins 1) :number)))))
+                (do (def pdt (pure-dest-type id pc))
+                  (if pdt
+                    (put st (ins 1) pdt)
+                    (do (def sh (call-shape-idx d pc st))
+                      (when sh (put st (ins 1) :number)))))))
             nil)
           (++ pc))
         (def lastins (code (- endx 1)))
@@ -1243,6 +1262,22 @@
       (set ok nil))
     (-- j))
   (if (or (< j 0) (= ok false)) slots nil))
+
+# Strict pure-call resolution for emission: recorded core name +
+# arity + numeric args (slots via the fail-closed backward walk).
+# Returns [spec slots]; nil refuses. Defined after call-arg-slots.
+(defn pure-call-shape [id pc st d]
+  (def nm (get (get core-call-map id) pc))
+  (when (nil? nm) (break nil))
+  (def spec (get infer/pure-calls nm))
+  (when (nil? spec) (break nil))
+  (def slots (call-arg-slots d pc))
+  (when (or (nil? slots) (not= (length slots) (length (spec :params))))
+    (break nil))
+  (each s slots
+    (unless (get infer/numeric-types (get st s :unknown))
+      (break nil)))
+  [spec slots])
 
 (defn intrinsic-ctype [kty]
   # C type of the native field; loads convert to the dest slot width
@@ -1401,10 +1436,13 @@
       (do (def wtid (get cmap wpc))
         (if wtid
           (wput (ins 1) (rts wtid))
-          # call-shaped access declares a numeric dst (wtypes stands in
-          # for st in this linear sweep; same rule as flow-check)
-          (do (def wsh (call-shape-idx d wpc wtypes))
-            (when wsh (wput (ins 1) :number)))))
+          (do (def wpdt (pure-dest-type id wpc))
+            (if wpdt
+              (wput (ins 1) wpdt)
+              # call-shaped access declares a numeric dst (wtypes stands in
+              # for st in this linear sweep; same rule as flow-check)
+              (do (def wsh (call-shape-idx d wpc wtypes))
+                (when wsh (wput (ins 1) :number)))))))
       nil)
     (++ wpc)
     (def wpos (get emit-writers wop))
@@ -1517,17 +1555,26 @@
             (do (def tid (get cmap pc))
               (if tid
                 (put st (ins 1) (rts tid))
-                (when sh-now (put st (ins 1) :number))))
+                (do (def pdt (pure-dest-type id pc))
+                  (if pdt
+                    (put st (ins 1) pdt)
+                    (when sh-now (put st (ins 1) :number))))))
             nil)
           (cond
             (= op 'ldi)
             (array/push lines (string "    s" (ins 1) " = " (ins 2) ";"))
             (= op 'ldc)
             (do (def cval ((or (d :constants) @[]) (ins 2)))
-              (unless (and cval (= :number (type cval)))
-                (set bad "ldc non-number")
-                (break))
-              (array/push lines (string "    s" (ins 1) " = " (emit-c-num cval) ";")))
+              (if (= :cfunction (type cval))
+                # dead callee load (math/floor etc.): the call arms
+                # resolve by core name; any live use of the loaded value
+                # carries :unknown through flow, refusing at the use site
+                # (same discipline as the ldu skip below).
+                nil
+                (do (unless (and cval (= :number (type cval)))
+                      (set bad "ldc non-number")
+                      (break))
+                  (array/push lines (string "    s" (ins 1) " = " (emit-c-num cval) ";")))))
             (= op 'ret)
             (do (def rvt (get st (ins 1) :unknown))
               # family check: int fn returns int-family values, float fn
@@ -1576,9 +1623,9 @@
             # int-family: C integer division truncates (needs a
             # documented policy in step 13); float-family: real division.
             # The check is on the OPERANDS (int64 operands truncate even
-            # in a :double fn), not just rt.
-            (if (and (get float-hints rt)
-                     (float-operand-ok st (ins 2))
+            # in a :double fn), never rt: double operands divide exactly
+            # in any fn shape (including :array-returning builders).
+            (if (and (float-operand-ok st (ins 2))
                      (float-operand-ok st (ins 3)))
               (do (set pending @[])
                 (array/push lines
@@ -1591,8 +1638,7 @@
             # small int constant by construction; float kernels divide
             # exactly like boxed, int kernels refuse (trunc vs real).
             (= op 'divim)
-            (if (and (get float-hints rt)
-                     (float-operand-ok st (ins 2)))
+            (if (float-operand-ok st (ins 2))
               (do (set pending @[])
                 (array/push lines
                             (string "    s" (ins 1) " = "
@@ -1610,8 +1656,7 @@
             # (silent miscompile otherwise) fail-loud, like OOB.
             (= op 'divf)
             (cond
-              (and (get float-hints rt)
-                   (float-operand-ok st (ins 2))
+              (and (float-operand-ok st (ins 2))
                    (float-operand-ok st (ins 3)))
               (do (set pending @[])
                 (array/push lines
@@ -1630,8 +1675,7 @@
                 (break)))
             (= op 'rem)
             (cond
-              (and (get float-hints rt)
-                   (float-operand-ok st (ins 2))
+              (and (float-operand-ok st (ins 2))
                    (float-operand-ok st (ins 3)))
               (do (set pending @[])
                 (array/push lines
@@ -1650,8 +1694,7 @@
                 (break)))
             (= op 'mod)
             (cond
-              (and (get float-hints rt)
-                   (float-operand-ok st (ins 2))
+              (and (float-operand-ok st (ins 2))
                    (float-operand-ok st (ins 3)))
               (do (set pending @[])
                 (def ma (emit-slot (ins 2) arity))
@@ -1802,6 +1845,24 @@
               (if (= op 'tcall)
                 (array/push lines (string "    return janet_unwrap_number(" shdata ");"))
                 (array/push lines (string "    s" (ins 1) " = janet_unwrap_number(" shdata ");")))
+              (set pending @[]))
+            # pure core calls (math/floor etc.): strict name + arity +
+            # numeric-args check, lowered to libm with (double) casts.
+            # Checked after the shape arm (mutually exclusive in practice:
+            # shape needs an array callee, pure a recorded cfunction).
+            (or (and (or (= op 'call) (= op 'tcall))
+                     (nil? (get cmap pc))
+                     (not sh-now)
+                     (pure-call-shape id pc st d)))
+            (do (def pres (pure-call-shape id pc st d))
+              (def pspec (pres 0))
+              (def pslots (pres 1))
+              (def pargs (seq [s :in pslots]
+                           (string "(double)(" (emit-slot s arity) ")")))
+              (def pcall (string (pspec :c) "(" (string/join pargs ", ") ")"))
+              (if (= op 'tcall)
+                (array/push lines (string "    return " pcall ";"))
+                (array/push lines (string "    s" (ins 1) " = " pcall ";")))
               (set pending @[]))
             (or (= op 'call) (= op 'tcall))
             (do (def tid (get cmap pc))

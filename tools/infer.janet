@@ -81,7 +81,19 @@
   @{'band true 'bor true 'bxor true 'sl true 'sr true 'sru true})
 (def bit-im-ops
   @{'slim true 'srim true 'sruim true})
-(def cmp-ops
+# Pure core calls: math libm wrappers with exact C equivalents
+# (JANET_DEFINE_MATHOP applies the libm fn to the unwrapped double).
+# Callgraph records call sites by core name (ldc-loaded cfunctions);
+# scan-def types them, emission lowers to libm. Arity mismatches stay
+# :unknown (fail-closed). Args code-gen through (double) casts, exact
+# for |v| <= 2^53 like all int kernels; beyond that the documented
+# int-width caveat applies.
+(def pure-calls
+  @{"math/floor" {:c "floor" :params [:double] :returns :double}
+    "math/ceil" {:c "ceil" :params [:double] :returns :double}
+    "math/sqrt" {:c "sqrt" :params [:double] :returns :double}
+    "math/abs" {:c "fabs" :params [:double] :returns :double}
+    "math/pow" {:c "pow" :params [:double :double] :returns :double}})(def cmp-ops
   @{'eq true 'eqim true 'lt true 'ltim true 'gt true 'gtim true
     'lte true 'gte true
     'neq true 'neqim true 'ltu true 'gtu true 'cmp true 'next true})
@@ -96,10 +108,11 @@
         (if (= c (math/trunc c)) :long :double)
         :unknown))))
 
-(defn analyze [defs call-map &opt profile]
+(defn analyze [defs call-map &opt profile coremap]
   # defs: array of @{:d disasm :hint ...}; call-map: id -> {pc -> tid};
   # profile: @{name -> [{:params [...] :mins [...] :maxs [...] :calls n}]}
-  # from a PGO dump.
+  # from a PGO dump; coremap: id -> {pc -> core cfunction name} for
+  # pure-call shaping (may be nil).
   # returns @{:pts pts :rts rts :nnp nnp :rounds rounds}; nnp maps
   # id -> array of bool (PGO-unanimous observed min >= 0 per param).
   (def n (length defs))
@@ -278,6 +291,17 @@
             (when (and (or (= callee-ty :array) (= callee-ty :tuple))
                        (int-family? (pending 0)))
               (put st (ins 1) :number)))
+          # pure core calls (math/floor etc., resolved from ldc-loaded
+          # cfunction constants): exact libm types when arity matches
+          # and every pushed arg is numeric; else :unknown (fail-closed).
+          (when (and (nil? tid) (not spread))
+            (def pname (get (get coremap id) pc))
+            (def pspec (and pname (get pure-calls pname)))
+            (when (and pspec (= (length pending) (length (pspec :params))))
+              (var allnum true)
+              (each a pending
+                (unless (get numeric-types a) (set allnum false)))
+              (when allnum (put st (ins 1) (pspec :returns)))))
           (set pending @[])
           (set spread false))
         (= op 'tcall)
@@ -305,6 +329,15 @@
             (when (and (or (= callee-ty :array) (= callee-ty :tuple))
                        (int-family? (pending 0)))
               (set rtype (type-join rtype :number))))
+          # pure core calls in tail position: same contract as above.
+          (when (and (nil? tid) (not spread))
+            (def pname (get (get coremap id) pc))
+            (def pspec (and pname (get pure-calls pname)))
+            (when (and pspec (= (length pending) (length (pspec :params))))
+              (var allnum true)
+              (each a pending
+                (unless (get numeric-types a) (set allnum false)))
+              (when allnum (set rtype (type-join rtype (pspec :returns))))))
           (set pending @[])
           (set spread false))
         (= op 'ret) (set rtype (type-join rtype (get st (ins 1) :unknown)))

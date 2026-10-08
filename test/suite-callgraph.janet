@@ -404,8 +404,36 @@
 (assert (not (nil? (string/find "native-skip" lsout))) "lib path prints skips")
 (assert (not (nil? (string/find "k-bad" lsout))) "lib skip names the refused def")
 
-# Step 10 (extern C calls): declared symbols emitted as direct calls,
-# harness linked against a real C implementation, parity via fallback
+# Step 15 (pure core calls): math/floor etc. resolve from ldc-loaded
+# cfunction constants and lower to libm (exact: boxed bodies ARE these
+# calls). Chained use (floor of a division) keeps temps numeric.
+(spit "/tmp/cg-pure.janet" (string
+  "(defn fl {:hint {:params [:double] :returns :double}} [x] (math/floor x))\n"
+  "(defn hy {:hint {:params [:double :double] :returns :double}} [a b] (math/sqrt (+ (* a a) (* b b))))\n"
+  "(defn blogd {:hint {:params [:double] :returns :double}} [v] (do (var n 0.0) (var x v)"
+  " (while (> x 0) (set n (+ n 1)) (set x (math/floor (/ x 2)))) n))\n"
+  "(defn main [] (print (fl 2.7) (hy 3 4) (blogd 7)))\n"))
+(assert (= 0 (os/execute ["/bin/sh" "-c"
+  "rm -rf /tmp/cg-pu && ./build/bender tools/callgraph.janet /tmp/cg-pure.janet --emit-native /tmp/cg-pu"] :p))
+  "pure emit run")
+(assert (= 0 (os/execute ["/bin/sh" "-c"
+  "cc -O2 /tmp/cg-pu/native.c -lm -o /tmp/cg-pu/native"] :p)) "pure native compiles+links libm")
+(assert (= 0 (os/execute ["/bin/sh" "-c"
+  "/tmp/cg-pu/native > /tmp/cg-pu/actual.txt && cmp /tmp/cg-pu/expected.txt /tmp/cg-pu/actual.txt"] :p))
+  "pure parity (floor/sqrt/chained floor-div)")
+(def putext (slurp "/tmp/cg-pu/native.c"))
+(assert (not (nil? (string/find "floor((double)" putext))) "floor lowers to libm")
+(assert (not (nil? (string/find "sqrt((double)" putext))) "sqrt lowers to libm")
+# arity mismatch stays boxed (pow takes 2)
+(spit "/tmp/cg-purebad.janet" (string
+  "(defn badp {:hint {:params [:double] :returns :double}} [x] (math/pow x))\n"
+  "(defn main [] (print (badp 2)))\n"))
+(os/execute ["/bin/sh" "-c"
+  "rm -rf /tmp/cg-pub && ./build/bender tools/callgraph.janet /tmp/cg-purebad.janet --emit-native /tmp/cg-pub > /tmp/cg-pub-out.txt 2>&1"])
+(assert (not (nil? (string/find "native-skip" (slurp "/tmp/cg-pub-out.txt"))))
+        "intrinsic arity mismatch refused")
+
+# Step 10 (extern C calls): declared symbols emitted as direct calls,# harness linked against a real C implementation, parity via fallback
 (spit "/tmp/cg-ext.janet" (string
   "(defn game-clamp [x lo hi] (if (< x lo) lo (if (> x hi) hi x)))\n"
   "(defn physics {:hint {:params [:double :double :double :double] :returns :double}}\n"
