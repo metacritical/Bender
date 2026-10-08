@@ -1,0 +1,59 @@
+# bench/ — micro-benchmarks for the perf gates.
+# Run: ./build/bender bench/run.janet
+# Each bench prints `name iters ns/op`. AOT parity: same file must run
+# under `bender --aot --native` byte-identically (oracle discipline).
+
+# Numeric ALU loop: boxed dispatch baseline. A widened kernel should
+# collapse this to raw double arithmetic (no int32-domain band, so
+# boxed and native agree trivially).
+(defn rng-next {:hint {:params [:double] :returns :double}} [s]
+  (+ (* s 1.0000001) 0.5))
+
+(defn bench-rng [n]
+  (var s 1)
+  (def t0 (os/clock))
+  (for i 0 n (set s (rng-next s)))
+  (def dt (- (os/clock) t0))
+  (print "rng-next " n " iters " (string/format "%.1f" (* 1e9 (/ dt n))) " ns/op result=" s))
+
+# Array stepping: SoA columns, sequential access. Tests :array
+# get/put/len kernel path vs boxed per-cell tables.
+(defn bench-array-sum {:hint {:params [:array] :returns :double}} [a]
+  (var acc 0.0)
+  (for i 0 (length a) (+= acc (get a i)))
+  acc)
+
+(defn bench-array [n]
+  (def a (array/new-filled n 1.5))
+  (def t0 (os/clock))
+  (def s (bench-array-sum a))
+  (def dt (- (os/clock) t0))
+  (print "array-sum " n " elems " (string/format "%.1f" (* 1e9 (/ dt n))) " ns/elem sum=" s))
+
+# Table field access: boxed keyword get, the L3 inline-cache target.
+# No kernel today — measures the hash+probe tax directly.
+(defn bench-table-get [n]
+  (def rec @{:x 1 :y 2 :z 3})
+  (var acc 0)
+  (def t0 (os/clock))
+  (for i 0 n (+= acc (get rec :x)))
+  (def dt (- (os/clock) t0))
+  (print "table-get " n " iters " (string/format "%.1f" (* 1e9 (/ dt n))) " ns/op acc=" acc))
+
+# Allocation pressure: fresh tuples per iteration, the L4 escape-analysis
+# target. GC sees all of it today.
+(defn bench-alloc [n]
+  (def t0 (os/clock))
+  (var acc 0)
+  (for i 0 n
+    (def t [i (+ i 1)])
+    (+= acc (get t 0)))
+  (def dt (- (os/clock) t0))
+  (print "alloc-tuple " n " iters " (string/format "%.1f" (* 1e9 (/ dt n))) " ns/op acc=" acc))
+
+(defn main [&]
+  (bench-rng 200000)
+  (bench-array 100000)
+  (bench-table-get 200000)
+  (bench-alloc 100000))
+# NOTE: no explicit (main) call — the script runner invokes main automatically.
