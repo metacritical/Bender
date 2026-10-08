@@ -96,8 +96,9 @@
         (if (= c (math/trunc c)) :long :double)
         :unknown))))
 
-(defn analyze [defs call-map]
-  # defs: array of @{:d disasm :hint ...}; call-map: id -> {pc -> tid}
+(defn analyze [defs call-map &opt profile]
+  # defs: array of @{:d disasm :hint ...}; call-map: id -> {pc -> tid};
+  # profile: @{name -> [{:params [...] :calls n}]} from a PGO dump.
   # returns @{:pts pts :rts rts :rounds rounds}
   (def n (length defs))
   (def pts @{})
@@ -120,6 +121,30 @@
         (++ i))
       (put pfixed id true))
     (put pts id parr)
+    # PGO seeding: unhinted params take unanimous observations as a
+    # starting point (never pfixed -- later conflicts widen soundly).
+    # A slot seeds only if every matching row agrees on exactly one
+    # type; unknown/empty slots stay unknown for the fixpoint.
+    (when (and (nil? hp) profile)
+      (def rows (get profile (string (or ((get defs id) :name) ""))))
+      (when rows
+        (var i 0)
+        (while (< i arity)
+          (var agree nil)
+          (var ok true)
+          (each row rows
+            (def ps (get row :params @[]))
+            (def sl0 (if (> (length ps) 0) (ps 0) nil))
+            (eprint "preds idx=" (indexed? sl0) " len=" (if (indexed? sl0) (length sl0) -1) " kw=" (if (and (indexed? sl0) (> (length sl0) 0)) (keyword? (sl0 0)) :na))
+            (def slot (if (< i (length ps)) (ps i) nil))
+            (if (and (indexed? slot) (= 1 (length slot)) (keyword? (slot 0)))
+              (do (def t (slot 0))
+                (if (nil? agree) (set agree t)
+                  (when (not= agree t) (set ok false))))
+              (set ok false)))
+          (when (and ok (not (nil? agree)))
+            (put parr i agree))
+          (++ i))))
     (def hr (if h (get h :returns) nil))
     (array/push rts (if (or (get numeric-types hr) (= hr :array)) hr :unknown))
     (when (or (get numeric-types hr) (= hr :array)) (put rfixed id true)))
@@ -161,6 +186,18 @@
         (put st (ins 1)
              (bit-join (get st (ins 2) :unknown) (get st (ins 3) :unknown)))
         (get cmp-ops op) (put st (ins 1) :bool)
+        # literal constructors: arrays/tuples precise; the rest :unknown
+        # (always sound -- kills stale slot types that otherwise leak
+        # into call-site widening as phantom :longs). They also consume
+        # the pending pushes (VM takes [stackstart, stacktop)); the
+        # compiler never interleaves call args across them. Single
+        # clause each: cond stops at the first match.
+        (or (= op 'mkarr))
+        (do (put st (ins 1) :array) (set pending @[]))
+        (or (= op 'mktup) (= op 'mkbtp))
+        (do (put st (ins 1) :tuple) (set pending @[]))
+        (or (= op 'mkbuf) (= op 'mkstr) (= op 'mkstu) (= op 'mktab))
+        (do (put st (ins 1) :unknown) (set pending @[]))
         # ldu (load upvalue: same-unit fn refs, closed-over vars).
         # Opaque :unknown -- any concrete use refuses downstream. The
         # load itself is dead in emitted code (static calls go direct
@@ -199,6 +236,7 @@
         (= op 'pusha) (set spread true)
         (= op 'call)
         (do (def tid (get cmap pc))
+          (eprint "callinfo tid=" tid " pending=[" (string/join (map string pending) ",") "]")
           (when (and tid (number? tid))
             # call-site widening: bind each pushed arg into the callee's
             # param slot (annotation-seeded params are never touched)
@@ -211,6 +249,7 @@
                   (unless cf
                     (def nn (narrow (callee-pts i) a))
                     (when (not= nn (callee-pts i))
+                      (eprint "WIDEN-WRITE tid=" tid " i=" i " was=" (callee-pts i) " nn=" nn)
                       (put callee-pts i nn)
                       (put box :changed true)))
                   (++ i))))
@@ -229,6 +268,7 @@
                   (unless cf
                     (def nn (narrow (callee-pts i) a))
                     (when (not= nn (callee-pts i))
+                      (eprint "WIDEN-WRITE tid=" tid " i=" i " was=" (callee-pts i) " nn=" nn)
                       (put callee-pts i nn)
                       (put box :changed true)))
                   (++ i))))

@@ -46,6 +46,7 @@
 (var emit-native-dir nil)
 (var emit-native-lib-dir nil)
 (var externs-file nil)
+(var profile-file nil)
 # Step 13: int-overflow policy. wrap (default): kernels compute in
 # exact int widths with two's-complement wrap (shipped/harness builds
 # must pass -fwrapv: C signed overflow is otherwise UB). promote:
@@ -64,6 +65,8 @@
     (do (set emit-native-lib-dir (args (+ i 1))) (++ i))
     (and (= a "--externs") (< (+ i 1) (length args)))
     (do (set externs-file (args (+ i 1))) (++ i))
+    (and (= a "--profile") (< (+ i 1) (length args)))
+    (do (set profile-file (args (+ i 1))) (++ i))
     (and (= a "--int-policy") (< (+ i 1) (length args)))
     (do (def pv (keyword (args (+ i 1))))
       (unless (or (= pv :wrap) (= pv :promote))
@@ -753,10 +756,30 @@
 
 (import ./infer)
 
+# PGO phase 2: profile-seeded widening. --profile FILE loads a
+# debug/profile-dump output; unanimous observations seed unhinted
+# params (never pfixed -- conflicts widen soundly as usual). Matching
+# is by defn name; same-name rows from different sources merge
+# conservatively (a slot seeds only if unanimous across all of them).
+(var profile-index nil)
+(when profile-file
+  (def rows (eval (parse (slurp profile-file))))
+  (set profile-index @{})
+  (each row rows
+    (def id (row 0))
+    (def info (row 1))
+    (def nm (if (>= (length id) 3) (string (id 2)) nil))
+    (when nm
+      (def bucket (or (get profile-index nm) @[]))
+      (array/push bucket {:params (get info :params @[])
+                          :calls (get info :calls 0)})
+      (put profile-index nm bucket)))
+  (print "profile " (length rows) " rows"))
+
 # Step 6+ (hybrid inference): hints are direct contracts (used as-is for
 # unboxing, never weakened); call-site widening + fixpoint prove the
 # unhinted rest. Concrete => unboxed, unproven => boxed.
-(def res (infer/analyze defs call-map))
+(def res (infer/analyze defs call-map profile-index))
 (def rts (res :rts))
 (def pts (res :pts))
 (each id (range (length defs))
@@ -921,6 +944,13 @@
                  (infer/bit-join (get st (ins 2) :unknown)
                                  (get st (ins 3) :unknown)))
             (get infer/cmp-ops op) (put st (ins 1) :bool)
+            (or (= op 'mkarr))
+            (do (put st (ins 1) :array))
+            (or (= op 'mktup) (= op 'mkbtp))
+            (do (put st (ins 1) :tuple))
+            (or (= op 'mkbuf) (= op 'mkstr) (= op 'mkstu) (= op 'mktab))
+            (do (put st (ins 1) :unknown))
+
             (= op 'ldu) (put st (ins 1) :unknown)
             # Step 11: array access (mirrors infer/scan-def rules)
             (= op 'get)
@@ -1036,6 +1066,10 @@
            (infer/bit-join (get wtypes (ins 2) :unknown)
                            (get wtypes (ins 3) :unknown)))
       (get infer/cmp-ops wop) (put wtypes (ins 1) :bool)
+      (or (= wop 'mkarr)) (put wtypes (ins 1) :array)
+      (or (= wop 'mktup) (= wop 'mkbtp)) (put wtypes (ins 1) :tuple)
+      (or (= wop 'mkbuf) (= wop 'mkstr) (= wop 'mkstu) (= wop 'mktab))
+      (put wtypes (ins 1) :unknown)
       (= wop 'ldu) (put wtypes (ins 1) :unknown)
       (= wop 'get)
       (put wtypes (ins 1)
@@ -1104,6 +1138,13 @@
                  (infer/bit-join (get st (ins 2) :unknown)
                                  (get st (ins 3) :unknown)))
             (get infer/cmp-ops op) (put st (ins 1) :bool)
+            (or (= op 'mkarr))
+            (do (put st (ins 1) :array) (set pending @[]))
+            (or (= op 'mktup) (= op 'mkbtp))
+            (do (put st (ins 1) :tuple) (set pending @[]))
+            (or (= op 'mkbuf) (= op 'mkstr) (= op 'mkstu) (= op 'mktab))
+            (do (put st (ins 1) :unknown) (set pending @[]))
+
             (= op 'ldu) (put st (ins 1) :unknown)
             # Step 11: array access (mirrors infer/scan-def rules)
             (= op 'get)
@@ -1207,7 +1248,8 @@
               (array/push lines (string "    s" (ins 1) " = "
                                         (emit-slot (ins 2) arity) "->count;")))
             (= op 'get)
-            (do (unless (and (= :array (get st (ins 2) :unknown))
+            (do (eprint "getdbg pc=" pc " base-slot=" (ins 2) " base=" (get st (ins 2) :unknown) " idx-slot=" (ins 3) " idx=" (get st (ins 3) :unknown) " arity=" arity)
+              (unless (and (= :array (get st (ins 2) :unknown))
                              (infer/int-family? (get st (ins 3) :unknown)))
                   (set bad "get requires array and int index")
                   (break))
@@ -1357,6 +1399,7 @@
     # a def named like a declared extern is the compiled fallback
     # artifact — the real implementation lives in C
     (when (get externs (string (or (d :name) "?"))) (set concrete false))
+    (eprint "canddbg " id " " (d :name) " concrete=" concrete " pt=" pt " rt=" rt)
     (if concrete
       (put cand id true)
       (array/push skips [id (string (or (d :name) "?"))

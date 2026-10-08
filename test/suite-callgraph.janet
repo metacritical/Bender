@@ -419,6 +419,34 @@
 (assert (= 0 (os/execute ["/bin/sh" "-c"
   "rm -rf /tmp/cg-dce && ./build/bender tools/callgraph.janet /tmp/cg-dce.janet --emit-native /tmp/cg-dce >/dev/null 2>&1"] :p))
   "dce emit run")
+# ---- PGO + widening: unhinted array kernel infers via call sites ----
+# (array literals type :array; constructors consume pending pushes so
+# literal elements never leak into widening as phantom :longs)
+(spit "/tmp/cg-wide.janet" (string
+  "(defn k-xor8u [r a b]\n"
+  "  (put r 0 (bxor (get a 0) (get b 0)))\n"
+  "  (put r 1 (bxor (get a 1) (get b 1)))\n"
+  "  (put r 2 (bxor (get a 2) (get b 2)))\n"
+  "  (put r 3 (bxor (get a 3) (get b 3)))\n"
+  "  (put r 4 (bxor (get a 4) (get b 4)))\n"
+  "  (put r 5 (bxor (get a 5) (get b 5)))\n"
+  "  (put r 6 (bxor (get a 6) (get b 6)))\n"
+  "  (put r 7 (bxor (get a 7) (get b 7)))\n"
+  "  r)\n"
+  "(defn main [&] (print (k-xor8u @[0 0 0 0 0 0 0 0] @[0 1 2 3 4 5 6 7] @[7 6 5 4 3 2 1 0])))\n"))
+(assert (= 0 (os/execute ["/bin/sh" "-c"
+  "rm -rf /tmp/cg-wide && ./build/bender tools/callgraph.janet /tmp/cg-wide.janet --emit-native /tmp/cg-wide"] :p))
+  "unhinted widening emit run")
+(assert (= 0 (os/execute ["/bin/sh" "-c"
+  "cc -O2 -w -fwrapv -Isrc/include -Isrc/conf /tmp/cg-wide/native.c build/janet.o -lm -lpthread -ldl -o /tmp/cg-wide/native && /tmp/cg-wide/native > /tmp/cg-wide/actual.txt && cmp /tmp/cg-wide/expected.txt /tmp/cg-wide/actual.txt"] :p))
+  "unhinted widening parity")
+# ---- PGO phase 2: profile-seeded params emit without hints ----
+(assert (= 0 (os/execute ["/bin/sh" "-c"
+  "JANET_PROFILE=1 JANET_PROFILE_OUT=/tmp/cg-wide-prof.out ./build/bender /tmp/cg-wide.janet >/dev/null 2>&1"] :p))
+  "profile run")
+(assert (= 0 (os/execute ["/bin/sh" "-c"
+  "rm -rf /tmp/cg-widep && ./build/bender tools/callgraph.janet /tmp/cg-wide.janet --profile /tmp/cg-wide-prof.out --emit-native /tmp/cg-widep && cc -O2 -w -fwrapv -Isrc/include -Isrc/conf /tmp/cg-widep/native.c build/janet.o -lm -lpthread -ldl -o /tmp/cg-widep/native && /tmp/cg-widep/native > /tmp/cg-widep/actual.txt && cmp /tmp/cg-widep/expected.txt /tmp/cg-widep/actual.txt"] :p))
+  "profile-seeded parity")
 (def dcetext (slurp "/tmp/cg-dce/native.c"))
 (assert (not (nil? (string/find "used(" dcetext))) "reachable kernel emitted")
 (assert (nil? (string/find "dead" dcetext)) "unreachable kernel eliminated")
