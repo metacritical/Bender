@@ -419,6 +419,34 @@
 (assert (= 0 (os/execute ["/bin/sh" "-c"
   "rm -rf /tmp/cg-dce && ./build/bender tools/callgraph.janet /tmp/cg-dce.janet --emit-native /tmp/cg-dce >/dev/null 2>&1"] :p))
   "dce emit run")
+# ---- Branches + shifts: CFG emission with bitwise ops ----
+# k-shl64! exercises if/goto + sl/sr + puti + array in/out at parity.
+# Regression cover for the :bool -> int declaration mapping (bool
+# temps in array-returning functions previously fell back to the
+# return width and miscompiled).
+(spit "/tmp/cg-shl.janet" (string
+  "(defn k-shl2 {:hint {:params [:array :array :long] :returns :array}} [r a k]\n"
+  "  (def ws (brshift k 3))\n"
+  "  (def bs (band k 7))\n"
+  "  (def j0 (- 0 ws))\n"
+  "  (if (>= j0 0)\n"
+  "    (do (var v0 (blshift (get a j0) bs))\n"
+  "      (if (> bs 0) (set v0 (bor v0 (brshift (get a 0) 1))) nil)\n"
+  "      (put r 0 (band v0 255)))\n"
+  "    (put r 0 0))\n"
+  "  (def j1 (- 1 ws))\n"
+  "  (if (>= j1 0)\n"
+  "    (do (var v1 (blshift (get a j1) bs))\n"
+  "      (put r 1 (band v1 255)))\n"
+  "    (put r 1 0))\n"
+  "  r)\n"
+  "(defn main [&] (print (k-shl2 @[0 0] @[1 2 3 4 5 6 7 8] 17)))\n"))
+(assert (= 0 (os/execute ["/bin/sh" "-c"
+  "rm -rf /tmp/cg-shl && ./build/bender tools/callgraph.janet /tmp/cg-shl.janet --emit-native /tmp/cg-shl"] :p))
+  "branch shift emit run")
+(assert (= 0 (os/execute ["/bin/sh" "-c"
+  "cc -O2 -w -fwrapv -Isrc/include -Isrc/conf /tmp/cg-shl/native.c build/janet.o -lm -lpthread -ldl -o /tmp/cg-shl/native && /tmp/cg-shl/native > /tmp/cg-shl/actual.txt && cmp /tmp/cg-shl/expected.txt /tmp/cg-shl/actual.txt"] :p))
+  "branch shift parity")
 # ---- PGO + widening: unhinted array kernel infers via call sites ----
 # (array literals type :array; constructors consume pending pushes so
 # literal elements never leak into widening as phantom :longs)

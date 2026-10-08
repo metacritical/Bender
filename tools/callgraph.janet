@@ -154,7 +154,7 @@
   @{:long "int64_t" :i32 "int32_t" :i16 "int16_t" :i8 "int8_t"
     :u64 "uint64_t" :u32 "uint32_t" :u16 "uint16_t" :u8 "uint8_t"
     :double "double" :float "float" :number "double"
-    :array "JanetArray*"})
+    :array "JanetArray*" :bool "int"})
 # alias spellings fold to the canonical width keyword
 (defn canon-hint [k] (get hint-canonical k k))
 (defn hint-of [id]
@@ -1050,38 +1050,48 @@
   # below; unknown types fall back to ct (previous behavior exactly).
   (def written @{})
   (def wtypes @{})
-  (each i (range arity) (put wtypes i (pt i)))
+  (def wsets @{})
+  (defn wput [slot ty]
+    (put wtypes slot ty)
+    (def st (or (get wsets slot) @{}))
+    (put st ty true)
+    (put wsets slot st))
+  (each i (range arity)
+    (put wtypes i (pt i))
+    (def st0 (or (get wsets i) @{}))
+    (put st0 (pt i) true)
+    (put wsets i st0))
   (var wpc 0)
   (each ins code
     (def wop (ins 0))
     (cond
-      (= wop 'ldi) (put wtypes (ins 1) :long)
-      (= wop 'ldc) (put wtypes (ins 1) (infer/const-num-type d (ins 2)))
-      (= wop 'ldn) (put wtypes (ins 1) :nil)
-      (or (= wop 'ldt) (= wop 'ldf)) (put wtypes (ins 1) :bool)
-      (= wop 'len) (put wtypes (ins 1) :long)
-      (= wop 'movn) (put wtypes (ins 1) (get wtypes (ins 2) :unknown))
-      (= wop 'movf) (put wtypes (ins 2) (get wtypes (ins 1) :unknown))
+      (= wop 'ldi) (wput (ins 1) :long)
+      (= wop 'ldc) (wput (ins 1) (infer/const-num-type d (ins 2)))
+      (= wop 'ldn) (wput (ins 1) :nil)
+      (or (= wop 'ldt) (= wop 'ldf)) (wput (ins 1) :bool)
+      (= wop 'len) (wput (ins 1) :long)
+      (= wop 'movn) (wput (ins 1) (get wtypes (ins 2) :unknown))
+      (= wop 'movf) (wput (ins 2) (get wtypes (ins 1) :unknown))
       (get infer/arith-im-ops wop)
-      (put wtypes (ins 1) (infer/arith-join (get wtypes (ins 2) :unknown) :long))
+      (wput (ins 1) (infer/arith-join (get wtypes (ins 2) :unknown) :long))
       (get infer/arith-ops wop)
-      (put wtypes (ins 1)
+      (wput (ins 1)
            (infer/arith-join (get wtypes (ins 2) :unknown)
                              (get wtypes (ins 3) :unknown)))
       (get infer/bit-im-ops wop)
-      (put wtypes (ins 1) (infer/bit-join (get wtypes (ins 2) :unknown) :long))
+      (wput (ins 1) (infer/bit-join (get wtypes (ins 2) :unknown) :long))
       (get infer/bit-ops wop)
-      (put wtypes (ins 1)
+      (wput (ins 1)
            (infer/bit-join (get wtypes (ins 2) :unknown)
                            (get wtypes (ins 3) :unknown)))
-      (get infer/cmp-ops wop) (put wtypes (ins 1) :bool)
-      (or (= wop 'mkarr)) (put wtypes (ins 1) :array)
-      (or (= wop 'mktup) (= wop 'mkbtp)) (put wtypes (ins 1) :tuple)
+      (get infer/cmp-ops wop) (wput (ins 1) :bool)
+      (or (= wop 'mkarr)) (wput (ins 1) :array)
+      (or (= wop 'mktup) (= wop 'mkbtp)) (wput (ins 1) :tuple)
       (or (= wop 'mkbuf) (= wop 'mkstr) (= wop 'mkstu) (= wop 'mktab))
-      (put wtypes (ins 1) :unknown)
-      (= wop 'ldu) (put wtypes (ins 1) :unknown)
+      (wput (ins 1) :unknown)
+      (= wop 'ldu) (wput (ins 1) :unknown)
       (= wop 'get)
-      (put wtypes (ins 1)
+      (wput (ins 1)
            (if (and (= :array (get wtypes (ins 2) :unknown))
                     (infer/int-family? (get wtypes (ins 3) :unknown)))
              :number :unknown))
@@ -1090,15 +1100,15 @@
         (when (= wpa :array)
           (unless (and (infer/int-family? (get wtypes (ins 2) :unknown))
                        (get infer/numeric-types (get wtypes (ins 3) :unknown)))
-            (put wtypes (ins 1) :unknown))))
+            (wput (ins 1) :unknown))))
       (= wop 'puti)
       (do (def wpa (get wtypes (ins 1) :unknown))
         (when (= wpa :array)
           (unless (get infer/numeric-types (get wtypes (ins 2) :unknown))
-            (put wtypes (ins 1) :unknown))))
+            (wput (ins 1) :unknown))))
       (= wop 'call)
       (do (def wtid (get cmap wpc))
-        (when wtid (put wtypes (ins 1) (rts wtid))))
+        (when wtid (wput (ins 1) (rts wtid))))
       nil)
     (++ wpc)
     (def wpos (get emit-writers wop))
@@ -1106,12 +1116,34 @@
       (def dst (ins wpos))
       (when (>= dst arity) (put written dst true))))
   (def ct (emit-kernel-type rt))
+  # join-aware declarations: collect every written type per slot. All
+  # numeric (or singleton) keeps exact current behavior (last-wins);
+  # any other mix refuses loudly -- a shared C declaration cannot hold
+  # both (the k-shl64 s30 array/int collision miscompiled silently).
+  (var slotbad nil)
+  (each slot (sort (keys written))
+    (when (and (nil? slotbad) (>= slot arity))
+      (def kinds (keys (or (get wsets slot) @{})))
+      # Sound sharing: all-numeric keeps last-wins (exact current
+      # behavior); bool shares soundly with numerics (C holds 0/1
+      # exactly, uses interpret per flow type -- flow-soundness is
+      # already assumed everywhere). Only composite/nil mixes refuse:
+      # no C declaration holds both an object and a scalar.
+      (def bad-mix
+        (and (> (length kinds) 1)
+             (some (fn [t] (or (= t :array) (= t :tuple) (= t :struct)
+                               (= t :nil))) kinds)))
+      (when bad-mix
+        (set slotbad (string "slot s" slot " mixes "
+                             (string/join (map string kinds) "/"))))))
   (def lines @[])
+  (var used-externs @[])
   (var used-externs @[])
   (each slot (sort (keys written))
     (array/push lines (string "    " (emit-kernel-type (get wtypes slot :double) ct)
                              " s" slot ";")))
   (var bad nil)
+  (when slotbad (set bad slotbad))
   (each start leaders
     (def st (get states start))
     (if (nil? st)
@@ -1257,7 +1289,7 @@
               (array/push lines (string "    s" (ins 1) " = "
                                         (emit-slot (ins 2) arity) "->count;")))
             (= op 'get)
-            (do (eprint "getdbg pc=" pc " base-slot=" (ins 2) " base=" (get st (ins 2) :unknown) " idx-slot=" (ins 3) " idx=" (get st (ins 3) :unknown) " arity=" arity)
+            (do
               (unless (and (= :array (get st (ins 2) :unknown))
                              (infer/int-family? (get st (ins 3) :unknown)))
                   (set bad "get requires array and int index")
@@ -1408,7 +1440,6 @@
     # a def named like a declared extern is the compiled fallback
     # artifact — the real implementation lives in C
     (when (get externs (string (or (d :name) "?"))) (set concrete false))
-    (eprint "canddbg " id " " (d :name) " concrete=" concrete " pt=" pt " rt=" rt)
     (if concrete
       (put cand id true)
       (array/push skips [id (string (or (d :name) "?"))

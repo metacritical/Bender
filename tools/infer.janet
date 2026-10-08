@@ -135,7 +135,6 @@
           (each row rows
             (def ps (get row :params @[]))
             (def sl0 (if (> (length ps) 0) (ps 0) nil))
-            (eprint "preds idx=" (indexed? sl0) " len=" (if (indexed? sl0) (length sl0) -1) " kw=" (if (and (indexed? sl0) (> (length sl0) 0)) (keyword? (sl0 0)) :na))
             (def slot (if (< i (length ps)) (ps i) nil))
             (if (and (indexed? slot) (= 1 (length slot)) (keyword? (slot 0)))
               (do (def t (slot 0))
@@ -236,7 +235,6 @@
         (= op 'pusha) (set spread true)
         (= op 'call)
         (do (def tid (get cmap pc))
-          (eprint "callinfo tid=" tid " pending=[" (string/join (map string pending) ",") "]")
           (when (and tid (number? tid))
             # call-site widening: bind each pushed arg into the callee's
             # param slot (annotation-seeded params are never touched)
@@ -249,7 +247,6 @@
                   (unless cf
                     (def nn (narrow (callee-pts i) a))
                     (when (not= nn (callee-pts i))
-                      (eprint "WIDEN-WRITE tid=" tid " i=" i " was=" (callee-pts i) " nn=" nn)
                       (put callee-pts i nn)
                       (put box :changed true)))
                   (++ i))))
@@ -268,7 +265,6 @@
                   (unless cf
                     (def nn (narrow (callee-pts i) a))
                     (when (not= nn (callee-pts i))
-                      (eprint "WIDEN-WRITE tid=" tid " i=" i " was=" (callee-pts i) " nn=" nn)
                       (put callee-pts i nn)
                       (put box :changed true)))
                   (++ i))))
