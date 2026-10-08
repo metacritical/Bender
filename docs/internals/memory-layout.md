@@ -114,7 +114,18 @@ monomorphic loops. VM work, benefits all boxed code at once.
 
 ## Do the benchmarks justify building any of this?
 
-Current data (2026-10-07, M2 Pro) — **no, not yet:**
+Update 2026-10-08 (ttfx 46x190 decrypt bench, M2 Pro): the cheap wins
+delivered exactly as ordered — buffer reuse + color cache 2.3x, SoA
+frame grid another 1.37x (174 -> 547 fps, 3.15x total, byte-identical),
+putting the port past Python TTE per-frame. The remaining gap to the
+Rust port (~470k fps) is per-cell boxing on the STEPPING path (chars
+are boxed tables) — that is Level 2/3 territory and now has measured
+demand. Practical note: kernel emission only sees defns in files
+passed explicitly (entry + --include); module fns compiled into a
+thunk stay invisible until their file joins analysis and their loops
+are numeric (SoA makes them so).
+
+Previous data (2026-10-07) — **no, not yet:**
 
 - Windowed GUI, uncapped: **1100–1900 fps** — frames are not blocked.
 - Engine: 0.80 ms/frame steady-state; profile 96% dispatch / 3% GC.
