@@ -101,7 +101,9 @@
 
 /* Next instruction variations */
 #define maybe_collect() do {\
-    if (JANET_UNLIKELY(janet_vm.gc_young_bytes >= janet_vm.gc_minor_threshold)) janet_collect_minor(); \
+    JanetFiber *mcf_ = janet_vm.fiber; \
+    if (JANET_UNLIKELY(NULL != mcf_ && mcf_->gc_nursery_bytes >= janet_vm.gc_minor_threshold)) janet_collect_fiber_minor(mcf_); \
+    else if (JANET_UNLIKELY(janet_vm.gc_young_bytes >= janet_vm.gc_minor_threshold)) janet_collect_minor(); \
     else if (JANET_UNLIKELY(janet_vm.next_collection >= janet_vm.gc_interval)) janet_collect(); } while (0)
 #define vm_checkgc_next() maybe_collect(); vm_next()
 #define vm_pcnext() pc++; vm_next()

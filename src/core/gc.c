@@ -54,8 +54,12 @@ static int janet_gc_minor_skip(JanetGCObject *mem);
 /* Object old for generational purposes (slab page age, or malloc-large);
  * defined with the slab code below. */
 static int janet_slab_obj_old(void *ptr);
+/* Step 1.3 owner for sweep filtering (0 = shared); defined below. */
+static uint32_t janet_slab_obj_owner(void *ptr);
 /* Reset generational slab state after a full sweep; defined below. */
 static void janet_slab_major_reset(void);
+/* Step 1.3 census removal at sweep-free; defined with the slab code. */
+static void janet_census_remove(JanetFiber *f);
 
 /* Hint to the GC that we may need to collect */
 void janet_gcpressure(size_t s) {
@@ -406,6 +410,8 @@ static void janet_deinit_block(JanetGCObject *mem) {
                 janet_ev_dec_refcount();
             }
 #endif
+            /* Step 1.3: leave the live-fiber census before release. */
+            janet_census_remove(f);
             janet_free(f->data);
             janet_fiber_native_stack_free(f);
         }
@@ -478,8 +484,11 @@ static int janet_check_liveref(Janet x) {
  * simply wait for the next major). Young/old comes from the slab page
  * (malloc-backed large objects always count as old). When sweeping the
  * string heap, every block must be a string or symbol (keywords intern
- * to symbols); otherwise it must be neither -- misrouting is a bug. */
-static void janet_sweep_list(JanetGCObject **head, int heap_kind, int is_minor) {
+ * to symbols); otherwise it must be neither -- misrouting is a bug.
+ * Step 1.3: only_owner != 0 frees only that owner's young unmarked
+ * (per-fiber minors); 0 keeps the shared behavior exactly. */
+static void janet_sweep_list(JanetGCObject **head, int heap_kind, int is_minor,
+                             uint32_t only_owner) {
     JanetGCObject *previous = NULL;
     JanetGCObject *current = *head;
     while (NULL != current) {
@@ -497,7 +506,8 @@ static void janet_sweep_list(JanetGCObject **head, int heap_kind, int is_minor) 
         if (current->flags & (JANET_MEM_REACHABLE | JANET_MEM_DISABLED)) {
             previous = current;
             current->flags &= ~JANET_MEM_REACHABLE;
-        } else if (!is_minor || !janet_slab_obj_old(current)) {
+        } else if ((!is_minor || !janet_slab_obj_old(current)) &&
+                (0 == only_owner || janet_slab_obj_owner(current) == only_owner)) {
             janet_vm.block_count--;
             janet_deinit_block(current);
             if (NULL != previous) {
@@ -564,12 +574,23 @@ void janet_sweep_weak_drop(void) {
  * below also runs at majors only. */
 static void janet_sweep_heaps(void) {
     /* Sweep weak heap to free blocks (minor-aware via helper). */
-    janet_sweep_list((JanetGCObject **) &janet_vm.weak_blocks, 2, janet_vm.gc_minor_phase);
+    janet_sweep_list((JanetGCObject **) &janet_vm.weak_blocks, 2, janet_vm.gc_minor_phase, 0);
 
     /* Sweep both strong heaps with identical semantics (Phase 2b-ii):
      * the main heap, then the immutable-string heap. */
-    janet_sweep_list((JanetGCObject **) &janet_vm.blocks, 0, janet_vm.gc_minor_phase);
-    janet_sweep_list((JanetGCObject **) &janet_vm.string_blocks, 1, janet_vm.gc_minor_phase);
+    janet_sweep_list((JanetGCObject **) &janet_vm.blocks, 0, janet_vm.gc_minor_phase, 0);
+    janet_sweep_list((JanetGCObject **) &janet_vm.string_blocks, 1, janet_vm.gc_minor_phase, 0);
+}
+
+/* Step 1.3: sweep all three heaps freeing only unmarked young blocks
+ * owned by only_owner (0 behaves like the shared sweep above).
+ * Foreign young unmarked blocks are spared (floating garbage until a
+ * global collection); foreign marked blocks were already spared by
+ * the mark. */
+static void janet_sweep_heaps_owned(uint32_t only_owner) {
+    janet_sweep_list((JanetGCObject **) &janet_vm.weak_blocks, 2, 1, only_owner);
+    janet_sweep_list((JanetGCObject **) &janet_vm.blocks, 0, 1, only_owner);
+    janet_sweep_list((JanetGCObject **) &janet_vm.string_blocks, 1, 1, only_owner);
 }
 
 void janet_sweep(void) {
@@ -701,6 +722,15 @@ typedef struct {
     size_t xfb_count;
     size_t xfb_cap;
     int xfb_stuck;
+    /* Step 1.3 live-fiber census (all fibers with live memory,
+     * reachable or not): per-fiber minors mark every census fiber so
+     * no unreaped referrer can dangle (an unreached foreign-old fiber
+     * holding target-young would otherwise). Appended at birth
+     * (alloc + unmarshal), swap-removed at free, reset at clear.
+     * Over-marking (dead fibers) only floats garbage until major. */
+    JanetFiber **fibers;
+    size_t fibers_count;
+    size_t fibers_cap;
 } JanetSlabState;
 
 static JanetSlabState *janet_slab_state(void) {
@@ -811,6 +841,16 @@ static int janet_slab_obj_old(void *ptr) {
     JanetSlabPage *page = janet_slab_page_for(ptr);
     if (NULL == page) return 1;
     return page->age >= JANET_SLAB_OLD_AGE;
+}
+
+/* Step 1.3: owning fiber id for sweep filtering (0 = shared: mixed
+ * pages, unowned pages, and malloc-large objects all read shared and
+ * are spared by per-fiber sweeps). */
+static uint32_t janet_slab_obj_owner(void *ptr) {
+    JanetSlabPage *page = janet_slab_page_for(ptr);
+    if (NULL == page) return 0;
+    if (page->mixed) return 0;
+    return page->owner;
 }
 
 static void *janet_slab_alloc(int class_index) {
@@ -924,6 +964,11 @@ static void janet_slab_free_pages(void) {
     ss->xfb_count = 0;
     ss->xfb_cap = 0;
     ss->xfb_stuck = 0;
+    /* Step 1.3: census resets with the pages (fibers are gone too). */
+    janet_free(ss->fibers);
+    ss->fibers = NULL;
+    ss->fibers_count = 0;
+    ss->fibers_cap = 0;
     janet_vm.gc_young_bytes = 0;
 }
 
@@ -1000,6 +1045,36 @@ JanetTable *janet_slab_owner_stats(void) {
     janet_gcunroot(owned_j);
     janet_gcunroot(out_j);
     return out;
+}
+
+/* Step 1.3 census helpers: add is cross-TU (fiber birth sites),
+ * remove runs at sweep-free in this TU. */
+void janet_census_add(JanetFiber *f) {
+    JanetSlabState *ss = janet_slab_state();
+    if (ss->fibers_count == ss->fibers_cap) {
+        size_t ncap = ss->fibers_cap ? ss->fibers_cap * 2 : 16;
+        JanetFiber **nf = janet_malloc(ncap * sizeof(JanetFiber *));
+        if (NULL == nf) JANET_OUT_OF_MEMORY;
+        if (NULL != ss->fibers) {
+            memcpy(nf, ss->fibers, ss->fibers_count * sizeof(JanetFiber *));
+            janet_free(ss->fibers);
+        }
+        ss->fibers = nf;
+        ss->fibers_cap = ncap;
+    }
+    ss->fibers[ss->fibers_count++] = f;
+}
+
+static void janet_census_remove(JanetFiber *f) {
+    JanetSlabState *ss = (JanetSlabState *) janet_vm.slab_state;
+    size_t i;
+    if (NULL == ss) return;
+    for (i = 0; i < ss->fibers_count; i++) {
+        if (ss->fibers[i] == f) {
+            ss->fibers[i] = ss->fibers[--ss->fibers_count];
+            return;
+        }
+    }
 }
 
 /* Minor-mode reachability gate (Phase 2b-iii policy): during a minor
@@ -1371,6 +1446,44 @@ static int janet_gc_verify_minor(void) {
         }
     }
     return bad;
+}
+
+/* Step 1.3 per-fiber minor: free only the target's young unmarked
+ * blocks. Marking is complete (full roots + every census fiber, so no
+ * unreaped referrer can dangle, plus the cross-fiber remembered set),
+ * which makes this at least as sound as a full minor; precision comes
+ * from the sweep filter (foreign young unmarked floats until a global
+ * collection). No aging, no global pressure reset, no weak dropping
+ * (minor rules, unchanged): promotion and global cadence stay owned by
+ * full minors/majors. Only the target's nursery counter resets. A stuck
+ * remembered set degrades to a full minor (missing edges would be
+ * unsound to ignore). */
+void janet_collect_fiber_minor(JanetFiber *f) {
+    JanetSlabState *ss;
+    size_t i;
+    if (janet_vm.gc_suspend) return;
+    if (NULL == f || 0 == f->gc_owner) {
+        janet_collect_minor();
+        return;
+    }
+    ss = (JanetSlabState *) janet_vm.slab_state;
+    if (NULL != ss && ss->xfb_stuck) {
+        janet_collect_minor();
+        f->gc_nursery_bytes = 0;
+        return;
+    }
+    depth = JANET_RECURSION_GUARD;
+    janet_vm.gc_mark_phase = 1;
+    janet_vm.gc_minor_phase = 1;
+    janet_mark_roots();
+    if (NULL != ss) {
+        for (i = 0; i < ss->fibers_count; i++)
+            janet_mark_fiber(ss->fibers[i]);
+    }
+    janet_vm.gc_mark_phase = 0;
+    janet_sweep_heaps_owned(f->gc_owner);
+    janet_vm.gc_minor_phase = 0;
+    f->gc_nursery_bytes = 0;
 }
 
 /* Minor collection (Phase 2b-iii policy): mark from the same roots (old-

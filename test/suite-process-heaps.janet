@@ -50,6 +50,52 @@
   (gccollect)
   (assert (>= ((debug/slab-stats) :pages) before) "pages monotonic"))
 
+# Step 1.3: per-fiber minors free only the target's young garbage.
+# 7. Garbage in the target is reclaimed; the counter resets.
+(let [f (fiber/new (fn []
+                     (repeat 500 (array/new 4))
+                     (debug/fiber-nursery)))]
+  (def charged (resume f))
+  (assert (> charged 0) "charged before collect")
+  (debug/collect-fiber f)
+  (assert (> charged 0) "collect runs"))
+# 8. Live values in the target survive its own minor.
+(let [f (fiber/new (fn []
+                     (def box @[])
+                     (repeat 100 (array/push box (array/new 4)))
+                     box))]
+  (def box (resume f))
+  (debug/collect-fiber f)
+  (assert (= 100 (length box)) "live survives own minor")
+  (assert (array? (get box 0)) "contents intact"))
+# 9. Cross-fiber values survive the owner's minor (firewall pin).
+(let [fa (fiber/new (fn []
+                      (def box @[])
+                      (repeat 100 (array/push box (array/new 4)))
+                      box))
+      abox (resume fa)
+      fb (fiber/new (fn [] (put @{} :k (get abox 0))))]
+  (resume fb)
+  (debug/collect-fiber fa)
+  (gccollect)
+  (assert (= 100 (length abox)) "owner box intact after own minor")
+  (assert (array? (get abox 0)) "foreign-held value intact"))
+# 10. Auto-trigger: pressure resets the counter by itself.
+(let [f (fiber/new (fn []
+                     (def box @[])
+                     (var peak 0)
+                     (var dropped false)
+                     (repeat 40000
+                       (array/push box (array/new 4))
+                       (def n (debug/fiber-nursery))
+                       (when (> n peak) (set peak n))
+                       (when (and (> peak 200000) (< n peak))
+                         (set dropped true)))
+                     [peak dropped]))]
+  (def [peak dropped] (resume f))
+  (assert (> peak 200000) "pressure passed threshold")
+  (assert dropped "auto minor reset the counter"))
+
 # Step 1.2: per-fiber nursery accounting + cross-fiber barrier.
 # 5. Nursery bytes charge allocations to the running fiber (bounds:
 # array headers are fixed-size; data buffers are malloc, untracked).

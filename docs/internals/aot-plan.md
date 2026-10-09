@@ -683,9 +683,12 @@ at mailboxes (ev/chan keeps zero-copy).
 - [x] 1.2 per-fiber cur pages (pure-owned young) + nursery counters +
   cross-fiber barrier recording + pins. Gate: <5% store-heavy bench
   regression or header-bit fast path instead.
-- [ ] 1.3 per-fiber minor (explicit API + auto-trigger) + pins.
+- [x] 1.3 per-fiber minor (explicit API + auto-trigger) + pins.
   Soundness rule: mark target roots + all other stacks + C roots +
-  remembered; sweep only own young unmarked.
+  remembered; sweep only own young unmarked. Note: with census
+  marking, xfb is currently spare (all edges found via traversal);
+  it becomes load-bearing when foreign stacks are skipped, which
+  needs copy-on-send (1.4) so channel/stack edges cannot hide.
 - [ ] 1.4 mailbox copy semantics (owned queues copy; ev/chan shared).
 
 **Step 2 — preemptive reductions.** Quantum polls become forced

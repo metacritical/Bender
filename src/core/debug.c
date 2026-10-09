@@ -520,6 +520,18 @@ JANET_CORE_FN(cfun_debug_fiber_nursery,
     return janet_wrap_integer((int64_t) janet_vm.fiber->gc_nursery_bytes);
 }
 
+JANET_CORE_FN(cfun_debug_collect_fiber,
+              "(debug/collect-fiber fiber)",
+              "Step 1.3: run a minor collection for one fiber's nursery "
+              "(frees only its young unmarked blocks; foreign young floats "
+              "until a global collection). Falls back to a full minor for "
+              "unowned fibers and stuck remembered sets. Returns nil.") {
+    janet_fixarity(argc, 1);
+    JanetFiber *fiber = janet_getfiber(argv, 0);
+    janet_collect_fiber_minor(fiber);
+    return janet_wrap_nil();
+}
+
 /* Module entry point */
 void janet_lib_debug(JanetTable *env) {
     JanetRegExt debug_cfuns[] = {
@@ -539,6 +551,7 @@ void janet_lib_debug(JanetTable *env) {
         JANET_CORE_REG("debug/slab-stats", cfun_debug_slab_stats),
         JANET_CORE_REG("debug/fiber-owner", cfun_debug_fiber_owner),
         JANET_CORE_REG("debug/fiber-nursery", cfun_debug_fiber_nursery),
+        JANET_CORE_REG("debug/collect-fiber", cfun_debug_collect_fiber),
         JANET_REG_END
     };
     janet_core_cfuns_ext(env, NULL, debug_cfuns);

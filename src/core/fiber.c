@@ -467,6 +467,7 @@ static JanetFiber *fiber_alloc(int32_t capacity) {
     }
     fiber->capacity = capacity;
     janet_fiber_init_owner(fiber);
+    janet_census_add(fiber);
     {
         /* Step 1.2: nursery starts empty (pages claimed on first bump). */
         int nci;

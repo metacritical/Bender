@@ -77,6 +77,10 @@ void *janet_gcalloc(enum JanetMemoryType type, size_t size);
  * stay major. */
 void janet_collect_minor(void);
 
+/* Step 1.3 per-fiber minor (see implementation for the soundness rule).
+ * Falls back to a full minor for unowned fibers and stuck sets. */
+void janet_collect_fiber_minor(JanetFiber *f);
+
 /* Generational write barrier (Phase 2b-iii policy): record an old
  * container that newly references a heap value, so minor collections
  * (which skip clean old tables/arrays) still find the edge. Immediates
@@ -94,5 +98,9 @@ void janet_gc_release(JanetGCObject *mem);
 /* Step 1 introspection (process heaps): per-owner slab page counts as
  * @{ :pages total :unowned n :owned @{id count} }. */
 JanetTable *janet_slab_owner_stats(void);
+
+/* Step 1.3 live-fiber census for per-fiber minors (append at birth in
+ * fiber_alloc/unmarshal, swap-remove at sweep-free). */
+void janet_census_add(JanetFiber *f);
 
 #endif
