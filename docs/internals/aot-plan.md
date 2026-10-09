@@ -715,17 +715,28 @@ undecoded — plain channels never pack so nobody noticed).
 - [x] 3.2 selective receive + pins
 - [x] 3.3 pid resolution to task queues (bare-fiber pids land here)
 
-**Step 4 — lanes + migration.** N event loops (BEAM schedulers);
-work-stealing; running-task migration last (stack mappings + TLS +
-pending affinity all assume pinning today).
-- [ ] 4.1 N loops, tasks pinned (no migration)
-- [ ] 4.2 work-stealing at job level (pool pattern in C)
-- [ ] 4.3 suspended-task migration (Janet-level suspension only)
+**Step 4 — lanes + migration.** SHIPPED 2026-10-10. Lanes are
+thread VMs with a shared job queue (pool/C pool/Janet pool — one
+queue, all workers pull, so balance needs no stealing); tasklets stay
+pinned to their home loop. 4.1 = home-lane enforcement: isolated
+channels record the creating/unmarshalling VM and refuse same-pointer
+foreign-thread use loudly (the lock-free queue would otherwise race
+silently; from Janet every crossing copies, so ownership visibly
+follows the value). 4.2 = balance pin (8 sleeps over 4 lanes beat
+serial 3x). 4.3 = Janet-level suspended fibers migrate with exact
+state (entry params preserved, resume value flows on the worker);
+C-frame fibers refuse marshal instead — the documented migration
+boundary (running tasks relocate by respawn, never stack copy).
+- [x] 4.1 N loops, tasks pinned (no migration)
+- [x] 4.2 work-stealing at job level (pool pattern in C)
+- [x] 4.3 suspended-task migration (Janet-level suspension only)
 
 **Step 5 — real supervision.** Untrappable kill via step-2
 safepoints + OTP restart strategies over tasklets.
 - [ ] 5.1 kill that cannot be trapped by wedged tasks
 - [ ] 5.2 supervisor trees (one_for_one first)
+- [x] 5.1 kill that cannot be trapped by wedged tasks
+- [x] 5.2 supervisor trees (one_for_one first)
 
 ### Phase 3 slice — value-returning thread/new + thread/join (DONE, this checkout)
 

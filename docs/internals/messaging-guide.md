@@ -211,6 +211,17 @@ marshal); quit on a completed task returns at once; raw tasks that
 never read their mailbox cannot quit. `(break val)` discards val in
 this Janet — loops park results in cells instead.
 
+Kill and supervision land with Step 5 (kill + one_for_one trees).
+
+Lanes (Step 4): thread VMs + the shared job queue are the lanes
+(`pool/*`, `examples/pool.janet`); tasklets stay pinned to their home
+loop. Isolated channels enforce the pin (same-pointer foreign-thread
+use panics; from Janet every crossing copies, so ownership visibly
+follows the value). Suspended pure-Janet fibers migrate across
+threads with exact state (`thread/new` a suspended fiber); fibers
+suspended with C frames (any tasklet blocked in take/recv/sleep)
+refuse marshal — running tasks relocate by respawn, never stack copy.
+
 ## 7. Broadcast constants: `shared`
 
 Immutable values frozen once, readable in every VM with zero copies

@@ -217,4 +217,19 @@
     (thread/join (thread/new (fn [q] (pool/call q + [1 1])) p)))
   (pool/stop p))
 
+# Step 4.2 lane balance: the shared queue spreads jobs across workers
+# (no stealing needed — one queue, all workers pull). 8 x 0.15s sleeps
+# on 4 lanes: serial would be 1.2s; parallel ≈ 0.3s. Bound 0.9s
+# (3x margin for loaded CI) + exact results prove spread, not just
+# speed (a single lane doing all 8 could never beat 1.2s... it must
+# parallelize to pass).
+(let [p (jpool/spawn 4)
+      t0 (os/clock)
+      rs (jpool/map p (fn [_] (ev/sleep 0.15) :ok)
+                    [[nil] [nil] [nil] [nil] [nil] [nil] [nil] [nil]])
+      dt (- (os/clock) t0)]
+  (assert (deep= @[:ok :ok :ok :ok :ok :ok :ok :ok] rs) "lane results exact")
+  (assert (< dt 0.9) (string "lanes parallelize: " dt))
+  (jpool/stop p))
+
 (end-suite)

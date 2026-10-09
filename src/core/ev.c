@@ -86,6 +86,11 @@ struct JanetChannel {
      * ones (same transit ownership) but take no lock: single-VM by
      * contract (tasklet mailboxes). Cross-thread use is user error. */
     int isolated;
+    /* Step 4.1 home-lane pin: the creating/unmarshalling thread's VM.
+     * Isolated channels are lock-free, so foreign-thread use would be
+     * a silent race; push/pop refuse it loudly instead. Plain and
+     * threaded channels leave this NULL (legacy behavior unchanged). */
+    JanetVM *owner;
 #ifdef JANET_WINDOWS
     CRITICAL_SECTION lock;
 #else
@@ -820,6 +825,10 @@ static void janet_chan_init(JanetChannel *chan, int32_t limit, int threaded, int
     chan->closed = 0;
     chan->is_threaded = threaded;
     chan->isolated = isolated;
+    /* Step 4.1: isolated channels pin to the home lane (this thread's
+     * VM — one VM per thread, so the address is the lane identity).
+     * Unmarshal re-inits, so ownership follows the value. */
+    chan->owner = isolated ? &janet_vm : NULL;
     janet_q_init(&chan->items);
     janet_q_init(&chan->read_pending);
     janet_q_init(&chan->write_pending);
@@ -1142,6 +1151,15 @@ static int janet_channel_push_with_lock(JanetChannel *channel, Janet x, int mode
 }
 
 static int janet_channel_push(JanetChannel *channel, Janet x, int mode) {
+    /* Step 4.1 home-lane pin: isolated channels are lock-free, so a
+     * foreign thread would race silently — refuse loudly instead
+     * (use ev/thread-chan across threads). One predictable branch on
+     * the non-isolated fast path. */
+    if (channel->isolated && channel->owner != &janet_vm) {
+        janet_panic("isolated channel used from a foreign thread "
+                    "(pinned to its home lane; use ev/thread-chan "
+                    "across threads)");
+    }
     janet_chan_lock(channel);
     return janet_channel_push_with_lock(channel, x, mode);
 }
@@ -1202,6 +1220,12 @@ static int janet_channel_pop_with_lock(JanetChannel *channel, Janet *item, int i
 }
 
 static int janet_channel_pop(JanetChannel *channel, Janet *item, int is_choice) {
+    /* Step 4.1 home-lane pin (see push). */
+    if (channel->isolated && channel->owner != &janet_vm) {
+        janet_panic("isolated channel used from a foreign thread "
+                    "(pinned to its home lane; use ev/thread-chan "
+                    "across threads)");
+    }
     janet_chan_lock(channel);
     return janet_channel_pop_with_lock(channel, item, is_choice);
 }

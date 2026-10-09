@@ -98,4 +98,23 @@
 (let [h (thread/new (fn [_] (fiber/new (fn [x] (string "w=" x)))) 7)]
   (assert (= "w=7" (resume (thread/join h) 7)) "fiber nested in result"))
 
+# Step 4.3 suspended-task migration (Janet-level suspension only): a
+# fiber suspended at a pure-Janet yield migrates with exact state —
+# entry params bound on main are preserved, the next resume value
+# flows through yield on the worker. Fibers suspended with C frames
+# (ev/take in a tasklet loop) refuse to marshal instead: that is the
+# documented migration boundary (running tasks relocate by respawn,
+# never by stack copy).
+(let [f (fiber/new (fn [x] (def y (yield [:suspended x])) [:resumed x y]))]
+  (assert (deep= [:suspended :first] (resume f :first)) "suspends")
+  (assert (deep= [:resumed :first :second]
+                 (thread/join (thread/new f :second)))
+          "suspended fiber migrates and resumes on worker"))
+(let [blocked (ev/go (fn [] (ev/take (ev/chan 1)) :never))]
+  (ev/sleep 0.05)
+  (assert-error "c-frame fiber refuses migration" (thread/new blocked nil))
+  # A fiber parked in take holds the loop open — cancel to let the
+  # suite process exit.
+  (ev/cancel blocked :done))
+
 (end-suite)

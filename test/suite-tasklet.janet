@@ -107,4 +107,24 @@
   (assert (= :fine (tasklet/call t :good nil)) "loop survives")
   (tasklet/quit t))
 
+# 10. Step 4.1 home-lane pin: isolated mailboxes cross threads by
+# copy (marshal) — the worker's copy is owned by the worker (usable
+# locally, queued items cross with it) and disconnected from main's
+# (no aliasing, no leakage back). Same-pointer foreign use refuses
+# loudly in C (janet_channel_make_isolated contract); from Janet
+# every crossing copies, so this is the observable face of the pin.
+(let [c (ev/ichan 4)
+      done (ev/thread-chan 1)]
+  (ev/give c :main-msg)
+  (thread/new (fn [chans]
+                (def [mine wdone] chans)
+                (assert (= :main-msg (ev/take mine)) "queued item crosses")
+                (ev/give mine :worker-msg)
+                (assert (= :worker-msg (ev/take mine)) "worker copy local")
+                (ev/give wdone :worker-ok))
+              [c done])
+  (assert (= :worker-ok (ev/take done)) "worker ran")
+  (assert (= :main-msg (ev/take c)) "main copy intact")
+  (assert (nil? (ev/try-take c)) "no worker leakage into main"))
+
 (end-suite)
