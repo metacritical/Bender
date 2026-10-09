@@ -370,6 +370,92 @@ static void janet_suspend_swap(JanetFiber *fiber, JanetSignal sig, Janet payload
 #define JANET_PROFILE_MAXPARAMS 8
 #define JANET_PROFILE_ELEMSAMPLE 8
 
+/* Direct-mapped entry cache (auto-PGO): real programs alternate
+ * between functions, so a last-entry cache thrashes (16x slowdown
+ * observed on alternating calls); 16 lines keyed by def-pointer hash
+ * hold the hot working set instead. Hits cost ~10 ALU ops (no
+ * hashing); misses take the full path and refill (flushing the
+ * evicted line first). Flush-all runs at every site that swaps or
+ * reads the table (stop, reset, rows), so counts are never lost. The
+ * non-moving collector keeps cached pointers valid while their table
+ * is current, which the pt-identity check enforces. */
+#define JANET_PROFILE_CACHELINES 64
+typedef struct {
+    JanetTable *pt;
+    JanetFuncDef *def;
+    JanetTable *e;
+    int64_t calls;
+    uint32_t rets;
+    uint32_t tick;
+    int live;
+    JanetArray *pa;
+    JanetArray *ea;
+    JanetArray *mn;
+    JanetArray *mx;
+} JanetProfileCache;
+/* Phase C: the fast-path cache is per-thread. Worker VMs share this
+ * translation unit across OS threads; a single global would let two
+ * workers fill/use it concurrently (params landing in the wrong
+ * function's arrays). Thread-local keeps every VM disjoint. Static
+ * storage is zero-initialized. */
+static JANET_THREAD_LOCAL JanetProfileCache janet_profile_cache[JANET_PROFILE_CACHELINES];
+
+static uint32_t janet_profile_line(JanetFuncDef *def) {
+    uintptr_t h = (uintptr_t) def;
+    h ^= h >> 12;
+    return (h >> 4) % JANET_PROFILE_CACHELINES;
+}
+
+static void janet_profile_flush_line(uint32_t ln) {
+    JanetProfileCache *c = &janet_profile_cache[ln];
+    if (c->live) {
+        janet_table_put(c->e, janet_ckeywordv("calls"),
+                        janet_wrap_integer(c->calls));
+        janet_table_put(c->e, janet_ckeywordv("rets"),
+                        janet_wrap_integer((int64_t) c->rets));
+        c->live = 0;
+    }
+}
+
+static void janet_profile_flush(void) {
+    uint32_t ln;
+    for (ln = 0; ln < JANET_PROFILE_CACHELINES; ln++)
+        janet_profile_flush_line(ln);
+}
+
+static void janet_profile_cache_fill(JanetTable *pt, JanetFuncDef *def, JanetTable *e) {
+    /* Miss path flushes first (per the collector contract): the live
+     * entry's C-side calls/rets would otherwise be lost on eviction. */
+    uint32_t ln = janet_profile_line(def);
+    JanetProfileCache *c = &janet_profile_cache[ln];
+    janet_profile_flush_line(ln);
+    c->pt = pt;
+    c->def = def;
+    c->e = e;
+    c->calls =
+        janet_unwrap_integer(janet_table_get(e, janet_ckeywordv("calls")));
+    c->rets =
+        (uint32_t) janet_unwrap_integer(janet_table_get(e, janet_ckeywordv("rets")));
+    c->pa = janet_unwrap_array(janet_table_get(e, janet_ckeywordv("params")));
+    c->ea = janet_unwrap_array(janet_table_get(e, janet_ckeywordv("elems")));
+    c->mn = janet_unwrap_array(janet_table_get(e, janet_ckeywordv("mins")));
+    c->mx = janet_unwrap_array(janet_table_get(e, janet_ckeywordv("maxs")));
+    c->live = 1;
+}
+
+static JANET_THREAD_LOCAL unsigned long long janet_profile_hits;
+static JANET_THREAD_LOCAL unsigned long long janet_profile_misses;
+
+static JanetProfileCache *janet_profile_hit(JanetFunction *func) {
+    JanetProfileCache *c = &janet_profile_cache[janet_profile_line(func->def)];
+    if (c->live && c->pt == janet_vm.profile_table && c->def == func->def) {
+        janet_profile_hits++;
+        return c;
+    }
+    janet_profile_misses++;
+    return NULL;
+}
+
 static JanetTable *janet_profile_entry(JanetFunction *func) {
     JanetTable *pt = janet_vm.profile_table;
     Janet key = janet_wrap_pointer(func->def);
@@ -423,33 +509,55 @@ static JanetTable *janet_profile_entry(JanetFunction *func) {
         janet_table_put(pt, key, janet_wrap_table(e));
         janet_gcunroot(janet_wrap_array(pa));
         janet_gcunroot(eroot);
+        janet_profile_cache_fill(pt, func->def, e);
         return e;
     }
+    janet_profile_cache_fill(pt, func->def, janet_unwrap_table(v));
     return janet_unwrap_table(v);
 }
 
 static void janet_profile_call(JanetFunction *func, const Janet *argv, int32_t argc) {
     int32_t n, i;
-    JanetTable *e = janet_profile_entry(func);
-    int64_t calls = janet_unwrap_integer(janet_table_get(e, janet_ckeywordv("calls")));
-    JanetArray *pa;
-    janet_table_put(e, janet_ckeywordv("calls"), janet_wrap_integer(calls + 1));
-    pa = janet_unwrap_array(janet_table_get(e, janet_ckeywordv("params")));
+    JanetArray *pa, *ea, *mn, *mx;
+    JanetProfileCache *hit = janet_profile_hit(func);
+    if (NULL != hit) {
+        pa = hit->pa;
+        ea = hit->ea;
+        mn = hit->mn;
+        mx = hit->mx;
+        hit->calls++;
+    } else {
+        JanetTable *e = janet_profile_entry(func);
+        (void) e;
+        hit = janet_profile_hit(func);
+        pa = hit->pa;
+        ea = hit->ea;
+        mn = hit->mn;
+        mx = hit->mx;
+        hit->calls++;
+    }
     n = argc < JANET_PROFILE_MAXPARAMS ? argc : JANET_PROFILE_MAXPARAMS;
+    /* Sample the expensive parts 1-in-8: type masks and call counts
+     * stay exact every call (seeding unanimity must be exact), while
+     * min/max ranges and element samples — heuristic evidence consumed
+     * behind fail-loud guards — cost ~1/8th. The first 16 calls per
+     * entry always record fully, so small tests and rare functions
+     * keep exact evidence. */
+    ++hit->tick;
+    int full = (hit->calls < 16) || ((hit->tick & 7) == 0);
     for (i = 0; i < n; i++) {
+        /* One type computation per arg (checktype would recompute). */
+        uint32_t at = (uint32_t) janet_type(argv[i]);
         uint32_t m = (uint32_t) janet_unwrap_integer(pa->data[i]);
-        m |= (1u << (uint32_t) janet_type(argv[i]));
+        m |= (1u << at);
         pa->data[i] = janet_wrap_integer((int64_t) m);
-        if (janet_checktype(argv[i], JANET_NUMBER)) {
+        if (full && at == (uint32_t) JANET_NUMBER) {
             double v = janet_unwrap_number(argv[i]);
-            JanetArray *mn = janet_unwrap_array(janet_table_get(e, janet_ckeywordv("mins")));
-            JanetArray *mx = janet_unwrap_array(janet_table_get(e, janet_ckeywordv("maxs")));
             if (v < janet_unwrap_number(mn->data[i])) mn->data[i] = janet_wrap_number(v);
             if (v > janet_unwrap_number(mx->data[i])) mx->data[i] = janet_wrap_number(v);
         }
-        if (janet_checktype(argv[i], JANET_ARRAY)) {
+        if (full && at == (uint32_t) JANET_ARRAY) {
             JanetArray *av = janet_unwrap_array(argv[i]);
-            JanetArray *ea = janet_unwrap_array(janet_table_get(e, janet_ckeywordv("elems")));
             int32_t k, nk = av->count < JANET_PROFILE_ELEMSAMPLE ? av->count : JANET_PROFILE_ELEMSAMPLE;
             uint32_t em = (uint32_t) janet_unwrap_integer(ea->data[i]);
             for (k = 0; k < nk; k++)
@@ -459,26 +567,55 @@ static void janet_profile_call(JanetFunction *func, const Janet *argv, int32_t a
     }
 }
 
+/* Phase C: record a task-root invocation that bypasses CALL opcodes
+ * (worker fibers are primed directly via janet_fiber, never through
+ * JOP_CALL, so without this their rows show calls=0 and no params).
+ * Mirrors the opcode hook exactly. Fiber-root tasks keep return-only
+ * records (a resume is not a call). */
+void janet_profile_task_call(JanetFunction *func, const Janet *argv, int32_t argc) {
+    if (NULL != janet_vm.profile_table)
+        janet_profile_call(func, argv, argc);
+}
+
 static void janet_profile_return(JanetFunction *func, Janet retval) {
-    JanetTable *e = janet_profile_entry(func);
-    uint32_t m = (uint32_t) janet_unwrap_integer(janet_table_get(e, janet_ckeywordv("rets")));
-    m |= (1u << (uint32_t) janet_type(retval));
-    janet_table_put(e, janet_ckeywordv("rets"), janet_wrap_integer((int64_t) m));
+    JanetProfileCache *hit = janet_profile_hit(func);
+    if (NULL == hit) {
+        janet_profile_entry(func);
+        hit = janet_profile_hit(func);
+    }
+    hit->rets |= (1u << (uint32_t) janet_type(retval));
 }
 
 void janet_profile_start(void) {
+    janet_profile_flush();
     janet_vm.profile_table = janet_table(0);
+    memset(janet_profile_cache, 0, sizeof(janet_profile_cache));
+}
+
+static void janet_profile_maybe_stats(void) {
+    if (NULL != getenv("JANET_PROFILE_STATS")) {
+        fprintf(stderr, "profile cache: %llu hits %llu misses (%.1f%% hit)\n",
+                janet_profile_hits, janet_profile_misses,
+                100.0 * janet_profile_hits /
+                    (janet_profile_hits + janet_profile_misses + 1e-9));
+        janet_profile_hits = janet_profile_misses = 0;
+    }
 }
 
 Janet janet_profile_stop(void) {
     JanetTable *pt = janet_vm.profile_table;
+    janet_profile_flush();
     janet_vm.profile_table = NULL;
+    memset(janet_profile_cache, 0, sizeof(janet_profile_cache));
+    janet_profile_maybe_stats();
     return NULL == pt ? janet_wrap_nil() : janet_wrap_table(pt);
 }
 
 void janet_profile_reset(void) {
     if (NULL != janet_vm.profile_table) {
+        janet_profile_flush();
         janet_vm.profile_table = janet_table(0);
+        memset(janet_profile_cache, 0, sizeof(janet_profile_cache));
     }
 }
 
@@ -498,14 +635,14 @@ static Janet janet_profile_mask_types(uint32_t m) {
     return janet_wrap_array(a);
 }
 
-void janet_profile_dump(const char *path) {
+/* Build the dump row array for this VM's live profile table (empty
+ * when inactive). Caller roots the result across further allocation.
+ * Shared by janet_profile_dump and cross-thread harvest (Phase C). */
+JanetArray *janet_profile_rows(void) {
     JanetTable *pt = janet_vm.profile_table;
-    JanetArray *out;
-    JanetBuffer *buf;
-    FILE *f;
-    if (NULL == pt) janet_panic("profiling not active");
-    out = janet_array(0);
-    janet_gcroot(janet_wrap_array(out));
+    JanetArray *out = janet_array(0);
+    janet_profile_flush();
+    if (NULL == pt) return out;
     {
         const JanetKV *kvs;
         int32_t cap, count, i;
@@ -587,6 +724,16 @@ void janet_profile_dump(const char *path) {
             janet_array_push(out, janet_wrap_array(row));
         }
     }
+    return out;
+}
+
+void janet_profile_dump(const char *path) {
+    JanetArray *out;
+    JanetBuffer *buf;
+    FILE *f;
+    if (NULL == janet_vm.profile_table) janet_panic("profiling not active");
+    out = janet_profile_rows();
+    janet_gcroot(janet_wrap_array(out));
     buf = janet_buffer(0);
     janet_gcroot(janet_wrap_buffer(buf));
     janet_pretty(buf, 8, JANET_PRETTY_NOTRUNC, janet_wrap_array(out));
@@ -2237,15 +2384,52 @@ void janet_sandbox_assert(uint32_t forbidden_flags) {
     }
 }
 
+/* Total recorded calls across the live table. Flushes first so
+ * C-side cached counts land in the tables, then sums tables only. */
+static int64_t janet_profile_total_calls(void) {
+    int64_t total = 0;
+    if (NULL != janet_vm.profile_table) {
+        janet_profile_flush();
+        {
+            const JanetKV *kvs;
+            int32_t cap, count, i;
+            janet_dictionary_view(janet_wrap_table(janet_vm.profile_table), &kvs, &count, &cap);
+            for (i = 0; i < cap; i++) {
+                const JanetKV *kv = kvs + i;
+                if (janet_checktype(kv->key, JANET_NIL)) continue;
+                total += janet_unwrap_integer(janet_table_get(
+                    janet_unwrap_table(kv->value), janet_ckeywordv("calls")));
+            }
+        }
+    }
+    return total;
+}
+
 /* Clear all memory associated with the VM */
 void janet_deinit(void) {
     /* PGO auto-dump: JANET_PROFILE_OUT=path writes the type profile on
      * every exit path (scripts ending in os/exit included), before any
-     * teardown. Explicit debug/profile-dump covers the rest. */
+     * teardown. Explicit debug/profile-dump covers the rest.
+     * Auto-collected runs (JANET_AUTO_PGO_ACTIVE, set by AOT binaries
+     * on first runs) additionally require a minimum call count:
+     * trivial runs (--help, --version) must not clobber a useful
+     * cached profile with a near-empty one. Explicit dumps always
+     * write. Override the floor with JANET_AUTO_PGO_MIN_CALLS. */
     if (NULL != janet_vm.profile_table) {
         const char *pout = getenv("JANET_PROFILE_OUT");
+        janet_profile_maybe_stats();
         if (NULL != pout && '\0' != *pout) {
-            janet_profile_dump(pout);
+            int dump = 1;
+            if (NULL != getenv("JANET_AUTO_PGO_ACTIVE")) {
+                const char *minenv = getenv("JANET_AUTO_PGO_MIN_CALLS");
+                long mincalls = (NULL == minenv || '\0' == *minenv)
+                    ? 10000L : strtol(minenv, NULL, 10);
+                if (janet_profile_total_calls() < mincalls)
+                    dump = 0;
+            }
+            if (dump) {
+                janet_profile_dump(pout);
+            }
             janet_vm.profile_table = NULL;
         }
     }

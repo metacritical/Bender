@@ -179,7 +179,63 @@
 (buffer/push-string out (string "/* source: " srcpath
                               ", image bytes: " (length image)
                               ", registry names: " (length regnames) " */\n"))
-(buffer/push-string out "#include <janet.h>\n#include <stdio.h>\n\n")
+(buffer/push-string out "#include <janet.h>\n#include <stdio.h>\n#include <stdlib.h>\n#include <string.h>\n")
+(buffer/push-string out "void janet_profile_start(void);\n")
+(buffer/push-string out
+  ```
+  #if defined(_WIN32)
+  #include <direct.h>
+  #include <io.h>
+  #define JANET_AOT_MKDIR(d) _mkdir(d)
+  #define JANET_AOT_PROBE(p) (_access(p, 0) == 0)
+  #else
+  #include <sys/stat.h>
+  #include <sys/types.h>
+  #include <unistd.h>
+  #define JANET_AOT_MKDIR(d) mkdir(d, 0755)
+  #define JANET_AOT_PROBE(p) (access(p, F_OK) == 0)
+  #endif
+  static void janet_aot_setenv(const char *k, const char *v) {
+      /* set-if-unset (explicit user env always wins) */
+      if (getenv(k)) return;
+  #if defined(_WIN32)
+      { char buf[8192]; snprintf(buf, sizeof(buf), "%s=%s", k, v); _putenv(buf); }
+  #else
+      setenv(k, v, 0);
+  #endif
+  }
+  static void janet_aot_mkdirp(char *d) {
+      /* best-effort recursive mkdir; failures are non-fatal */
+      char *p = d;
+      if (*p == '\0') return;
+      for (; *p != '\0'; p++) {
+          if (*p == '/' && p != d) {
+              char save = *p;
+              *p = '\0';
+              JANET_AOT_MKDIR(d);
+              *p = save;
+          }
+      }
+      JANET_AOT_MKDIR(d);
+  }
+  static void janet_aot_key(char *base, size_t cap, const char *exe) {
+      /* cache key from the binary basename, sanitized; never empty */
+      const char *bn = (exe && exe[0] != '\0') ? exe : "janet-app";
+      const char *sl = strrchr(bn, '/');
+      size_t bi = 0, i;
+      const char *bs = strrchr(bn, '\\');
+      if (bs && (!sl || bs > sl)) sl = bs;
+      bn = sl ? sl + 1 : bn;
+      if (bn[0] == '\0') bn = "janet-app";
+      for (i = 0; bn[i] != '\0' && bi + 1 < cap; i++) {
+          char ch = bn[i];
+          base[bi++] = ((ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') ||
+                         (ch >= '0' && ch <= '9') || ch == '_' || ch == '-' || ch == '.') ? ch : '_';
+      }
+      base[bi] = '\0';
+      if (bi == 0) { base[0] = 'j'; base[1] = '\0'; }
+  }
+  ```)
 (buffer/push-string out "static const unsigned char janet_aot_image[] = {")
 (each b image
   (buffer/push-string out (string/format "0x%02x," b)))
@@ -196,6 +252,44 @@
   ```
   int main(int argc, char **argv) {
       janet_init();
+#ifndef JANET_NO_PGO
+      /* Auto-PGO, first runs only (on demand, never always-on): when
+       * no cached profile exists for this binary yet — or
+       * JANET_AUTO_PGO=1 forces it — collect this run into the
+       * standard cache. The next `bender --aot --native --auto-pgo`
+       * build widens from it and recompiles; the binary after that
+       * runs clean. Never when JANET_NO_PROFILE is set. Never breaks
+       * the run: every failure here silently runs clean. Locked-down
+       * targets (iOS: no JIT/dynamic codegen) compile the whole
+       * mechanism out with -DJANET_NO_PGO. */
+      {
+          const char *noprof = getenv("JANET_NO_PROFILE");
+          const char *force = getenv("JANET_AUTO_PGO");
+          const char *xdg = getenv("XDG_CACHE_HOME");
+          const char *home = getenv("HOME");
+          char base[64];
+          char dir[4096];
+          char path[4096];
+          dir[0] = '\0';
+          if (!noprof) {
+              if (xdg && xdg[0] != '\0')
+                  snprintf(dir, sizeof(dir), "%s/janet/pgo", xdg);
+              else if (home && home[0] != '\0')
+                  snprintf(dir, sizeof(dir), "%s/.cache/janet/pgo", home);
+          }
+          path[0] = '\0';
+          if (dir[0] != '\0') {
+              janet_aot_key(base, sizeof(base), (argc > 0) ? argv[0] : NULL);
+              snprintf(path, sizeof(path), "%s/%s.jdn", dir, base);
+          }
+          if (path[0] != '\0' && (force || !JANET_AOT_PROBE(path))) {
+              janet_aot_mkdirp(dir);
+              janet_profile_start();
+              janet_aot_setenv("JANET_PROFILE_OUT", path);
+              janet_aot_setenv("JANET_AUTO_PGO_ACTIVE", "1");
+          }
+      }
+#endif
       JanetTable *env = janet_core_env(NULL);
       janet_table_put(env, janet_ckeywordv("executable"), janet_cstringv(argv[0]));
 #ifdef JANET_AOT_NATIVE_INIT
