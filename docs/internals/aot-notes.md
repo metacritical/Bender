@@ -285,3 +285,49 @@ diagnostics; now 4 (`k_next_word_bang`, `color_clamp`, `floor_div`,
 Still refused on ttfx (next): constructor emission (`mkarr` in
 `seed-limbs`), live-range splitting for shared slots (`xor64`
 `s2 mixes array/long/number`), dependency chains (`rotl64`).
+
+## 12. 2026-10-09 batch, part 2 (benchmarksgame-driven)
+
+`bench/benchmarksgame/` ports n-body, spectral-norm, fannkuch-redux
+against the published game (byte-exact outputs at N=1000/100/7).
+Driving real programs through the pipeline exposed and fixed:
+
+- **Join-aware declarations.** A reused slot must declare a type
+  holding every write; last-wins truncated (`energy` declared a
+  bool/double-shared temp `int`, zeroing `0.5*m`). Resolution:
+  any float write → double; 64-bit sign mixes refuse; int mixes
+  widen; singletons exact. Dead callee values (`ldc`-functions,
+  `ldu`) don't poison the join; flow still gates live uses.
+- **No put downgrades.** Stores preserve container type; element
+  risk is runtime-gated by unwrap; unprovable stores refuse at
+  emission with reasons.
+- **Numeric indices** with fail-loud integrality guards
+  (`:number` slots abort on fractions, as boxed errors).
+- **Mixed division** via `(double)` casts with dest checks (boxed
+  div is always real, even `(/ 1 2)` — the compiler folds integral
+  `1.0` to `ldi`).
+- **Cross-return native calls** with exact arg-conversion checks
+  (`int->float` ok, `float->int` refuses); tail calls keep exact
+  match.
+- **Oracle globals**: the harness binds top-level self-evaluating
+  `def`s before sampling; eval failures skip per-fn (fail-closed).
+- **Per-sample fixtures**: in-place kernels mutated shared fixtures
+  across samples — a pancake loop over contaminated duplicates
+  cycled forever. Both sides now reset per sample (aliasing
+  preserved within a sample; tuples immutable).
+- **Const-global propagation** remains open: kernels can't read
+  globals (`NB`, `SOLAR-MASS`) — benchmarks use literals (matching
+  C `#define`), real fix is value-tracking `ldu` (specified).
+
+Measured (M2 Pro, this repo's `build/bender`):
+
+| program | interp | native | ref C | ref Rust |
+|---|---|---|---|---|
+| n-body 50M | — (est. ~150s) | **6.0s** exact | 2.10s | 2.19s |
+| spectral-norm 5500 | 64.4s | **1.85s** exact (35×) | — | — |
+| fannkuch-redux 12 | — (est. ~10min) | **162s** exact | 2.14s | 3.81s |
+
+n-body sits at Go/Java-naot level (6.4s/6.0s), 2.9× off C, with the
+whole hot loop (`advance`, `energy`) kernelized. fannkuch needs
+whole-loop native (rotation stays boxed + per-permutation wrapper
+overhead) — see next steps in `extreme-perf.md`.

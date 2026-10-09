@@ -229,3 +229,12 @@ divim-double + floor-intrinsic chaining). Still refused, next in
 line: constructor emission (`mkarr` in `seed-limbs`), live-range
 splitting for shared slots (`xor64` `s2 mixes array/long/number`),
 dependency chains (`rotl64` waits on leaves).
+
+## Appendix — benchmarksgame (2026-10-09)
+
+`bench/benchmarksgame/` runs n-body, spectral-norm, fannkuch-redux
+per the game rules (same algorithms as the C references, byte-exact
+outputs). Full writeup incl. soundness fixes in `aot-notes.md` §12.
+Headline: n-body 50M at 6.0s exact (Go 6.4s, C 2.1s); spectral 5500
+at 1.85s exact (35× over interp); fannkuch 12 at 162s exact
+(rotation still boxed — whole-loop native is next).
