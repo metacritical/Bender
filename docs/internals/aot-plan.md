@@ -665,6 +665,54 @@ for a separate review (noted, not touched).
 - [ ] E2' keep refusal with explicit error + guide/docs update instead
 - [x] E3 correct shared-structs-design.md outcome #3 (claims safe-mode works)
 
+### Processes epic — true Erlang lightweight processes (started 2026-10-09)
+
+Five steps, in order; each lands gated (suite pins + full gates) or
+reverts. Binding constraint: without heap isolation (step 1),
+everything else is Tasklets-with-benefits, not Erlang — say so in
+every status. Slices below are the plan; check them as they land.
+
+**Step 1 — heap isolation (per-process heaps).**
+Substrate: generational slab GC (per-VM arenas, page-granular ages +
+barriers). Direction: owner id per slab page, per-fiber nurseries,
+cross-fiber barrier + remembered set, per-fiber minors, copy-on-send
+at mailboxes (ev/chan keeps zero-copy).
+- [x] 1.1 page ownership tagging (numeric ids, never pointers) +
+  introspection (`debug/slab-stats`, `debug/fiber-owner`) + pins.
+  Zero behavior change; mixed bump pages documented approximate.
+- [ ] 1.2 per-fiber cur pages (pure-owned young) + nursery counters +
+  cross-fiber barrier recording + pins. Gate: <5% store-heavy bench
+  regression or header-bit fast path instead.
+- [ ] 1.3 per-fiber minor (explicit API + auto-trigger) + pins.
+  Soundness rule: mark target roots + all other stacks + C roots +
+  remembered; sweep only own young unmarked.
+- [ ] 1.4 mailbox copy semantics (owned queues copy; ev/chan shared).
+
+**Step 2 — preemptive reductions.** Quantum polls become forced
+reduction suspends (C calls stay atomic). Needs step 1 for safe
+interruption accounting.
+- [ ] 2.1 reduction counter + suspend points beyond back-edges/calls
+- [ ] 2.2 starvation reversal proof (hog + latency pair, bounded)
+
+**Step 3 — owned mailboxes + selective receive.** Scheduler queue
+table per task + match-scan primitive; resolve pids to task queues
+(Tasklets shape). Needs step 1 (queues copy) for isolation.
+- [ ] 3.1 per-task owned queue + send/recv/self primitives
+- [ ] 3.2 selective receive + pins
+- [ ] 3.3 pid resolution to task queues (bare-fiber pids land here)
+
+**Step 4 — lanes + migration.** N event loops (BEAM schedulers);
+work-stealing; running-task migration last (stack mappings + TLS +
+pending affinity all assume pinning today).
+- [ ] 4.1 N loops, tasks pinned (no migration)
+- [ ] 4.2 work-stealing at job level (pool pattern in C)
+- [ ] 4.3 suspended-task migration (Janet-level suspension only)
+
+**Step 5 — real supervision.** Untrappable kill via step-2
+safepoints + OTP restart strategies over tasklets.
+- [ ] 5.1 kill that cannot be trapped by wedged tasks
+- [ ] 5.2 supervisor trees (one_for_one first)
+
 ### Phase 3 slice — value-returning thread/new + thread/join (DONE, this checkout)
 
 `ev/thread` suspends until completion but always returns nil. New

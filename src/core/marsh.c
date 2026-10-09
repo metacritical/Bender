@@ -1098,8 +1098,11 @@ static const uint8_t *unmarshal_one_fiber(
     JanetFiber **out,
     int flags) {
 
-    /* Initialize a new fiber with gc friendly defaults */
+    /* Initialize a new fiber with gc friendly defaults. Unmarshalled
+     * fibers get a fresh owner id (Step 1): the origin VM's ids are
+     * meaningless here, and reuse would misattribute. */
     JanetFiber *fiber = janet_gcalloc(JANET_MEMORY_FIBER, sizeof(JanetFiber));
+    janet_fiber_init_owner(fiber);
     fiber->flags = 0;
     fiber->frame = 0;
     fiber->stackstart = 0;

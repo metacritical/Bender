@@ -656,6 +656,13 @@ typedef struct JanetSlabPage {
     int32_t age;
     int32_t dirty;
     int32_t bump;
+    /* Step 1 (process heaps): owner id of the claiming fiber (first-
+     * claimer wins; recycled slots keep it). 0 means shared/host
+     * (allocated with no running fiber). Numeric (never a pointer), so
+     * fiber death can never dangle it. Approximate once bump pages are
+     * shared — per-fiber cur pages (slice 1.2) make young pages
+     * pure-owned. Read-only until then. */
+    uint32_t owner;
 } JanetSlabPage;
 
 #define JANET_SLAB_USABLE (JANET_SLAB_PAGE_SIZE - sizeof(JanetSlabPage))
@@ -820,6 +827,8 @@ static void *janet_slab_alloc(int class_index) {
         page->age = 0;
         page->dirty = 0;
         page->bump = 0;
+        /* Step 1: claiming fiber's owner id (0 when host-allocated). */
+        page->owner = (NULL != janet_vm.fiber) ? janet_vm.fiber->gc_owner : 0;
         if (!janet_slab_dir_insert(page)) {
             janet_slab_page_free(page);
             return NULL;
@@ -909,6 +918,43 @@ static void janet_slab_major_reset(void) {
     }
     janet_slab_merge_free();
     janet_vm.gc_young_bytes = 0;
+}
+
+/* Step 1 introspection: per-owner slab page counts. Returns
+ * @{ :pages total :unowned n :owned @{id count} } (pure numbers: fiber
+ * death can never dangle them). Caller holds the result on the Janet
+ * stack (rooted across the table builds below). */
+JanetTable *janet_slab_owner_stats(void) {
+    JanetSlabState *ss = janet_slab_state();
+    JanetTable *out = janet_table(0);
+    Janet out_j = janet_wrap_table(out);
+    janet_gcroot(out_j);
+    JanetTable *owned = janet_table(0);
+    Janet owned_j = janet_wrap_table(owned);
+    janet_gcroot(owned_j);
+    int32_t total = 0;
+    int32_t unowned = 0;
+    int cls;
+    for (cls = 0; cls < JANET_SLAB_NCLASSES; cls++) {
+        JanetSlabPage *p;
+        for (p = ss->pages[cls]; NULL != p; p = p->next) {
+            total++;
+            if (0 == p->owner) {
+                unowned++;
+            } else {
+                Janet k = janet_wrap_integer((int64_t) p->owner);
+                Janet cur = janet_table_get(owned, k);
+                int32_t n = janet_checktype(cur, JANET_NIL) ? 0 : janet_unwrap_integer(cur);
+                janet_table_put(owned, k, janet_wrap_integer(n + 1));
+            }
+        }
+    }
+    janet_table_put(out, janet_ckeywordv("pages"), janet_wrap_integer(total));
+    janet_table_put(out, janet_ckeywordv("unowned"), janet_wrap_integer(unowned));
+    janet_table_put(out, janet_ckeywordv("owned"), owned_j);
+    janet_gcunroot(owned_j);
+    janet_gcunroot(out_j);
+    return out;
 }
 
 /* Minor-mode reachability gate (Phase 2b-iii policy): during a minor

@@ -487,6 +487,28 @@ JANET_CORE_FN(cfun_debug_profile_dump,
     return janet_wrap_nil();
 }
 
+JANET_CORE_FN(cfun_debug_slab_stats,
+              "(debug/slab-stats)",
+              "Step 1 (process heaps) introspection: per-owner slab page "
+              "counts as @{:pages total :unowned n :owned @{id count}}. "
+              "Owner ids are per-fiber numbers (0 means shared/host); "
+              "fresh fibers get strictly new ids. Returns the table.") {
+    janet_fixarity(argc, 0);
+    (void) argv;
+    return janet_wrap_table(janet_slab_owner_stats());
+}
+
+JANET_CORE_FN(cfun_debug_fiber_owner,
+              "(debug/fiber-owner)",
+              "Step 1 (process heaps) introspection: the owner id of the "
+              "calling fiber (nonzero; strictly increasing across fibers "
+              "in a VM). Page claims record this id. Returns the integer.") {
+    janet_fixarity(argc, 0);
+    (void) argv;
+    if (NULL == janet_vm.fiber) return janet_wrap_integer(0);
+    return janet_wrap_integer((int64_t) janet_vm.fiber->gc_owner);
+}
+
 /* Module entry point */
 void janet_lib_debug(JanetTable *env) {
     JanetRegExt debug_cfuns[] = {
@@ -503,6 +525,8 @@ void janet_lib_debug(JanetTable *env) {
         JANET_CORE_REG("debug/profile-stop", cfun_debug_profile_stop),
         JANET_CORE_REG("debug/profile-reset", cfun_debug_profile_reset),
         JANET_CORE_REG("debug/profile-dump", cfun_debug_profile_dump),
+        JANET_CORE_REG("debug/slab-stats", cfun_debug_slab_stats),
+        JANET_CORE_REG("debug/fiber-owner", cfun_debug_fiber_owner),
         JANET_REG_END
     };
     janet_core_cfuns_ext(env, NULL, debug_cfuns);

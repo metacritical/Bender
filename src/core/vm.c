@@ -2329,6 +2329,8 @@ int janet_init(void) {
     janet_vm.gc_minor_phase = 0;
     janet_vm.gc_young_bytes = 0;
     janet_vm.gc_minor_threshold = 256 * 1024;
+    /* Step 1 (process heaps): owner-id source starts empty (0 reserved). */
+    janet_vm.gc_owner_next = 0;
 
     janet_symcache_init();
 

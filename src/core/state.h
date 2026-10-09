@@ -183,6 +183,10 @@ struct JanetVM {
     int gc_minor_phase;
     size_t gc_young_bytes;
     size_t gc_minor_threshold;
+    /* Step 1 (process heaps): monotonic owner-id source for fibers.
+     * 0 is reserved (shared/unowned); wraps past 4B fibers (reissue
+     * is accounting-only noise, never a dangling pointer). */
+    uint32_t gc_owner_next;
 
     /* GC roots */
     Janet *roots;

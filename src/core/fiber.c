@@ -466,6 +466,7 @@ static JanetFiber *fiber_alloc(int32_t capacity) {
         capacity = 32;
     }
     fiber->capacity = capacity;
+    janet_fiber_init_owner(fiber);
     data = array_allocate(sizeof(Janet), capacity);
     if (NULL == data) {
         JANET_OUT_OF_MEMORY;
@@ -480,6 +481,15 @@ static JanetFiber *fiber_alloc(int32_t capacity) {
     fiber->stack_overflowed = 0;
     janet_fiber_ensure_native_stack(fiber);
     return fiber;
+}
+
+/* Step 1 (process heaps): assign a fresh owner id from the VM counter
+ * (0 reserved for shared). Used at every fiber birth site (alloc,
+ * unmarshal); resets keep the id (same logical fiber). */
+void janet_fiber_init_owner(JanetFiber *fiber) {
+    uint32_t id = ++janet_vm.gc_owner_next;
+    if (0 == id) id = ++janet_vm.gc_owner_next;
+    fiber->gc_owner = id;
 }
 
 /* Allocate the fiber's native stack on first use and (re)prime its switch

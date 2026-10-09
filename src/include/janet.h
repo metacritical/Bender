@@ -1071,6 +1071,10 @@ struct JanetFiber {
     int interrupt_requested;
     Janet interrupt_value;
 #endif
+    /* Step 1 (process heaps): owner id for slab page attribution (0 =
+     * shared/unowned). Assigned at fiber creation from the VM counter;
+     * kept across resets (same logical fiber), fresh on unmarshal. */
+    uint32_t gc_owner;
 };
 
 /* Mark if a stack frame is a tail call for debugging */

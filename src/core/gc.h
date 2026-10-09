@@ -87,4 +87,8 @@ void janet_gc_barrier(void *obj, Janet value);
  * use janet_free directly. */
 void janet_gc_release(JanetGCObject *mem);
 
+/* Step 1 introspection (process heaps): per-owner slab page counts as
+ * @{ :pages total :unowned n :owned @{id count} }. */
+JanetTable *janet_slab_owner_stats(void);
+
 #endif
