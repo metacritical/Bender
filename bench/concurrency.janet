@@ -69,10 +69,34 @@
   (print "thread-spawn 1 thread "
     (string/format "%.1f" (* 1e9 dt)) " ns/op result=" r))
 
+(defn bench-pool-call [n]
+  # Warm-VM task latency: N pool/call round trips, no per-task spawn.
+  (def p (pool/spawn 4))
+  (def t0 (os/clock))
+  (var acc 0)
+  (for i 0 n (+= acc (pool/call p + [i 1])))
+  (def dt (- (os/clock) t0))
+  (pool/stop p)
+  (print "pool-call " n " calls "
+    (string/format "%.1f" (* 1e9 (/ dt n))) " ns/op acc=" acc))
+
+(defn bench-pool-map [n]
+  # Batch fan-out: N trivial tasks over 4 workers, results in order.
+  (def p (pool/spawn 4))
+  (def arglist (map (fn [i] [i]) (range n)))
+  (def t0 (os/clock))
+  (def res (pool/map p (fn [x] (* x 2)) arglist))
+  (def dt (- (os/clock) t0))
+  (pool/stop p)
+  (print "pool-map " n " tasks "
+    (string/format "%.1f" (* 1e9 (/ dt n))) " ns/op acc=" (res (- n 1))))
+
 (defn main [&]
   (bench-chan-pingpong 2000)
   (bench-chan-buffered 20000)
   (bench-chan-try 20000)
   (bench-fiber-spawn 2000)
-  (bench-thread-spawn))
+  (bench-thread-spawn)
+  (bench-pool-call 2000)
+  (bench-pool-map 10000))
 # NOTE: no explicit (main) call — the script runner invokes main automatically.

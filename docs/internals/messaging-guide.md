@@ -130,24 +130,45 @@ removed/overwritten.
 Use when: any layer must find a worker without threading a handle
 through (game systems finding `:physics`, mods finding services).
 
-## 6. Batches: `examples/pool.janet`
+## 6. Batches: C pool (`pool/spawn`) over N warm VMs
 
-M one-shot calls over N warm worker VMs on a shared queue — no
-per-task spawn cost (the cheap-restart substrate).
+M one-shot calls over N long-lived worker VMs on a shared condvar
+queue — no per-task spawn cost (the cheap-restart substrate). The C
+runtime (M4c) is primary: one hop, direct completion events for
+`pool/call` (no per-task reply channel). `examples/pool.janet` stays
+as the reference implementation (same semantics, Janet-level dispatch
+loop, per-task reply channels).
 
 ```janet
-(import ../examples/pool :as pool)
-
 (def p (pool/spawn 4))
 (pool/call p + [3 4])                    # 7
 (pool/call p image-blur [pixels] 5)      # with timeout
 (pool/map p price [[sku1] [sku2]])       # fan-out, results in order
-(def ch (pool/submit p f [x])) (ev/take ch)
+(def ch (pool/submit p f [x])) (pool/collect ch)
 (pool/stop p)                            # drain + join all workers
 ```
 
 Task errors re-raise in the collector; workers survive. FIFO per
-queue; no ordering across workers.
+queue; no ordering across workers. `pool/submit` errors arrive as
+`[:pool-error err]` tuples; `pool/collect` re-raises them (with
+optional timeout). `pool/acquire` + `pool/dispatch` are the internal
+building blocks (`call`/`submit`/`map` compose them — capacity tokens
+are acquired first, then the task dispatches; never separate them).
+
+Task discipline (hard rules — violations wedge or panic, never corrupt):
+- Tasks run share-nothing: `func`/`args` marshal in, results marshal
+  back. Fibers resume with the args array as one value.
+- Inside tasks use ONLY threaded channels (`ev/thread-chan`) and
+  marshalled values. Plain channels are single-VM: a cross-VM
+  take/give schedules a foreign fiber on the wrong queue (hangs).
+- Tasks may use `ev/sleep` (each runs under a per-task event loop),
+  but a task that suspends forever wedges its worker (capacity it
+  holds never returns — cooperative, like the rest of the layer).
+- Do not nest `pool/call` on a saturated pool (same-pool recursion
+  deadlocks at capacity — same as the reference impl).
+- `pool/stop` is required (like closing a file); use-after-stop
+  panics fail-loud (the reference impl instead blocks for a timeout).
+  Abandoning a pool without stopping leaks its threads.
 
 Use when: many calls (parallel maps, asset pipelines, physics
 islands), or anywhere `thread/new` per item would dominate. Do NOT

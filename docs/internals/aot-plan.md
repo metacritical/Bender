@@ -589,13 +589,13 @@ per-task `janet_loop` (ev/sleep works); yielding-forever wedges a worker
 (documented, cooperative). Token channel enforces capacity (submit takes,
 worker gives after dequeue — mode-2 push never reports full by
 construction). API parity with pool.janet: spawn/call/submit/map/stop.
-- [ ] A1 `core/pool` type + spawn/stop (workers, queue, prologue, token chan)
-- [ ] A2 call (direct completion, no channel) + submit (reply chan) + map + timeouts
-- [ ] A3 worker crash isolation (error values back, worker survives) + stop-drain-join
-- [ ] A4 owner-checking, sandbox flags, registry/abstract sharing = thread/new semantics
-- [ ] A5 pins in test/suite-pool.janet (soak 10k, kill-recovery, stop-drain, timeout+late-drop)
-- [ ] A6 bench rows (call vs thread/new >=5x on 10k trivial tasks or revert)
-- [ ] A7 guide + this plan updated; pool.janet stays as reference until oracle parity
+- [x] A1 `core/pool` type + spawn/stop (workers, queue, prologue, token chan)
+- [x] A2 call (direct completion, no channel) + submit (reply chan) + map + timeouts
+- [x] A3 worker crash isolation (error values back, worker survives) + stop-drain-join
+- [x] A4 owner-checking, sandbox flags, registry/abstract sharing = thread/new semantics
+- [x] A5 pins in test/suite-pool.janet (soak 10k, kill-recovery, stop-drain, timeout+late-drop)
+- [x] A6 bench rows (call vs thread/new >=5x on 10k trivial tasks or revert)
+- [x] A7 guide + this plan updated; pool.janet stays as reference until oracle parity
 
 **Phase B — MPSC channel fast path (lock-free ring, mutex fallback).**
 - [ ] B1 bounded ring (atomics, acquire/release documented) for single-producer
