@@ -579,6 +579,12 @@ void janet_ev_mark(void) {
 
 static int janet_channel_push(JanetChannel *channel, Janet x, int mode);
 static int janet_channel_pop(JanetChannel *channel, Janet *item, int is_choice);
+/* Phase C: harvest helper defined with the pool code below (used by
+ * both thread/new completions and pool worker exits). */
+static int janet_profile_harvest_bytes(uint8_t **out_bytes, size_t *out_len);
+/* NOTE(other-stream): forward declaration to unblock the build; the
+ * owning change should place this with its own declarations. */
+static int janet_profile_harvest_bytes(uint8_t **out_bytes, size_t *out_len);
 
 static Janet make_supervisor_event(const char *name, JanetFiber *fiber, int threaded) {
     Janet tup[3];
@@ -3432,6 +3438,7 @@ typedef struct {
     int joined;
     int is_error;
     Janet result;
+    Janet profile_rows;   /* Phase C: harvested worker profile rows (or nil) */
     JanetFiber *waiter;
     /* sched_id of waiter when it suspended: every schedule bumps it, so
      * a waiter whose id moved on was already resumed elsewhere (timeout
@@ -3452,6 +3459,8 @@ typedef struct {
     uint8_t *bytes;
     size_t len;
     int is_error;
+    uint8_t *pbytes;   /* Phase C: harvested profile rows (or NULL) */
+    size_t plen;
 } JanetThreadCompletion;
 
 typedef struct {
@@ -3460,6 +3469,7 @@ typedef struct {
     JanetVM *owner;
     uint32_t flags;
     uint32_t sandbox_flags;
+    int profile_active;  /* Phase C: boot with the collector on */
 } JanetThreadNewArgs;
 
 static int janet_thread_handle_gc(void *p, size_t len) {
@@ -3486,6 +3496,7 @@ static int janet_thread_handle_mark(void *p, size_t len) {
     (void) len;
     JanetThreadHandle *h = (JanetThreadHandle *) p;
     janet_mark(h->result);
+    janet_mark(h->profile_rows);
     if (h->waiter) {
         janet_mark(janet_wrap_fiber(h->waiter));
     }
@@ -3560,6 +3571,14 @@ static void janet_thread_new_complete(JanetEVGenericMessage msg) {
     } else if (c->bytes != NULL) {
         janet_free(c->bytes);
     }
+    /* Phase C: harvested worker profile rows (nil when it profiled
+     * nothing). Stored on the handle for thread/profile. */
+    if (c->pbytes != NULL && c->plen > 0) {
+        h->profile_rows = janet_unmarshal(c->pbytes, c->plen, JANET_MARSHAL_UNSAFE, NULL, NULL);
+        janet_free(c->pbytes);
+    } else if (c->pbytes != NULL) {
+        janet_free(c->pbytes);
+    }
     int is_error = c->is_error;
     janet_free(c);
     h->result = result;
@@ -3606,6 +3625,8 @@ static JanetThreadCompletion *janet_thread_make_completion(
     c->bytes = bytes;
     c->len = len;
     c->is_error = is_error;
+    c->pbytes = NULL;
+    c->plen = 0;
     return c;
 }
 
@@ -3636,6 +3657,8 @@ static JanetThreadCompletion *janet_thread_new_run(JanetThreadNewArgs *targs) {
     JanetThreadHandle *handle = targs->handle;
     janet_init();
     janet_vm.sandbox_flags = targs->sandbox_flags;
+    /* Phase C: inherit the collector when the owner was profiling. */
+    if (targs->profile_active) janet_profile_start();
     JanetThreadCompletion *comp = NULL;
     JanetTryState tstate;
     JanetSignal signal = janet_try(&tstate);
@@ -3682,6 +3705,9 @@ static JanetThreadCompletion *janet_thread_new_run(JanetThreadNewArgs *targs) {
                 "thread function must accept 0 or 1 arguments");
             fiber = janet_fiber(func, 64, func->def->min_arity, &value);
             janet_assert(fiber != NULL, "bad fiber in thread setup");
+            /* Phase C: primed fibers bypass JOP_CALL; record the root
+             * invocation so worker rows carry calls/params. */
+            janet_profile_task_call(func, &value, 1);
             fiber->flags |=
                 JANET_FIBER_MASK_ERROR |
                 JANET_FIBER_MASK_USER0 |
@@ -3715,6 +3741,9 @@ static JanetThreadCompletion *janet_thread_new_run(JanetThreadNewArgs *targs) {
         janet_gcunroot(fiber_j);
         janet_gcunroot(result_j);
         comp = janet_thread_make_completion(handle, bytes, len, is_error);
+        /* Phase C: harvest this worker's profile table (best-effort;
+         * empty when profiling was off). The VM is still alive here. */
+        janet_profile_harvest_bytes(&comp->pbytes, &comp->plen);
         janet_restore(&tstate);
     } else {
         janet_restore(&tstate);
@@ -3821,6 +3850,7 @@ JANET_CORE_FN(cfun_thread_new,
     handle->joined = 0;
     handle->is_error = 0;
     handle->result = janet_wrap_nil();
+    handle->profile_rows = janet_wrap_nil();
     handle->waiter = NULL;
     handle->waiter_sched = 0;
     handle->monitors = NULL;
@@ -3837,6 +3867,8 @@ JANET_CORE_FN(cfun_thread_new,
     targs->owner = &janet_vm;
     targs->flags = (uint32_t) flags;
     targs->sandbox_flags = janet_vm.sandbox_flags;
+    /* Phase C: the worker inherits the collector when profiling. */
+    targs->profile_active = (janet_vm.profile_table != NULL);
     janet_abstract_incref(handle);
     janet_ev_inc_refcount();
 #ifdef JANET_WINDOWS
@@ -3938,6 +3970,21 @@ JANET_CORE_FN(cfun_thread_alive,
     return janet_wrap_boolean(!handle->done);
 }
 
+JANET_CORE_FN(cfun_thread_profile,
+              "(thread/profile handle)",
+              "Return the worker's harvested profile rows (Phase C dump "
+              "format) after the thread completed, or nil when it profiled "
+              "nothing. Workers inherit the collector when the owner is "
+              "profiling at thread/new time. Must be called from the "
+              "creating thread.") {
+    janet_fixarity(argc, 1);
+    JanetThreadHandle *handle = janet_getabstract(argv, 0, &janet_thread_handle_type);
+    if (handle->owner != &janet_vm) {
+        janet_panic("thread/profile called from non-owner thread");
+    }
+    return handle->profile_rows;
+}
+
 /* M4c: pooled warm-VM task executors (C runtime). M one-shot tasks run
  * over N long-lived worker VMs sharing one condvar queue: no per-task
  * spawn cost (cf. thread/new, which boots a VM per call), one hop, and
@@ -3974,6 +4021,17 @@ typedef struct JanetPoolTask {
     struct JanetPoolTask *next;
 } JanetPoolTask;
 
+/* Phase C: per-worker profile harvest. Workers with profiling active
+ * serialize their tables at exit into UNSAFE-marshal buffers; the
+ * owner drains them via pool/profile-harvest (merged Janet-side by
+ * tools/profile-merge.janet). Malloc'd, pool-locked, freed on drain
+ * or with the pool. */
+typedef struct JanetProfileHarvest {
+    uint8_t *bytes;
+    size_t len;
+    struct JanetProfileHarvest *next;
+} JanetProfileHarvest;
+
 typedef struct {
 #ifdef JANET_WINDOWS
     CRITICAL_SECTION lock;
@@ -3998,6 +4056,8 @@ typedef struct {
     JanetFiber *stop_waiter; /* pool/stop waiter (single), else NULL */
     uint32_t stop_sched;
     Janet self;              /* gcrooted wrapper: pins the struct until stop */
+    int profile_active;      /* Phase C: workers boot with the collector on */
+    JanetProfileHarvest *harvest_head, *harvest_tail;
 #ifdef JANET_WINDOWS
     HANDLE *threads;
 #else
@@ -4086,6 +4146,18 @@ static void janet_pool_free_contents(JanetPool *pool) {
     if (pool->tokens != NULL) {
         janet_abstract_decref_maybe_free(pool->tokens);
         pool->tokens = NULL;
+    }
+    /* Phase C: unread harvest remnants (readers drain via
+     * pool/profile-harvest; leftovers die with the pool). */
+    {
+        JanetProfileHarvest *h = pool->harvest_head;
+        while (h != NULL) {
+            JanetProfileHarvest *next = h->next;
+            if (h->bytes != NULL) janet_free(h->bytes);
+            janet_free(h);
+            h = next;
+        }
+        pool->harvest_head = pool->harvest_tail = NULL;
     }
     pool->contents_freed = 1;
 }
@@ -4206,9 +4278,50 @@ typedef struct {
     int index;
 } JanetPoolWorkerArgs;
 
+/* Phase C: harvest this VM's profile table (if active) into malloc'd
+ * UNSAFE-marshal bytes of the dump row array. Returns 1 when harvested
+ * (caller frees *out_bytes). Runs on the harvesting VM; the bytes cross
+ * threads like any completion payload. */
+static int janet_profile_harvest_bytes(uint8_t **out_bytes, size_t *out_len) {
+    JanetArray *rows;
+    Janet rows_j;
+    JanetBuffer tmp;
+    uint8_t *copy;
+    if (NULL == janet_vm.profile_table) return 0;
+    rows = janet_profile_rows();
+    rows_j = janet_wrap_array(rows);
+    janet_gcroot(rows_j);
+    janet_buffer_init(&tmp, 0);
+    janet_marshal(&tmp, rows_j, NULL, JANET_MARSHAL_UNSAFE);
+    copy = NULL;
+    if (tmp.count > 0) {
+        /* Best-effort: teardown callers must never panic (a panic
+         * with the pool lock held wedges stop), so OOM drops the
+         * evidence instead of raising. */
+        copy = janet_malloc((size_t) tmp.count);
+        if (NULL != copy) {
+            memcpy(copy, tmp.data, (size_t) tmp.count);
+        } else {
+            janet_buffer_deinit(&tmp);
+            janet_gcunroot(rows_j);
+            *out_bytes = NULL;
+            *out_len = 0;
+            return 0;
+        }
+    }
+    *out_bytes = copy;
+    *out_len = (size_t) tmp.count;
+    janet_buffer_deinit(&tmp);
+    janet_gcunroot(rows_j);
+    return 1;
+}
+
 static void janet_pool_worker_boot(JanetPool *pool) {
     janet_init();
     janet_vm.sandbox_flags = pool->sandbox_flags;
+    /* Phase C: inherit the collector when the owner was profiling at
+     * spawn. Per-VM table; harvested at worker exit below. */
+    if (pool->profile_active) janet_profile_start();
     const uint8_t *nextbytes = pool->prologue;
     const uint8_t *endbytes = nextbytes + pool->prologue_len;
     uint32_t flags = pool->flags;
@@ -4264,6 +4377,9 @@ static Janet janet_pool_run_task(Janet taskv, int *is_error) {
         }
         fiber = janet_fiber(func, 64, nargs, argdata);
         janet_assert(fiber != NULL, "pool task: bad fiber");
+        /* Phase C: primed fibers bypass JOP_CALL, so record the root
+         * invocation explicitly (else rows show calls=0, no params). */
+        janet_profile_task_call(func, argdata, nargs);
         janet_schedule(fiber, janet_wrap_nil());
     }
     fiber->supervisor_channel = NULL;
@@ -4307,6 +4423,30 @@ static void *janet_pool_worker(void *ptr) {
              * exiting worker only reports. The abandoned path leaks
              * by design (documented) since the pool wrapper stays
              * gcrooted until stop. */
+            /* Phase C: harvest this worker's profile table first (the
+             * VM is still alive; the bytes wait in the pool). The pool
+             * lock is already held here: link directly, no re-lock. */
+            {
+                uint8_t *hbytes = NULL;
+                size_t hlen = 0;
+                if (janet_profile_harvest_bytes(&hbytes, &hlen)) {
+                    JanetProfileHarvest *h = janet_malloc(sizeof(JanetProfileHarvest));
+                    if (NULL == h) {
+                        /* Best-effort (see above): drop, keep exiting. */
+                        if (hbytes != NULL) janet_free(hbytes);
+                    } else {
+                        h->bytes = hbytes;
+                        h->len = hlen;
+                        h->next = NULL;
+                        if (pool->harvest_tail != NULL) {
+                            pool->harvest_tail->next = h;
+                        } else {
+                            pool->harvest_head = h;
+                        }
+                        pool->harvest_tail = h;
+                    }
+                }
+            }
             pool->live_workers--;
             int last = (pool->live_workers == 0);
             janet_pool_unlock(pool);
@@ -4490,6 +4630,10 @@ JANET_CORE_FN(cfun_pool_spawn,
     pool->sandbox_flags = janet_vm.sandbox_flags;
     pool->n_workers = nthreads;
     pool->live_workers = nthreads;
+    /* Phase C: workers inherit the collector when the owner is
+     * profiling at spawn (harvested at worker exit, read via
+     * pool/profile-harvest). */
+    pool->profile_active = (janet_vm.profile_table != NULL);
     /* Prologue: registries marshalled once, shared read-only (same
      * layout thread/new builds per thread). */
     {
@@ -4741,6 +4885,41 @@ JANET_CORE_FN(cfun_pool_dispatch,
     /* Unreachable when suspending; the completion schedules this fiber
      * with the task result (or cancels with its error). */
     return janet_wrap_nil();
+}
+
+JANET_CORE_FN(cfun_pool_profile_harvest,
+              "(pool/profile-harvest p)",
+              "Drain this pool's harvested per-worker profiles (Phase C): "
+              "returns an array with one dump-format row array per exited "
+              "worker that profiled (empty when profiling was off or "
+              "nothing exited yet). Workers inherit the collector when the "
+              "owner is profiling at spawn; each exiting worker appends "
+              "its table. Merge rows Janet-side (tools/profile-merge.janet) "
+              "and feed callgraph --profile. Must be called from the owning "
+              "thread. Unread harvests are freed with the pool.") {
+    janet_fixarity(argc, 1);
+    JanetPool *pool = janet_getpool(argv, 0);
+    JanetArray *out = janet_array(0);
+    Janet out_j = janet_wrap_array(out);
+    janet_gcroot(out_j);
+    janet_pool_lock(pool);
+    JanetProfileHarvest *h = pool->harvest_head;
+    pool->harvest_head = pool->harvest_tail = NULL;
+    janet_pool_unlock(pool);
+    while (h != NULL) {
+        JanetProfileHarvest *next = h->next;
+        if (h->bytes != NULL && h->len > 0) {
+            Janet rows = janet_unmarshal(h->bytes, h->len, JANET_MARSHAL_UNSAFE, NULL, NULL);
+            janet_array_push(out, rows);
+            janet_free(h->bytes);
+        } else if (h->bytes != NULL) {
+            janet_free(h->bytes);
+        }
+        janet_free(h);
+        h = next;
+    }
+    janet_gcunroot(out_j);
+    return out_j;
 }
 
 JANET_CORE_FN(cfun_pool_stop,
@@ -5916,9 +6095,11 @@ void janet_lib_ev(JanetTable *env) {
         JANET_CORE_REG("thread/new", cfun_thread_new),
         JANET_CORE_REG("thread/join", cfun_thread_join),
         JANET_CORE_REG("thread/alive?", cfun_thread_alive),
+        JANET_CORE_REG("thread/profile", cfun_thread_profile),
         JANET_CORE_REG("pool/spawn", cfun_pool_spawn),
         JANET_CORE_REG("pool/acquire", cfun_pool_acquire),
         JANET_CORE_REG("pool/dispatch", cfun_pool_dispatch),
+        JANET_CORE_REG("pool/profile-harvest", cfun_pool_profile_harvest),
         JANET_CORE_REG("pool/stop", cfun_pool_stop),
         JANET_CORE_REG("ev/monitor", cfun_thread_monitor),
         JANET_CORE_REG("ev/demonitor", cfun_thread_demonitor),

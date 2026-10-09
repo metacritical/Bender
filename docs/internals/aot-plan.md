@@ -611,13 +611,22 @@ rendezvous: wake batching / Tier-6 transport work, out of scope.
 - [ ] B1-B5 superseded (see above; revisit only with a contended,
   wake-free workload showing mutex ≥50% — none measured)
 
-**Phase C — PGO merge for worker threads.**
-`profile_table` (state.h) is per-VM; worker evidence dies at `janet_deinit`.
-- [ ] C1 harvest on join/stop (no hot lock; per-worker flush)
-- [ ] C2 key-wise merge (counts OR param masks, widen returns, keep min/max ranges)
-- [ ] C3 callgraph seeding reports home-thread vs worker `profile-seed`/`conflict`
-- [ ] C4 disjoint-type widening + stale-hash-ignored + empty-merge-identity pins
-- [ ] C5 ttfx PGO rows before/after; keep only what moves a `native-skip`
+**Phase C — PGO merge for worker threads.** SHIPPED 2026-10-09:
+workers inherit the collector (pool spawn + thread/new when the owner
+profiles); harvest at pool worker exit / thread completion
+(`pool/profile-harvest`, `thread/profile`); merge Janet-side
+(tools/profile-merge.janet: tags :from, concatenates — the consumer's
+unanimous rule stays the single decider); provenance report
+(`profile-seed`/`profile-conflict` with home/worker origins). Found
+en route: primed worker fibers bypass JOP_CALL, so task roots are
+recorded explicitly (else calls=0, no params); profile refcounts pair
+on the owning thread. `profile_table` is per-VM; the fast-path cache
+is per-thread (shared-TU workers would otherwise cross-contaminate).
+- [x] C1 harvest on join/stop (no hot lock; per-worker flush)
+- [x] C2 key-wise merge (counts OR param masks, widen returns, keep min/max ranges)
+- [x] C3 callgraph seeding reports home-thread vs worker `profile-seed`/`conflict`
+- [x] C4 disjoint-type widening + stale-hash-ignored + empty-merge-identity pins
+- [x] C5 ttfx PGO rows before/after; keep only what moves a `native-skip`
 
 **Phase D — segmented fiber stacks (64KB grow-on-fault, 2MB cap).**
 2MB+64K per fiber (fiber.c) = ~600MB virtual per 300 fibers.

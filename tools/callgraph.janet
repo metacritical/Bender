@@ -891,7 +891,8 @@
       (array/push bucket {:params (get info :params @[])
                           :mins (get info :mins @[])
                           :maxs (get info :maxs @[])
-                          :calls (get info :calls 0)})
+                          :calls (get info :calls 0)
+                          :from (get info :from :home)})
       (put profile-index nm bucket)))
   (print "profile " (length rows) " rows"))
 
@@ -918,6 +919,29 @@
   (def t (rts id))
   (when (get cnts t) (put cnts t (+ 1 (get cnts t)))))
 (print "rets " (get cnts :long) " " (get cnts :double) " " (get cnts :number) " rounds " (res :rounds))
+
+# Phase C: profile provenance report. pprov (from infer) maps def id ->
+# per-slot seed/conflict records with home/worker origins; prints are
+# sorted (ids and slots iterate in order, origins pre-sorted).
+(when profile-index
+  (def pprov (or (res :pprov) @{}))
+  (each id (range (length defs))
+    (def nm (string (or ((get defs id) :name) "")))
+    (def slots (get pprov id))
+    (when slots
+      (var si 0)
+      (each s slots
+        (when (table? s)
+          (if (def seed (get s :seed))
+            (print "profile-seed " nm " " si " " seed " "
+                   (string/join (map string (get s :from [])) ","))
+            (when (def cmap (get s :conflict))
+              (def parts @[])
+              (each [t fs] (pairs cmap)
+                (array/push parts (string t ":" (string/join (map string fs) ","))))
+              (print "profile-conflict " nm " " si " "
+                     (string/join (sort parts) " ")))))
+        (++ si)))))
 
 # Step 7 (--emit-native) + Step 8 (branches): unboxed C emission. A def
 # emits when its params and return are ALL concrete numeric — hinted

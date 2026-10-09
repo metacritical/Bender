@@ -125,4 +125,71 @@
     (assert (= 4 ((get info :maxs) 1)) "dumped max 1")))
 (assert saw-mm "prof-mm in dump")
 
+# Phase C: worker harvest. Profiling off -> empty harvest, nil thread rows.
+# (The range test above leaves the collector on; stop it first.)
+(debug/profile-stop)
+(let [p (pool/spawn 2)]
+  (pool/call p + [1 2])
+  (pool/stop p)
+  (assert (deep= @[] (pool/profile-harvest p)) "harvest empty when off"))
+(let [t (thread/new (fn [x] (+ x 1)) 1)]
+  (thread/join t)
+  (assert (nil? (thread/profile t)) "thread rows nil when off"))
+
+# Phase C: profiling on -> workers inherit, harvest carries rows with
+# identity + calls + param evidence (task roots recorded explicitly:
+# primed fibers bypass JOP_CALL).
+(debug/profile-start)
+(defn prof-wfn [x] (+ x 1))
+(let [p (pool/spawn 2)]
+  (assert (= 42 (pool/call p prof-wfn [41])) "profiled pool call")
+  (assert (= 43 (pool/call p prof-wfn [42])) "profiled pool call 2")
+  (pool/stop p)
+  (def h (pool/profile-harvest p))
+  (assert (= 2 (length h)) "one batch per worker")
+  (var saw-wfn false)
+  (var total-calls 0)
+  (var gmin nil)
+  (each batch h
+    (assert (indexed? batch) "batch is rows array")
+    (each [id info] batch
+      (when (= (id 2) "prof-wfn")
+        (set saw-wfn true)
+        (+= total-calls (get info :calls))
+        (assert (deep= @[:number] ((get info :params) 0)) "worker param evidence")
+        # mins are per worker (calls may split across workers); the
+        # merge tool unions them, so pin the global min here.
+        (def m ((get info :mins) 0))
+        (when (number? m)
+          (set gmin (if (nil? gmin) m (min gmin m)))))))
+  (assert saw-wfn "prof-wfn in harvest")
+  (assert (= 2 total-calls) "worker calls counted")
+  (assert (= 41 gmin) "worker min evidence"))
+(debug/profile-stop)
+
+# Phase C: thread harvest mirrors pool harvest.
+(debug/profile-start)
+(defn prof-tfn [x] (* x 2))
+(let [t (thread/new prof-tfn 21)]
+  (assert (= 42 (thread/join t)) "profiled thread call")
+  (def rows (thread/profile t))
+  (assert (indexed? rows) "thread rows array")
+  (var saw-tfn false)
+  (each [id info] rows
+    (when (= (id 2) "prof-tfn")
+      (set saw-tfn true)
+      (assert (= 1 (get info :calls)) "thread call counted")
+      (assert (deep= @[:number] ((get info :params) 0)) "thread param evidence")))
+  (assert saw-tfn "prof-tfn in thread rows"))
+(debug/profile-stop)
+
+# Phase C: harvest drains (second read is empty).
+(debug/profile-start)
+(let [p (pool/spawn 1)]
+  (pool/call p prof-wfn [1])
+  (pool/stop p)
+  (assert (> (length (pool/profile-harvest p)) 0) "first drain")
+  (assert (deep= @[] (pool/profile-harvest p)) "second drain empty"))
+(debug/profile-stop)
+
 (end-suite)

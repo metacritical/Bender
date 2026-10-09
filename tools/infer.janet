@@ -112,13 +112,17 @@
   # defs: array of @{:d disasm :hint ...}; call-map: id -> {pc -> tid};
   # profile: @{name -> [{:params [...] :mins [...] :maxs [...] :calls n}]}
   # from a PGO dump; coremap: id -> {pc -> core cfunction name} for
-  # pure-call shaping (may be nil).
-  # returns @{:pts pts :rts rts :nnp nnp :rounds rounds}; nnp maps
+  # pure-call shaping (may be nil). Rows may carry :from (:home/:worker
+  # for Phase C provenance; absent means :home).
+  # returns @{:pts pts :rts rts :nnp nnp :rounds rounds :pprov pprov}; nnp maps
   # id -> array of bool (PGO-unanimous observed min >= 0 per param).
+  # pprov maps id -> per-slot provenance: nil (no rows / silent),
+  # @{:seed t :from [...]}, or @{:conflict @{t [@[from...]]}}.
   (def n (length defs))
   (def pts @{})
   (def rts @[])
   (def nnp @{})
+  (def pprov @{})
   (def pfixed @{})
   (def rfixed @{})
   (each id (range n)
@@ -151,18 +155,22 @@
     # observation withholds the mark.
     (when profile
       (def rows (get profile (string (or ((get defs id) :name) ""))))
+      (def prov @[])
       (when rows
         (var i 0)
         (while (< i arity)
           (var agree nil)
           (var ok true)
           (var nonneg true)
+          (def seen @{})
           (each row rows
+            (def from (get row :from :home))
             (def ps (get row :params @[]))
             (def sl0 (if (> (length ps) 0) (ps 0) nil))
             (def slot (if (< i (length ps)) (ps i) nil))
             (if (and (indexed? slot) (= 1 (length slot)) (keyword? (slot 0)))
               (do (def t (slot 0))
+                (array/push (or (get seen t) (do (def a @[]) (put seen t a) a)) from)
                 (if (nil? agree) (set agree t)
                   (when (not= agree t) (set ok false))))
               (set ok false))
@@ -170,9 +178,24 @@
             (def mn (if (< i (length mns)) (mns i) nil))
             (unless (and (number? mn) (>= mn 0)) (set nonneg false)))
           (when (and (nil? hp) ok (not (nil? agree)))
-            (put parr i agree))
+            (put parr i agree)
+            # Phase C provenance: unanimous rows' origins (deduped, sorted).
+            (def froms @[])
+            (each [_ fs] (pairs seen) (each f fs (array/push froms f)))
+            (array/push prov @{:seed agree :from (sorted (distinct froms))}))
+          (when (and (nil? hp) (not ok) (> (length (keys seen)) 1))
+            # Genuine type conflict (malformed slots stay silent): per-type origins.
+            (def cmap @{})
+            (each [t fs] (pairs seen)
+              (put cmap t (sorted (distinct fs))))
+            (array/push prov @{:conflict cmap}))
+          (when (and (not ok) (<= (length (keys seen)) 1))
+            (array/push prov nil))
+          (when (and ok (nil? agree))
+            (array/push prov nil))
           (when nonneg (put nnarr i true))
-          (++ i))))
+          (++ i)))
+      (put pprov id prov))
     (put nnp id nnarr)
     (def hr (if h (get h :returns) nil))
     (array/push rts (if (or (get numeric-types hr) (= hr :array)) hr :unknown))
@@ -349,4 +372,4 @@
           (when (not= nt (rts id))
             (put rts id nt)
             (put box :changed true))))))
-  @{:pts pts :rts rts :nnp nnp :rounds rounds})
+  @{:pts pts :rts rts :nnp nnp :rounds rounds :pprov pprov})

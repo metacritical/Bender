@@ -275,6 +275,8 @@ void janet_profile_start(void);
 Janet janet_profile_stop(void);
 void janet_profile_reset(void);
 void janet_profile_dump(const char *path);
+JanetArray *janet_profile_rows(void);
+void janet_profile_task_call(JanetFunction *func, const Janet *argv, int32_t argc);
 
 /* M4b-2 quantum driver: back-edge/call polls granted per task run.
  * One poll ≈ one loop iteration or call; 200 keeps scheduling

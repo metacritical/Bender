@@ -79,7 +79,10 @@ profile behave exactly as today.
    2026-10-08 (debug/profile-start|stop|reset|dump, deinit auto-dump;
    378-row deterministic ttfx profile verified).
 2. Seeding: callgraph reads the profile, seeds the fixpoint,
-   reports `profile-seed` vs `profile-conflict` per defn.
+   reports `profile-seed` vs `profile-conflict` per defn. SHIPPED
+   2026-10-09 (unanimous seeding + `profile-seed`/`profile-conflict`
+   lines with home/worker provenance; worker rows merge via
+   tools/profile-merge.janet).
 3. Hot-store profiling + invalidation UX (stale-profile warnings).
 4. Evaluate: does PGO move any ttfx bench row? Keep only what
    measures. Long-term interplay with Phase 3 value types below.
