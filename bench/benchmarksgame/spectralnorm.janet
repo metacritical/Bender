@@ -1,0 +1,43 @@
+# spectral-norm: power method on infinite matrix A (benchmarksgame).
+# Usage: bender spectralnorm.janet N  (N=100 correctness → 1.274219991)
+# A(i,j) = 1/(((i+j)*(i+j+1))/2+i+1); 10 iterations of AtAu.
+
+(defn A {:hint {:params [:double :double] :returns :double}} [i j]
+  (def t (+ i j))
+  (/ 1.0 (+ (/ (* t (+ t 1)) 2) i 1)))
+
+(defn Au {:hint {:params [:long :array :array] :returns :array}} [n v w]
+  (for i 0 n
+    (var s 0.0)
+    (for j 0 n (+= s (* (A i j) (v j))))
+    (put w i s))
+  w)
+
+(defn Atu {:hint {:params [:long :array :array] :returns :array}} [n v w]
+  (for i 0 n
+    (var s 0.0)
+    (for j 0 n (+= s (* (A j i) (v j))))
+    (put w i s))
+  w)
+
+(defn AtAu {:hint {:params [:long :array :array :array] :returns :array}} [n v w tmp]
+  (Au n v tmp)
+  (Atu n tmp w))
+
+(defn main [&]
+  (def n (scan-number (get (dyn :args) 1 "100")))
+  (def u (array/new-filled n 1.0))
+  (def v (array/new-filled n 0.0))
+  (def tmp (array/new-filled n 0.0))
+  (for i 0 10
+    (AtAu n u v tmp)
+    (AtAu n v u tmp))
+  (var vBv 0.0)
+  (var vv 0.0)
+  (for i 0 n
+    (+= vBv (* (u i) (v i)))
+    (+= vv (* (v i) (v i))))
+  (print (string/format "%.9f" (math/sqrt (/ vBv vv)))))
+
+# top-level call runs in AOT images; os/exit beats the CLI auto-call
+(os/exit (main))
