@@ -551,6 +551,84 @@ Erlang-exact signals + fiber pids); M5 independent of M2-M4, gated on
 the GC design review. Each task: feature branch, suite pins, full
 gates (`make test`, `make fibertest`, oracle x6), feature commit.
 
+**SHIPPED 2026-10-09 (concurrency hardening slice 1).**
+Non-blocking channel ops `ev/try-give`/`ev/try-take` (src/core/ev.c:
+mode-3 push reports full without buffering — mode 2 keeps
+buffer-beyond-limit for supervisor pushes, which ignore the return;
+never suspends, safe inside `janet_call`; `:try-give`/`:try-take`
+channel methods) + pins in test/suite-ev.janet (760 tests: full/empty/
+rendezvous/closed; closed reads nil even with buffered items, matching
+blocking take). Channel unmarshal re-inits with the marshalled
+`is_threaded` flag (was hardcoded 0 — wrong lock path for threaded
+channels on JANET_THREADS builds). `bench/concurrency.janet` harness
+(same print + oracle discipline as bench/run.janet): pingpong 269ns/rt,
+buffered 107ns/op, try 16ns/op, spawn 3.9us/op, thread-spawn 133us
+(the pool argument). Compiler `string`-fold scratch via `janet_smalloc`
+(no unrooted GC buffer across allocations). Guide cheat-sheet row.
+
+### Phase 3 follow-ups — concurrency hardening epics (recorded 2026-10-09)
+
+M:N clarification (binding): fibers stay pinned N:1, threads stay 1:1
+pthreads; M:N exists ONLY at job level (M tasks over N warm workers).
+Migrating fibers are rejected (lock elision in ev.c, per-VM GC arenas,
+`pending.thread` affinity all assume pinning). Order: A -> B (pool is
+B's first customer) -> C (needs pool traffic to matter) -> D (needed
+when fiber counts grow) -> E (semantic decision first). Each epic:
+tasks land with suite pins + bench rows or revert; `make test` green
+per commit; docs updated in the same commit.
+
+**Phase A — M4c C warm-VM pool (M tasks over N workers, one hop).**
+Motivation: `thread/new` costs ~133us/task (VM boot); `examples/pool.janet`
+avoids it but pays per-task reply channels + two hops + a Janet dispatch
+loop. C pool: persistent joinable workers (own VMs, registries marshalled
+once at spawn like thread/new), shared condvar task queue, per-task
+UNSAFE marshal buffers, completion via `ev_post_event` to the owner
+(thread/join waiter discipline: gcroot pair, `sched_id` exactly-once,
+timeout via `janet_addtimeout`, late results dropped). Tasks run under a
+per-task `janet_loop` (ev/sleep works); yielding-forever wedges a worker
+(documented, cooperative). Token channel enforces capacity (submit takes,
+worker gives after dequeue — mode-2 push never reports full by
+construction). API parity with pool.janet: spawn/call/submit/map/stop.
+- [ ] A1 `core/pool` type + spawn/stop (workers, queue, prologue, token chan)
+- [ ] A2 call (direct completion, no channel) + submit (reply chan) + map + timeouts
+- [ ] A3 worker crash isolation (error values back, worker survives) + stop-drain-join
+- [ ] A4 owner-checking, sandbox flags, registry/abstract sharing = thread/new semantics
+- [ ] A5 pins in test/suite-pool.janet (soak 10k, kill-recovery, stop-drain, timeout+late-drop)
+- [ ] A6 bench rows (call vs thread/new >=5x on 10k trivial tasks or revert)
+- [ ] A7 guide + this plan updated; pool.janet stays as reference until oracle parity
+
+**Phase B — MPSC channel fast path (lock-free ring, mutex fallback).**
+- [ ] B1 bounded ring (atomics, acquire/release documented) for single-producer
+- [ ] B2 transparent migration to mutex on 2nd producer (generation counter, no ABA)
+- [ ] B3 preserve select/close/stale-removal/gcroot/`try-*` semantics on both paths
+- [ ] B4 soak + forced-migration + close-during-flight pins; ASan/TSan clean
+- [ ] B5 >=2x SPSC ping-pong or revert; pool throughput before/after
+
+**Phase C — PGO merge for worker threads.**
+`profile_table` (state.h) is per-VM; worker evidence dies at `janet_deinit`.
+- [ ] C1 harvest on join/stop (no hot lock; per-worker flush)
+- [ ] C2 key-wise merge (counts OR param masks, widen returns, keep min/max ranges)
+- [ ] C3 callgraph seeding reports home-thread vs worker `profile-seed`/`conflict`
+- [ ] C4 disjoint-type widening + stale-hash-ignored + empty-merge-identity pins
+- [ ] C5 ttfx PGO rows before/after; keep only what moves a `native-skip`
+
+**Phase D — segmented fiber stacks (64KB grow-on-fault, 2MB cap).**
+2MB+64K per fiber (fiber.c) = ~600MB virtual per 300 fibers.
+- [ ] D1 guard-fault growth, transparent to ctx_swap/trampoline
+- [ ] D2 asm paths kept; ucontext fallback stays flat (documented)
+- [ ] D3 over-cap recursion = catchable Janet error, pinned
+- [ ] D4 10k-fiber RSS + bit-exact resume + FFI-recursion pins
+- [ ] D5 RSS <=1/8th at 1k fibers with <=5% spawn regression or revert
+
+**Phase E — safe-mode marshal of threaded channels (semantic decision).**
+`janet_unmarshal_abstract_threaded` (marsh.c) requires `JANET_THREADS`,
+which no build file defines — safe `marshal`/`unmarshal` of threaded
+channels always panics (found 2026-10-09, left untouched: decision, not typo).
+- [ ] E1 per-type copyability audit (channel: yes; thread handles: no)
+- [ ] E2 implement deep-copy (locked, pendings dropped) + refcount/ASan pins, or
+- [ ] E2' keep refusal with explicit error + guide/docs update instead
+- [ ] E3 correct shared-structs-design.md outcome #3 (claims safe-mode works)
+
 ### Phase 3 slice — value-returning thread/new + thread/join (DONE, this checkout)
 
 `ev/thread` suspends until completion but always returns nil. New
