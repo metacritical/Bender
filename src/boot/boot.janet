@@ -4366,6 +4366,49 @@
     [& bodies]
     ~(,ev/go-gather ,(seq [body :in bodies] ~(fn :ev/gather [] ,body)))))
 
+  (defn pool/call
+    ``Run `(apply func args)` on a worker of the C pool `p` (see `pool/spawn`)
+    and wait for the result. Task errors re-raise in the caller; the worker
+    survives. With `timeout` (seconds), raise a timeout error instead of
+    waiting; the late result is dropped. Blocks while the queue is full.``
+    [p func args &opt timeout]
+    (pool/acquire p)
+    (pool/dispatch p func args :call timeout))
+
+  (defn pool/submit
+    ``Enqueue `(apply func args)` on the C pool `p` and return a 1-slot
+    reply channel. `(ev/take ch)` gives the result; task errors arrive as
+    `[:pool-error err]`. Blocks while the queue is full.``
+    [p func args]
+    (pool/acquire p)
+    (pool/dispatch p func args :submit))
+
+  (defn pool/collect
+    ``Take one result from a `pool/submit` reply channel, re-raising
+    `[:pool-error err]` as an error. With `timeout` (seconds), raise a
+    timeout error instead of waiting.``
+    [rch &opt timeout]
+    (def raw
+      (if (nil? timeout)
+        (ev/take rch)
+        (let [tch (ev/chan 1)]
+          (ev/go (fn [] (ev/sleep timeout) (ev/give tch :pool-timed-out)))
+          (def sel (ev/select rch tch))
+          (if (= tch (sel 1))
+            (error "pool call timed out")
+            (sel 2)))))
+    (if (and (tuple? raw) (= 2 (length raw)) (= :pool-error (raw 0)))
+      (error (raw 1))
+      raw))
+
+  (defn pool/map
+    ``Fan `func` over `arglist` (each element is the argument array for one
+    call) on the C pool `p` and collect results in order. Task errors
+    re-raise; `timeout` applies per result.``
+    [p func arglist &opt timeout]
+    (def chans (map (fn [args] (pool/submit p func args)) arglist))
+    (map (fn [ch] (pool/collect ch timeout)) chans))
+
 (compwhen (dyn 'net/listen)
   (defn net/server
     ``

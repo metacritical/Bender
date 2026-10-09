@@ -24,68 +24,197 @@
 # M4a: pooled warm-VM executors (examples/pool.janet). Each file runs
 # in its own process, so no settings leak between suites.
 
-(import ../examples/pool :as pool)
+(import ../examples/pool :as jpool)
 
 # 1. Basic calls with arg round-trips across the pool.
-(let [p (pool/spawn 2)]
-  (assert (= 7 (pool/call p + [3 4])) "call add")
-  (assert (= 49 (pool/call p (fn [x] (* x x)) [7])) "call closure")
-  (assert (deep= @{:k 7} (pool/call p (fn [x] @{:k x}) [7])) "table arg")
-  (pool/stop p))
+(let [p (jpool/spawn 2)]
+  (assert (= 7 (jpool/call p + [3 4])) "call add")
+  (assert (= 49 (jpool/call p (fn [x] (* x x)) [7])) "call closure")
+  (assert (deep= @{:k 7} (jpool/call p (fn [x] @{:k x}) [7])) "table arg")
+  (jpool/stop p))
 
 # 2. Task errors re-raise in the caller; the pool survives.
-(let [p (pool/spawn 2)]
+(let [p (jpool/spawn 2)]
   (assert-error-value "task error surfaces" "kaboom"
-    (pool/call p (fn [_] (error "kaboom")) [nil]))
-  (assert (= 8 (pool/call p + [3 5])) "pool survives errors")
-  (pool/stop p))
+    (jpool/call p (fn [_] (error "kaboom")) [nil]))
+  (assert (= 8 (jpool/call p + [3 5])) "pool survives errors")
+  (jpool/stop p))
 
 # 3. Call timeout fires on slow tasks; the task itself still runs.
-(let [p (pool/spawn 1)]
-  (assert-error "call timeout" (pool/call p (fn [_] (ev/sleep 1) :slow) [nil] 0.05))
-  (pool/stop p))
+(let [p (jpool/spawn 1)]
+  (assert-error "call timeout" (jpool/call p (fn [_] (ev/sleep 1) :slow) [nil] 0.05))
+  (jpool/stop p))
 
 # 4. More tasks than workers: everything runs, all correct.
-(let [p (pool/spawn 3)]
+(let [p (jpool/spawn 3)]
   (assert (deep= (map (fn [i] (* i i)) (range 20))
-                 (pool/map p (fn [x] (* x x)) (map (fn [i] [i]) (range 20))))
+                 (jpool/map p (fn [x] (* x x)) (map (fn [i] [i]) (range 20))))
           "20 tasks over 3 workers")
-  (pool/stop p))
+  (jpool/stop p))
 
 # 5. pool/map preserves order and takes per-call arg arrays.
-(let [p (pool/spawn 2)]
-  (assert (deep= @[3 7 11] (pool/map p + [[1 2] [3 4] [5 6]])) "map order")
-  (pool/stop p))
+(let [p (jpool/spawn 2)]
+  (assert (deep= @[3 7 11] (jpool/map p + [[1 2] [3 4] [5 6]])) "map order")
+  (jpool/stop p))
 
 # 6. Parallelism: 8 x 50ms sleeps on 4 workers finish well under the
 # 400ms serial cost (generous bound for loaded machines).
+(let [p (jpool/spawn 4)
+      t0 (os/clock)]
+  (jpool/map p (fn [_] (ev/sleep 0.05) :ok) (map (fn [_] [nil]) (range 8)))
+  (def dt (- (os/clock) t0))
+  (assert (< dt 0.3) (string "parallel speedup, took " dt))
+  (jpool/stop p))
+
+# 7. submit/collect split: raw reply channels compose.
+(let [p (jpool/spawn 2)
+      c1 (jpool/submit p + [1 2])
+      c2 (jpool/submit p + [10 20])]
+  (assert (= 3 (ev/take c1)) "submit channel 1")
+  (assert (= 30 (ev/take c2)) "submit channel 2")
+  (jpool/stop p))
+
+# 8. Lifecycle: stop joins every worker; calls after stop time out
+# (queue has no takers — at-most-once, same as dead mailboxes).
+(let [p (jpool/spawn 2)]
+  (assert (= 2 (jpool/call p + [1 1])) "pre-stop call")
+  (jpool/stop p)
+  (var any-alive false)
+  (each w (p :workers) (when (thread/alive? w) (set any-alive true)))
+  (assert (not any-alive) "all workers joined")
+  (assert-error "call after stop" (jpool/call p + [1 1] 0.05)))
+
+# 9. Bad spawn args refused.
+(assert-error "zero threads" (jpool/spawn 0))
+(assert-error "non-integer threads" (jpool/spawn 2.5))
+
+# M4c: C warm-VM pool (core pool/*). Same semantics as above, one hop,
+# direct completions for call. Bare pool/* names are the C runtime here
+# (the Janet reference impl is jpool above).
+
+# C1. Basic calls with arg round-trips.
+(let [p (pool/spawn 2)]
+  (assert (= 7 (pool/call p + [3 4])) "c call add")
+  (assert (= 49 (pool/call p (fn [x] (* x x)) [7])) "c call closure")
+  (assert (deep= @{:k 7} (pool/call p (fn [x] @{:k x}) [7])) "c table arg")
+  (assert (deep= [1 2 3] (pool/call p (fn [& xs] xs) [1 2 3])) "c varargs")
+  (pool/stop p))
+
+# C2. Task errors re-raise; the pool survives.
+(let [p (pool/spawn 2)]
+  (assert-error-value "c task error surfaces" "kaboom"
+    (pool/call p (fn [_] (error "kaboom")) [nil]))
+  (assert (= 8 (pool/call p + [3 5])) "c pool survives errors")
+  (pool/stop p))
+
+# C3. Call timeout fires; the late result is dropped, pool reusable.
+(let [p (pool/spawn 1)]
+  (assert-error "c call timeout" (pool/call p (fn [_] (ev/sleep 1) :slow) [nil] 0.05))
+  (assert (= :quick (pool/call p (fn [_] :quick) [nil])) "c reusable after timeout")
+  (pool/stop p))
+
+# C4. More tasks than workers; map order preserved.
+(let [p (pool/spawn 3)]
+  (assert (deep= (map (fn [i] (* i i)) (range 20))
+                 (pool/map p (fn [x] (* x x)) (map (fn [i] [i]) (range 20))))
+          "c 20 tasks over 3 workers")
+  (assert (deep= @[3 7 11] (pool/map p + [[1 2] [3 4] [5 6]])) "c map order")
+  (pool/stop p))
+
+# C5. Parallelism: 8 x 50ms sleeps on 4 workers well under serial cost.
 (let [p (pool/spawn 4)
       t0 (os/clock)]
   (pool/map p (fn [_] (ev/sleep 0.05) :ok) (map (fn [_] [nil]) (range 8)))
   (def dt (- (os/clock) t0))
-  (assert (< dt 0.3) (string "parallel speedup, took " dt))
+  (assert (< dt 0.3) (string "c parallel speedup, took " dt))
   (pool/stop p))
 
-# 7. submit/collect split: raw reply channels compose.
+# C6. submit/collect split; collect timeout; submit errors as tuples.
 (let [p (pool/spawn 2)
       c1 (pool/submit p + [1 2])
       c2 (pool/submit p + [10 20])]
-  (assert (= 3 (ev/take c1)) "submit channel 1")
-  (assert (= 30 (ev/take c2)) "submit channel 2")
+  (assert (= 3 (pool/collect c1)) "c submit channel 1")
+  (assert (= 30 (pool/collect c2)) "c submit channel 2")
+  (def c3 (pool/submit p (fn [_] (error "nope")) [nil]))
+  (assert (deep= [:pool-error "nope"] (ev/take c3)) "c error tuple on wire")
+  (assert-error-value "c collect re-raises" "nope"
+    (pool/collect (pool/submit p (fn [_] (error "nope")) [nil])))
+  (assert-error "c collect timeout"
+    (pool/collect (pool/submit p (fn [_] (ev/sleep 1) :slow) [nil]) 0.05))
   (pool/stop p))
 
-# 8. Lifecycle: stop joins every worker; calls after stop time out
-# (queue has no takers — at-most-once, same as dead mailboxes).
-(let [p (pool/spawn 2)]
-  (assert (= 2 (pool/call p + [1 1])) "pre-stop call")
-  (pool/stop p)
-  (var any-alive false)
-  (each w (p :workers) (when (thread/alive? w) (set any-alive true)))
-  (assert (not any-alive) "all workers joined")
-  (assert-error "call after stop" (pool/call p + [1 1] 0.05)))
+# C7. Fibers as tasks resume with the args array; ev works in tasks.
+(let [p (pool/spawn 2)
+      fib (fiber/new (fn [a] (get a 0)))]
+  (assert (= 41 (pool/call p fib [41])) "c fiber task")
+  (assert (= :slept (pool/call p (fn [_] (ev/sleep 0.02) :slept) [nil])) "c ev in task")
+  (pool/stop p))
 
-# 9. Bad spawn args refused.
-(assert-error "zero threads" (pool/spawn 0))
-(assert-error "non-integer threads" (pool/spawn 2.5))
+# C8. Backpressure: second submit blocks while worker is wedged.
+# NOTE: the gate is a thread-chan — plain channels are single-VM and
+# must never cross into tasks (owner give would schedule the worker's
+# fiber on the owner's queue).
+(let [p (pool/spawn 1 1)
+      gate (ev/thread-chan)
+      slowch (pool/submit p (fn [_] (ev/take gate) :slow) [nil])]
+  (ev/sleep 0.1) # let the worker take the slow task
+  (var second-done false)
+  (ev/go (fn [] (pool/submit p + [1 1]) (set second-done true)))
+  (ev/sleep 0.1)
+  (assert (not second-done) "c backpressure blocks at capacity")
+  (ev/give gate :go)
+  (assert (= :slow (pool/collect slowch)) "c wedged task completes")
+  (ev/sleep 0.1)
+  (assert second-done "c unblocked after drain")
+  (pool/stop p))
+
+# C9. Lifecycle: stop drains, joins, and use-after-stop panics (fail-loud,
+# unlike the reference impl, where calls after stop hang for a timeout).
+(let [p (pool/spawn 2)]
+  (assert (= 2 (pool/call p + [1 1])) "c pre-stop call")
+  (pool/stop p)
+  (assert-error "c double stop" (pool/stop p))
+  (assert-error "c call after stop" (pool/call p + [1 1]))
+  (assert-error "c submit after stop" (pool/submit p + [1 1])))
+
+# C10. Argument validation (pools stopped even on failure paths).
+(assert-error "c zero threads" (pool/spawn 0))
+(assert-error "c too many threads" (pool/spawn 1000000))
+(assert-error "c non-integer threads" (pool/spawn 2.5))
+(assert-error "c bad capacity" (pool/spawn 2 0))
+(let [p (pool/spawn 1)]
+  (assert-error "c non-function" (pool/call p 42 [1]))
+  (pool/stop p))
+(let [p (pool/spawn 1)]
+  (assert-error "c arity mismatch" (pool/call p (fn [a b] [a b]) [1]))
+  (pool/stop p))
+(let [p (pool/spawn 1)]
+  (assert-error "c bad args" (pool/call p + 42))
+  (pool/stop p))
+(let [p (pool/spawn 1)]
+  (assert-error "c bad kind" (pool/dispatch p + [1] :bogus))
+  (pool/stop p))
+(let [p (pool/spawn 1)]
+  (assert-error "c timeout needs call" (pool/dispatch p + [1] :submit 1))
+  (pool/stop p))
+
+# C11. Registry flags: :a skips abstract copies, :c skips cfunc copies.
+(let [p (pool/spawn 1 nil :a)]
+  (assert (= 3 (pool/call p + [1 2])) "c :a keeps cfuncs")
+  (pool/stop p))
+(let [p (pool/spawn 1 nil :c)]
+  (assert (= 49 (pool/call p (fn [x] (* x x)) [7])) "c :c keeps bytecode")
+  (pool/stop p))
+
+# C12. Handles stay owner-local (share-nothing boundary).
+(let [p (pool/spawn 1)]
+  (assert-error "c pool handle refuses marshal" (marshal p))
+  (pool/stop p))
+# thread/new re-raises the worker's owner-check panic (ev/thread would
+# only report it via the supervisor channel and return nil).
+(let [p (pool/spawn 1)]
+  (assert-error "c pool handle refuses foreign threads"
+    (thread/join (thread/new (fn [q] (pool/call q + [1 1])) p)))
+  (pool/stop p))
 
 (end-suite)

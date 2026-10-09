@@ -3938,6 +3938,848 @@ JANET_CORE_FN(cfun_thread_alive,
     return janet_wrap_boolean(!handle->done);
 }
 
+/* M4c: pooled warm-VM task executors (C runtime). M one-shot tasks run
+ * over N long-lived worker VMs sharing one condvar queue: no per-task
+ * spawn cost (cf. thread/new, which boots a VM per call), one hop, and
+ * direct completion events for pool/call (no per-task reply channel).
+ * Share-nothing: [func args] go in and results come back via UNSAFE
+ * marshal copies. Fibers stay pinned: workers are 1:1 pthreads with
+ * isolated VMs (registries marshalled once at spawn, exactly like
+ * thread/new); only tasks move. This is M:N at job level — never
+ * migrating fibers. Cooperative like the rest of the layer: each task
+ * runs under a per-task janet_loop (so ev/sleep works inside tasks),
+ * but a task that suspends forever wedges its worker.
+ *
+ * Suspension discipline: every blocking cfun below has at most ONE
+ * trailing suspension (the proven take/join shape — code after
+ * janet_await never runs). Capacity tokens are therefore acquired in a
+ * separate step (pool/acquire, sequenced from Janet): the token take is
+ * its suspension, the result wait is dispatch's.
+ *
+ * Lifetime: the pool abstract is gcrooted at spawn and unrooted at
+ * stop, so the struct always outlives its workers (workers hold no
+ * pool refs). pool/stop joins every worker, then frees the internals;
+ * the type finalizer only handles the abandoned case (sets stopping +
+ * broadcasts; the last exiting worker frees the contents). Abandoning
+ * a pool without pool/stop leaks its threads until process exit —
+ * documented, same class as leaked threads. */
+
+typedef struct JanetPoolTask {
+    uint8_t *bytes;          /* UNSAFE-marshalled [func args] tuple, malloc'd */
+    size_t len;
+    JanetVM *owner;          /* completion target */
+    JanetFiber *waiter;      /* pool/call path (direct completion), else NULL */
+    uint32_t waiter_sched;
+    void *reply;             /* pool/submit path: incref'd threaded channel, else NULL */
+    struct JanetPoolTask *next;
+} JanetPoolTask;
+
+typedef struct {
+#ifdef JANET_WINDOWS
+    CRITICAL_SECTION lock;
+    CONDITION_VARIABLE nonempty;
+#else
+    pthread_mutex_t lock;
+    pthread_cond_t nonempty;
+#endif
+    JanetPoolTask *head, *tail;
+    int32_t count;
+    int stopping;            /* drain, then exit (stop or finalizer) */
+    int joined;              /* stop() completed: workers joined, contents freed */
+    int contents_freed;
+    int32_t n_workers;
+    int32_t live_workers;
+    JanetVM *owner;
+    uint32_t flags;
+    uint32_t sandbox_flags;
+    uint8_t *prologue;       /* marshalled registries, immutable after spawn */
+    size_t prologue_len;
+    JanetChannel *tokens;    /* capacity tokens (pool-incref'd, never rooted) */
+    JanetFiber *stop_waiter; /* pool/stop waiter (single), else NULL */
+    uint32_t stop_sched;
+    Janet self;              /* gcrooted wrapper: pins the struct until stop */
+#ifdef JANET_WINDOWS
+    HANDLE *threads;
+#else
+    pthread_t *threads;
+#endif
+} JanetPool;
+
+static void janet_pool_lock(JanetPool *pool) {
+#ifdef JANET_WINDOWS
+    EnterCriticalSection(&pool->lock);
+#else
+    pthread_mutex_lock(&pool->lock);
+#endif
+}
+
+static void janet_pool_unlock(JanetPool *pool) {
+#ifdef JANET_WINDOWS
+    LeaveCriticalSection(&pool->lock);
+#else
+    pthread_mutex_unlock(&pool->lock);
+#endif
+}
+
+static void janet_pool_broadcast(JanetPool *pool) {
+#ifdef JANET_WINDOWS
+    WakeAllConditionVariable(&pool->nonempty);
+#else
+    pthread_cond_broadcast(&pool->nonempty);
+#endif
+}
+
+static void janet_pool_signal(JanetPool *pool) {
+#ifdef JANET_WINDOWS
+    WakeConditionVariable(&pool->nonempty);
+#else
+    pthread_cond_signal(&pool->nonempty);
+#endif
+}
+
+/* Owner-loop callback: the last worker exited. Join (all already dead,
+ * so immediate), free the contents, wake the pool/stop waiter. Runs on
+ * the owner event loop — the only place teardown happens. */
+static void janet_pool_all_exited(JanetEVGenericMessage msg);
+
+static void janet_pool_sync_destroy(JanetPool *pool) {
+#ifdef JANET_WINDOWS
+    /* CONDITION_VARIABLE needs no destroy; CRITICAL_SECTION does. */
+    DeleteCriticalSection(&pool->lock);
+#else
+    pthread_cond_destroy(&pool->nonempty);
+    pthread_mutex_destroy(&pool->lock);
+#endif
+}
+
+/* Free queue/tasks/prologue/threads (not the abstract itself). Runs
+ * exactly once: by pool/stop (workers joined) or by the last exiting
+ * worker (abandoned path). Callers must exclude each other via the
+ * pool lock + contents_freed flag, except stop which is exclusive by
+ * construction (owner-only, single stop). */
+static void janet_pool_free_contents(JanetPool *pool) {
+    JanetPoolTask *t = pool->head;
+    while (t != NULL) {
+        JanetPoolTask *next = t->next;
+        /* Abandon-path remnants: tasks the drain never ran. Their reply
+         * channels keep them safe (worker incref pairs with this decref);
+         * direct-completion waiters are gone with the owner flow. */
+        if (t->reply != NULL) janet_abstract_decref_maybe_free(t->reply);
+        if (t->bytes != NULL) janet_free(t->bytes);
+        janet_free(t);
+        t = next;
+    }
+    pool->head = pool->tail = NULL;
+    if (pool->prologue != NULL) {
+        janet_free(pool->prologue);
+        pool->prologue = NULL;
+    }
+    if (pool->threads != NULL) {
+        /* Thread handles are joined (stop) or abandoned with the leak
+         * (documented): never closed here. Windows HANDLEs are closed
+         * by pool/stop after joining. */
+        janet_free(pool->threads);
+        pool->threads = NULL;
+    }
+    /* Drop the pool's own token ref; the wrapper-owned ref dies with
+     * the tokens wrapper. */
+    if (pool->tokens != NULL) {
+        janet_abstract_decref_maybe_free(pool->tokens);
+        pool->tokens = NULL;
+    }
+    pool->contents_freed = 1;
+}
+
+static int janet_pool_gc(void *p, size_t len) {
+    (void) len;
+    JanetPool *pool = (JanetPool *) p;
+    /* The wrapper is unreachable: no Janet code can name this pool
+     * anymore. Joined pools (and spawn-failure leftovers, already
+     * joined on the panic path) have no threads: free without the
+     * lock held — destroying a locked mutex is UB, and nothing else
+     * can run here. The live case (abandonment) never unroots, so it
+     * cannot reach here; if it ever does, only ask for a drain and
+     * leave the documented leak rather than freeing under workers. */
+    janet_pool_lock(pool);
+    if (!pool->joined && pool->live_workers != 0) {
+        pool->stopping = 1;
+        janet_pool_broadcast(pool);
+        janet_pool_unlock(pool);
+        return 0;
+    }
+    int do_free = !pool->contents_freed;
+    janet_pool_unlock(pool);
+    if (do_free) {
+        janet_pool_free_contents(pool);
+        janet_pool_sync_destroy(pool);
+    }
+    return 0;
+}
+
+static int janet_pool_mark(void *p, size_t len) {
+    (void) len;
+    (void) p;
+    /* Tasks reference no owner-VM heap objects (all payloads are
+     * malloc'd marshal buffers); waiters/replies are rooted per-call. */
+    return 0;
+}
+
+const JanetAbstractType janet_pool_type = {
+    "core/pool",
+    janet_pool_gc,
+    janet_pool_mark,
+    NULL, /* get */
+    NULL, /* put */
+    NULL, /* marshal (refuse: pools stay on the owner thread) */
+    NULL, /* unmarshal */
+    NULL, /* tostring */
+    NULL, /* compare */
+    NULL, /* hash */
+    NULL, /* next */
+    NULL, /* call */
+    NULL, /* length */
+    NULL, /* bytes */
+    NULL  /* gcperthread */
+};
+
+/* Best-effort reply give (at-most-once: dropped when closed). The reply
+ * channel has limit 1 and takes exactly one give, so mode 2 only fires
+ * on close — which we pre-check to avoid panicking on the owner loop. */
+static void janet_pool_give_reply(JanetChannel *chan, Janet msg) {
+    if (chan->closed) return;
+    janet_channel_push(chan, msg, 2);
+}
+
+typedef struct {
+    JanetFiber *waiter;      /* direct-completion waiter, else NULL */
+    uint32_t waiter_sched;
+    JanetChannel *reply;     /* reply channel (borrowed ref), else NULL */
+    uint8_t *bytes;
+    size_t len;
+    int is_error;
+} JanetPoolCompletion;
+
+static void janet_pool_complete(JanetEVGenericMessage msg) {
+    JanetPoolCompletion *c = (JanetPoolCompletion *) msg.argp;
+    Janet result = janet_wrap_nil();
+    if (c->bytes != NULL && c->len > 0) {
+        result = janet_unmarshal(c->bytes, c->len, JANET_MARSHAL_UNSAFE, NULL, NULL);
+        janet_free(c->bytes);
+    } else if (c->bytes != NULL) {
+        janet_free(c->bytes);
+    }
+    /* Same exactly-once waiter discipline as thread/join: deliver only
+     * if the waiter is still suspended in our await (a moved sched_id
+     * means timeout/cancel already resumed it — drop the value). */
+    if (c->waiter != NULL) {
+        JanetFiber *w = c->waiter;
+        uint32_t ws = c->waiter_sched;
+        c->waiter = NULL;
+        janet_gcunroot(janet_wrap_fiber(w));
+        if (w->sched_id == ws) {
+            if (c->is_error) {
+                janet_cancel(w, result);
+            } else {
+                janet_schedule(w, result);
+            }
+        }
+    }
+    if (c->reply != NULL) {
+        /* Submit path: exactly one give into a limit-1 channel. The
+         * task held a ref so the channel is alive here; drop ours. */
+        janet_pool_give_reply(c->reply, c->is_error
+            ? janet_wrap_tuple(janet_tuple_n((Janet[]) {
+                janet_ckeywordv("pool-error"), result }, 2))
+            : result);
+        janet_abstract_decref_maybe_free(c->reply);
+    }
+    janet_free(c);
+    janet_ev_dec_refcount();
+}
+
+/* Boot one worker VM from the shared prologue (registries), mirroring
+ * janet_thread_new_run's registry section. Returns NULL with the task
+ * fiber set up, or aborts on corrupt prologue (same fail-loud contract
+ * as thread/new). */
+typedef struct {
+    JanetPool *pool;
+    int index;
+} JanetPoolWorkerArgs;
+
+static void janet_pool_worker_boot(JanetPool *pool) {
+    janet_init();
+    janet_vm.sandbox_flags = pool->sandbox_flags;
+    const uint8_t *nextbytes = pool->prologue;
+    const uint8_t *endbytes = nextbytes + pool->prologue_len;
+    uint32_t flags = pool->flags;
+    if (!(flags & 0x2)) {
+        Janet aregv = janet_unmarshal(nextbytes, endbytes - nextbytes,
+            JANET_MARSHAL_UNSAFE, NULL, &nextbytes);
+        janet_assert(janet_checktype(aregv, JANET_TABLE), "pool prologue: abstract registry");
+        janet_vm.abstract_registry = janet_unwrap_table(aregv);
+        janet_gcroot(janet_wrap_table(janet_vm.abstract_registry));
+    }
+    if (!(flags & 0x4)) {
+        uint32_t count1;
+        memcpy(&count1, nextbytes, sizeof(count1));
+        size_t count = (size_t) count1;
+        janet_assert(count <= (size_t)(endbytes - nextbytes - sizeof(count1)) / sizeof(JanetCFunRegistry),
+            "pool prologue: registry bounds");
+        janet_vm.registry_count = count;
+        janet_vm.registry_cap = count;
+        janet_vm.registry = janet_malloc(count * sizeof(JanetCFunRegistry));
+        if (janet_vm.registry == NULL) {
+            JANET_OUT_OF_MEMORY;
+        }
+        janet_vm.registry_dirty = 1;
+        nextbytes += sizeof(uint32_t);
+        memcpy(janet_vm.registry, nextbytes, count * sizeof(JanetCFunRegistry));
+    }
+}
+
+/* Run one task payload ([func args] tuple) to completion in this worker
+ * VM under a per-task janet_loop (so ev/sleep works inside tasks).
+ * Returns the result value; sets *is_error on task failure. */
+static Janet janet_pool_run_task(Janet taskv, int *is_error) {
+    *is_error = 0;
+    const Janet *pair = janet_unwrap_tuple(taskv);
+    Janet funcv = pair[0];
+    Janet argsv = pair[1];
+    JanetFiber *fiber;
+    if (janet_checktype(funcv, JANET_FIBER)) {
+        /* Fibers resume with the args array as the single resume value
+         * (same single-value shape as thread/new). */
+        fiber = janet_unwrap_fiber(funcv);
+        janet_schedule(fiber, argsv);
+    } else {
+        JanetFunction *func = janet_unwrap_function(funcv);
+        const Janet *argdata = NULL;
+        int32_t nargs = 0;
+        if (janet_checktype(argsv, JANET_ARRAY)) {
+            nargs = janet_unwrap_array(argsv)->count;
+            argdata = janet_unwrap_array(argsv)->data;
+        } else {
+            nargs = janet_tuple_length(janet_unwrap_tuple(argsv));
+            argdata = janet_unwrap_tuple(argsv);
+        }
+        fiber = janet_fiber(func, 64, nargs, argdata);
+        janet_assert(fiber != NULL, "pool task: bad fiber");
+        janet_schedule(fiber, janet_wrap_nil());
+    }
+    fiber->supervisor_channel = NULL;
+    janet_loop();
+    JanetFiberStatus status = janet_fiber_status(fiber);
+    if (status == JANET_STATUS_ERROR) {
+        *is_error = 1;
+        return fiber->last_value;
+    }
+    if (status != JANET_STATUS_DEAD) {
+        *is_error = 1;
+        return janet_cstringv("pool task did not complete (yielded)");
+    }
+    return fiber->last_value;
+}
+
+#ifdef JANET_WINDOWS
+static DWORD WINAPI janet_pool_worker(LPVOID ptr) {
+#else
+static void *janet_pool_worker(void *ptr) {
+#endif
+    JanetPoolWorkerArgs *wargs = (JanetPoolWorkerArgs *) ptr;
+    JanetPool *pool = wargs->pool;
+    janet_free(wargs);
+    janet_pool_worker_boot(pool);
+    for (;;) {
+        JanetPoolTask *task;
+        janet_pool_lock(pool);
+        while (pool->head == NULL && !pool->stopping) {
+#ifdef JANET_WINDOWS
+            SleepConditionVariableCS(&pool->nonempty, &pool->lock, INFINITE);
+#else
+            pthread_cond_wait(&pool->nonempty, &pool->lock);
+#endif
+        }
+        /* Drain-then-exit: take remaining tasks while stopping, but
+         * leave once the queue is empty. */
+        if (pool->head == NULL) {
+            /* stopping && empty: exit. Teardown belongs to the
+             * all-exited callback (pool/stop joins there); the last
+             * exiting worker only reports. The abandoned path leaks
+             * by design (documented) since the pool wrapper stays
+             * gcrooted until stop. */
+            pool->live_workers--;
+            int last = (pool->live_workers == 0);
+            janet_pool_unlock(pool);
+            if (last) {
+                JanetEVGenericMessage msg;
+                memset(&msg, 0, sizeof(msg));
+                msg.argp = pool;
+                /* No refcount here (thread-local counters): pool/stop
+                 * inc'd on the owner; the callback decs there. */
+                janet_ev_post_event(pool->owner, janet_pool_all_exited, msg);
+            }
+            janet_deinit();
+#ifdef JANET_WINDOWS
+            return 0;
+#else
+            return NULL;
+#endif
+        }
+        task = pool->head;
+        pool->head = task->next;
+        if (pool->head == NULL) pool->tail = NULL;
+        pool->count--;
+        janet_pool_unlock(pool);
+        /* Run + complete. The capacity token is held for the task's
+         * whole lifetime and handed back after completion posts: that
+         * is what bounds memory (a wedged worker pins its capacity).
+         * Total tokens are constant, so the give always fits. */
+        Janet taskv = janet_unmarshal(task->bytes, task->len,
+            JANET_MARSHAL_UNSAFE, NULL, NULL);
+        janet_free(task->bytes);
+        task->bytes = NULL;
+        Janet taskv_j = taskv;
+        janet_gcroot(taskv_j);
+        int is_error = 0;
+        JanetTryState tstate;
+        Janet result = janet_wrap_nil();
+        JanetSignal sig = janet_try(&tstate);
+        if (!sig) {
+            result = janet_pool_run_task(taskv, &is_error);
+            janet_restore(&tstate);
+        } else {
+            janet_restore(&tstate);
+            result = tstate.payload;
+            is_error = 1;
+        }
+        Janet result_j = result;
+        janet_gcroot(result_j);
+        uint8_t *bytes = NULL;
+        size_t len = 0;
+        JanetTryState tstate2;
+        JanetSignal sig2 = janet_try(&tstate2);
+        if (!sig2) {
+            janet_thread_marshal_result_copy(result, &bytes, &len);
+            janet_restore(&tstate2);
+        } else {
+            janet_restore(&tstate2);
+            Janet fallback = janet_cstringv("pool result failed to marshal");
+            Janet fallback_j = fallback;
+            janet_gcroot(fallback_j);
+            janet_thread_marshal_result_copy(fallback, &bytes, &len);
+            janet_gcunroot(fallback_j);
+            is_error = 1;
+        }
+        janet_gcunroot(taskv_j);
+        janet_gcunroot(result_j);
+        JanetPoolCompletion *comp = janet_malloc(sizeof(JanetPoolCompletion));
+        if (NULL == comp) {
+            JANET_OUT_OF_MEMORY;
+        }
+        comp->waiter = task->waiter;
+        comp->waiter_sched = task->waiter_sched;
+        comp->reply = task->reply;
+        comp->bytes = bytes;
+        comp->len = len;
+        comp->is_error = is_error;
+        JanetVM *owner = task->owner;
+        janet_free(task);
+        JanetEVGenericMessage msg;
+        memset(&msg, 0, sizeof(msg));
+        msg.argp = comp;
+        /* No refcount here: the matching inc ran on the owner at
+         * dispatch (refcounts are thread-local; worker-inc/owner-dec
+         * would strand the worker's counter and wedge its next loop). */
+        janet_ev_post_event(owner, janet_pool_complete, msg);
+        /* Hand the capacity token back now that the task is complete. */
+        janet_channel_push(pool->tokens, janet_wrap_nil(), 2);
+    }
+}
+
+static void janet_pool_all_exited(JanetEVGenericMessage msg) {
+    JanetPool *pool = (JanetPool *) msg.argp;
+    /* Join first (all workers already exited: immediate, loop unaffected).
+     * Teardown of the internals happens in the type finalizer, not here:
+     * the pool struct (and its lock) must stay mapped while any handle
+     * Janet exists, so use-after-stop always fails loud via the flags
+     * instead of touching freed memory. */
+#ifdef JANET_WINDOWS
+    for (int32_t i = 0; i < pool->n_workers; i++) {
+        if (pool->threads[i] != NULL) {
+            WaitForSingleObject(pool->threads[i], INFINITE);
+            CloseHandle(pool->threads[i]);
+            pool->threads[i] = NULL;
+        }
+    }
+#else
+    for (int32_t i = 0; i < pool->n_workers; i++) {
+        pthread_join(pool->threads[i], NULL);
+    }
+#endif
+    janet_pool_lock(pool);
+    pool->joined = 1;
+    JanetFiber *w = pool->stop_waiter;
+    uint32_t ws = pool->stop_sched;
+    pool->stop_waiter = NULL;
+    janet_pool_unlock(pool);
+    /* Unpin the wrapper now that no thread can touch the pool. */
+    janet_gcunroot(pool->self);
+    pool->self = janet_wrap_nil();
+    /* Wake the stopper unless it moved on (cancel); teardown stands. */
+    if (w != NULL) {
+        janet_gcunroot(janet_wrap_fiber(w));
+        if (w->sched_id == ws) {
+            janet_schedule(w, janet_wrap_nil());
+        }
+    }
+    janet_ev_dec_refcount();
+}
+
+static JanetPool *janet_getpool(const Janet *argv, int32_t n) {
+    JanetPool *pool = janet_getabstract(argv, n, &janet_pool_type);
+    if (pool->owner != &janet_vm) {
+        janet_panic("pool used from non-owner thread");
+    }
+    return pool;
+}
+
+JANET_CORE_FN(cfun_pool_spawn,
+              "(pool/spawn nthreads &opt capacity flags)",
+              "Start a pool of `nthreads` worker VMs sharing one task queue "
+              "and return a pool handle. `capacity` (default 1024) bounds "
+              "queued tasks; submitters block when full. Workers run an "
+              "isolated VM each (share-nothing, registries copied once at "
+              "spawn like thread/new). Flags `:a`/`:c` skip the abstract / "
+              "cfunction registry copies. Use pool/call, pool/submit, "
+              "pool/map to run tasks and pool/stop to drain and shut down "
+              "(required: an unstopped pool leaks its threads). Must be "
+              "called from the owning thread.") {
+    janet_sandbox_assert(JANET_SANDBOX_THREADS);
+    janet_arity(argc, 1, 3);
+    int32_t nthreads = janet_getinteger(argv, 0);
+    if (nthreads <= 0 || nthreads > 1024) {
+        janet_panic("pool thread count must be between 1 and 1024");
+    }
+    int32_t capacity = 1024;
+    if (argc >= 2 && !janet_checktype(argv[1], JANET_NIL)) {
+        capacity = janet_getinteger(argv, 1);
+    }
+    if (capacity <= 0 || capacity > 0xFFFFFF) {
+        janet_panic("pool capacity must be between 1 and 16777215");
+    }
+    uint64_t flags = 0;
+    if (argc >= 3) {
+        flags = janet_getflags(argv, 2, "ac");
+    }
+    JanetPool *pool = janet_abstract_threaded(&janet_pool_type, sizeof(JanetPool));
+    memset(pool, 0, sizeof(JanetPool));
+#ifdef JANET_WINDOWS
+    InitializeCriticalSection(&pool->lock);
+    InitializeConditionVariable(&pool->nonempty);
+#else
+    if (pthread_mutex_init(&pool->lock, NULL)) {
+        janet_panic("pool mutex init failed");
+    }
+    if (pthread_cond_init(&pool->nonempty, NULL)) {
+        pthread_mutex_destroy(&pool->lock);
+        janet_panic("pool condvar init failed");
+    }
+#endif
+    pool->owner = &janet_vm;
+    pool->flags = (uint32_t) flags;
+    pool->sandbox_flags = janet_vm.sandbox_flags;
+    pool->n_workers = nthreads;
+    pool->live_workers = nthreads;
+    /* Prologue: registries marshalled once, shared read-only (same
+     * layout thread/new builds per thread). */
+    {
+        JanetBuffer prologue;
+        janet_buffer_init(&prologue, 0);
+        if (!(flags & 0x2)) {
+            janet_marshal(&prologue, janet_wrap_table(janet_vm.abstract_registry), NULL, JANET_MARSHAL_UNSAFE);
+        }
+        if (!(flags & 0x4)) {
+            janet_assert(janet_vm.registry_count <= INT32_MAX, "assert failed size check");
+            uint32_t temp = (uint32_t) janet_vm.registry_count;
+            janet_buffer_push_bytes(&prologue, (uint8_t *) &temp, sizeof(temp));
+            janet_buffer_push_bytes(&prologue, (uint8_t *) janet_vm.registry,
+                (int32_t) janet_vm.registry_count * sizeof(JanetCFunRegistry));
+        }
+        if (prologue.count > 0) {
+            pool->prologue = janet_malloc((size_t) prologue.count);
+            if (NULL == pool->prologue) {
+                janet_buffer_deinit(&prologue);
+                janet_pool_sync_destroy(pool);
+                JANET_OUT_OF_MEMORY;
+            }
+            memcpy(pool->prologue, prologue.data, (size_t) prologue.count);
+            pool->prologue_len = (size_t) prologue.count;
+        }
+        janet_buffer_deinit(&prologue);
+    }
+    /* Capacity tokens: constant supply; submit takes, workers return. */
+    pool->tokens = janet_channel_make_threaded((uint32_t) capacity);
+    janet_abstract_incref(pool->tokens);
+    for (int32_t i = 0; i < capacity; i++) {
+        janet_channel_push(pool->tokens, janet_wrap_nil(), 2);
+    }
+    /* Pin the wrapper until stop: workers must never see a freed pool. */
+    pool->self = janet_wrap_abstract(pool);
+    janet_gcroot(pool->self);
+#ifdef JANET_WINDOWS
+    pool->threads = janet_malloc((size_t) nthreads * sizeof(HANDLE));
+#else
+    pool->threads = janet_malloc((size_t) nthreads * sizeof(pthread_t));
+#endif
+    if (NULL == pool->threads) {
+        janet_pool_free_contents(pool);
+        janet_pool_sync_destroy(pool);
+        janet_gcunroot(pool->self);
+        JANET_OUT_OF_MEMORY;
+    }
+    memset(pool->threads, 0, (size_t) nthreads * sizeof(pool->threads[0]));
+    for (int32_t i = 0; i < nthreads; i++) {
+        JanetPoolWorkerArgs *wargs = janet_malloc(sizeof(JanetPoolWorkerArgs));
+        if (NULL == wargs) {
+            pool->stopping = 1;
+            janet_pool_broadcast(pool);
+            goto pool_spawn_failed;
+        }
+        wargs->pool = pool;
+        wargs->index = i;
+#ifdef JANET_WINDOWS
+        pool->threads[i] = CreateThread(NULL, 0, janet_pool_worker, wargs, 0, NULL);
+        if (NULL == pool->threads[i]) goto pool_spawn_failed;
+#else
+        int err = pthread_create(&pool->threads[i], NULL, janet_pool_worker, wargs);
+        if (err) goto pool_spawn_failed;
+#endif
+        continue;
+pool_spawn_failed:
+        if (wargs != NULL) janet_free(wargs);
+        /* Reap the workers that did start (they exit on stopping with
+         * an empty queue), then release everything and raise. */
+        pool->stopping = 1;
+        janet_pool_broadcast(pool);
+        for (int32_t j = 0; j < i; j++) {
+#ifdef JANET_WINDOWS
+            WaitForSingleObject(pool->threads[j], INFINITE);
+            CloseHandle(pool->threads[j]);
+#else
+            pthread_join(pool->threads[j], NULL);
+#endif
+        }
+        janet_pool_free_contents(pool);
+        janet_pool_sync_destroy(pool);
+        janet_gcunroot(pool->self);
+        janet_panic("pool failed to start workers");
+    }
+    return janet_wrap_abstract(pool);
+}
+
+JANET_CORE_FN(cfun_pool_acquire,
+              "(pool/acquire p)",
+              "Take one capacity token from pool `p`, blocking while the "
+              "queue is full. Internal building block for pool/call and "
+              "pool/submit: every acquire must be followed by exactly one "
+              "pool/dispatch (the wrappers do this back-to-back with no "
+              "suspension between, so the token cannot strand).") {
+    janet_fixarity(argc, 1);
+    JanetPool *pool = janet_getpool(argv, 0);
+    if (janet_vm.coerce_error) {
+        janet_panic("cannot acquire pool token inside janet_call");
+    }
+    /* Fail loud on dead pools before touching the token channel (its
+     * memory is released at wrapper collection). */
+    janet_pool_lock(pool);
+    int dead = pool->stopping || pool->joined;
+    janet_pool_unlock(pool);
+    if (dead) {
+        janet_panic("pool is stopping");
+    }
+    Janet item;
+    if (janet_channel_pop(pool->tokens, &item, 0)) {
+        janet_schedule(janet_vm.root_fiber, item);
+    }
+    janet_await();
+}
+
+JANET_CORE_FN(cfun_pool_dispatch,
+              "(pool/dispatch p func args kind &opt timeout)",
+              "Enqueue `[func args]` on pool `p` (caller must hold a token "
+              "from pool/acquire) and, for `:call`, wait for the result. "
+              "`func` takes N arguments (fibers resume with the args array "
+              "as one value); `args` is an array or tuple. `:submit` "
+              "returns a 1-slot reply channel instead of waiting; task "
+              "errors arrive as `[:pool-error err]` and pool/call re-raises "
+              "them in the caller. With `timeout` (seconds, `:call` only), "
+              "raise a timeout error instead of waiting; the late result "
+              "is dropped. Panics if the pool is stopping (the token is "
+              "handed back first).") {
+    janet_arity(argc, 4, 5);
+    JanetPool *pool = janet_getpool(argv, 0);
+    if (janet_vm.coerce_error) {
+        janet_panic("cannot dispatch pool task inside janet_call");
+    }
+    int is_call;
+    if (janet_checktype(argv[3], JANET_KEYWORD)) {
+        const uint8_t *kw = janet_unwrap_keyword(argv[3]);
+        if (!strcmp((const char *) kw, "call")) {
+            is_call = 1;
+        } else if (!strcmp((const char *) kw, "submit")) {
+            is_call = 0;
+        } else {
+            janet_panic("pool kind must be :call or :submit");
+        }
+    } else {
+        janet_panic("pool kind must be :call or :submit");
+    }
+    double timeout = janet_optnumber(argv, argc, 4, INFINITY);
+    if (!is_call && timeout != INFINITY) {
+        janet_panic("pool timeout needs :call");
+    }
+    /* Validate the call shape on the owner (clear errors beat worker
+     * asserts): functions take exactly nargs, fibers take the array. */
+    int32_t nargs;
+    if (janet_checktype(argv[2], JANET_ARRAY)) {
+        nargs = janet_unwrap_array(argv[2])->count;
+    } else if (janet_checktype(argv[2], JANET_TUPLE)) {
+        nargs = janet_tuple_length(janet_unwrap_tuple(argv[2]));
+    } else {
+        janet_panic("pool args must be an array or tuple");
+    }
+    if (janet_checktype(argv[1], JANET_FUNCTION)) {
+        JanetFunction *func = janet_unwrap_function(argv[1]);
+        if (nargs < func->def->min_arity ||
+                (func->def->max_arity >= 0 && nargs > func->def->max_arity)) {
+            janet_panic("pool function arity mismatch");
+        }
+    } else if (!janet_checktype(argv[1], JANET_FIBER)) {
+        janet_panic("pool func must be a function or fiber");
+    }
+    /* Marshal [func args] (UNSAFE: crosses into the worker VM). */
+    Janet pair[2];
+    pair[0] = argv[1];
+    pair[1] = argv[2];
+    JanetBuffer payload;
+    janet_buffer_init(&payload, 0);
+    janet_marshal(&payload, janet_wrap_tuple(janet_tuple_n(pair, 2)), NULL, JANET_MARSHAL_UNSAFE);
+    uint8_t *bytes = NULL;
+    size_t len = (size_t) payload.count;
+    if (len > 0) {
+        bytes = janet_malloc(len);
+        if (NULL == bytes) {
+            janet_buffer_deinit(&payload);
+            JANET_OUT_OF_MEMORY;
+        }
+        memcpy(bytes, payload.data, len);
+    }
+    janet_buffer_deinit(&payload);
+    JanetPoolTask *task = janet_malloc(sizeof(JanetPoolTask));
+    if (NULL == task) {
+        if (bytes != NULL) janet_free(bytes);
+        JANET_OUT_OF_MEMORY;
+    }
+    task->bytes = bytes;
+    task->len = len;
+    task->owner = &janet_vm;
+    task->waiter = NULL;
+    task->waiter_sched = 0;
+    task->reply = NULL;
+    task->next = NULL;
+    Janet replyv = janet_wrap_nil();
+    if (!is_call) {
+        JanetChannel *reply = janet_channel_make_threaded(1);
+        janet_abstract_incref(reply);
+        task->reply = reply;
+        replyv = janet_wrap_abstract(reply);
+    }
+    janet_pool_lock(pool);
+    if (pool->stopping || pool->joined) {
+        janet_pool_unlock(pool);
+        /* Hand the token back: total supply is constant, so it fits. */
+        janet_channel_push(pool->tokens, janet_wrap_nil(), 2);
+        if (task->reply != NULL) janet_abstract_decref_maybe_free(task->reply);
+        if (task->bytes != NULL) janet_free(task->bytes);
+        janet_free(task);
+        janet_panic("pool is stopping");
+    }
+    if (pool->tail != NULL) {
+        pool->tail->next = task;
+    } else {
+        pool->head = task;
+    }
+    pool->tail = task;
+    pool->count++;
+    janet_pool_signal(pool);
+    janet_pool_unlock(pool);
+    /* Owner-side ref for the outstanding completion (paired with the
+     * dec in janet_pool_complete). Thread-local counters: must inc
+     * where the dec runs. */
+    janet_ev_inc_refcount();
+    if (!is_call) {
+        return replyv;
+    }
+    /* :call: single trailing suspension (take/join shape). The waiter
+     * fiber is rooted; the completion unroots it. The pool itself is
+     * pinned from spawn until stop. */
+    JanetFiber *root = janet_root_fiber();
+    if (timeout != INFINITY &&
+            !(root->gc.flags & JANET_FIBER_EV_GCFLAG_ROOT)) {
+        janet_panic("pool/call with timeout requires an ev task");
+    }
+    /* Late-binding the waiter: the task is already queued, so claim it. */
+    janet_pool_lock(pool);
+    task->waiter = root;
+    task->waiter_sched = root->sched_id;
+    janet_pool_unlock(pool);
+    janet_gcroot(janet_wrap_fiber(root));
+    if (timeout != INFINITY) {
+        janet_addtimeout(timeout);
+    }
+    janet_await();
+    /* Unreachable when suspending; the completion schedules this fiber
+     * with the task result (or cancels with its error). */
+    return janet_wrap_nil();
+}
+
+JANET_CORE_FN(cfun_pool_stop,
+              "(pool/stop p)",
+              "Drain-stop pool `p`: queued tasks run first, then every "
+              "worker exits; returns nil once all workers are joined. "
+              "Suspends (the loop stays live during the drain). Further "
+              "use panics. Must be called from the owning thread, exactly "
+              "once. Pools must be stopped (like files must be closed).") {
+    janet_fixarity(argc, 1);
+    JanetPool *pool = janet_getpool(argv, 0);
+    if (janet_vm.coerce_error) {
+        janet_panic("cannot stop pool inside janet_call");
+    }
+    janet_pool_lock(pool);
+    if (pool->joined || pool->stopping) {
+        janet_pool_unlock(pool);
+        janet_panic("pool already stopped");
+    }
+    pool->stopping = 1;
+    if (pool->stop_waiter != NULL) {
+        janet_pool_unlock(pool);
+        janet_panic("pool already stopping");
+    }
+    JanetFiber *root = janet_root_fiber();
+    pool->stop_waiter = root;
+    pool->stop_sched = root->sched_id;
+    janet_pool_broadcast(pool);
+    janet_pool_unlock(pool);
+    /* Rooted until the all-exited callback unroots (teardown stands
+     * even if this waiter is cancelled first). Owner-side ref for the
+     * all-exited event, paired with its dec there. */
+    janet_gcroot(janet_wrap_fiber(root));
+    janet_ev_inc_refcount();
+    janet_await();
+    /* Unreachable when suspending; the callback schedules nil here. */
+    return janet_wrap_nil();
+}
+
 JANET_CORE_FN(cfun_thread_monitor,
               "(ev/monitor handle tag chan)",
               "Watch the thread `handle` created by `thread/new`: when the "
@@ -5074,6 +5916,10 @@ void janet_lib_ev(JanetTable *env) {
         JANET_CORE_REG("thread/new", cfun_thread_new),
         JANET_CORE_REG("thread/join", cfun_thread_join),
         JANET_CORE_REG("thread/alive?", cfun_thread_alive),
+        JANET_CORE_REG("pool/spawn", cfun_pool_spawn),
+        JANET_CORE_REG("pool/acquire", cfun_pool_acquire),
+        JANET_CORE_REG("pool/dispatch", cfun_pool_dispatch),
+        JANET_CORE_REG("pool/stop", cfun_pool_stop),
         JANET_CORE_REG("ev/monitor", cfun_thread_monitor),
         JANET_CORE_REG("ev/demonitor", cfun_thread_demonitor),
         JANET_CORE_REG("ev/register", cfun_registry_register),
@@ -5113,6 +5959,7 @@ void janet_lib_ev(JanetTable *env) {
     janet_register_abstract_type(&janet_mutex_type);
     janet_register_abstract_type(&janet_rwlock_type);
     janet_register_abstract_type(&janet_thread_handle_type);
+    janet_register_abstract_type(&janet_pool_type);
     janet_register_abstract_type(&janet_shared_type);
 }
 
