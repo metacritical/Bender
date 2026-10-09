@@ -233,27 +233,18 @@
         # by name); emission skips it explicitly.
         (= op 'ldu) (put st (ins 1) :unknown)
         # Step 11: array access. get needs an :array base and an
-        # int-family index (-> :number); anything else is :unknown
-        # (fail-closed: tables/strings stay boxed). put keeps :array
-        # only with int index + numeric value, else :unknown.
+        # int-family or :number index (-> :number; :number indices
+        # carry a runtime integrality guard at emission, fail-loud).
+        # Anything else is :unknown (fail-closed: tables/strings stay
+        # boxed). put/puti never change the container type (array-ness
+        # is preserved by construction; element risk is runtime-gated
+        # by unwrap, and unprovable stores refuse at emission).
         (= op 'get)
         (put st (ins 1)
              (if (and (= :array (get st (ins 2) :unknown))
-                      (int-family? (get st (ins 3) :unknown)))
+                      (or (int-family? (get st (ins 3) :unknown))
+                          (= :number (get st (ins 3) :unknown))))
                :number :unknown))
-        (= op 'put)
-        (do (def pa (get st (ins 1) :unknown))
-          (when (= pa :array)
-            (unless (and (int-family? (get st (ins 2) :unknown))
-                         (get numeric-types (get st (ins 3) :unknown)))
-              (put st (ins 1) :unknown))))
-        # puti: constant-index put (dest=A, value=B, index=C immediate).
-        # Same rule as put; the constant index is always int-family.
-        (= op 'puti)
-        (do (def pa (get st (ins 1) :unknown))
-          (when (= pa :array)
-            (unless (get numeric-types (get st (ins 2) :unknown))
-              (put st (ins 1) :unknown))))
         (= op 'push) (array/push pending (get st (ins 1) :unknown))
         (= op 'push2)
         (do (array/push pending (get st (ins 1) :unknown))
@@ -284,12 +275,13 @@
           # call-shaped array/tuple access: (a i) compiles to
           # push+tcall/call with the array as callee (tcall carries no
           # dst; call's dst is ins 1, callee ins 2). Same rule as get:
-          # single int-family index into :array/:tuple -> :number
-          # (emission unwraps fail-loud, like get/OOB).
+          # int-family or :number index into :array/:tuple -> :number
+          # (:number indices carry a runtime integrality guard at
+          # emission, fail-loud, like get/OOB).
           (when (and (nil? tid) (not spread) (= 1 (length pending)))
             (def callee-ty (get st (ins 2) :unknown))
             (when (and (or (= callee-ty :array) (= callee-ty :tuple))
-                       (int-family? (pending 0)))
+                       (or (int-family? (pending 0)) (= :number (pending 0))))
               (put st (ins 1) :number)))
           # pure core calls (math/floor etc., resolved from ldc-loaded
           # cfunction constants): exact libm types when arity matches
@@ -322,12 +314,12 @@
             (when (number? tid)
               (set rtype (type-join rtype (rts tid)))))
           # call-shaped access in tail position: (a i) as the return
-          # value. tcall carries only the callee (ins 1); same :number
-          # rule as the call arm above.
+          # value. tcall carries only the callee (ins 1); same rule
+          # (int-family or :number index) as the call arm above.
           (when (and (nil? tid) (not spread) (= 1 (length pending)))
             (def callee-ty (get st (ins 1) :unknown))
             (when (and (or (= callee-ty :array) (= callee-ty :tuple))
-                       (int-family? (pending 0)))
+                       (or (int-family? (pending 0)) (= :number (pending 0))))
               (set rtype (type-join rtype :number))))
           # pure core calls in tail position: same contract as above.
           (when (and (nil? tid) (not spread))

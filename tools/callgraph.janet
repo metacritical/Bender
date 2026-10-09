@@ -1010,11 +1010,14 @@
 # Step 14: call-shaped array/tuple access. (a i) compiles to
 # push+tcall/call with the array as callee (tcall carries only the
 # callee; call's dst is ins 1, callee ins 2); (t :k) is likewise a
-# call. Returns [callee-slot idx-slot] when code[pc] is a single-index
-# access into a proven :array/:tuple slot, else nil. The single push
-# must immediately precede the call (modulo one callee-slot load);
-# anything else is fail-closed. Mirrors infer/scan-def's pending-based
-# rule; emission lowers to ->data[] exactly like get (bounds abort).
+# call. Returns [callee-slot idx-slot needs-check?] when code[pc] is a
+# single-index access into a proven :array/:tuple slot, else nil. The
+# single push must immediately precede the call (modulo one
+# callee-slot load); anything else is fail-closed. needs-check? is
+# true for :number indices (int-family needs no check): emission adds
+# a fail-loud integrality guard. Mirrors infer/scan-def's
+# pending-based rule; emission lowers to ->data[] exactly like get
+# (bounds abort).
 (defn call-shape-idx [d pc st]
   (def code (or (d :bytecode) @[]))
   (def n (length code))
@@ -1039,8 +1042,9 @@
     (def pj ((code (- j 1)) 0))
     (when (or (= pj 'push) (= pj 'push2) (= pj 'push3) (= pj 'pusha))
       (break nil)))
-  (unless (infer/int-family? (get st idx :unknown)) (break nil))
-  [callee idx])
+  (def idx-ty (get st idx :unknown))
+  (unless (or (infer/int-family? idx-ty) (= idx-ty :number)) (break nil))
+  [callee idx (= idx-ty :number)])
 
 # Pure core-call dest type: recorded core-cfunction call sites (ldc
 # constants) typed from infer/pure-calls. Arity is NOT checked here —
@@ -1149,24 +1153,16 @@
             (do (put st (ins 1) :unknown))
 
             (= op 'ldu) (put st (ins 1) :unknown)
-            # Step 11: array access (mirrors infer/scan-def rules)
+            # Step 11: array access (mirrors infer/scan-def rules).
+            # :number indices accepted (runtime guard at emission);
+            # put/puti preserve the container type (see infer).
             (= op 'get)
             (put st (ins 1)
                  (if (and (or (= :array (get st (ins 2) :unknown))
                               (= :tuple (get st (ins 2) :unknown)))
-                          (infer/int-family? (get st (ins 3) :unknown)))
+                          (or (infer/int-family? (get st (ins 3) :unknown))
+                              (= :number (get st (ins 3) :unknown))))
                    :number :unknown))
-            (= op 'put)
-            (do (def pa (get st (ins 1) :unknown))
-              (when (= pa :array)
-                (unless (and (infer/int-family? (get st (ins 2) :unknown))
-                             (get infer/numeric-types (get st (ins 3) :unknown)))
-                  (put st (ins 1) :unknown))))
-            (= op 'puti)
-            (do (def pa (get st (ins 1) :unknown))
-              (when (= pa :array)
-                (unless (get infer/numeric-types (get st (ins 2) :unknown))
-                  (put st (ins 1) :unknown))))
             (= op 'call)
             (do (def tid (get cmap pc))
               (if tid
@@ -1234,6 +1230,23 @@
           (emit-slot sa arity) " < 0) { fprintf(stderr, "
           "\"int div out of nonneg domain\\n\"); abort(); }"))
 
+# Real-division operand expr: boxed div ALWAYS computes in doubles
+# (even `(/ 1 2)` — the compiler folds integral `1.0` to `ldi`, but
+# boxed still divides real). Int-family slots cast through (double),
+# exact for |v| <= 2^53 like all int kernels; other numerics pass
+# through. Returns nil for non-numeric (bool/nil/composite) → refuse.
+(defn div-operand-expr [st slot arity]
+  (def t (get st slot :unknown))
+  (cond (or (get float-hints t) (= t :number)) (emit-slot slot arity)
+        (get int-hints t) (string "(double)(" (emit-slot slot arity) ")")
+        nil))
+
+# Real-division dest must declare double: assigning a fractional
+# double to an int64 temp would truncate where boxed keeps 3.5.
+(defn div-dest-ok? [wtypes dst]
+  (def t (get wtypes dst :double))
+  (or (get float-hints t) (= t :number)))
+
 (defn call-arg-slots [d pc]
   # mirror of call-arity, collecting pushed arg slots in order; nil
   # unless the walk ends at a clean boundary (fail-closed). Push
@@ -1279,6 +1292,29 @@
       (break nil)))
   [spec slots])
 
+# Native-to-native call argument check: each passed arg must convert
+# exactly into the callee param (same type, or int->float which is
+# exact for |v| <= 2^53 like all int kernels). float->int refuses
+# (truncation diverges from boxed). Unclear walks allow (legacy
+# behavior — the common direct-call patterns verify strictly).
+(defn call-args-compatible? [tid st d pc]
+  (def cpt (get pts tid))
+  (when (nil? cpt) (break true))
+  (def slots (call-arg-slots d pc))
+  (when (nil? slots) (break true))
+  (when (not= (length slots) (length cpt)) (break false))
+  (var i 0)
+  (var ok true)
+  (while (and ok (< i (length slots)))
+    (def at (get st (slots i) :unknown))
+    (def pt (cpt i))
+    (unless (or (= at pt)
+                (and (get infer/numeric-types at)
+                     (or (= pt :double) (= pt :float) (= pt :number))))
+      (set ok false))
+    (++ i))
+  ok)
+
 # OOB guard emission with counted-loop upper elision (Step 16):
 # elide? drops the `>= count` half (proven by loop discipline) and
 # keeps `< 0` as defense-in-depth.
@@ -1288,6 +1324,14 @@
       (string "    if (" idx-e " < 0) { fprintf(stderr, \"" msg "\\n\"); abort(); }")
       (string "    if (" idx-e " < 0 || " idx-e
               " >= " bound-e ") { fprintf(stderr, \"" msg "\\n\"); abort(); }"))))
+
+# Integrality guard for :number indices (Step 17): int-family slots
+# need no check; :number slots abort fail-loud on fractions (boxed
+# indexing with a non-integer errors). idx-d is the double expr.
+(defn emit-index-check [lines idx-d needs-check?]
+  (when needs-check?
+    (array/push lines
+      (string "    if (" idx-d " != floor(" idx-d ")) { fprintf(stderr, \"index not an integer\\n\"); abort(); }"))))
 
 # Writers of a slot in a pc range: array of [pc ins] via emit-writer
 # positions. No early exits (safe inside any context).
@@ -1563,7 +1607,16 @@
     (def wop (ins 0))
     (cond
       (= wop 'ldi) (wput (ins 1) :long)
-      (= wop 'ldc) (wput (ins 1) (infer/const-num-type d (ins 2)))
+      (= wop 'ldc)
+      # ldc-loaded functions are dead callee values (calls resolve by
+      # position, never by slot type), so they must not poison the
+      # declaration join: a slot reused as a numeric temp afterwards
+      # would otherwise mix function/number and refuse (nbody s21).
+      # Flow/state walks still record :unknown (conservative: any live
+      # non-call use refuses downstream).
+      (do (def wcc ((or (d :constants) @[]) (ins 2)))
+        (unless (or (= :cfunction (type wcc)) (= :function (type wcc)))
+          (wput (ins 1) (infer/const-num-type d (ins 2)))))
       (= wop 'ldn) (wput (ins 1) :nil)
       (or (= wop 'ldt) (= wop 'ldf)) (wput (ins 1) :bool)
       (= wop 'len) (wput (ins 1) :long)
@@ -1586,24 +1639,20 @@
       (or (= wop 'mktup) (= wop 'mkbtp)) (wput (ins 1) :tuple)
       (or (= wop 'mkbuf) (= wop 'mkstr) (= wop 'mkstu) (= wop 'mktab))
       (wput (ins 1) :unknown)
-      (= wop 'ldu) (wput (ins 1) :unknown)
+      (= wop 'ldu)
+      # Like ldc-loaded functions above: upvalue loads are overwhelmingly
+      # dead callee values (extern fallbacks, closed-over fns resolve by
+      # name/position, never by slot type), so they must not poison the
+      # declaration join. Flow/state walks still record :unknown, so any
+      # live non-call use refuses downstream fail-closed.
+      nil
       (= wop 'get)
       (wput (ins 1)
            (if (and (or (= :array (get wtypes (ins 2) :unknown))
                         (= :tuple (get wtypes (ins 2) :unknown)))
-                    (infer/int-family? (get wtypes (ins 3) :unknown)))
+                    (or (infer/int-family? (get wtypes (ins 3) :unknown))
+                        (= :number (get wtypes (ins 3) :unknown))))
              :number :unknown))
-      (= wop 'put)
-      (do (def wpa (get wtypes (ins 1) :unknown))
-        (when (= wpa :array)
-          (unless (and (infer/int-family? (get wtypes (ins 2) :unknown))
-                       (get infer/numeric-types (get wtypes (ins 3) :unknown)))
-            (wput (ins 1) :unknown))))
-      (= wop 'puti)
-      (do (def wpa (get wtypes (ins 1) :unknown))
-        (when (= wpa :array)
-          (unless (get infer/numeric-types (get wtypes (ins 2) :unknown))
-            (wput (ins 1) :unknown))))
       (= wop 'call)
       (do (def wtid (get cmap wpc))
         (if wtid
@@ -1624,31 +1673,55 @@
         (put written dst true)
         (put pwritten dst true))))
   (def ct (emit-kernel-type rt))
-  # join-aware declarations: collect every written type per slot. All
-  # numeric (or singleton) keeps exact current behavior (last-wins);
-  # any other mix refuses loudly -- a shared C declaration cannot hold
-  # both (the k-shl64 s30 array/int collision miscompiled silently).
+  # Join-aware declarations: a reused slot must DECLARE a type that
+  # holds EVERYTHING ever written to it. Last-wins miscompiled
+  # silently here (nbody energy: a bool/int temp shared with double
+  # writes declared `int`, truncating 0.5*m to 0). Resolution, in order:
+  # unanalyzable (:unknown mixes, 64-bit sign mixes, composite mixes)
+  # refuses loudly; any float-family write -> double (bools and ints
+  # convert exactly into it; >2^53 ints keep the documented int-width
+  # caveat); int mixes widen soundly (:long, else :u64, else int64_t
+  # for narrower mixes); singletons keep exact current behavior.
+  (defn decl-kind [kinds]
+    # nil = keep the legacy wtypes fallback (dead/odd singletons only)
+    (cond (= 0 (length kinds)) nil
+          (and (= 1 (length kinds)) (= (kinds 0) :unknown)) nil
+          (and (> (length kinds) 1)
+               (some (fn [t] (= t :unknown)) kinds))
+          :bad-unknown
+          (some (fn [t] (or (= t :double) (= t :float) (= t :number))) kinds)
+          :double
+          (and (some (fn [t] (= t :long)) kinds)
+               (some (fn [t] (= t :u64)) kinds))
+          :bad-sign
+          (some (fn [t] (= t :long)) kinds) :long
+          (some (fn [t] (= t :u64)) kinds) :u64
+          (some (fn [t] (get int-hints t)) kinds) :long
+          (= 1 (length kinds)) (kinds 0)
+          :bool))
   (var slotbad nil)
+  (def decl-types @{})
   (each slot (sort (keys written))
     (when (and (nil? slotbad) (>= slot arity))
       (def kinds (keys (or (get wsets slot) @{})))
-      # Sound sharing: all-numeric keeps last-wins (exact current
-      # behavior); bool shares soundly with numerics (C holds 0/1
-      # exactly, uses interpret per flow type -- flow-soundness is
-      # already assumed everywhere). Only composite/nil mixes refuse:
-      # no C declaration holds both an object and a scalar.
-      (def bad-mix
-        (and (> (length kinds) 1)
-             (some (fn [t] (or (= t :array) (= t :tuple) (= t :struct)
-                               (= t :nil))) kinds)))
-      (when bad-mix
-        (set slotbad (string "slot s" slot " mixes "
-                             (string/join (map string kinds) "/"))))))
+      (def dk (decl-kind kinds))
+      (cond (= dk :bad-unknown)
+            (set slotbad (string "slot s" slot " mixes unanalyzable "
+                                 (string/join (map string kinds) "/")))
+            (= dk :bad-sign)
+            (set slotbad (string "slot s" slot " mixes signed/unsigned 64-bit"))
+            (and (> (length kinds) 1)
+                 (some (fn [t] (or (= t :array) (= t :tuple) (= t :struct)
+                                   (= t :nil))) kinds))
+            (set slotbad (string "slot s" slot " mixes "
+                                 (string/join (map string kinds) "/")))
+            dk
+            (put decl-types slot dk))))
   (def lines @[])
   (var used-externs @[])
   (var used-externs @[])
   (each slot (sort (keys written))
-    (array/push lines (string "    " (emit-kernel-type (get wtypes slot :double) ct)
+    (array/push lines (string "    " (emit-kernel-type (get decl-types slot (get wtypes slot :double)) ct)
                              " s" slot ";")))
   (var bad nil)
   (when slotbad (set bad slotbad))
@@ -1705,24 +1778,16 @@
             (do (put st (ins 1) :unknown) (set pending @[]))
 
             (= op 'ldu) (put st (ins 1) :unknown)
-            # Step 11: array access (mirrors infer/scan-def rules)
+            # Step 11: array access (mirrors infer/scan-def rules).
+            # :number indices accepted (runtime guard at emission);
+            # put/puti preserve the container type (see infer).
             (= op 'get)
             (put st (ins 1)
                  (if (and (or (= :array (get st (ins 2) :unknown))
                               (= :tuple (get st (ins 2) :unknown)))
-                          (infer/int-family? (get st (ins 3) :unknown)))
+                          (or (infer/int-family? (get st (ins 3) :unknown))
+                              (= :number (get st (ins 3) :unknown))))
                    :number :unknown))
-            (= op 'put)
-            (do (def pa (get st (ins 1) :unknown))
-              (when (= pa :array)
-                (unless (and (infer/int-family? (get st (ins 2) :unknown))
-                             (get infer/numeric-types (get st (ins 3) :unknown)))
-                  (put st (ins 1) :unknown))))
-            (= op 'puti)
-            (do (def pa (get st (ins 1) :unknown))
-              (when (= pa :array)
-                (unless (get infer/numeric-types (get st (ins 2) :unknown))
-                  (put st (ins 1) :unknown))))
             (= op 'call)
             (do (def tid (get cmap pc))
               (if tid
@@ -1794,30 +1859,40 @@
             (= op 'div)
             # int-family: C integer division truncates (needs a
             # documented policy in step 13); float-family: real division.
-            # The check is on the OPERANDS (int64 operands truncate even
-            # in a :double fn), never rt: double operands divide exactly
-            # in any fn shape (including :array-returning builders).
-            (if (and (float-operand-ok st (ins 2))
-                     (float-operand-ok st (ins 3)))
-              (do (set pending @[])
-                (array/push lines
-                            (string "    s" (ins 1) " = "
-                                    (emit-slot (ins 2) arity) " / "
-                                    (emit-slot (ins 3) arity) ";")))
-              (do (set bad "div needs float operands (policy TBD)")
-                (break)))
-            # divim (x / const): same policy as div. The immediate is a
-            # small int constant by construction; float kernels divide
-            # exactly like boxed, int kernels refuse (trunc vs real).
+            # Operands cast through (double) as needed (boxed div is
+            # always real); the dest must declare double.
+            (do (def d1 (div-operand-expr st (ins 2) arity))
+              (def d2 (div-operand-expr st (ins 3) arity))
+              (if (and d1 d2 (div-dest-ok? wtypes (ins 1)))
+                (do (set pending @[])
+                  (array/push lines
+                              (string "    s" (ins 1) " = " d1 " / " d2 ";")))
+                (do (set bad "div needs float-compatible operands and dest (policy TBD)")
+                  (break))))
+            # divim (x / const): same policy as div, denominator needs
+            # no cast (int consts promote in double division). Int path
+            # needs nonneg src (PGO) and a nonzero const (a const zero
+            # denominator would trap, so it refuses instead of guarding).
             (= op 'divim)
-            (if (float-operand-ok st (ins 2))
-              (do (set pending @[])
-                (array/push lines
-                            (string "    s" (ins 1) " = "
-                                    (emit-slot (ins 2) arity) " / "
-                                    (ins 3) ";")))
-              (do (set bad "divim needs float operands (policy TBD)")
-                (break)))
+            (do (def d1 (div-operand-expr st (ins 2) arity))
+              (cond
+                (and d1 (div-dest-ok? wtypes (ins 1)))
+                (do (set pending @[])
+                  (array/push lines
+                              (string "    s" (ins 1) " = " d1 " / "
+                                      (ins 3) ";")))
+                (and (not= (ins 3) 0)
+                     (nonneg-operand? (get nnp id) pwritten (ins 2) st))
+                (do (set pending @[])
+                  (array/push lines
+                              (string "    if (" (emit-slot (ins 2) arity)
+                                      " < 0) { fprintf(stderr, \"int div out of nonneg domain\\n\"); abort(); }"))
+                  (array/push lines
+                              (string "    s" (ins 1) " = "
+                                      (emit-slot (ins 2) arity) " / "
+                                      (ins 3) ";")))
+                (do (set bad "divim needs float or nonneg-int operands (policy TBD)")
+                  (break))))
             # divf/mod/rem: float-family only (C % truncates toward zero
             # but Janet mod is floor-based — they diverge on negatives;
             # doubles via libm match boxed exactly, same op order).
@@ -1827,64 +1902,61 @@
             # path guards BOTH zero (trap otherwise) and negativity
             # (silent miscompile otherwise) fail-loud, like OOB.
             (= op 'divf)
-            (cond
-              (and (float-operand-ok st (ins 2))
-                   (float-operand-ok st (ins 3)))
-              (do (set pending @[])
-                (array/push lines
-                            (string "    s" (ins 1) " = floor("
-                                    (emit-slot (ins 2) arity) " / "
-                                    (emit-slot (ins 3) arity) ");")))
-              (and (nonneg-operand? (get nnp id) pwritten (ins 2) st)
-                   (nonneg-operand? (get nnp id) pwritten (ins 3) st))
-              (do (set pending @[])
-                (array/push lines (emit-intdiv-guard (ins 2) (ins 3) arity))
-                (array/push lines
-                            (string "    s" (ins 1) " = "
-                                    (emit-slot (ins 2) arity) " / "
-                                    (emit-slot (ins 3) arity) ";")))
-              (do (set bad "divf needs float or nonneg-int operands (policy TBD)")
-                (break)))
+            (do (def d1 (div-operand-expr st (ins 2) arity))
+              (def d2 (div-operand-expr st (ins 3) arity))
+              (cond
+                (and d1 d2 (div-dest-ok? wtypes (ins 1)))
+                (do (set pending @[])
+                  (array/push lines
+                              (string "    s" (ins 1) " = floor(" d1 " / " d2 ");")))
+                (and (nonneg-operand? (get nnp id) pwritten (ins 2) st)
+                     (nonneg-operand? (get nnp id) pwritten (ins 3) st))
+                (do (set pending @[])
+                  (array/push lines (emit-intdiv-guard (ins 2) (ins 3) arity))
+                  (array/push lines
+                              (string "    s" (ins 1) " = "
+                                      (emit-slot (ins 2) arity) " / "
+                                      (emit-slot (ins 3) arity) ";")))
+                (do (set bad "divf needs float or nonneg-int operands (policy TBD)")
+                  (break))))
             (= op 'rem)
-            (cond
-              (and (float-operand-ok st (ins 2))
-                   (float-operand-ok st (ins 3)))
-              (do (set pending @[])
-                (array/push lines
-                            (string "    s" (ins 1) " = fmod("
-                                    (emit-slot (ins 2) arity) ", "
-                                    (emit-slot (ins 3) arity) ");")))
-              (and (nonneg-operand? (get nnp id) pwritten (ins 2) st)
-                   (nonneg-operand? (get nnp id) pwritten (ins 3) st))
-              (do (set pending @[])
-                (array/push lines (emit-intdiv-guard (ins 2) (ins 3) arity))
-                (array/push lines
-                            (string "    s" (ins 1) " = "
-                                    (emit-slot (ins 2) arity) " % "
-                                    (emit-slot (ins 3) arity) ";")))
-              (do (set bad "rem needs float or nonneg-int operands (policy TBD)")
-                (break)))
+            (do (def d1 (div-operand-expr st (ins 2) arity))
+              (def d2 (div-operand-expr st (ins 3) arity))
+              (cond
+                (and d1 d2 (div-dest-ok? wtypes (ins 1)))
+                (do (set pending @[])
+                  (array/push lines
+                              (string "    s" (ins 1) " = fmod(" d1 ", " d2 ");")))
+                (and (nonneg-operand? (get nnp id) pwritten (ins 2) st)
+                     (nonneg-operand? (get nnp id) pwritten (ins 3) st))
+                (do (set pending @[])
+                  (array/push lines (emit-intdiv-guard (ins 2) (ins 3) arity))
+                  (array/push lines
+                              (string "    s" (ins 1) " = "
+                                      (emit-slot (ins 2) arity) " % "
+                                      (emit-slot (ins 3) arity) ";")))
+                (do (set bad "rem needs float or nonneg-int operands (policy TBD)")
+                  (break))))
             (= op 'mod)
-            (cond
-              (and (float-operand-ok st (ins 2))
-                   (float-operand-ok st (ins 3)))
-              (do (set pending @[])
-                (def ma (emit-slot (ins 2) arity))
-                (def mb (emit-slot (ins 3) arity))
-                (array/push lines
-                            (string "    s" (ins 1) " = (" mb ") == 0 ? ("
-                                    ma ") : ((" ma ") - (" mb ") * floor(("
-                                    ma ") / (" mb ")));")))
-              (and (nonneg-operand? (get nnp id) pwritten (ins 2) st)
-                   (nonneg-operand? (get nnp id) pwritten (ins 3) st))
-              (do (set pending @[])
-                (array/push lines (emit-intdiv-guard (ins 2) (ins 3) arity))
-                (array/push lines
-                            (string "    s" (ins 1) " = "
-                                    (emit-slot (ins 2) arity) " % "
-                                    (emit-slot (ins 3) arity) ";")))
-              (do (set bad "mod needs float or nonneg-int operands (policy TBD)")
-                (break)))
+            (do (def d1 (div-operand-expr st (ins 2) arity))
+              (def d2 (div-operand-expr st (ins 3) arity))
+              (cond
+                (and d1 d2 (div-dest-ok? wtypes (ins 1)))
+                (do (set pending @[])
+                  (array/push lines
+                              (string "    s" (ins 1) " = (" d2 ") == 0 ? ("
+                                      d1 ") : ((" d1 ") - (" d2 ") * floor(("
+                                      d1 ") / (" d2 ")));")))
+                (and (nonneg-operand? (get nnp id) pwritten (ins 2) st)
+                     (nonneg-operand? (get nnp id) pwritten (ins 3) st))
+                (do (set pending @[])
+                  (array/push lines (emit-intdiv-guard (ins 2) (ins 3) arity))
+                  (array/push lines
+                              (string "    s" (ins 1) " = "
+                                      (emit-slot (ins 2) arity) " % "
+                                      (emit-slot (ins 3) arity) ";")))
+                (do (set bad "mod needs float or nonneg-int operands (policy TBD)")
+                  (break))))
             (= op 'movn)
             (array/push lines (string "    s" (ins 1) " = "
                                       (emit-slot (ins 2) arity) ";"))
@@ -1917,25 +1989,31 @@
               # const Janet*); length lives in the head. Arrays use
               # ->data/->count. Bounds abort either way (fail loud).
               (def garr (emit-slot (ins 2) arity))
-              (def gidx (string "(int64_t)(" (emit-slot (ins 3) arity) ")"))
+              (def gidxd (emit-slot (ins 3) arity))
+              (def gidx (string "(int64_t)(" gidxd ")"))
               (def gbound (if gtup (string "janet_tuple_head(" garr ")->length")
                               (string garr "->count")))
               (def gdata (if gtup (string garr "[" gidx "]")
                              (string garr "->data[" gidx "]")))
               (def oobmsg (if gtup "tuple index out of bounds"
                               "array index out of bounds"))
+              (emit-index-check lines gidxd (= :number (get st (ins 3) :unknown)))
               (emit-oob-check lines gidx gbound oobmsg
                               (loop-elide-upper? d pc (ins 2) (ins 3) id st))
               (array/push lines
                           (string "    s" (ins 1) " = janet_unwrap_number(" gdata ");")))
             (= op 'put)
-            # (put arr idx val): dst IS the array slot (ins 1)
+            # (put arr idx val): dst IS the array slot (ins 1).
+            # :number indices carry the runtime integrality guard.
             (do (unless (and (= :array (get st (ins 1) :unknown))
-                             (infer/int-family? (get st (ins 2) :unknown))
+                             (or (infer/int-family? (get st (ins 2) :unknown))
+                                 (= :number (get st (ins 2) :unknown)))
                              (get infer/numeric-types (get st (ins 3) :unknown)))
                   (set bad "put requires array, int index, numeric value")
                   (break))
               (def pidx-e (string "(int64_t)(" (emit-slot (ins 2) arity) ")"))
+              (emit-index-check lines (emit-slot (ins 2) arity)
+                                (= :number (get st (ins 2) :unknown)))
               (emit-oob-check lines pidx-e
                               (string (emit-slot (ins 1) arity) "->count")
                               "array index out of bounds"
@@ -2010,6 +2088,7 @@
                                      (string sharr-e "->data[" shidx-e "]")))
               (def shoob (if shtup "tuple index out of bounds"
                                     "array index out of bounds"))
+              (emit-index-check lines (emit-slot shidx arity) (sh2 2))
               (emit-oob-check lines shidx-e shbound shoob
                               (loop-elide-upper? d pc sharr shidx id st))
               (if (= op 'tcall)
@@ -2070,12 +2149,23 @@
                       (break))))
                 (do (def cname (if tid (get emitted-names tid)))
                   (def trt (if tid (rts tid) :unknown))
-                  (if (and tid cname (= trt rt) (not spread) (not= op 'tcall))
+                  # Composition: numeric-returning callees compose into
+                  # any caller (the temp carries the callee type; int
+                  # callers refuse via purity fail-closed). Pointer
+                  # returns still require exact match (no unwrapping).
+                  # Args must convert exactly (int->float ok, float->int
+                  # refuses). Tail calls keep exact match (returned as
+                  # our own value; conversion could truncate).
+                  (def ret-ok
+                    (or (= trt rt) (get infer/numeric-types trt)))
+                  (if (and tid cname ret-ok (not spread) (not= op 'tcall)
+                           (call-args-compatible? tid st d pc))
                     (do (array/push lines
                                     (string "    s" (ins 1) " = "
                                             (emit-c-name cname) "(" (string/join pending ", ") ");"))
                       (set pending @[]))
-                    (if (and tid cname (= trt rt) (not spread))
+                    (if (and tid cname (= trt rt) (not spread)
+                             (call-args-compatible? tid st d pc))
                       (do (array/push lines
                                       (string "    return " (emit-c-name cname)
                                               "(" (string/join pending ", ") ");"))
@@ -2199,15 +2289,36 @@
       (each kn (keys kernel-intrinsics)
         (def entry (get uenv (symbol kn)))
         (when entry (put (curenv) (symbol kn) entry)))))
+  # bind top-level self-evaluating globals (numbers, strings,
+  # keywords, booleans, nil, quotes) so eval'd kernel forms resolve
+  # constants like NB. Calls and complex initializers stay out (their
+  # side effects belong to load time, not the harness); fns needing
+  # them fail closed at the eval below with a reason.
+  (defn self-eval-value? [v]
+    (or (string? v) (number? v) (keyword? v) (boolean? v) (nil? v)
+        (and (tuple? v) (= 2 (length v)) (= (v 0) 'quote))))
+  (each f args
+    (each form (or (get unit-forms f) @[])
+      (when (and (tuple? form) (>= (length form) 3) (= (form 0) 'def)
+                 (symbol? (form 1)) (self-eval-value? (form 2)))
+        (try (eval form) ([_] nil)))))
+  (var eval-failed @[])
   (each e emitted
-    (array/push c-parts (e :code))
     (def form (get all-defn-forms (e :name)))
     (unless form
       (eprint "emit-native: no form for " (e :name))
       (os/exit 1))
-    (def fnval (eval form))
-    (each combo (samples-for (e :pt))
-      (array/push calls {:e e :args (tuple ;combo) :fn fnval})))
+    (def fnval (try (eval form) ([err] nil)))
+    (if (nil? fnval)
+      (array/push eval-failed e)
+      (do (array/push c-parts (e :code))
+        (each combo (samples-for (e :pt))
+          (array/push calls {:e e :args (tuple ;combo) :fn fnval})))))
+  (each e eval-failed
+    (print "native-skip " (e :id) " " (e :name) " oracle eval failed"))
+  (when (empty? calls)
+    (eprint "emit-native: no samplable functions")
+    (os/exit 1))
   (def cout @"")
   (buffer/push-string cout "#include <stdio.h>\n#include <inttypes.h>\n#include <math.h>\n#include <stdlib.h>\n#include <string.h>\n")
   (buffer/push-string cout "/* int32-domain bitwise helpers: boxed Janet errors outside int32\n * (integral doubles accepted); results wrap int32; shift counts mask\n * to 5 bits. Callers range/integrality-check operands (fail loud). */\nstatic int32_t k_band32(int32_t a, int32_t b) { return a & b; }\nstatic int32_t k_bor32(int32_t a, int32_t b) { return a | b; }\nstatic int32_t k_bxor32(int32_t a, int32_t b) { return a ^ b; }\nstatic int32_t k_sl32(int32_t a, int32_t b) { return (int32_t)((uint32_t)a << ((uint32_t)b & 31u)); }\nstatic int32_t k_sr32(int32_t a, int32_t b) { uint32_t n = (uint32_t)b & 31u; int32_t r = (int32_t)((uint32_t)a >> n); if ((a < 0) && (n != 0)) { r |= (int32_t)(~0u << (32u - n)); } return r; }\nstatic int32_t k_sru32(int32_t a, int32_t b) { return (int32_t)((uint32_t)a >> ((uint32_t)b & 31u)); }\n\n")
@@ -2289,6 +2400,16 @@
                           (string "ptr_v" ((c :args) i))
                           (string ((c :args) i))))
                   ", "))
+    # per-sample fixture reset: in-place kernels mutate the shared
+    # variants, and later samples must observe pristine inputs
+    # (a pancake loop on contaminated duplicates can even cycle
+    # forever). Tuples are immutable and need no reset.
+    (when anyarr
+      (buffer/push-string cout
+        "    { for (int _q = 0; _q < 8; _q++) { arr_v0_elts[_q] = janet_wrap_number(_q); arr_v1_elts[_q] = janet_wrap_number(7 - _q); } }\n"))
+    (when anyptr
+      (buffer/push-string cout
+        "    { for (int _q = 0; _q < 8; _q++) { ptr_v0[_q] = (double)_q; ptr_v1[_q] = (double)(7 - _q); } }\n"))
     (buffer/push-string cout
       (if (= :array ((c :e) :rt))
         (string "    { JanetArray *_r = " (emit-c-name ((c :e) :name))
@@ -2306,24 +2427,40 @@
   (def expected @[])
   (def arr-variants [@[0 1 2 3 4 5 6 7] @[7 6 5 4 3 2 1 0]])
   (def tup-variants [(tuple 0 1 2 3 4 5 6 7) (tuple 7 6 5 4 3 2 1 0)])
-  # pointer variants mirror the C fixtures exactly (8 doubles each);
-  # shared across calls like the array pair, so in-place kernels see
-  # identical mutation order on both sides. Freed after sampling.
+  # pointer variants mirror the C fixtures exactly (8 doubles each).
+  # Arrays AND pointers are re-created fresh per sample (shared within
+  # a sample by variant index, so aliasing is preserved): in-place
+  # kernels mutate their inputs, and reusing one shared object across
+  # samples contaminates later samples — a data-dependent loop over
+  # contaminated duplicates can even cycle forever (fannkuch found it).
+  # Tuples are immutable and stay shared. The C side resets its
+  # fixtures before every call (see above), so both sides agree.
   (defn- mkptr [flip]
     (def p (unsafe/malloc 64))
     (for i 0 8 (unsafe/poke :double p (if flip (- 7 i) i) (* i 8)))
     p)
-  (def ptr-variants [(mkptr false) (mkptr true)])
+  (def ptr-garbage @[])
+  (defn- fresh-ptr [flip]
+    (def p (mkptr flip))
+    (array/push ptr-garbage p)
+    p)
   (each c calls
     (def ept ((c :e) :pt))
+    (def fresh @{})
     (def coerced (seq [i :range [0 (length (c :args))]]
-                   (cond (= :array (ept i))
-                         (get arr-variants ((c :args) i))
-                         (= :tuple (ept i))
-                         (get tup-variants ((c :args) i))
-                         (= :pointer (ept i))
-                         (get ptr-variants ((c :args) i))
-                         ((c :args) i))))
+                   (do (def ai ((c :args) i))
+                     (cond (= :array (ept i))
+                           # put returns the table: re-fetch the array
+                           (or (get fresh ai)
+                               (do (put fresh ai (array/slice (get arr-variants ai)))
+                                 (get fresh ai)))
+                           (= :tuple (ept i))
+                           (get tup-variants ai)
+                           (= :pointer (ept i))
+                           (or (get fresh (tuple :p ai))
+                               (do (put fresh (tuple :p ai) (fresh-ptr (= ai 1)))
+                                 (get fresh (tuple :p ai))))
+                           ai))))
     (def v ((c :fn) ;coerced))
     # array returns print canonically on both sides: [%.17g ...]
     # (numeric elements assumed -- the harness only feeds those)
@@ -2331,7 +2468,7 @@
       (if (= :array ((c :e) :rt))
         (string "[" (string/join (map (fn [x] (string/format "%.17g" x)) v) " ") "]")
         (string/format "%.17g" v))))
-  (each p ptr-variants (unsafe/free p))
+  (each p ptr-garbage (unsafe/free p))
   (spit (string outdir "/expected.txt") (string (string/join expected "\n") "\n"))
   (print "native " (length emitted) " fns " (length calls) " samples " outdir))
 

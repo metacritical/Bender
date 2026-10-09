@@ -315,7 +315,7 @@
   "(defn main [] (print (halve-i 7)))\n"))
 (os/execute ["/bin/sh" "-c"
   "rm -rf /tmp/cg-dii && ./build/bender tools/callgraph.janet /tmp/cg-divimi.janet --emit-native /tmp/cg-dii > /tmp/cg-dii-out.txt"])
-(assert (not (nil? (string/find "divim needs float operands"
+(assert (not (nil? (string/find "divim needs float or nonneg-int operands"
   (slurp "/tmp/cg-dii-out.txt")))) "int divim refused")
 
 # regression (ttfx floor-div miscompile): int64 OPERANDS in a :double
@@ -329,6 +329,23 @@
   "rm -rf /tmp/cg-dm && ./build/bender tools/callgraph.janet /tmp/cg-divmix.janet --emit-native /tmp/cg-dm > /tmp/cg-dm-out.txt 2>&1"])
 (assert (not (nil? (string/find "divf needs float or nonneg-int operands"
   (slurp "/tmp/cg-dm-out.txt")))) "int operands in double fn refused")
+
+# mixed int/double division: the int64 operand casts through (double)
+# (boxed div is always real), dest declares double. Even 0 denominators
+# match (double inf, no trap).
+(spit "/tmp/cg-divcast.janet" (string
+  "(defn fdivm {:hint {:params [:long :double] :returns :double}} [a b] (div a b))\n"
+  "(defn main [] (print (fdivm 7 2)))\n"))
+(assert (= 0 (os/execute ["/bin/sh" "-c"
+  "rm -rf /tmp/cg-dc && ./build/bender tools/callgraph.janet /tmp/cg-divcast.janet --emit-native /tmp/cg-dc"] :p))
+  "mixed-div emit run")
+(assert (= 0 (os/execute ["/bin/sh" "-c"
+  "cc -O2 /tmp/cg-dc/native.c -o /tmp/cg-dc/native"] :p)) "mixed-div compiles")
+(assert (= 0 (os/execute ["/bin/sh" "-c"
+  "/tmp/cg-dc/native > /tmp/cg-dc/actual.txt && cmp /tmp/cg-dc/expected.txt /tmp/cg-dc/actual.txt"] :p))
+  "mixed-div parity (incl. div-by-zero)")
+(assert (not (nil? (string/find "(double)" (slurp "/tmp/cg-dc/native.c"))))
+        "int operand casts through double")
 
 # PGO-nonneg int path: unanimous min >= 0 on unrebound :long params
 # unlocks trunc-division (== floor there) with a fail-loud zero guard.
@@ -458,6 +475,40 @@
   "rm -rf /tmp/cg-pub && ./build/bender tools/callgraph.janet /tmp/cg-purebad.janet --emit-native /tmp/cg-pub > /tmp/cg-pub-out.txt 2>&1"])
 (assert (not (nil? (string/find "native-skip" (slurp "/tmp/cg-pub-out.txt"))))
         "intrinsic arity mismatch refused")
+
+# Cross-return native calls: a :double callee composes into an
+# :array caller (temp carries the callee type); args convert exactly.
+(spit "/tmp/cg-compo.janet" (string
+  "(defn dbl {:hint {:params [:double] :returns :double}} [x] (+ x 1.0))\n"
+  "(defn usen {:hint {:params [:array] :returns :double}} [a]\n"
+  "  (var s 0.0)\n"
+  "  (for i 0 (length a) (+= s (dbl (a i))))\n"
+  "  s)\n"
+  "(defn main [] (print (usen @[1 2])))\n"))
+(assert (= 0 (os/execute ["/bin/sh" "-c"
+  "rm -rf /tmp/cg-co && ./build/bender tools/callgraph.janet /tmp/cg-compo.janet --emit-native /tmp/cg-co"] :p))
+  "composition emit run")
+(assert (= 0 (os/execute ["/bin/sh" "-c"
+  "cc -O2 -w -Isrc/include -Isrc/conf /tmp/cg-co/native.c build/janet.o -lm -lpthread -ldl -o /tmp/cg-co/native"] :p))
+  "composition compiles+links")
+(assert (= 0 (os/execute ["/bin/sh" "-c"
+  "/tmp/cg-co/native > /tmp/cg-co/actual.txt && cmp /tmp/cg-co/expected.txt /tmp/cg-co/actual.txt"] :p))
+  "composition parity")
+(assert (not (nil? (string/find "dbl(" (slurp "/tmp/cg-co/native.c"))))
+        "callee inlined by direct call")
+
+# Regression (nbody energy miscompile): bool/int temps shared with
+# double writes must declare double, not int (truncated 0.5*m to 0).
+# Exercises the join-aware declarations end to end with parity.
+(assert (= 0 (os/execute ["/bin/sh" "-c"
+  "rm -rf /tmp/cg-nb && ./build/bender tools/callgraph.janet bench/benchmarksgame/nbody.janet --emit-native /tmp/cg-nb"] :p))
+  "nbody emit run")
+(assert (= 0 (os/execute ["/bin/sh" "-c"
+  "cc -O2 -w -Isrc/include -Isrc/conf /tmp/cg-nb/native.c build/janet.o -lm -lpthread -ldl -o /tmp/cg-nb/native"] :p))
+  "nbody compiles+links")
+(assert (= 0 (os/execute ["/bin/sh" "-c"
+  "/tmp/cg-nb/native > /tmp/cg-nb/actual.txt && cmp /tmp/cg-nb/expected.txt /tmp/cg-nb/actual.txt"] :p))
+  "nbody parity (640 samples incl. real magnitudes)")
 
 # Step 10 (extern C calls): declared symbols emitted as direct calls,# harness linked against a real C implementation, parity via fallback
 (spit "/tmp/cg-ext.janet" (string
