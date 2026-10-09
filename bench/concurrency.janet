@@ -1,0 +1,78 @@
+# bench/concurrency.janet — concurrency micro-benchmarks for the perf gates.
+# Run: ./build/bender bench/concurrency.janet
+# Each bench prints `name iters ns/op` plus a deterministic result checksum.
+# AOT parity: same file must run under `bender --aot --native` byte-identically
+# (oracle discipline) — timings vary, result= checksums must not.
+
+(defn bench-chan-pingpong [n]
+  # Rendezvous ping-pong between two fibers: measures schedule + context
+  # switch + channel handoff per round trip.
+  (def a (ev/chan 0))
+  (def b (ev/chan 0))
+  (ev/go (fn []
+    (for i 0 n
+      (ev/give a i)
+      (ev/take b))))
+  (def t0 (os/clock))
+  (var acc 0)
+  (for i 0 n
+    (ev/take a)
+    (ev/give b i)
+    (+= acc i))
+  (def dt (- (os/clock) t0))
+  (print "chan-pingpong " n " roundtrips "
+    (string/format "%.1f" (* 1e9 (/ dt n))) " ns/rt acc=" acc))
+
+(defn bench-chan-buffered [n]
+  # Buffered throughput: producer fiber gives N, main takes N concurrently.
+  # (A single fiber giving N > limit with no concurrent taker would
+  # deadlock — the producer must run alongside the drain.)
+  (def c (ev/chan 1024))
+  (ev/go (fn [] (for i 0 n (ev/give c i))))
+  (def t0 (os/clock))
+  (var acc 0)
+  (for i 0 n (+= acc (ev/take c)))
+  (def dt (- (os/clock) t0))
+  (print "chan-buffered " n " msgs "
+    (string/format "%.1f" (* 1e9 (/ dt (* 2 n)))) " ns/op acc=" acc))
+
+(defn bench-chan-try [n]
+  # Non-blocking try-give/try-take throughput: no suspension ever.
+  (def c (ev/chan 1024))
+  (def t0 (os/clock))
+  (var acc 0)
+  (for i 0 n
+    (ev/try-give c i)
+    (+= acc (ev/try-take c)))
+  (def dt (- (os/clock) t0))
+  (print "chan-try " n " pairs "
+    (string/format "%.1f" (* 1e9 (/ dt (* 2 n)))) " ns/op acc=" acc))
+
+(defn bench-fiber-spawn [n]
+  # Fiber spawn + resume + yield round trip via ev/go + supervisor channel.
+  (def sup (ev/chan 4096))
+  (def t0 (os/clock))
+  (for i 0 n (ev/go (fn [] i) nil sup))
+  (var acc 0)
+  (for i 0 n
+    (def [_ fib] (ev/take sup))
+    (+= acc (if (fiber? fib) 0 1)))
+  (def dt (- (os/clock) t0))
+  (print "fiber-spawn " n " fibers "
+    (string/format "%.1f" (* 1e9 (/ dt (* 2 n)))) " ns/op acc=" acc))
+
+(defn bench-thread-spawn []
+  # OS thread spawn tax: one thread/new + join round trip (VM boot cost).
+  (def t0 (os/clock))
+  (def r (thread/join (thread/new (fn [] 41))))
+  (def dt (- (os/clock) t0))
+  (print "thread-spawn 1 thread "
+    (string/format "%.1f" (* 1e9 dt)) " ns/op result=" r))
+
+(defn main [&]
+  (bench-chan-pingpong 2000)
+  (bench-chan-buffered 20000)
+  (bench-chan-try 20000)
+  (bench-fiber-spawn 2000)
+  (bench-thread-spawn))
+# NOTE: no explicit (main) call — the script runner invokes main automatically.
