@@ -343,3 +343,40 @@ after it is recorded in its own notes file:
   `ev/timeslice` (quantum driver: per-resume poll budgets +
   scheduler re-queue); fiber fields `interrupt_requested` /
   `interrupt_value`, VM fields `quantum` / `quantum_remaining`.
+
+## Addendum — grow-on-fault native stacks (Phase D slice 1, 2026-10-09)
+
+Reserve stays 2 MiB + 64 KiB guard per fiber, but only the top 64 KiB
+commits at spawn (`JANET_FIBER_STACK_INIT_BYTES`); guard faults extend
+the committed window downward in 64 KiB steps to the faulting chunk
+(`JANET_FIBER_STACK_GROW_BYTES`), so large single-frame jumps cannot
+skip growth. New fiber field `native_stack_committed` (lowest
+committed address); usable start is fixed so no context re-prime is
+ever needed, and both switchers (asm + ucontext) are transparent.
+`JANET_FIBER_STACK_BYTES` is now the cap, not the commit.
+
+Mechanics (`src/core/fiber.c`): a `SIGSEGV`/`SIGBUS` handler (macOS
+delivers below-mapping faults as SIGBUS) commits and resumes; the
+faulting thread's running fiber (`janet_vm.fiber`) identifies the
+mapping — no global registry, no locks, no allocation in the handler.
+Anything else chains to the previous action (ASan, user
+`os/sigaction` handlers — installing yours later replaces growth).
+A red-zone fault prints `fiber native stack overflow` and dies via
+the old action (catchable errors are the D3 follow-up). Per-thread
+256 KiB alternate stacks install from `janet_init`; `pthread_atfork`
+reinstalls in forked children (macOS resets the alt stack to
+`SS_DISABLE` across fork — without that, fault handling in children
+crashes). Windows stays flat malloc; `JANET_NO_GROWSTACK` restores
+commit-all. C proofs in `tools/fiber-c-test.c` (`make fibertest`):
+idle commits exactly 64 KiB, 750 KiB C recursion completes across
+growths, 1000 idle fibers commit 65536000 bytes total (vs ~2 GiB
+flat), over-cap dies identified by signal. Deep `marshal` still ends
+in the depth guard (`MARSH_STACKCHECK`), now reached after
+transparent growth — same clean error as before. Under ASan the
+handler chains cleanly (growth + overflow all pass); ASan prints one
+benign custom-stack warning (`__asan_handle_no_return` ignored — the
+shadow cannot see hand-rolled stacks, same as before). Alternate
+stacks are skipped under ASan (`__SANITIZE_ADDRESS__`): its allocator
+CHECK-fails deallocating around them, and ASan prints its own fault
+reports anyway (only the identified-overflow message may be lost
+there).

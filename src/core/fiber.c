@@ -31,6 +31,8 @@
 
 #ifndef JANET_WINDOWS
 #include <sys/mman.h>
+#include <signal.h>
+#include <pthread.h>
 #include <unistd.h>
 #endif
 
@@ -46,13 +48,191 @@
 #ifndef JANET_FIBER_GUARD_BYTES
 #define JANET_FIBER_GUARD_BYTES (64 * 1024)
 #endif
+/* Phase D (segmented growth): reserve the full window up front but commit
+ * only this much initially, extending downward in CHUNK steps on guard
+ * faults. Both must stay multiples of any supported page size (4K/16K). */
+#ifndef JANET_FIBER_STACK_INIT_BYTES
+#define JANET_FIBER_STACK_INIT_BYTES (64 * 1024)
+#endif
+#ifndef JANET_FIBER_STACK_GROW_BYTES
+#define JANET_FIBER_STACK_GROW_BYTES (64 * 1024)
+#endif
 
-static void *fiber_native_stack_alloc(size_t *out_total) {
+#ifdef JANET_WINDOWS
+/* Flat malloc there, so init is a no-op (growth needs reserved address
+ * space + fault interception; a VEH follow-up could add it). */
+void janet_fiber_growstack_init(void) {}
+#endif
+
+/* Phase D: grow-on-fault for fiber native stacks (POSIX only; Windows
+ * keeps the flat malloc, ucontext keeps its fixed makecontext region —
+ * growth is transparent to both switchers since stacks extend downward
+ * and the saved sp never moves).
+ *
+ * Layout: [mapping base][red zone: guard, PROT_NONE, forever][usable:
+ * reserved PROT_NONE, committed top-down from INIT in CHUNK steps].
+ * A fault anywhere in the uncommitted usable window commits down to
+ * (and including) the faulting chunk and resumes; the faulting
+ * instruction retries transparently. Single-step growth would miss
+ * large single-frame jumps (deep GC/mark chains can move sp a long
+ * way at once), so the commit target derives from the fault address
+ * itself, rounded down to a chunk. A fault in the red zone is overflow
+ * (slice 1: identified abort; catchable errors are the D3 follow-up).
+ * Anything else chains to the previously installed action (ASan, user
+ * os/sigaction handlers). macOS delivers below-mapping faults as
+ * SIGBUS, so both signals are handled with the same logic; Linux
+ * delivers both as SIGSEGV (the SIGBUS registration is harmless).
+ *
+ * Only async-safe operations run in the handler (plain reads, mprotect,
+ * write); no locks, no allocation. The faulting thread's running fiber
+ * (janet_vm.fiber) identifies the mapping — no global registry needed.
+ * A stale fiber pointer on host code can only over-commit (harmless) or
+ * mislabel a genuine crash (still dies). Installing our own SIGSEGV
+ * handler via os/sigaction later replaces growth (documented). */
+
+#ifndef JANET_WINDOWS
+#ifndef JANET_NO_GROWSTACK
+
+static struct sigaction janet_growstack_oldact;
+static volatile JanetAtomicInt janet_growstack_installed = 0;
+static JANET_THREAD_LOCAL int janet_growstack_alt_ok = 0;
+
+/* fork() keeps the handler disposition but (on some systems, notably
+ * macOS) resets the signal stack to SS_DISABLE in the child, and all
+ * threads but the forking one vanish. Reinstall a working alt stack
+ * right here so forked children keep grow-on-fault transparently (the
+ * parent's alt-stack mapping is inherited but no longer registered;
+ * leaking its registration is virtual-only). Runs in normal context,
+ * so malloc is fine. */
+static void janet_growstack_atfork_child(void) {
+#ifndef __SANITIZE_ADDRESS__
+    size_t alt_size = 256 * 1024;
+    void *alt_stack = malloc(alt_size);
+    if (NULL != alt_stack) {
+        stack_t ss;
+        ss.ss_sp = alt_stack;
+        ss.ss_size = alt_size;
+        ss.ss_flags = 0;
+        if (0 == sigaltstack(&ss, NULL)) {
+            janet_growstack_alt_ok = 1;
+        } else {
+            free(alt_stack);
+        }
+    }
+#else
+    (void) 0;
+#endif
+}
+
+static void janet_growstack_segv(int sig, siginfo_t *info, void *uctx) {
+    (void) uctx;
+    JanetFiber *fiber = janet_vm.fiber;
+    void *fault = (NULL != info) ? info->si_addr : NULL;
+    if (NULL != fiber && NULL != fault && NULL != fiber->native_stack_base &&
+            NULL != fiber->native_stack_committed) {
+        char *base = (char *) fiber->native_stack_base;
+        char *usable = (char *) fiber->native_stack;
+        char *committed = (char *) fiber->native_stack_committed;
+        char *f = (char *) fault;
+        size_t chunk = (size_t) JANET_FIBER_STACK_GROW_BYTES;
+        if (f >= usable && f < committed) {
+            /* Growth fault anywhere in the uncommitted window: commit
+             * down to the faulting chunk (jump-proof) and resume. */
+            uintptr_t off = (uintptr_t) (f - usable);
+            char *target = usable + (off / chunk) * chunk;
+            size_t len = (size_t) (committed - target);
+            if (0 == mprotect(target, len, PROT_READ | PROT_WRITE)) {
+                fiber->native_stack_committed = target;
+                return;
+            }
+            /* Commit failed: fall through and die below. */
+        } else if (f >= base && f < usable) {
+            static const char msg[] = "janet: fiber native stack overflow\n";
+            (void) write(STDERR_FILENO, msg, sizeof(msg) - 1);
+            /* Fall through to the old action for the core dump. */
+        } else {
+            goto chain;
+        }
+    } else {
+        goto chain;
+    }
+chain:
+    if (janet_growstack_oldact.sa_flags & SA_SIGINFO) {
+        if (NULL != janet_growstack_oldact.sa_sigaction) {
+            janet_growstack_oldact.sa_sigaction(sig, info, uctx);
+            return;
+        }
+    } else if (janet_growstack_oldact.sa_handler == SIG_DFL) {
+        signal(sig, SIG_DFL);
+        raise(sig);
+        return;
+    } else if (janet_growstack_oldact.sa_handler == SIG_IGN) {
+        return;
+    } else if (NULL != janet_growstack_oldact.sa_handler) {
+        janet_growstack_oldact.sa_handler(sig);
+        return;
+    }
+    signal(sig, SIG_DFL);
+    raise(sig);
+}
+
+/* Process-once handler install + per-thread alternate stack. Called
+ * from janet_init (every VM thread). The alt stack is one-time-per-
+ * thread virtual (untouched pages cost no RSS); threads without a VM
+ * simply chain. */
+void janet_fiber_growstack_init(void) {
+    if (1 == janet_atomic_inc(&janet_growstack_installed)) {
+        struct sigaction act;
+        memset(&act, 0, sizeof(act));
+        act.sa_sigaction = janet_growstack_segv;
+        sigemptyset(&act.sa_mask);
+        act.sa_flags = SA_SIGINFO | SA_ONSTACK;
+        sigaction(SIGSEGV, &act, &janet_growstack_oldact);
+        /* macOS delivers below-mapping faults as SIGBUS: same handler.
+         * Harmless on Linux (never fires there for our mappings). */
+        sigaction(SIGBUS, &act, NULL);
+        pthread_atfork(NULL, NULL, janet_growstack_atfork_child);
+    }
+    if (!janet_growstack_alt_ok) {
+        /* Roomy: chained handlers (ASan) also run here. Skipped under
+         * AddressSanitizer: its allocator CHECK-fails deallocating
+         * around these mappings (suite-ev), and ASan prints its own
+         * fault reports anyway. Growth still works without one (the
+         * faulting sp stays in committed space); only the identified-
+         * overflow message may be lost when sp is wild. */
+#ifndef __SANITIZE_ADDRESS__
+        size_t alt_size = 256 * 1024;
+        void *alt_stack = malloc(alt_size);
+        if (NULL != alt_stack) {
+            stack_t ss;
+            ss.ss_sp = alt_stack;
+            ss.ss_size = alt_size;
+            ss.ss_flags = 0;
+            if (0 == sigaltstack(&ss, NULL)) {
+                janet_growstack_alt_ok = 1;
+            } else {
+                free(alt_stack);
+            }
+        }
+#endif
+    }
+}
+
+#endif /* JANET_NO_GROWSTACK */
+#endif /* !JANET_WINDOWS */
+
+/* Reserve the full guard+usable window PROT_NONE; commit the top
+ * window (all of it under JANET_NO_GROWSTACK, INIT bytes otherwise —
+ * the rest arrives on guard faults). Reports the mapping size, the
+ * page-aligned guard, and the lowest committed address. */
+static void *fiber_native_stack_alloc(size_t *out_total, size_t *out_guard, void **out_committed) {
 #ifdef JANET_WINDOWS
     size_t total = JANET_FIBER_STACK_BYTES;
     void *p = malloc(total);
     if (NULL == p) JANET_OUT_OF_MEMORY;
     *out_total = total;
+    *out_guard = 0;
+    *out_committed = p;
     return p;
 #else
     long page = sysconf(_SC_PAGESIZE);
@@ -62,12 +242,20 @@ static void *fiber_native_stack_alloc(size_t *out_total) {
     size_t total = guard + JANET_FIBER_STACK_BYTES;
     void *p = mmap(NULL, total, PROT_NONE, MAP_PRIVATE | MAP_ANON, -1, 0);
     if (MAP_FAILED == p) JANET_OUT_OF_MEMORY;
-    if (mprotect((char *)p + guard, JANET_FIBER_STACK_BYTES,
+#ifdef JANET_NO_GROWSTACK
+    size_t commit = JANET_FIBER_STACK_BYTES;
+#else
+    size_t commit = JANET_FIBER_STACK_INIT_BYTES;
+    if (commit > JANET_FIBER_STACK_BYTES) commit = JANET_FIBER_STACK_BYTES;
+#endif
+    if (mprotect((char *)p + total - commit, commit,
                  PROT_READ | PROT_WRITE)) {
         munmap(p, total);
         JANET_OUT_OF_MEMORY;
     }
     *out_total = total;
+    *out_guard = guard;
+    *out_committed = (char *)p + total - commit;
     return p;
 #endif
 }
@@ -84,6 +272,7 @@ void janet_fiber_native_stack_free(JanetFiber *fiber) {
             fiber->native_stack_base = NULL;
             fiber->native_stack = NULL;
             fiber->native_stack_size = 0;
+            fiber->native_stack_committed = NULL;
             return;
         }
 #ifdef JANET_WINDOWS
@@ -95,6 +284,7 @@ void janet_fiber_native_stack_free(JanetFiber *fiber) {
         fiber->native_stack_base = NULL;
         fiber->native_stack = NULL;
         fiber->native_stack_size = 0;
+        fiber->native_stack_committed = NULL;
     }
 }
 
@@ -241,6 +431,7 @@ static JanetFiber *fiber_alloc(int32_t capacity) {
     fiber->native_stack_base = NULL;
     fiber->native_stack = NULL;
     fiber->native_stack_size = 0;
+    fiber->native_stack_committed = NULL;
     janet_fiber_ensure_native_stack(fiber);
     return fiber;
 }
@@ -250,12 +441,20 @@ static JanetFiber *fiber_alloc(int32_t capacity) {
  * is valid. */
 void janet_fiber_ensure_native_stack(JanetFiber *fiber) {
     if (!fiber->native_stack_base) {
-        fiber->native_stack_base = fiber_native_stack_alloc(&fiber->native_stack_size);
+        size_t guard = 0;
+        void *committed = NULL;
+        fiber->native_stack_base = fiber_native_stack_alloc(&fiber->native_stack_size,
+                                                            &guard, &committed);
 #ifndef JANET_WINDOWS
-        fiber->native_stack = (char *)fiber->native_stack_base +
-            fiber->native_stack_size - JANET_FIBER_STACK_BYTES;
+        /* Usable start is fixed (base + guard); the committed window
+         * starts at the top and grows down on faults. Priming spans the
+         * full usable window: sp starts at the top (always committed),
+         * and downward growth never moves it, so no re-prime is needed. */
+        fiber->native_stack = (char *)fiber->native_stack_base + guard;
+        fiber->native_stack_committed = committed;
 #else
         fiber->native_stack = fiber->native_stack_base;
+        fiber->native_stack_committed = NULL;
 #endif
     }
     if (fiber->native_stack) {

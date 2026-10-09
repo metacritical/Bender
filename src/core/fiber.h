@@ -101,6 +101,13 @@ void janet_fiber_ensure_native_stack(JanetFiber *fiber);
  * from the GC sweep in gc.c. */
 void janet_fiber_native_stack_free(JanetFiber *fiber);
 
+/* Phase D: install the grow-on-fault SIGSEGV handler (process-once)
+ * plus this thread's alternate signal stack. Called from janet_init
+ * (every VM thread). POSIX only; no-op on Windows and under
+ * JANET_NO_GROWSTACK. Replaces growth if the user installs their own
+ * SIGSEGV handler via os/sigaction afterwards (documented). */
+void janet_fiber_growstack_init(void);
+
 #ifdef JANET_EV
 void janet_fiber_did_resume(JanetFiber *fiber);
 #endif

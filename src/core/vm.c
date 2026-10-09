@@ -2355,6 +2355,9 @@ int janet_init(void) {
     janet_vm.fiber = NULL;
     janet_vm.root_fiber = NULL;
     janet_vm.stackn = 0;
+    /* Phase D: fault handler (process-once) + this thread's alt stack,
+     * before any fiber can run here. */
+    janet_fiber_growstack_init();
     /* Phase 1.1/2a: no active compilation, clean host register park. */
     janet_vm.compiler_stack = NULL;
     janet_vm.base_signal_buf = NULL;

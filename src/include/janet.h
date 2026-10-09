@@ -1045,6 +1045,10 @@ struct JanetFiber {
     void *native_stack; /* Usable region of the native stack (post-guard) */
     void *native_stack_base; /* Mapping base (native_stack - guard) */
     size_t native_stack_size; /* Total mapped bytes */
+    /* Phase D: lowest committed address of the usable window (grows down
+     * on guard faults; NULL where growth is unsupported). The guard red
+     * zone below usable is never committed. */
+    void *native_stack_committed;
 #ifdef JANET_EV
     /* These fields are only relevant for fibers that are used as "root fibers" -
      * that is, fibers that are scheduled on the event loop and behave much like threads

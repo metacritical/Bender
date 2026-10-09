@@ -15,6 +15,15 @@
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
+#ifndef JANET_WINDOWS
+#include <unistd.h>
+#include <sys/wait.h>
+#endif
+#ifdef JANET_WINDOWS
+#include <malloc.h>
+#else
+#include <alloca.h>
+#endif
 
 static int failures = 0;
 #define CHECK(cond, msg) do { \
@@ -175,6 +184,46 @@ static JanetFiber *run_fn1(JanetTable *env, const char *name, Janet arg) {
     return f;
 }
 
+/* Phase D: grow-on-fault. Fat-frame C recursion to a calibrated depth:
+ * depth 1500 x ~512B ≈ 750KB forces several growth faults on a 64KB
+ * initial commit; the result proves transparent resume across growths.
+ * alloca (not a volatile array: optimizers shrink those unpredictably)
+ * pins the frame size; post-call work defeats tail calls. Over-cap
+ * callers die identified (test 11, child process). */
+static Janet c_grow_rec(int level, volatile char *touchp) {
+    volatile char *pad = (volatile char *) alloca(448);
+    pad[0] = (char) level;
+    {
+        int i;
+        for (i = 1; i < 448; i++) pad[i] = (char) (pad[i - 1] + i);
+    }
+    *touchp += pad[0] + pad[447];
+    Janet r;
+    if (level == 0) {
+        r = janet_wrap_integer(*touchp);
+    } else {
+        r = c_grow_rec(level - 1, touchp);
+    }
+    *touchp += pad[0];
+    return r;
+}
+
+static Janet c_grow(int32_t argc, Janet *argv) {
+    janet_arity(argc, 1, 1);
+    int depth = janet_unwrap_integer(argv[0]);
+    volatile char touch = 0;
+    return c_grow_rec(depth, &touch);
+}
+
+/* Committed window below the mapping top, or 0 where untracked (flat). */
+static size_t fiber_committed_window(JanetFiber *f) {
+    if (NULL == f->native_stack_base || 0 == f->native_stack_size ||
+            NULL == f->native_stack_committed)
+        return 0;
+    return (size_t) ((char *) f->native_stack_base + f->native_stack_size -
+                     (char *) f->native_stack_committed);
+}
+
 int main(int argc, char **argv) {
     (void) argc;
     (void) argv;
@@ -184,13 +233,15 @@ int main(int argc, char **argv) {
     janet_def(env, "c-outer", janet_wrap_cfunction(c_outer), "(test helper)");
     janet_def(env, "c-rooted", janet_wrap_cfunction(c_rooted), "(test helper)");
     janet_def(env, "c-deep", janet_wrap_cfunction(c_deep), "(test helper)");
+    janet_def(env, "c-grow", janet_wrap_cfunction(c_grow), "(test helper)");
 
     Janet out = janet_wrap_nil();
     if (janet_dostring(env,
             "(defn w1 [] (c-yield1 :ignored))"
             "(defn w2 [] (c-outer))"
             "(defn w3 [] (c-rooted))"
-            "(defn w4 [d] (c-deep d))",
+            "(defn w4 [d] (c-deep d))"
+            "(defn w5 [d] (c-grow d))",
             "fiber-c-test", &out)) {
         printf("FAIL: setup dostring failed\n");
         return 1;
@@ -302,6 +353,97 @@ int main(int argc, char **argv) {
         CHECK(s == JANET_SIGNAL_YIELD && streq_cstring(r, "R1"), "fiber usable after refused marshal");
         janet_gcunroot(janet_wrap_fiber(f));
     }
+
+    /* 8-11. Phase D grow-on-fault (POSIX grown stacks; flat builds
+     * only check completion, never the window). */
+    {
+        JanetFiber *f = run_fn1(env, "w5", janet_wrap_integer(0));
+        Janet r = janet_wrap_nil();
+        JanetSignal s = janet_continue(f, janet_wrap_nil(), &r);
+        CHECK(s == JANET_SIGNAL_OK && janet_checktype(r, JANET_NUMBER),
+              "shallow C recursion completes");
+#ifndef JANET_WINDOWS
+        CHECK(fiber_committed_window(f) == 64 * 1024,
+              "idle fiber commits exactly the initial window");
+#else
+        CHECK(fiber_committed_window(f) == 0, "flat build tracks no window");
+#endif
+        janet_gcunroot(janet_wrap_fiber(f));
+    }
+    {
+        JanetFiber *f = run_fn1(env, "w5", janet_wrap_integer(1500));
+        Janet r = janet_wrap_nil();
+        JanetSignal s = janet_continue(f, janet_wrap_nil(), &r);
+        CHECK(s == JANET_SIGNAL_OK && janet_checktype(r, JANET_NUMBER),
+              "750KB C recursion completes across growths");
+#ifndef JANET_WINDOWS
+        {
+            size_t w = fiber_committed_window(f);
+            CHECK(w >= 512 * 1024 && w <= 2 * 1024 * 1024,
+                  "committed window grew with use (and never past cap)");
+        }
+#endif
+        CHECK(janet_fiber_status(f) == JANET_STATUS_DEAD, "grown fiber dead");
+        janet_gcunroot(janet_wrap_fiber(f));
+    }
+    {
+        /* D5 accounting: 1000 idle fibers commit ~64MB total, not ~2GB.
+         * Portable (no OS counters): the tracked window is the proof. */
+        size_t total = 0;
+        int i;
+        for (i = 0; i < 1000; i++) {
+            JanetFiber *f = run_fn1(env, "w5", janet_wrap_integer(0));
+            total += fiber_committed_window(f);
+            janet_gcunroot(janet_wrap_fiber(f));
+        }
+        janet_collect();
+#ifndef JANET_WINDOWS
+        CHECK(total <= 1000 * 128 * 1024, "1k idle fibers commit small");
+        printf("info: 1000 idle fibers commit %lu bytes total\n",
+               (unsigned long) total);
+#else
+        (void) total;
+        printf("info: flat build skips commit accounting\n");
+#endif
+    }
+#ifndef JANET_WINDOWS
+    /* 11. Over-cap C recursion dies identified (child: fatal by design).
+     * D3 catchable errors are the follow-up; slice 1 must at least name
+     * the killer instead of corrupting into a mystery fault. */
+    {
+        int pipefd[2];
+        CHECK(pipe(pipefd) == 0, "overflow pipe ready");
+        pid_t pid = fork();
+        if (pid == 0) {
+            dup2(pipefd[1], STDERR_FILENO);
+            close(pipefd[0]);
+            close(pipefd[1]);
+            {
+                JanetFiber *f = run_fn1(env, "w5", janet_wrap_integer(20000));
+                Janet r = janet_wrap_nil();
+                (void) janet_continue(f, janet_wrap_nil(), &r);
+            }
+            _exit(0);
+        }
+        close(pipefd[1]);
+        {
+            char buf[256];
+            size_t off = 0;
+            ssize_t n;
+            while ((n = read(pipefd[0], buf + off, sizeof(buf) - off - 1)) > 0) {
+                off += (size_t) n;
+                if (off >= sizeof(buf) - 1) break;
+            }
+            buf[off] = '\0';
+            close(pipefd[0]);
+            int status = 0;
+            waitpid(pid, &status, 0);
+            CHECK(WIFSIGNALED(status), "over-cap recursion dies by signal");
+            CHECK(strstr(buf, "fiber native stack overflow") != NULL,
+                  "over-cap death names the stack");
+        }
+    }
+#endif
 
     /* 7. Yield with no current fiber panics instead of crashing. */
     {
