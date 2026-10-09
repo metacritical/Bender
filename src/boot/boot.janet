@@ -5299,6 +5299,74 @@
   (put env *args* (tuple toolpath ;toolargs))
   (dofile toolpath :exit true :env env))
 
+# Auto-PGO cache: standard location shared with AOT binaries (which
+# compute the same key/dir in C, see mkimage.janet). Profiles land
+# here on binary first-runs and explicit --pgo builds; plain
+# --native builds pick them up automatically (see aot-compile).
+(defn- aot-cache-dir []
+  (def xdg (os/getenv "XDG_CACHE_HOME"))
+  (if (and xdg (not (empty? xdg)))
+    (string xdg "/janet/pgo")
+    (do (def home (os/getenv "HOME"))
+      (if (and home (not (empty? home)))
+        (string home "/.cache/janet/pgo")
+        nil))))
+
+(defn- aot-cache-key [out]
+  # basename sanitized exactly like the binary's janet_aot_key:
+  # [A-Za-z0-9._-] kept, rest '_', 63 chars max, never empty.
+  (def parts (string/split "/" out))
+  (def base (last parts))
+  (def clean
+    (string/join
+      (map (fn [b] (if (or (and (>= b 65) (<= b 90))
+                              (and (>= b 97) (<= b 122))
+                              (and (>= b 48) (<= b 57))
+                              (= b 95) (= b 45) (= b 46))
+                       (string/from-bytes b) "_"))
+           (string/bytes base)) ""))
+  (def cut (if (> (length clean) 63) (string/slice clean 0 63) clean))
+  (if (empty? cut) "janet-app" cut))
+
+(defn- aot-cache-fresh? [prof paths]
+  # profile newer than every source (and existing at all)
+  (def pst (os/stat prof))
+  (when (nil? pst) (break false))
+  (def pt (get pst :modified 0))
+  (var ok true)
+  (each p paths
+    (def s (os/stat p))
+    # missing sources are someone else's error; ignore here
+    (when (and s (> (get s :modified 0) pt)) (set ok false)))
+  ok)
+
+(defn- aot-mkdir-p [dir]
+  # best-effort recursive mkdir; never fails the build
+  (try
+    (do (var cur "")
+      (def abs (string/has-prefix? "/" dir))
+      (each part (string/split "/" dir)
+        (when (not (empty? part))
+          (set cur (if (empty? cur)
+                     (if abs (string "/" part) part)
+                     (string cur "/" part)))
+          (unless (os/stat cur) (os/mkdir cur)))))
+    ([_] nil)))
+
+(defn- aot-cache-store [out ndir workload stdin]
+  # persist a successful --pgo build's profile + workload for future
+  # automatic builds. Best effort, never fails the build.
+  (try
+    (do (def cdir (aot-cache-dir))
+      (when cdir
+        (aot-mkdir-p cdir)
+        (def key (aot-cache-key out))
+        (spit (string cdir "/" key ".jdn") (slurp (string ndir "/profile.jdn")))
+        (spit (string cdir "/" key ".workload") workload)
+        (spit (string cdir "/" key ".stdin") stdin)
+        (eprint "bender --aot: cached PGO profile for automatic rebuilds")))
+    ([_] (eprint "bender --aot: warning: could not write PGO cache"))))
+
 (defn- aot-abs-exe []
   (def exe (dyn *executable* "bender"))
   (if (or (string/has-prefix? "/" exe) (nil? (string/find "/" exe)))
@@ -5336,6 +5404,7 @@
   (var pgo false)
   (var pgo-args "")
   (var pgo-stdin "")
+  (var no-auto-pgo false)
   (var appargs @[])
   (var i 0)
   (def n (length aotargs))
@@ -5352,13 +5421,14 @@
       (= a "--include") (do (array/push includes (aot-next aotargs i "--include")) (+= i 2))
       (= a "--pgo") (do (set pgo true) (set pgo-args (aot-next aotargs i "--pgo")) (+= i 2))
       (= a "--pgo-stdin") (do (set pgo-stdin (aot-next aotargs i "--pgo-stdin")) (+= i 2))
+      (= a "--no-auto-pgo") (do (set no-auto-pgo true) (++ i))
       (= a "-x") (do (array/push extrac (aot-next aotargs i "-x")) (+= i 2))
       (= a "--ldflags") (do (set ldflags (aot-next aotargs i "--ldflags")) (+= i 2))
       (string/has-prefix? "-" a) (aot-die (string "unknown flag " a))
       (do (when (not (empty? src)) (aot-die "one input only"))
           (set src a) (++ i))))
   (when (empty? src)
-    (aot-die "usage: bender --aot app.janet [-o app] [-c] [-S] [-E args...] [--native] [--externs FILE] [--include FILE] [-x FILE] [--ldflags STR] [--pgo ARGS] [--pgo-stdin FILE]"))
+    (aot-die "usage: bender --aot app.janet [-o app] [-c] [-S] [-E args...] [--native] [--externs FILE] [--include FILE] [-x FILE] [--ldflags STR] [--pgo ARGS] [--pgo-stdin FILE] [--no-auto-pgo]"))
   (when pgo
     (unless native (aot-die "--pgo needs --native (profiling seeds kernel shaping)"))
     (when (or only-c print-c run-mode)
@@ -5410,6 +5480,11 @@
     (do (def ndir (string out "-native"))
       (var profile-args @[])
       (var expected nil)
+      # gate inputs: explicit --pgo fills them by collecting now;
+      # the auto path fills them from the cache (see below).
+      (var gate false)
+      (var gate-workload "")
+      (var gate-stdin "")
       (when pgo
         # phase 0 (collect): interpreter under the type collector;
         # stdout doubles as the parity oracle. Runs in the caller's
@@ -5437,7 +5512,63 @@
         (when (nil? (os/stat prof))
           (aot-die "collector produced no profile (is JANET_PROFILE wired?)" 1))
         (eprint "bender --aot: pgo collected profile")
-        (set profile-args ["--profile" prof]))
+        (set profile-args ["--profile" prof])
+        (set gate true)
+        (set gate-workload pgo-args)
+        (set gate-stdin pgo-stdin))
+      # auto-PGO: no flags needed. A fresh cached profile (collected by
+      # first binary runs or earlier --pgo builds, newer than sources,
+      # with a recorded workload) applies automatically through the
+      # same parity gate. Anything missing prints what to do instead;
+      # --no-auto-pgo skips this entirely. Never breaks the build.
+      (var auto false)
+      (when (and native (not pgo) (not no-auto-pgo)
+                 (not only-c) (not print-c) (not run-mode))
+        (def cdir (aot-cache-dir))
+        (when cdir
+          (def key (aot-cache-key out))
+          (def cprof (string cdir "/" key ".jdn"))
+          (def cwork (string cdir "/" key ".workload"))
+          (def cstdin (string cdir "/" key ".stdin"))
+          (cond (nil? (os/stat cprof))
+                (eprint "bender --aot: no cached PGO profile yet; the binary profiles its first run automatically")
+                (nil? (os/stat cwork))
+                (eprint "bender --aot: cached profile has no workload; pass --pgo \"args\" once to make it gateable")
+                (not (aot-cache-fresh? cprof [src ;includes ;extrac]))
+                (eprint "bender --aot: cached profile is stale (sources are newer); it refreshes on the next run, or pass --pgo \"args\" now")
+                (do (unless (os/stat ndir) (os/mkdir ndir))
+                  (def aprof (string ndir "/profile.jdn"))
+                  (spit aprof (slurp cprof))
+                  (set expected (string ndir "/expected.out"))
+                  # fresh oracle for current sources (cached output
+                  # would be stale by the same argument as profiles)
+                  (eprint "bender --aot: applying cached PGO profile; verifying with recorded workload")
+                  (def exe (aot-abs-exe))
+                  (def wargs (string (slurp cwork)))
+                  (def wpargs (aot-words wargs))
+                  (var winfile nil)
+                  (var wstdin "")
+                  (when (os/stat cstdin)
+                    (set wstdin (string (slurp cstdin)))
+                    (when (os/stat wstdin)
+                      (set winfile (file/open wstdin :r))))
+                  (def wout (file/open expected :w))
+                  (def wenv (merge @{} (os/environ)))
+                  (when winfile (put wenv :in winfile))
+                  (put wenv :out wout)
+                  (def wcode (os/execute [exe src ;wpargs]
+                                         (if (string/find "/" exe) :e :ep) wenv))
+                  (file/close wout)
+                  (when winfile (file/close winfile))
+                  (when (not= wcode 0)
+                    (eprint "bender --aot: oracle run failed; building unoptimized")
+                    (set expected nil))
+                  (when expected
+                    (set profile-args ["--profile" aprof])
+                    (set gate true)
+                    (set auto true)
+                    (set gate-workload wargs)
+                    (set gate-stdin wstdin))))))
       (aot-run-tool tooldir "callgraph.janet"
                     [src ;inc-args ;profile-args "--emit-native-lib" ndir
                      ;(if externs ["--externs" externs] [])])
@@ -5458,31 +5589,53 @@
                        "-I" (string root "/src/include")
                        cfile native-c ;extrac libjanet
                        ;(aot-words ldflags) "-lm" "-lpthread" "-o"])
-          (if pgo
+          (var gate-fallback false)
+          (when gate
             # phase 1+2 (seeded build, parity gate): binary goes to a
             # temp name first; stdout must match the interpreter
-            # byte-for-byte or nothing installs.
+            # byte-for-byte or nothing installs. Explicit --pgo dies on
+            # mismatch; the auto path falls back to unoptimized (never
+            # break the build for a stale cache).
             (do (def candidate (string out ".pgo-tmp"))
               (aot-run-cc [;ccbase candidate])
               (def actual (string ndir "/actual.out"))
               (def aout (file/open actual :w))
               (def aenv (merge @{} (os/environ)))
               (var ainfile nil)
-              (when (not (empty? pgo-stdin))
-                (set ainfile (file/open pgo-stdin :r))
-                (put aenv :in ainfile))
+              (var runnable true)
+              (when (not (empty? gate-stdin))
+                (if (os/stat gate-stdin)
+                  (do (set ainfile (file/open gate-stdin :r))
+                    (put aenv :in ainfile))
+                  (do (eprint "bender --aot: gate stdin file is gone; building unoptimized")
+                    (set runnable false))))
               (put aenv :out aout)
-              (def acode (os/execute [candidate ;(aot-words pgo-args)] :e aenv))
+              (var acode nil)
+              (when runnable
+                (set acode (os/execute [candidate ;(aot-words gate-workload)] :e aenv)))
               (file/close aout)
               (when ainfile (file/close ainfile))
-              (when (not= acode 0)
-                (aot-die (string "pgo-built binary exited " acode) 1))
-              # slurp yields buffers (identity-compared); stringify first.
-              (if (= (string (slurp expected)) (string (slurp actual)))
-                (do (os/rename candidate out)
-                  (eprint "bender --aot: pgo parity ok, installed " out))
-                (do (eprint "bender --aot: PGO PARITY FAILED (artifacts kept in " ndir ")")
-                  (os/exit 1))))
+              (cond (not runnable)
+                    (if auto
+                      (do (set gate-fallback true))
+                      (aot-die "gate stdin file is gone" 1))
+                    (not= acode 0)
+                    (if auto
+                      (do (eprint "bender --aot: gated binary exited nonzero; building unoptimized")
+                        (set gate-fallback true))
+                      (aot-die (string "pgo-built binary exited " acode) 1))
+                    (not= (string (slurp expected)) (string (slurp actual)))
+                    (if auto
+                      (do (eprint "bender --aot: cached-profile gate mismatch (stale workload?); building unoptimized")
+                        (set gate-fallback true))
+                      (do (eprint "bender --aot: PGO PARITY FAILED (artifacts kept in " ndir ")")
+                        (os/exit 1)))
+                    (do (os/rename candidate out)
+                      (eprint "bender --aot: pgo parity ok, installed " out)
+                      # explicit --pgo refreshes the cache (profile +
+                      # workload) for future automatic builds.
+                      (when pgo (aot-cache-store out ndir gate-workload gate-stdin))))))
+          (unless (and gate (not gate-fallback))
             (do (aot-run-cc [;ccbase out])
               (unless run-mode (print "built " out))))))))
   (when run-mode

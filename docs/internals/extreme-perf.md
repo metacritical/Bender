@@ -238,3 +238,22 @@ outputs). Full writeup incl. soundness fixes in `aot-notes.md` §12.
 Headline: n-body 50M at 6.0s exact (Go 6.4s, C 2.1s); spectral 5500
 at 1.85s exact (35× over interp); fannkuch 12 at 162s exact
 (rotation still boxed — whole-loop native is next).
+`bench/benchmarksgame/run.sh` repeats each case (default 3×) with
+mean/min/max, after asserting all six correctness outputs.
+
+## Appendix — auto-PGO collector cost (2026-10-09)
+
+On-demand collection must be cheap enough for first-run use. Measured
+on ttfx 46×190 decrypt (call-heavy, alternating callees):
+
+- Uncached (per-call hashing): +58%.
+- Last-entry cache: +44% on ttfx, and a 16× regression on
+  alternating-call micros (every call misses + flushes). Wrong design.
+- 16→64-line direct-mapped cache + single `janet_type` per arg +
+  1-in-8 min/max/element sampling (types/counts exact): **~10%**.
+- Type masks and call counts stay exact every call (seeding
+  unanimity must be exact); ranges/elements are heuristic evidence
+  consumed behind fail-loud guards. First 16 calls per entry always
+  record fully (small tests keep exact evidence).
+- `JANET_PROFILE_STATS=1` prints hits/misses at stop/deinit.
+- Steady state pays zero (collection runs first-run/explicit only).

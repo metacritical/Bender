@@ -181,6 +181,7 @@
                               ", registry names: " (length regnames) " */\n"))
 (buffer/push-string out "#include <janet.h>\n#include <stdio.h>\n#include <stdlib.h>\n#include <string.h>\n")
 (buffer/push-string out "void janet_profile_start(void);\n")
+(buffer/push-string out "#ifndef JANET_NO_PGO\n")
 (buffer/push-string out
   ```
   #if defined(_WIN32)
@@ -233,9 +234,15 @@
                          (ch >= '0' && ch <= '9') || ch == '_' || ch == '-' || ch == '.') ? ch : '_';
       }
       base[bi] = '\0';
-      if (bi == 0) { base[0] = 'j'; base[1] = '\0'; }
+      if (bi == 0) {
+          const char *fb = "janet-app";
+          size_t fi = 0;
+          while (fb[fi] != '\0' && fi + 1 < cap) { base[fi] = fb[fi]; fi++; }
+          base[fi] = '\0';
+      }
   }
   ```)
+(buffer/push-string out "\n#endif /* JANET_NO_PGO (auto-profile helpers) */\n")
 (buffer/push-string out "static const unsigned char janet_aot_image[] = {")
 (each b image
   (buffer/push-string out (string/format "0x%02x," b)))
@@ -256,12 +263,12 @@
       /* Auto-PGO, first runs only (on demand, never always-on): when
        * no cached profile exists for this binary yet — or
        * JANET_AUTO_PGO=1 forces it — collect this run into the
-       * standard cache. The next `bender --aot --native --auto-pgo`
-       * build widens from it and recompiles; the binary after that
-       * runs clean. Never when JANET_NO_PROFILE is set. Never breaks
-       * the run: every failure here silently runs clean. Locked-down
-       * targets (iOS: no JIT/dynamic codegen) compile the whole
-       * mechanism out with -DJANET_NO_PGO. */
+       * standard cache. The next plain `bender --aot --native` build
+       * widens from it and recompiles automatically; the binary after
+       * that runs clean. Never when JANET_NO_PROFILE is set. Never
+       * breaks the run: every failure here silently runs clean.
+       * Locked-down targets (iOS: no JIT/dynamic codegen) compile
+       * the whole mechanism out with -DJANET_NO_PGO. */
       {
           const char *noprof = getenv("JANET_NO_PROFILE");
           const char *force = getenv("JANET_AUTO_PGO");
