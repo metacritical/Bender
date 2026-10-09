@@ -1103,6 +1103,13 @@ static const uint8_t *unmarshal_one_fiber(
      * meaningless here, and reuse would misattribute. */
     JanetFiber *fiber = janet_gcalloc(JANET_MEMORY_FIBER, sizeof(JanetFiber));
     janet_fiber_init_owner(fiber);
+    {
+        /* Step 1.2: nursery starts empty (see fiber_alloc). */
+        int nci;
+        for (nci = 0; nci < JANET_SLAB_NCLASSES; nci++)
+            fiber->nursery_cur[nci] = NULL;
+        fiber->gc_nursery_bytes = 0;
+    }
     fiber->flags = 0;
     fiber->frame = 0;
     fiber->stackstart = 0;

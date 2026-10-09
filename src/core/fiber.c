@@ -467,6 +467,13 @@ static JanetFiber *fiber_alloc(int32_t capacity) {
     }
     fiber->capacity = capacity;
     janet_fiber_init_owner(fiber);
+    {
+        /* Step 1.2: nursery starts empty (pages claimed on first bump). */
+        int nci;
+        for (nci = 0; nci < JANET_SLAB_NCLASSES; nci++)
+            fiber->nursery_cur[nci] = NULL;
+        fiber->gc_nursery_bytes = 0;
+    }
     data = array_allocate(sizeof(Janet), capacity);
     if (NULL == data) {
         JANET_OUT_OF_MEMORY;

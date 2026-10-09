@@ -680,7 +680,7 @@ at mailboxes (ev/chan keeps zero-copy).
 - [x] 1.1 page ownership tagging (numeric ids, never pointers) +
   introspection (`debug/slab-stats`, `debug/fiber-owner`) + pins.
   Zero behavior change; mixed bump pages documented approximate.
-- [ ] 1.2 per-fiber cur pages (pure-owned young) + nursery counters +
+- [x] 1.2 per-fiber cur pages (pure-owned young) + nursery counters +
   cross-fiber barrier recording + pins. Gate: <5% store-heavy bench
   regression or header-bit fast path instead.
 - [ ] 1.3 per-fiber minor (explicit API + auto-trigger) + pins.

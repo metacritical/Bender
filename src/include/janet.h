@@ -1004,6 +1004,11 @@ JANET_API void janet_fiber_ctx_prime(JanetFiberCtx *ctx, void *base,
 /* Save *from's current position and switch to *to. */
 JANET_API void janet_fiber_ctx_swap(JanetFiberCtx *from, JanetFiberCtx *to);
 
+/* Forward: slab pages (gc.c) for per-fiber nursery cursors below.
+ * Array sized by literal (must match JANET_SLAB_NCLASSES in gc.h;
+ * enforced by static assert there). */
+struct JanetSlabPage;
+
 struct JanetFiber {
     JanetGCObject gc; /* GC Object stuff */
     int32_t flags; /* More flags */
@@ -1075,6 +1080,12 @@ struct JanetFiber {
      * shared/unowned). Assigned at fiber creation from the VM counter;
      * kept across resets (same logical fiber), fresh on unmarshal. */
     uint32_t gc_owner;
+    /* Step 1.2: per-fiber nursery bump pages (one per slab class) for
+     * pure-owned young allocation, plus lifetime slab bytes charged to
+     * this fiber (pressure accounting for per-fiber minors). NULL/0 at
+     * birth; kept across resets (pages stay valid). */
+    struct JanetSlabPage *nursery_cur[8];
+    size_t gc_nursery_bytes;
 };
 
 /* Mark if a stack frame is a tail call for debugging */

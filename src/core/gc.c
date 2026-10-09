@@ -640,7 +640,6 @@ void janet_sweep(void) {
 #define JANET_SLAB_PAGE_SIZE 16384
 #define JANET_SLAB_PAGE_MASK (~(uintptr_t)0x3FFF)
 #define JANET_SLAB_MAGIC 0x4A534C41u
-#define JANET_SLAB_NCLASSES 8
 #define JANET_SLAB_OLD_AGE 2
 
 /* Bytes of young allocation between minor collections. */
@@ -648,6 +647,10 @@ void janet_sweep(void) {
 
 static const size_t janet_slab_classes[JANET_SLAB_NCLASSES] =
     {32, 64, 96, 128, 192, 256, 384, 512};
+
+/* Fiber nursery cursors pair with the class table above. */
+_Static_assert(JANET_SLAB_NCLASSES == 8,
+    "nursery_cur literal in JanetFiber must match class count");
 
 typedef struct JanetSlabPage {
     struct JanetSlabPage *next;
@@ -663,6 +666,11 @@ typedef struct JanetSlabPage {
      * shared — per-fiber cur pages (slice 1.2) make young pages
      * pure-owned. Read-only until then. */
     uint32_t owner;
+    /* Step 1.2: set when a recycled slot is reused across owners. Mixed
+     * pages read as shared (owner 0) everywhere: accounting lumps them
+     * with shared, the barrier records their edges. Hot loops reusing
+     * their own slots keep pages pure. */
+    int32_t mixed;
 } JanetSlabPage;
 
 #define JANET_SLAB_USABLE (JANET_SLAB_PAGE_SIZE - sizeof(JanetSlabPage))
@@ -682,6 +690,17 @@ typedef struct {
     JanetSlabPage **dir;
     size_t dir_count;
     size_t dir_cap;
+    /* Step 1.2 cross-fiber remembered set: containers whose stores
+     * crossed owner ids (see janet_gc_barrier). Plain Janet values
+     * (rooted via mark_roots); duplicates tolerated, pruned in 1.3.
+     * Capped: past the cap recording stops (stuck=1) rather than
+     * growing without bound — missing edges only matter once
+     * per-fiber minors consume the set (1.3), so failing open here is
+     * today's behavior exactly. */
+    Janet *xfb;
+    size_t xfb_count;
+    size_t xfb_cap;
+    int xfb_stuck;
 } JanetSlabState;
 
 static JanetSlabState *janet_slab_state(void) {
@@ -797,6 +816,11 @@ static int janet_slab_obj_old(void *ptr) {
 static void *janet_slab_alloc(int class_index) {
     JanetSlabState *ss = janet_slab_state();
     size_t slot = janet_slab_classes[class_index];
+    /* Step 1.2 requester: the running fiber (possibly NULL on host)
+     * pays nursery bytes and owns bump pages; recycled slots keep
+     * their page and mark it mixed on cross-owner reuse. */
+    JanetFiber *req = janet_vm.fiber;
+    uint32_t reqid = (NULL != req) ? req->gc_owner : 0;
     /* Pop a young slot, skipping (to the old list) any slot whose page
      * has aged out since the slot was freed. Self-correcting: every pop
      * either uses or re-files the head, so it always terminates. */
@@ -806,6 +830,8 @@ static void *janet_slab_alloc(int class_index) {
         ss->young_free[class_index] = slot_obj->data.next;
         JanetSlabPage *page = janet_slab_page_for(slot_obj);
         if (NULL != page && page->age < JANET_SLAB_OLD_AGE) {
+            if (0 != page->owner && page->owner != reqid) page->mixed = 1;
+            if (NULL != req) req->gc_nursery_bytes += slot;
             /* TEMPORARY 2b-iii bisect: zero recycled slots to test for
              * uninitialized-field reads. */
             memset(slot_obj, 0, slot);
@@ -814,7 +840,12 @@ static void *janet_slab_alloc(int class_index) {
         slot_obj->data.next = (JanetGCObject *) ss->old_free[class_index];
         ss->old_free[class_index] = slot_obj;
     }
-    JanetSlabPage *page = ss->cur[class_index];
+    /* Bump path: the requester's own cur page when in a fiber (young
+     * pages stay pure-owned), else the shared cur (host behavior
+     * unchanged from before Step 1.2). */
+    JanetSlabPage **curp = (NULL != req) ?
+        &req->nursery_cur[class_index] : &ss->cur[class_index];
+    JanetSlabPage *page = *curp;
     if (NULL == page || page->age >= JANET_SLAB_OLD_AGE ||
             (size_t) page->bump + slot > (size_t) JANET_SLAB_USABLE) {
         page = janet_slab_page_alloc();
@@ -827,17 +858,20 @@ static void *janet_slab_alloc(int class_index) {
         page->age = 0;
         page->dirty = 0;
         page->bump = 0;
-        /* Step 1: claiming fiber's owner id (0 when host-allocated). */
-        page->owner = (NULL != janet_vm.fiber) ? janet_vm.fiber->gc_owner : 0;
+        /* Step 1: claiming fiber's owner id (0 when host-allocated).
+         * Fresh pages start pure. */
+        page->owner = reqid;
+        page->mixed = 0;
         if (!janet_slab_dir_insert(page)) {
             janet_slab_page_free(page);
             return NULL;
         }
         ss->pages[class_index] = page;
-        ss->cur[class_index] = page;
+        *curp = page;
     }
     void *out = (char *) JANET_SLAB_SLOTS(page) + page->bump;
     page->bump += (int32_t) slot;
+    if (NULL != req) req->gc_nursery_bytes += slot;
     janet_vm.gc_young_bytes += slot;
     return out;
 }
@@ -884,6 +918,12 @@ static void janet_slab_free_pages(void) {
     ss->dir = NULL;
     ss->dir_count = 0;
     ss->dir_cap = 0;
+    /* Step 1.2: remembered set dies with the pages. */
+    janet_free(ss->xfb);
+    ss->xfb = NULL;
+    ss->xfb_count = 0;
+    ss->xfb_cap = 0;
+    ss->xfb_stuck = 0;
     janet_vm.gc_young_bytes = 0;
 }
 
@@ -952,6 +992,11 @@ JanetTable *janet_slab_owner_stats(void) {
     janet_table_put(out, janet_ckeywordv("pages"), janet_wrap_integer(total));
     janet_table_put(out, janet_ckeywordv("unowned"), janet_wrap_integer(unowned));
     janet_table_put(out, janet_ckeywordv("owned"), owned_j);
+    /* Step 1.2: cross-fiber remembered edges pending (pruned in 1.3). */
+    janet_table_put(out, janet_ckeywordv("remembered"),
+                    janet_wrap_integer((int64_t) ss->xfb_count));
+    janet_table_put(out, janet_ckeywordv("remember-stuck"),
+                    janet_wrap_boolean(ss->xfb_stuck));
     janet_gcunroot(owned_j);
     janet_gcunroot(out_j);
     return out;
@@ -989,13 +1034,23 @@ static int janet_gc_minor_skip(JanetGCObject *mem) {
     return !page->dirty;
 }
 
+/* Step 1.2 cap: past this many cross-fiber edges, recording stops
+ * (stuck) instead of growing without bound. Pruning lands in 1.3. */
+#define JANET_XFB_MAX (1024 * 1024)
+
 /* Generational write barrier (Phase 2b-iii policy): record an old
  * container that newly references a heap value, so minor collections
  * (which skip clean old tables/arrays) still find the edge. Immediates
  * (nil/boolean/number/cfunction/pointer) never create edges; young and
  * large containers are always traversed, so only old slab pages are
  * marked dirty. Call after every store of a Janet value into a heap
- * table, array, or equivalent long-lived container. */
+ * table, array, or equivalent long-lived container.
+ *
+ * Step 1.2 cross-fiber recording rides along: when container and value
+ * live on pages owned by different fibers (mixed pages read as shared),
+ * the container joins the cross-fiber remembered set for per-fiber
+ * minors (1.3). Shared either side needs nothing (shared space is
+ * always traversed). Hot path unchanged when same-owner. */
 void janet_gc_barrier(void *obj, Janet value) {
     JanetType t = janet_type(value);
     if (t == JANET_NIL || t == JANET_BOOLEAN || t == JANET_NUMBER ||
@@ -1004,8 +1059,84 @@ void janet_gc_barrier(void *obj, Janet value) {
     }
     JanetSlabPage *page = janet_slab_page_for(obj);
     if (NULL == page) return;
-    if (page->age < JANET_SLAB_OLD_AGE) return;
-    page->dirty = 1;
+    if (page->age >= JANET_SLAB_OLD_AGE) page->dirty = 1;
+    /* Cross-fiber edge below; same-owner (and shared) stores skip it. */
+    uint32_t own_o = page->mixed ? 0 : page->owner;
+    if (0 == own_o) return;
+    void *vptr = NULL;
+    Janet cobj = janet_wrap_nil();
+    switch (janet_gc_type((JanetGCObject *) obj)) {
+        case JANET_MEMORY_ARRAY:
+        case JANET_MEMORY_ARRAY_WEAK:
+            cobj = janet_wrap_array((JanetArray *) obj);
+            break;
+        case JANET_MEMORY_TABLE:
+        case JANET_MEMORY_TABLE_WEAKK:
+        case JANET_MEMORY_TABLE_WEAKV:
+        case JANET_MEMORY_TABLE_WEAKKV:
+            cobj = janet_wrap_table((JanetTable *) obj);
+            break;
+        default:
+            return;
+    }
+    switch (t) {
+        case JANET_STRING:
+        case JANET_SYMBOL:
+        case JANET_KEYWORD:
+            vptr = (void *) janet_unwrap_string(value);
+            break;
+        case JANET_ARRAY:
+            vptr = (void *) janet_unwrap_array(value);
+            break;
+        case JANET_TUPLE:
+            vptr = (void *) janet_unwrap_tuple(value);
+            break;
+        case JANET_TABLE:
+            vptr = (void *) janet_unwrap_table(value);
+            break;
+        case JANET_STRUCT:
+            vptr = (void *) janet_unwrap_struct(value);
+            break;
+        case JANET_BUFFER:
+            vptr = (void *) janet_unwrap_buffer(value);
+            break;
+        case JANET_FUNCTION:
+            vptr = (void *) janet_unwrap_function(value);
+            break;
+        case JANET_ABSTRACT:
+            vptr = (void *) janet_unwrap_abstract(value);
+            break;
+        case JANET_FIBER:
+            vptr = (void *) janet_unwrap_fiber(value);
+            break;
+        default:
+            return;
+    }
+    JanetSlabPage *pv = janet_slab_page_for(vptr);
+    if (NULL == pv) return;
+    uint32_t own_v = pv->mixed ? 0 : pv->owner;
+    if (0 == own_v || own_v == own_o) return;
+    JanetSlabState *ss = janet_slab_state();
+    if (ss->xfb_stuck) return;
+    if (ss->xfb_count == ss->xfb_cap) {
+        size_t ncap = ss->xfb_cap ? ss->xfb_cap * 2 : 64;
+        if (ncap > JANET_XFB_MAX) {
+            ss->xfb_stuck = 1;
+            return;
+        }
+        Janet *nxfb = janet_malloc(ncap * sizeof(Janet));
+        if (NULL == nxfb) {
+            ss->xfb_stuck = 1;
+            return;
+        }
+        if (NULL != ss->xfb) {
+            memcpy(nxfb, ss->xfb, ss->xfb_count * sizeof(Janet));
+            janet_free(ss->xfb);
+        }
+        ss->xfb = nxfb;
+        ss->xfb_cap = ncap;
+    }
+    ss->xfb[ss->xfb_count++] = cobj;
 }
 
 void *janet_gcalloc(enum JanetMemoryType type, size_t size) {
@@ -1098,6 +1229,16 @@ static void janet_mark_roots(void) {
     /* Scoped shadow roots (Phase 2b-i): everything pushed is live. */
     for (i = 0; i < janet_vm.shadow_count; i++)
         janet_mark(janet_vm.shadow_roots[i]);
+    /* Step 1.2 cross-fiber remembered set: recorded containers stay
+     * live (pruned in 1.3). */
+    {
+        JanetSlabState *xss = (JanetSlabState *) janet_vm.slab_state;
+        if (NULL != xss) {
+            size_t xi;
+            for (xi = 0; xi < xss->xfb_count; xi++)
+                janet_mark(xss->xfb[xi]);
+        }
+    }
     while (orig_rootcount < janet_vm.root_count) {
         Janet x = janet_vm.roots[--janet_vm.root_count];
         janet_mark(x);

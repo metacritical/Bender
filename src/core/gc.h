@@ -28,6 +28,10 @@
 #include <janet.h>
 #endif
 
+/* Slab size classes (ceiling byte sizes). Shared with the per-fiber
+ * nursery cursor array in JanetFiber (sized by literal there). */
+#define JANET_SLAB_NCLASSES 8
+
 /* The metadata header associated with an allocated block of memory */
 #define janet_gc_header(mem) ((JanetGCObject *)(mem))
 

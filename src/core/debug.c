@@ -509,6 +509,17 @@ JANET_CORE_FN(cfun_debug_fiber_owner,
     return janet_wrap_integer((int64_t) janet_vm.fiber->gc_owner);
 }
 
+JANET_CORE_FN(cfun_debug_fiber_nursery,
+              "(debug/fiber-nursery)",
+              "Step 1.2 introspection: lifetime slab bytes charged to the "
+              "calling fiber's nursery (bump + recycled paths). Never "
+              "reset (per-fiber minors in 1.3 will). Returns the integer.") {
+    janet_fixarity(argc, 0);
+    (void) argv;
+    if (NULL == janet_vm.fiber) return janet_wrap_integer(0);
+    return janet_wrap_integer((int64_t) janet_vm.fiber->gc_nursery_bytes);
+}
+
 /* Module entry point */
 void janet_lib_debug(JanetTable *env) {
     JanetRegExt debug_cfuns[] = {
@@ -527,6 +538,7 @@ void janet_lib_debug(JanetTable *env) {
         JANET_CORE_REG("debug/profile-dump", cfun_debug_profile_dump),
         JANET_CORE_REG("debug/slab-stats", cfun_debug_slab_stats),
         JANET_CORE_REG("debug/fiber-owner", cfun_debug_fiber_owner),
+        JANET_CORE_REG("debug/fiber-nursery", cfun_debug_fiber_nursery),
         JANET_REG_END
     };
     janet_core_cfuns_ext(env, NULL, debug_cfuns);
