@@ -68,8 +68,44 @@ Anything else skips **with a reason** (`native-skip <id> <name>
 <reason>` — the add-a-hint diagnostics):
 
 - Arithmetic: `add/sub/mul/div` + immediates (int-family purity
-  enforced: an int kernel never sees a float temp); `div` needs a
-  float return (C integer `/` truncates; int-div policy is TBD).
+  enforced: an int kernel never sees a float temp). Division-family
+  soundness is checked on the OPERANDS, never just the return type
+  (int64 operands truncate even inside a `:double` fn — the ttfx
+  `floor_div` miscompile that motivated the rule): `div`/`divim` need
+  float operands; `divf`/`mod`/`rem` need float operands, or
+  PGO-nonneg int operands (below).
+- `divf`/`mod`/`rem`/`divim` (2026-10-09): `divf` is `floor(a/b)`,
+  `mod` is `b==0?a:a-b*floor(a/b)`, `rem` is `fmod(a,b)` — exact
+  libm matches of boxed. Int widths refuse (C `%` truncates, Janet
+  floors) unless PGO-unanimous `min >= 0` on unrebound params, in
+  which case trunc == floor; the int path guards the whole nonneg
+  domain fail-loud (`b <= 0 || a < 0` aborts — PGO evidence is not
+  proof). Reserved C names (`fmod`, …) emit with a `k_` prefix:
+  defining `fmod` is UB (the compiler folds calls with builtin
+  semantics — observed `-1` instead of floor-mod `0.5`).
+- PGO-nonneg ranges (2026-10-09): the collector tracks per-param
+  min/max (`:mins`/`:maxs` in dumps); unanimous `min >= 0` seeds
+  nonneg evidence for unrebound params. Never a contract — guards
+  stay in the emitted code.
+- Call-shaped access (2026-10-09): `(a i)` compiles to push+call
+  with the array as callee, invisible to `get`-based rules. A
+  single-index call into a proven `:array`/`:tuple` slot refines
+  like `get` and lowers to `->data[]` with the same bounds abort
+  (multi-arg calls refuse). Resolved once per site before the state
+  update (dest slots routinely reuse index temps).
+- Pure core calls (2026-10-09): `math/floor|ceil|sqrt|abs|pow`
+  resolve from ldc-loaded cfunction constants and lower to libm
+  with `(double)` casts (boxed bodies ARE these calls). Arity and
+  numeric-args verified; `ldc`-of-cfunction skips emission (dead
+  callee load, same discipline as `ldu`).
+- Polymorphic `:number` returns code-gen as `:double` (boxed
+  arithmetic IS double arithmetic; int-domain ops keep their own
+  checks). Callers still see `:number`, so native-to-native calls
+  into such fns refuse (width unification is future work).
+- Counted loops (2026-10-09): `for i 0 (len arr)` loops elide the
+  `>= count` half (init-0 + single-+1-increment + dominated
+  `lt`-exit + same-array bound + access-before-increment + no count
+  mutation, all positional). `< 0` stays as defense-in-depth.
 - Branches: `if`/`goto` via CFG + dataflow join; conditions must be
   `:bool` (janet truthiness makes `0` truthy — C wouldn't).
 - Loops: back edges + loop-carried slots (`lte`/`gte` supported).
@@ -83,7 +119,8 @@ Anything else skips **with a reason** (`native-skip <id> <name>
   index int-family, `put` value numeric, returns stay numeric.
   Kernels never retain pointers (caller-rooted for the call), so
   zero collector work. Pointer temps (`JanetArray*`) are exempt
-  from numeric purity.
+  from numeric purity. Counted `for i 0 (len a)` loops elide the
+  upper half (above).
 - Dead code never reaches emission (reachability from entry thunks;
   uncalled defns are simply absent from the output).
 
@@ -118,7 +155,10 @@ Anything else skips **with a reason** (`native-skip <id> <name>
 strips proven defns from the unit and prepends a prelude rebind, so
 same-unit call sites compile against the wrappers (native stays
 native-to-native internally) while boxed code and `eval`'d mod code
-dispatch through env with one conversion at the boundary. Build:
+dispatch through env with one conversion at the boundary. The lib
+path prints the same `native-skip` diagnostics as `--emit-native`
+(real builds go through `--emit-native-lib`, and silent skips used
+to hide all signal). Build:
 
 ```sh
 tools/janet-aot.sh game.janet --native -o game   # needs a C compiler
@@ -152,8 +192,9 @@ through the janet oracle by `eval`ing the original defns):
 | `:float` arithmetic | float64 | true float32 | opt-in contract |
 | int past 2^53 | truncates | wraps (`wrap`) / exact (`promote`) | policy flag |
 | array OOB `get`/`put` | `nil` | aborts | opt-in contract |
-| int `div` | real division | rejected (use float) | fail-closed |
+| int `div` | real division | float operands only; PGO-nonneg ints via guarded trunc | fail-closed + opt-in guard |
 | non-numeric array elements | error | unchecked unwrap | documented, hardening later |
+| PGO-nonneg domain exit | trunc==floor | aborts | opt-in contract (evidence, not proof) |
 
 ## 8. CLI reference
 
@@ -161,6 +202,8 @@ through the janet oracle by `eval`ing the original defns):
 tools/callgraph.janet FILE... [--emit-native DIR]
                               [--emit-native-lib DIR]
                               [--externs FILE]
+                              [--profile FILE]
+                              [--include FILE]...
                               [--int-policy wrap|promote]
 tools/janet-aot.sh app.janet [-o app] [-c] [-S] [-E args...] [--native]
 ```
@@ -185,9 +228,9 @@ cc -O2 -w -fwrapv /tmp/gw/native.c -o /tmp/gw/native
 Step 13's DCE is the reachability already in the pipeline
 (Phase 4 step 2: reachability from entry thunks); Step 11's SoA story is N
 `:array` params (positions, velocities, …) through the same
-mechanism. `test/suite-callgraph.janet` (105 pins) locks all of
-the above: exact C text, parity runs, alias canonicalization,
-fail-closed reasons, policy modes, DCE absence.
+mechanism. `test/suite-callgraph.janet` (171 pins as of 2026-10-09)
+locks all of the above: exact C text, parity runs, alias
+canonicalization, fail-closed reasons, policy modes, DCE absence.
 
 ## 10. FFI struct fixes that AOT GUI work required (2026-10-07)
 
@@ -209,3 +252,36 @@ fail-closed reasons, policy modes, DCE absence.
   `:current-file`, import pre-execution mirroring loader ordering,
   import-form stripping from images, `(dyn :args)` install in the
   harness, extern-decl hoisting for `--native`.
+
+## 11. 2026-10-08/09 batch (ttfx-driven)
+
+`bender --aot bin/ttfx-cli.janet --native` emitted 0 kernels with no
+diagnostics; now 4 (`k_next_word_bang`, `color_clamp`, `floor_div`,
+`bitlen`) with reasons for all 148 skips. Landed, in order:
+
+1. AOT cc flags `-O3 -fwrapv -fno-math-errno
+   -fno-trapping-math` (`boot.janet`; `-fwrapv` is a correctness
+   fix for `:wrap`).
+2. VM `JANET_LIKELY/UNLIKELY` on ALU fast paths + GC polls
+   (`vm.c`; ttfx interp 547 → 637 fps).
+3. `bench/run.janet` micro-harness (ALU/array/table-get/alloc).
+4. `divf`/`mod`/`rem` float emission + `k_` reserved-name prefix
+   (fixed a real miscompile: folded `fmod` gave `-1` vs `0.5`).
+5. `divim` emission + lib-path skip diagnostics.
+6. Call-shaped `(a i)` recognition (inference + `->data[]`
+   lowering + per-site snapshot for slot reuse) and `:number`
+   returns code-gen as `:double`.
+7. Division operand soundness: checks on operands, not rt (fixed a
+   real `floor(int64/int64)` truncation miscompile).
+8. PGO min/max collection + nonneg-seeded int `divf`/`mod`/`rem`
+   with fail-loud domain guards.
+9. Pure `math/floor|ceil|sqrt|abs|pow` → libm (+ `ldc`-cfunction
+   skip); div-family gates on operands, not rt (unlocks
+   array-building fns' numeric subcomputations).
+10. Compiler `(string "a" "b")` literal folding (`compile.c`,
+    pointer-compared, shadowing-safe).
+11. Counted `for i 0 (len a)` upper-guard elision (`< 0` kept).
+
+Still refused on ttfx (next): constructor emission (`mkarr` in
+`seed-limbs`), live-range splitting for shared slots (`xor64`
+`s2 mixes array/long/number`), dependency chains (`rotl64`).

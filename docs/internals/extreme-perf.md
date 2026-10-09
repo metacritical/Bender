@@ -16,8 +16,9 @@ Baseline (M-series, interpreter): rng-double ~28ns/op, array-sum
 - [x] Computed-goto threading (`vm.c:run_vm`). Switch dispatch
   mispredicts; threading is strictly better on GCC/Clang.
 - [x] `JANET_LIKELY/UNLIKELY` on ALU fast paths + GC polls (`vm.c`).
-  ~1-3% on numeric loops, free. Next: annotate `fiber_push`,
-  `table_get` probe loop, `symcache` hit path.
+  ~1-3% on numeric loops, free (ttfx interp 547 → 637 fps).
+  Next: annotate `fiber_push`, `table_get` probe loop, `symcache`
+  hit path.
 - [x] AOT cc flags: `-O3 -fwrapv -fno-math-errno
   -fno-trapping-math` (`boot.janet`). `-fwrapv` is a CORRECTNESS fix
   for `:wrap` int policy (signed overflow is UB otherwise); the rest
@@ -34,6 +35,26 @@ Baseline (M-series, interpreter): rng-double ~28ns/op, array-sum
   `fmod` is UB: the compiler folds `fmod(-2.5,1.5)` with builtin
   semantics (-1) instead of calling the kernel (0.5). Any libm/libc
   name or keyword collides the same way.
+- [x] `bench/run.janet` micro-harness: rng-double ~28ns/op,
+  array-sum ~13ns/elem, table-get ~16ns/op, alloc-tuple ~64ns/op.
+- [x] `divim` emission + lib-path skip diagnostics (the lib path
+  printed nothing; real builds were undiagnosable).
+- [x] Call-shaped `(a i)` access: inference + `->data[]` lowering
+  (per-site snapshot: dest slots reuse index temps) +
+  `:number`-as-`:double` returns (native-to-native into such fns
+  still refuses — width unification is future work).
+- [x] Division operand soundness: checks on operands, never rt
+  (fixed a real `floor(int64/int64)` truncation miscompile on ttfx
+  `floor_div`; stock `div` had the same hole).
+- [x] PGO min/max collection + nonneg-seeded int `divf`/`mod`/`rem`
+  with fail-loud domain guards (evidence, not proof).
+- [x] Pure `math/floor|ceil|sqrt|abs|pow` → libm (+ `ldc`-cfunction
+  skip); div-family gates on operands so array-building fns'
+  numeric subcomputations emit.
+- [x] Compiler `(string "a" "b")` literal folding (`compile.c`,
+  pointer-compared against the core binding, shadowing-safe).
+- [x] Counted `for i 0 (len a)` upper-guard elision (`< 0` kept as
+  defense-in-depth; nearest-writer-before-use for reused temps).
 
 ## Tier 1 — VM dispatch (boxed code, benefits everything)
 
@@ -170,39 +191,41 @@ explicitly: 148 skips, 1 kernel. PGO top rows: `nil?` 13M,
 `next-word-boxed` 339K, `bitlen`/`randbelow` 187K. New items beyond
 the tiers above, ranked for this workload:
 
-1. **Call-shaped access recognition (biggest, new).** `(a i)` compiles
+1. **Call-shaped access recognition (shipped).** `(a i)` compiles
    to `(push i) (tcall a)`, `(t :k)` to `(ldc k) (push) (tcall t)` —
-   the analyzer only understands `get` (`callgraph.janet` get rule,
-   `infer.janet` scan-def). The whole port (rng limb arrays, scene
-   records, SoA rows) is therefore invisible: hot fns like `xor64`
-   are *called* directly (resolvable) but their *bodies* never prove.
-   Fix in two stages: (a) inference-level — a `call`/`tcall` whose
-   callee slot is `:array`/`:table` with a constant-or-int arg refines
-   like `get` (sound: slot type already proves the callee); (b)
-   emission-level — lower to `->data[]` / `janet_table_get`. (a) is
-   zero-risk (emission still fail-closes); (b) unlocks dozens of ttfx
-   kernels without touching port sources.
+   the analyzer only understood `get`. Now: inference refines
+   single-index calls into proven `:array`/`:tuple` slots like
+   `get`, and emission lowers to `->data[]` (per-site snapshot:
+   dest slots reuse index temps). Multi-arg calls refuse.
 2. **Immediate-opcode symmetry (shipped: `divim`).** `(/ x 2)` folds
    to `divim`, which had no emission while `addim/subim/mulim` did —
    blocked `bitlen`. Rule: every `*im` the compiler can emit must
    have an inference + emission arm (audit: `eqim/neqim/ltim/gtim`,
    `slim/srim/sruim` done; `divim` done; none remain unhandled).
-3. **Non-negative int range analysis (specified).** `floor-div`
-   (`canvas.janet`, canvas dims) and `bitlen` refuse on `divf/divim
-   on int width`. Operands are ≥0 in practice (dims, counts,
-   `length`), where trunc == floor. Track `≥0` from `ldi 0`,
-   `length`/`len`, `band`-masks, and monotonic `for` counters; allow
-   trunc-div/mod on proven-`≥0` int slots. Interim stays refused.
-4. **Pure-core-call intrinsics (specified).** `(math/floor (/ x 256))`
-   (`seed-limbs`), `math/sqrt`, `math/abs`: calls to known-pure core
-   fns with a type rule (`:number -> :number`) + libm emission.
-   Small table in `cfuns.c` style; unlocks seed/gradient/easing code
-   with no inference changes.
-5. **String-format fusion (specified).** `color-string` 2M calls +
-   per-cell `buffer/push-string` is the other 50% of frame time.
-   Fuse constant format strings at compile time (`cfuns.c`) and sink
-   appends into the frame buffer (L4 concretized for this workload).
-6. **Counted-loop versioning (Tier 3, concretized).**
-   `ctx-frame-string` loops `(for i 0 nrows)` over SoA rows with
-   `len`/`get`/`put`: hoist one bounds/type guard, elide per-iter
-   checks. Profitable only after (1) makes the bodies visible.
+3. **Non-negative int range analysis (shipped: PGO evidence).**
+   `floor-div` (`canvas.janet`, canvas dims) refused on int width.
+   Now: collector min/max → unanimous `min >= 0` seeds nonneg for
+   unrebound params → trunc `divf`/`mod`/`rem` with fail-loud
+   domain guards. Static `≥0` tracking (`ldi 0`, `len`,
+   monotonic counters) remains future.
+4. **Pure-core-call intrinsics (shipped).** `(math/floor (/ x 256))`
+   (`seed-limbs`), `math/sqrt`, `math/abs` (+ `ceil`, `pow`): recorded
+   from ldc-loaded cfunction constants, typed from a shared table,
+   lowered to libm with `(double)` casts. `ldc`-of-cfunction skips
+   emission as a dead callee load.
+5. **String-format fusion (partially shipped).** `color-string`
+   2M calls + per-cell `buffer/push-string` is the other 50% of
+   frame time. Shipped: `(string "a" "b")` literal folding in the
+   compiler. Still open: dynamic fusion / buffer sinking (L4).
+6. **Counted-loop versioning (Tier 3, shipped narrow).**
+   `for i 0 (len a)` elides the `>= count` half (`< 0` kept);
+   positional proof (init-0, single-+1, dominated lt-exit,
+   same-array bound, access-before-increment, no count mutation).
+   Multi-block loops, rebound counters/arrays still refuse.
+
+Status after the batch: 1 → 4 ttfx kernels (`k_next_word_bang`,
+`color_clamp`, `floor_div` with domain guard, `bitlen` via
+divim-double + floor-intrinsic chaining). Still refused, next in
+line: constructor emission (`mkarr` in `seed-limbs`), live-range
+splitting for shared slots (`xor64` `s2 mixes array/long/number`),
+dependency chains (`rotl64` waits on leaves).
