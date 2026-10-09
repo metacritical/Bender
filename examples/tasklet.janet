@@ -247,6 +247,24 @@
       (ev/take rch)
       t)))
 
+(defn kill
+  "Untrappable kill (Step 5.1): cancel the task's fiber with `reason`
+  as the error value. Lands at the next resume boundary for idle
+  tasks, or the next quantum boundary (<=200 polls) for wedged compute
+  hogs — trap-exit does NOT save the victim (the ERROR is raised at
+  the dispatch loop's take, outside every protect). Monitors observe
+  [:down tag reason] via the supervisor completion. Unknown or already-
+  completed pids are a silent no-op (Erlang parity). Caveat: a raw
+  task that wraps its whole body in protect can trap the kill —
+  loop (spawn) tasks cannot. Returns its argument."
+  [t reason]
+  (def r (resolve t))
+  (def task (r :task))
+  (if (or (nil? task) (get task :done))
+    t
+    (do (ev/cancel (task :fiber) reason)
+      t)))
+
 ###
 ### Monitors and links over supervisor completions. A watched task's
 ### exit delivers [:down tag reason] to the watcher, where reason is
@@ -318,3 +336,131 @@
   "Remove `name` from the tasklet registry."
   [name]
   (put *task-names* name nil))
+
+###
+### Supervisors, one_for_one (Step 5.2). A supervisor is a loop task
+### whose handler restarts children on abnormal exit. Child spec:
+### {:id id :start (fn -> tasklet) :restart :permanent|:transient|
+### :temporary}. :permanent restarts on every exit, :transient only on
+### abnormal reasons (anything but :normal), :temporary never. Unknown
+### tags in :down payloads are ignored (stale monitors from before a
+### respawn carry the old tag — tags are the child id, rebound on each
+### respawn, so staleness cannot misroute). Restart intensity
+### (default 3 restarts per 5s) bounds crash loops: exceeding it exits
+### the supervisor with the last reason (its own monitors observe).
+### Children are quit (graceful) when the supervisor quits... except
+### the supervisor loop has no quit hook: stop via supervisor-stop,
+### which quits children then quits the supervisor task.
+###
+
+(defn- sup-restart-child [sup child]
+  (def starter (child :starter))
+  (def [ok handle] (protect (starter)))
+  (if ok
+    (do (put child :handle handle)
+      (monitor handle (sup :self-task) (child :id))
+      (put (sup :children) (child :id) child)
+      true)
+    (do (put child :last-error handle)
+      false)))
+
+(defn- sup-note-restart [sup]
+  (def now (os/clock))
+  (def window (sup :intensity-window))
+  (def stamps (sup :restarts))
+  (array/push stamps now)
+  (def cutoff (- now window))
+  (def fresh (filter (fn [ts] (> ts cutoff)) stamps))
+  (put sup :restarts fresh)
+  (<= (length fresh) (sup :intensity)))
+
+(defn- sup-handle-down [sup id reason]
+  (def children (sup :children))
+  (def child (get children id))
+  # Unknown ids are stale respawn-era monitors — ignore. Stopping
+  # drops everything (teardown must not resurrect :permanent children).
+  (when (and (not (nil? child)) (not (sup :stopping)))
+    (def restart-kind (child :restart))
+    (def abnormal (and (not= reason :normal) (not (nil? reason))))
+    (def should-restart
+      (case restart-kind
+        :permanent true
+        :transient abnormal
+        false))
+    (if (not should-restart)
+      (put children id nil)
+      (do
+        (when (not (sup-note-restart sup))
+          (error (string "supervisor intensity exceeded for " id
+                         ": " reason)))
+        (when (not (sup-restart-child sup child))
+          (error (string "supervisor child start failed for " id
+                         ": " (child :last-error))))))))
+
+(defn supervisor-start
+  "Start a one_for_one supervisor over `specs` (array of child specs).
+  Each spec: {:id id :start starter-fn &opt :restart kind} (default
+  :permanent). Intensity `max-restarts` per `window` seconds (defaults
+  3 per 5). Returns the supervisor tasklet; ask it :which-children
+  (via call) for {id pid-or-nil} (pids, not handles: handles embed
+  live fibers, which cannot cross the reply channel), or stop it with
+  supervisor-stop."
+  [specs &opt max-restarts window]
+  (default max-restarts 3)
+  (default window 5)
+  (def children @{})
+  (def sup @{:children children :restarts @[] :intensity max-restarts
+             :intensity-window window :self-task nil})
+  (def handler
+    (fn [tag payload]
+      (case tag
+        :down (sup-handle-down sup (payload 0) (payload 1))
+        # Handles embed live fibers (unmarshallable through the reply
+        # channel), so expose pids — they plug into send/call/resolve.
+        :which-children
+        (do (def out @{})
+          (eachk id children
+            (def h ((get children id) :handle))
+            (put out id (if (nil? h) nil (h :pid))))
+          out))))
+  (def task (spawn handler))
+  (put sup :self-task task)
+  (put task :sup-record sup)
+  (each spec specs
+    (def child @{:id (spec :id) :starter (spec :start)
+                 :restart (get spec :restart :permanent)
+                 :handle nil :last-error nil})
+    (when (not (sup-restart-child sup child))
+      (quit task)
+      (error (string "supervisor child start failed for " (spec :id)
+                     ": " (child :last-error)))))
+  task)
+
+(defn supervisor-which-children
+  "Ask supervisor `sup` for its {id pid-or-nil} table (call)."
+  [sup]
+  (call sup :which-children nil))
+
+(defn supervisor-stop
+  "Stop supervisor `sup`: quit every live child (graceful, 0.5s each),
+  `:shutdown`-kill the stragglers (raw tasks that never read their
+  mailbox cannot quit — same rule as quit), then quit the supervisor
+  task itself. Sets the stopping flag first so :permanent children
+  exiting during teardown are not resurrected. Returns `sup`."
+  [sup]
+  (def rec ((resolve sup) :task))
+  (def record (rec :sup-record))
+  (put record :stopping true)
+  (def children (record :children))
+  (eachk id children
+    (def h ((get children id) :handle))
+    (when (and (not (nil? h)) (nil? (get h :done)))
+      (def rch (ev/thread-chan 1))
+      (send h :tasklet-quit nil rch)
+      (def tch (ev/chan 1))
+      (ev/go (fn [] (ev/sleep 0.5) (ev/give tch :stop-timeout)))
+      (def sel (ev/select rch tch))
+      (when (= tch (sel 1))
+        (kill h :shutdown))))
+  (quit sup)
+  sup)

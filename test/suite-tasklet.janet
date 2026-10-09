@@ -127,4 +127,103 @@
   (assert (= :main-msg (ev/take c)) "main copy intact")
   (assert (nil? (ev/try-take c)) "no worker leakage into main"))
 
+# 11. Step 5.1 kill: idle task dies, monitor observes the reason.
+(let [results @[]
+      t (tasklet/spawn (fn [tag payload] :ok))
+      w (tasklet/spawn (fn [tag payload] (array/push results [tag payload])))]
+  (tasklet/monitor t w :m)
+  (tasklet/kill t :killed)
+  (ev/sleep 0.2)
+  (assert (deep= @[[:down [:m :killed]]] results) "kill observed")
+  (assert (= :error (fiber/status (get t :fiber))) "victim errors")
+  (tasklet/quit w))
+
+# 12. Kill is untrappable at loop level: trap-exit does not save the
+# victim (ERROR lands at the dispatch take, outside every protect).
+(let [results @[]
+      t (tasklet/spawn (fn [tag payload] :ok))
+      w (tasklet/spawn (fn [tag payload] (array/push results [tag payload])))]
+  (tasklet/trap-exit t true)
+  (tasklet/monitor t w :m)
+  (tasklet/kill t :killed)
+  (ev/sleep 0.2)
+  (assert (deep= @[[:down [:m :killed]]] results) "trapper still dies")
+  (tasklet/quit w))
+
+# 13. Kill lands on wedged hogs at the quantum boundary (<=200 polls,
+# far inside the 0.3s sleep): status flips and monitors observe.
+(let [results @[]
+      hog (tasklet/spawn-raw
+            (fn [] (var acc 0) (while true (+= acc 1))))
+      w (tasklet/spawn (fn [tag payload] (array/push results [tag payload])))]
+  (tasklet/monitor hog w :h)
+  (ev/sleep 0.05)
+  (tasklet/kill hog :killed)
+  (ev/sleep 0.3)
+  (assert (= :error (fiber/status (get hog :fiber))) "hog dies")
+  (assert (deep= @[[:down [:h :killed]]] results) "hog kill observed")
+  (tasklet/quit w))
+
+# 14. Kill of unknown/completed pids is a silent no-op.
+(let [t (tasklet/spawn (fn [tag payload] :ok))]
+  (tasklet/quit t)
+  (tasklet/kill t :whatever)
+  (tasklet/kill [:pid 0 999999 (ev/ichan 1)] :whatever))
+
+# 15. Step 5.2 one_for_one: transient crash restarts the child
+# (same id, new pid), clean transient exits do not restart. The flaky
+# child crashes its first two incarnations, then stays up (a tight
+# crash loop would trip intensity before the assertions run — that is
+# test 16's point).
+(let [starts @[]]
+  (var crashes-left 2)
+  (def sup
+    (tasklet/supervisor-start
+      [{:id :flaky
+        :start (fn []
+                 (array/push starts :started)
+                 (if (> crashes-left 0)
+                   (do (-- crashes-left)
+                     (tasklet/spawn-raw
+                       (fn [] (ev/sleep 0.02) (error "flaky-boom"))))
+                   (tasklet/spawn (fn [tag payload] :steady))))
+        :restart :transient}
+       {:id :clean
+        :start (fn [] (tasklet/spawn-raw (fn [] :bye)))
+        :restart :transient}]))
+  (ev/sleep 0.4)
+  (def kids (tasklet/supervisor-which-children sup))
+  (assert (tasklet/pid? (kids :flaky)) "flaky re-pidded")
+  (assert (nil? (kids :clean)) "clean transient not restarted")
+  (assert (= 3 (length starts)) "two crashes + steady incarnation")
+  (assert (= :steady (tasklet/call (kids :flaky) :ping nil))
+          "restarted child serves")
+  (tasklet/supervisor-stop sup))
+
+# 16. Intensity bounds crash loops: 3 restarts per 5s, then the
+# supervisor itself exits (observed dead, starts frozen).
+(let [starts @[]
+      sup (tasklet/supervisor-start
+            [{:id :doomed
+              :start (fn []
+                       (array/push starts :started)
+                       (tasklet/spawn-raw
+                         (fn [] (ev/sleep 0.02) (error "boom"))))
+              :restart :transient}])]
+  (ev/sleep 0.6)
+  (assert (= 4 (length starts)) "intensity: 1 + 3 restarts")
+  (assert (= :error (fiber/status (get sup :fiber))) "sup gives up"))
+
+# 17. Permanent steady child answers through its supervised pid;
+# stop tears everything down (no resurrection, clean exit).
+(let [sup (tasklet/supervisor-start
+            [{:id :steady
+              :start (fn [] (tasklet/spawn (fn [tag payload] :steady-ok)))}])]
+  (ev/sleep 0.1)
+  (def kids (tasklet/supervisor-which-children sup))
+  (assert (tasklet/pid? (kids :steady)) "steady has pid")
+  (assert (= :steady-ok (tasklet/call (kids :steady) :ping nil))
+          "call through supervised pid")
+  (tasklet/supervisor-stop sup))
+
 (end-suite)

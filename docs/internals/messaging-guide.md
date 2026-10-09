@@ -211,7 +211,29 @@ marshal); quit on a completed task returns at once; raw tasks that
 never read their mailbox cannot quit. `(break val)` discards val in
 this Janet — loops park results in cells instead.
 
-Kill and supervision land with Step 5 (kill + one_for_one trees).
+Kill and supervision (`tasklet/kill`, `supervisor-start`):
+
+```janet
+(tasklet/kill db :killed)   # untrappable at loop level (trap-exit
+                             # never saves the victim); wedged hogs die
+                             # at the next quantum boundary (<=200 polls);
+                             # monitors observe [:down tag reason].
+                             # Unknown/completed pids: silent no-op.
+(def sup (tasklet/supervisor-start
+           [{:id :db
+             :start (fn [] (tasklet/spawn db-handler))
+             :restart :transient}]))   # :permanent | :transient | :temporary
+(tasklet/supervisor-which-children sup) # -> {id pid-or-nil}
+(tasklet/supervisor-stop sup)           # graceful quit, then
+                                        # :shutdown-kill stragglers
+```
+
+Restart intensity (default 3 per 5s) bounds crash loops — exceeding
+it exits the supervisor with the reason. Stopping never resurrects
+`:permanent` children. `which-children` returns pids, not handles
+(handles embed live fibers, which cannot cross the reply channel).
+Raw tasks that protect their whole body can trap a kill (loop tasks
+cannot) — the one documented hole in "untrappable".
 
 Lanes (Step 4): thread VMs + the shared job queue are the lanes
 (`pool/*`, `examples/pool.janet`); tasklets stay pinned to their home

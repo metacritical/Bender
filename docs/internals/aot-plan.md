@@ -731,10 +731,18 @@ boundary (running tasks relocate by respawn, never stack copy).
 - [x] 4.2 work-stealing at job level (pool pattern in C)
 - [x] 4.3 suspended-task migration (Janet-level suspension only)
 
-**Step 5 — real supervision.** Untrappable kill via step-2
-safepoints + OTP restart strategies over tasklets.
-- [ ] 5.1 kill that cannot be trapped by wedged tasks
-- [ ] 5.2 supervisor trees (one_for_one first)
+**Step 5 — real supervision.** SHIPPED 2026-10-10 (examples/
+tasklet.janet): tasklet/kill over ev/cancel — untrappable at loop
+level (ERROR lands at the dispatch take, outside every protect, so
+trap-exit never saves the victim) and quantum-bounded for wedged hogs
+(<=200 polls); monitors observe the reason. Caveat: raw tasks that
+protect their whole body can trap it (loop tasks cannot). one_for_one
+supervisor-start (/which-children/stop) with :permanent/:transient/
+:temporary, restart intensity (3/5s default, then the supervisor exits
+with the reason), stopping flag (teardown never resurrects
+:permanent children), graceful-quit-then-:shutdown-kill stop, pids
+(not handles) out of which-children (handles embed unmarshallable
+live fibers).
 - [x] 5.1 kill that cannot be trapped by wedged tasks
 - [x] 5.2 supervisor trees (one_for_one first)
 
