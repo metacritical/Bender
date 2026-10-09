@@ -1586,6 +1586,25 @@ static void *janet_chanat_unmarshal(JanetMarshalContext *ctx) {
     for (int32_t i = 0; i < count; i++) {
         Janet item = janet_unmarshal_janet(ctx);
         janet_assert(!janet_q_push(&abst->items, &item, sizeof(item)), "bad unmarshal channel");
+        /* Threaded queues hold malloc'd transit buffers (see pack), but
+         * unmarshal rebuilds them as GC buffers — which unpack would
+         * janet_free (invalid free). Move the bytes into malloc'd
+         * ownership (encoding untouched); the GC copy becomes garbage.
+         * Pack is bypassed deliberately: items are already transit. */
+        if (is_threaded && janet_checktype(item, JANET_BUFFER)) {
+            JanetBuffer *src = janet_unwrap_buffer(item);
+            JanetBuffer *nb = janet_malloc(sizeof(JanetBuffer));
+            if (NULL == nb) JANET_OUT_OF_MEMORY;
+            janet_buffer_init(nb, 0);
+            if (src->count > 0) {
+                janet_buffer_push_bytes(nb, src->data, src->count);
+            }
+            JanetQueue *q = &abst->items;
+            Janet *slots = q->data;
+            int32_t tail = q->tail - 1;
+            if (tail < 0) tail += q->capacity;
+            slots[tail] = janet_wrap_buffer(nb);
+        }
     }
     return abst;
 }

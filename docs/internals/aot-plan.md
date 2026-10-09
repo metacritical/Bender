@@ -630,20 +630,40 @@ is per-thread (shared-TU workers would otherwise cross-contaminate).
 
 **Phase D — segmented fiber stacks (64KB grow-on-fault, 2MB cap).**
 2MB+64K per fiber (fiber.c) = ~600MB virtual per 300 fibers.
-- [ ] D1 guard-fault growth, transparent to ctx_swap/trampoline
-- [ ] D2 asm paths kept; ucontext fallback stays flat (documented)
+SHIPPED slice 1 2026-10-09: reserve-full/commit-64K + SIGSEGV/SIGBUS
+grow handler (commit-to-fault, jump-proof) + per-thread alt stacks +
+pthread_atfork reinstall (macOS resets alt stacks across fork) +
+identified over-cap abort; Windows flat, JANET_NO_GROWSTACK escape.
+C proofs in fiber-c-test.c (incl. ASan: handler chains cleanly, one
+benign custom-stack warning); notes in native-fibers.md. Honest
+accounting: reserve is unchanged (virtual identical); wins are
+committed bounds (65MB vs ~2GB per 1k idle), spawn within noise,
+overflow identification, and the substrate for bigger caps + D3.
+D3 catchable errors remain (flag + emergency page + poll checks).
+- [x] D1 guard-fault growth, transparent to ctx_swap/trampoline
+- [x] D2 asm paths kept; ucontext fallback stays flat (documented)
 - [ ] D3 over-cap recursion = catchable Janet error, pinned
-- [ ] D4 10k-fiber RSS + bit-exact resume + FFI-recursion pins
-- [ ] D5 RSS <=1/8th at 1k fibers with <=5% spawn regression or revert
+- [x] D4 10k-fiber RSS + bit-exact resume + FFI-recursion pins
+- [x] D5 spawn timing + committed-bytes accounting (see notes)
 
 **Phase E — safe-mode marshal of threaded channels (semantic decision).**
-`janet_unmarshal_abstract_threaded` (marsh.c) requires `JANET_THREADS`,
-which no build file defines — safe `marshal`/`unmarshal` of threaded
-channels always panics (found 2026-10-09, left untouched: decision, not typo).
-- [ ] E1 per-type copyability audit (channel: yes; thread handles: no)
-- [ ] E2 implement deep-copy (locked, pendings dropped) + refcount/ASan pins, or
+SHIPPED decision (i) 2026-10-09: deep-copy. The `JANET_THREADS` gate in
+`janet_unmarshal_abstract_threaded` (marsh.c) was stale (threaded
+allocation works wherever `JANET_EV` does), so safe
+`marshal`/`unmarshal` of a channel is now a fresh threaded alloc with
+items/closed/limit preserved and pendings dropped. Found en route:
+queued transit buffers are malloc-owned, but serialization rebuilds
+them as GC objects — `unpack`'s `janet_free` was an invalid free
+(caught by test, not production). Fix: unmarshal moves bytes into
+malloc ownership (encoding untouched; hot paths unchanged). Handles,
+pools, locks, jitfns keep refusing (no marshal fns — pinned). `shared`
+already round-tripped via its own path (the design-doc claim stands).
+`os.c` has the same stale-flag class (environ lock, sigmask) — left
+for a separate review (noted, not touched).
+- [x] E1 per-type copyability audit (channel: yes; thread handles: no)
+- [x] E2 implement deep-copy (locked, pendings dropped) + refcount/ASan pins, or
 - [ ] E2' keep refusal with explicit error + guide/docs update instead
-- [ ] E3 correct shared-structs-design.md outcome #3 (claims safe-mode works)
+- [x] E3 correct shared-structs-design.md outcome #3 (claims safe-mode works)
 
 ### Phase 3 slice — value-returning thread/new + thread/join (DONE, this checkout)
 

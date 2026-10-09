@@ -361,6 +361,67 @@
 (assert (= (ev/take mchan2) "hello-m"))
 (assert (= (ev/take mchan2) "world-m"))
 
+# Phase E: safe marshal/unmarshal of threaded channels is a deep copy
+# (fresh threaded alloc; items/closed/limit preserved; pendings dropped
+# by construction). Transit buffers are malloc-owned on both sides:
+# unmarshal moves bytes into malloc ownership (never janet_free on GC
+# memory), so takes after round-trips are safe.
+(defn- chan-roundtrip [ch] (unmarshal (marshal ch)))
+(let [t (ev/thread-chan 10)]
+  (ev/give t :a)
+  (ev/give t 42)
+  (ev/give t "hi")
+  (ev/give t @{:k [1 2]})
+  (ev/give t @[1 "two" :three])
+  (def d (chan-roundtrip t))
+  (assert (= (ev/capacity d) 10) "threaded round-trip capacity")
+  (assert (= :a (ev/take d)) "threaded round-trip keyword")
+  (assert (= 42 (ev/take d)) "threaded round-trip number")
+  (assert (= "hi" (ev/take d)) "threaded round-trip string")
+  (assert (deep= @{:k [1 2]} (ev/take d)) "threaded round-trip table")
+  (assert (deep= @[1 "two" :three] (ev/take d)) "threaded round-trip array"))
+# double round-trip (encode stability) + independence (original usable).
+(let [t (ev/thread-chan 4)]
+  (ev/give t @{:nested @[1]})
+  (def d (chan-roundtrip (chan-roundtrip t)))
+  (assert (deep= @{:nested @[1]} (ev/take d)) "threaded double round-trip")
+  (assert (deep= @{:nested @[1]} (ev/take t)) "original independent"))
+# cross-thread use after unmarshal (lock path intact).
+(let [t (ev/thread-chan 4)]
+  (ev/give t :ping)
+  (def d (chan-roundtrip t))
+  (ev/do-thread (assert (= :ping (ev/take d)) "round-tripped cross-thread take"))
+  (ev/give d :pong)
+  (assert (= :pong (ev/take d)) "round-tripped cross-thread give"))
+# closed flag survives; independence the other way (drain copy, live orig).
+(let [t (ev/thread-chan 2)]
+  (ev/give t :keep)
+  (def d (chan-roundtrip t))
+  (ev/chan-close d)
+  (assert (= nil (ev/take d)) "round-tripped close reads nil")
+  (assert (= :keep (ev/take t)) "original unaffected by copy close"))
+(let [t (ev/thread-chan 2)]
+  (ev/chan-close t)
+  (assert (= nil (ev/take (chan-roundtrip t))) "closed flag survives"))
+# stress: round-trips interleaved with collections (ownership/GC churn).
+(let [t (ev/thread-chan 64)]
+  (for i 0 64 (ev/give t (string "v" i)))
+  (var acc 0)
+  (repeat 20
+    (def d (chan-roundtrip t))
+    (gccollect)
+    (+= acc (if (= (string "v" 0) (ev/take d)) 1 0))
+    (gccollect))
+  (assert (= 20 acc) "round-trip stress"))
+# refusals stand: handles, pools, locks never marshal.
+(let [h (thread/new (fn [] 1))]
+  (assert-error "thread handle refuses marshal" (marshal h))
+  (thread/join h))
+(let [p (pool/spawn 1)]
+  (assert-error "pool refuses marshal" (marshal p))
+  (pool/stop p))
+(assert-error "lock refuses marshal" (marshal (ev/lock)))
+
 # ev/try-give / ev/try-take: non-blocking, never suspend
 (def tch (ev/chan 2))
 (assert (= (ev/try-take tch) nil) "try-take empty")

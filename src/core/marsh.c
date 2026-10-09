@@ -1342,16 +1342,18 @@ void *janet_unmarshal_abstract(JanetMarshalContext *ctx, size_t size) {
     return p;
 }
 
+/* Phase E: the JANET_THREADS gate was stale — threaded allocation
+ * works wherever JANET_EV does (every threaded type in this tree
+ * allocates through it, including on builds that never define
+ * JANET_THREADS). Safe-mode unmarshal of a type with marshal fns is a
+ * deep copy (fresh threaded alloc; items copied, pendings dropped by
+ * the type's own unmarshal); UNSAFE pointer passthrough still travels
+ * by reference (LB_THREADED_ABSTRACT). Types without marshal fns
+ * (thread handles, pools, locks, jitfns) keep refusing everywhere. */
 void *janet_unmarshal_abstract_threaded(JanetMarshalContext *ctx, size_t size) {
-#ifdef JANET_THREADS
     void *p = janet_abstract_threaded(ctx->at, size);
     janet_unmarshal_abstract_reuse(ctx, p);
     return p;
-#else
-    (void) ctx;
-    (void) size;
-    janet_panic("threaded abstracts not supported");
-#endif
 }
 
 int janet_unmarshal_flags(JanetMarshalContext *ctx) {
