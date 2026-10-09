@@ -175,6 +175,42 @@ islands), or anywhere `thread/new` per item would dominate. Do NOT
 use for stateful services (no per-task state — use mailbox) or
 strictly ordered streams (use one mailbox).
 
+## 6b. Tasklets: bare fibers with owned isolated queues
+
+BEAM-shaped processes inside one VM (`examples/tasklet.janet`):
+each task owns an `ev/ichan` mailbox (marshal-copied values, never
+shared mutable references), has a `[:pid node serial chan]` identity
+(shared shape with mailbox pids), and supports send/call/selective
+receive, links/monitors/trap-exit, and a same-VM name registry.
+Fibers stay pinned N:1; supervision is cooperative.
+
+```janet
+(import ../examples/tasklet :as tasklet)
+
+(def db (tasklet/spawn
+          (do (var store @{})
+              (fn [tag payload]
+                (case tag
+                  :put (put store (payload 0) (payload 1))
+                  :get (get store payload))))))
+(tasklet/send db :put [:user "amy"])
+(tasklet/call db :get :user)      # -> "amy" (copied)
+# selective receive in a raw task (out-of-order arrival, in-order match)
+(tasklet/spawn-raw
+  (fn []
+    (tasklet/recv (fn [m] (= :a (m 0))))))
+(tasklet/quit db)
+```
+
+Rules that differ from mailboxes: payloads copy on every crossing
+(mutations never alias); pids must not travel as ichan payloads (plain
+channels marshal-copy, so the pid would point at a disconnected
+queue — pass registry names instead); supervisor channels are plain
+(completion events embed the task fiber, which packing would try to
+marshal); quit on a completed task returns at once; raw tasks that
+never read their mailbox cannot quit. `(break val)` discards val in
+this Janet — loops park results in cells instead.
+
 ## 7. Broadcast constants: `shared`
 
 Immutable values frozen once, readable in every VM with zero copies
@@ -255,6 +291,8 @@ straight-line megafunctions aren't preemptible mid-way).
 | cancel/wake a sleeper | `ev/interrupt` (+ `ev/cancel` to kill) |
 | hogs starving the loop | `ev/timeslice` |
 | non-blocking check (never suspends, safe in `janet_call`) | `ev/try-give` / `ev/try-take` (nil = full/empty; closed `give` panics, closed `take` gives nil) |
+| isolated same-VM mailbox (copy, no lock) | `ev/ichan` — payloads marshal-copy like thread-chans; single-VM only |
+| bare-fiber actor (send/call/recv/link/monitor) | `examples/tasklet.janet` (`spawn`, `spawn-raw`, `recv`, `link`, `monitor`, `register`) |
 
 ## Worked example: supervised physics with named broadcast config
 

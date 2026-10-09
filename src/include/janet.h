@@ -1614,6 +1614,7 @@ JANET_API int32_t janet_abstract_decref_maybe_free(void *abst);
 /* Expose channel utilities */
 JANET_API JanetChannel *janet_channel_make(uint32_t limit);
 JANET_API JanetChannel *janet_channel_make_threaded(uint32_t limit);
+JANET_API JanetChannel *janet_channel_make_isolated(uint32_t limit);
 JANET_API JanetChannel *janet_getchannel(const Janet *argv, int32_t n);
 JANET_API JanetChannel *janet_optchannel(const Janet *argv, int32_t argc, int32_t n, JanetChannel *dflt);
 JANET_API int janet_channel_give(JanetChannel *channel, Janet x);

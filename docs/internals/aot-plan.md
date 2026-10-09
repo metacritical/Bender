@@ -689,7 +689,7 @@ at mailboxes (ev/chan keeps zero-copy).
   marking, xfb is currently spare (all edges found via traversal);
   it becomes load-bearing when foreign stacks are skipped, which
   needs copy-on-send (1.4) so channel/stack edges cannot hide.
-- [ ] 1.4 mailbox copy semantics (owned queues copy; ev/chan shared).
+- [x] 1.4 mailbox copy semantics (owned queues copy; ev/chan shared).
 
 **Step 2 — preemptive reductions.** Quantum polls become forced
 reduction suspends (C calls stay atomic). Needs step 1 for safe
@@ -697,12 +697,17 @@ interruption accounting.
 - [ ] 2.1 reduction counter + suspend points beyond back-edges/calls
 - [ ] 2.2 starvation reversal proof (hog + latency pair, bounded)
 
-**Step 3 — owned mailboxes + selective receive.** Scheduler queue
-table per task + match-scan primitive; resolve pids to task queues
-(Tasklets shape). Needs step 1 (queues copy) for isolation.
-- [ ] 3.1 per-task owned queue + send/recv/self primitives
-- [ ] 3.2 selective receive + pins
-- [ ] 3.3 pid resolution to task queues (bare-fiber pids land here)
+**Step 3 — owned mailboxes + selective receive.** SHIPPED 2026-10-10
+(examples/tasklet.janet + ev/ichan): per-task owned isolated queue +
+send/call/recv/self (+ spawn-raw), selective receive with stash,
+trap-exit/link/monitor over supervisor completions (single-shot
+reapers), same-VM name registry (ev/register would snapshot pids).
+Step 1.4 rode along: ev/ichan (marshal-copy, no lock) + direct-handoff
+decode fix in push (non-threaded handoff delivered transit buffers
+undecoded — plain channels never pack so nobody noticed).
+- [x] 3.1 per-task owned queue + send/recv/self primitives
+- [x] 3.2 selective receive + pins
+- [x] 3.3 pid resolution to task queues (bare-fiber pids land here)
 
 **Step 4 — lanes + migration.** N event loops (BEAM schedulers);
 work-stealing; running-task migration last (stack mappings + TLS +

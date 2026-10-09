@@ -82,6 +82,10 @@ struct JanetChannel {
     int32_t limit;
     int closed;
     int is_threaded;
+    /* Step 1.4: isolated channels marshal-copy values like threaded
+     * ones (same transit ownership) but take no lock: single-VM by
+     * contract (tasklet mailboxes). Cross-thread use is user error. */
+    int isolated;
 #ifdef JANET_WINDOWS
     CRITICAL_SECTION lock;
 #else
@@ -760,8 +764,15 @@ static inline int janet_chan_is_threaded(JanetChannel *chan) {
     return chan->is_threaded;
 }
 
+/* Step 1.4: values are marshal-copied through isolated channels the
+ * same way as threaded ones (same transit ownership); only the lock
+ * stays threaded-only (isolated channels are single-VM by contract). */
+static inline int janet_chan_needs_pack(JanetChannel *chan) {
+    return chan->is_threaded || chan->isolated;
+}
+
 static int janet_chan_pack(JanetChannel *chan, Janet *x) {
-    if (!janet_chan_is_threaded(chan)) return 0;
+    if (!janet_chan_needs_pack(chan)) return 0;
     switch (janet_type(*x)) {
         default: {
             JanetBuffer *buf = janet_malloc(sizeof(JanetBuffer));
@@ -783,7 +794,7 @@ static int janet_chan_pack(JanetChannel *chan, Janet *x) {
 }
 
 static int janet_chan_unpack(JanetChannel *chan, Janet *x, int is_cleanup) {
-    if (!janet_chan_is_threaded(chan)) return 0;
+    if (!janet_chan_needs_pack(chan)) return 0;
     switch (janet_type(*x)) {
         default:
             return 1;
@@ -804,10 +815,11 @@ static int janet_chan_unpack(JanetChannel *chan, Janet *x, int is_cleanup) {
     }
 }
 
-static void janet_chan_init(JanetChannel *chan, int32_t limit, int threaded) {
+static void janet_chan_init(JanetChannel *chan, int32_t limit, int threaded, int isolated) {
     chan->limit = limit;
     chan->closed = 0;
     chan->is_threaded = threaded;
+    chan->isolated = isolated;
     janet_q_init(&chan->items);
     janet_q_init(&chan->read_pending);
     janet_q_init(&chan->write_pending);
@@ -825,7 +837,7 @@ static void janet_chan_unlock(JanetChannel *chan) {
 }
 
 static void janet_chan_deinit(JanetChannel *chan) {
-    if (janet_chan_is_threaded(chan)) {
+    if (janet_chan_needs_pack(chan)) {
         Janet item;
         janet_chan_lock(chan);
         janet_q_deinit(&chan->read_pending);
@@ -1114,6 +1126,10 @@ static int janet_channel_push_with_lock(JanetChannel *channel, Janet x, int mode
                 janet_chan_unpack(channel, &x, 1);
             }
         } else {
+            /* Same-VM handoff: decode transit values first (no-op for
+             * plain channels, which never pack; the threaded path
+             * decodes in its completion callback instead). */
+            janet_assert(!janet_chan_unpack(channel, &x, 0), "bad channel packing");
             if (reader.mode == JANET_CP_MODE_CHOICE_READ) {
                 janet_schedule(reader.fiber, make_read_result(channel, x));
             } else {
@@ -1217,14 +1233,21 @@ int janet_channel_take(JanetChannel *channel, Janet *out) {
 JanetChannel *janet_channel_make(uint32_t limit) {
     janet_assert(limit <= INT32_MAX, "bad limit");
     JanetChannel *channel = janet_abstract(&janet_channel_type, sizeof(JanetChannel));
-    janet_chan_init(channel, (int32_t) limit, 0);
+    janet_chan_init(channel, (int32_t) limit, 0, 0);
     return channel;
 }
 
 JanetChannel *janet_channel_make_threaded(uint32_t limit) {
     janet_assert(limit <= INT32_MAX, "bad limit");
     JanetChannel *channel = janet_abstract_threaded(&janet_channel_type, sizeof(JanetChannel));
-    janet_chan_init(channel, (int32_t) limit, 1);
+    janet_chan_init(channel, (int32_t) limit, 1, 0);
+    return channel;
+}
+
+JanetChannel *janet_channel_make_isolated(uint32_t limit) {
+    janet_assert(limit <= INT32_MAX, "bad limit");
+    JanetChannel *channel = janet_abstract(&janet_channel_type, sizeof(JanetChannel));
+    janet_chan_init(channel, (int32_t) limit, 0, 1);
     return channel;
 }
 
@@ -1441,7 +1464,7 @@ JANET_CORE_FN(cfun_channel_new,
     janet_arity(argc, 0, 1);
     int32_t limit = janet_optnat(argv, argc, 0, 0);
     JanetChannel *channel = janet_abstract(&janet_channel_type, sizeof(JanetChannel));
-    janet_chan_init(channel, limit, 0);
+    janet_chan_init(channel, limit, 0, 0);
     return janet_wrap_abstract(channel);
 }
 
@@ -1452,8 +1475,22 @@ JANET_CORE_FN(cfun_channel_new_threaded,
     janet_arity(argc, 0, 1);
     int32_t limit = janet_optnat(argv, argc, 0, 0);
     JanetChannel *tchan = janet_abstract_threaded(&janet_channel_type, sizeof(JanetChannel));
-    janet_chan_init(tchan, limit, 1);
+    janet_chan_init(tchan, limit, 1, 0);
     return janet_wrap_abstract(tchan);
+}
+
+JANET_CORE_FN(cfun_channel_new_isolated,
+              "(ev/ichan &opt limit)",
+              "Create an isolated channel. Values sent through it are "
+              "marshal-copied like a threaded channel (no shared mutable "
+              "references cross), but it takes no lock: single-VM use "
+              "only, the tasklet mailbox transport. Cross-thread use is "
+              "user error (use ev/thread-chan across threads).") {
+    janet_arity(argc, 0, 1);
+    int32_t limit = janet_optnat(argv, argc, 0, 0);
+    JanetChannel *ichan = janet_abstract(&janet_channel_type, sizeof(JanetChannel));
+    janet_chan_init(ichan, limit, 0, 1);
+    return janet_wrap_abstract(ichan);
 }
 
 JANET_CORE_FN(cfun_channel_close,
@@ -1549,7 +1586,11 @@ static Janet janet_chanat_next(void *p, Janet key) {
 
 static void janet_chanat_marshal(void *p, JanetMarshalContext *ctx) {
     JanetChannel *channel = (JanetChannel *)p;
-    janet_marshal_byte(ctx, channel->is_threaded);
+    /* Step 1.4: flags byte (bit0 threaded, bit1 isolated). Old dumps
+     * wrote 0/1, which read back identically (bit1 clear). */
+    uint8_t flags = (uint8_t)
+        ((channel->is_threaded ? 1 : 0) | (channel->isolated ? 2 : 0));
+    janet_marshal_byte(ctx, flags);
     janet_marshal_abstract(ctx, channel);
     janet_marshal_byte(ctx, channel->closed);
     janet_marshal_int(ctx, channel->limit);
@@ -1569,7 +1610,10 @@ static void janet_chanat_marshal(void *p, JanetMarshalContext *ctx) {
 }
 
 static void *janet_chanat_unmarshal(JanetMarshalContext *ctx) {
-    uint8_t is_threaded = janet_unmarshal_byte(ctx);
+    uint8_t flags = janet_unmarshal_byte(ctx);
+    /* Old dumps carry 0/1 (threaded bit only); bit1 clear preserves them. */
+    int is_threaded = (flags & 1) != 0;
+    int isolated = (flags & 2) != 0;
     JanetChannel *abst;
     if (is_threaded) {
         abst = janet_unmarshal_abstract_threaded(ctx, sizeof(JanetChannel));
@@ -1581,17 +1625,18 @@ static void *janet_chanat_unmarshal(JanetMarshalContext *ctx) {
     int32_t count = janet_unmarshal_int(ctx);
     if (count < 0) janet_panic("invalid negative channel count");
     if (count > limit) janet_panic("invalid channel count");
-    janet_chan_init(abst, limit, is_threaded);
+    janet_chan_init(abst, limit, is_threaded, isolated);
     abst->closed = !!is_closed;
+    int needs_pack = (is_threaded || isolated);
     for (int32_t i = 0; i < count; i++) {
         Janet item = janet_unmarshal_janet(ctx);
         janet_assert(!janet_q_push(&abst->items, &item, sizeof(item)), "bad unmarshal channel");
-        /* Threaded queues hold malloc'd transit buffers (see pack), but
+        /* Packed queues hold malloc'd transit buffers (see pack), but
          * unmarshal rebuilds them as GC buffers — which unpack would
          * janet_free (invalid free). Move the bytes into malloc'd
          * ownership (encoding untouched); the GC copy becomes garbage.
          * Pack is bypassed deliberately: items are already transit. */
-        if (is_threaded && janet_checktype(item, JANET_BUFFER)) {
+        if (needs_pack && janet_checktype(item, JANET_BUFFER)) {
             JanetBuffer *src = janet_unwrap_buffer(item);
             JanetBuffer *nb = janet_malloc(sizeof(JanetBuffer));
             if (NULL == nb) JANET_OUT_OF_MEMORY;
@@ -6108,6 +6153,7 @@ void janet_lib_ev(JanetTable *env) {
         JANET_CORE_REG("ev/rselect", cfun_channel_rchoice),
         JANET_CORE_REG("ev/chan", cfun_channel_new),
         JANET_CORE_REG("ev/thread-chan", cfun_channel_new_threaded),
+        JANET_CORE_REG("ev/ichan", cfun_channel_new_isolated),
         JANET_CORE_REG("ev/chan-close", cfun_channel_close),
         JANET_CORE_REG("ev/go", cfun_ev_go),
         JANET_CORE_REG("ev/thread", cfun_ev_thread),
