@@ -597,12 +597,19 @@ construction). API parity with pool.janet: spawn/call/submit/map/stop.
 - [x] A6 bench rows (call vs thread/new >=5x on 10k trivial tasks or revert)
 - [x] A7 guide + this plan updated; pool.janet stays as reference until oracle parity
 
-**Phase B — MPSC channel fast path (lock-free ring, mutex fallback).**
-- [ ] B1 bounded ring (atomics, acquire/release documented) for single-producer
-- [ ] B2 transparent migration to mutex on 2nd producer (generation counter, no ABA)
-- [ ] B3 preserve select/close/stale-removal/gcroot/`try-*` semantics on both paths
-- [ ] B4 soak + forced-migration + close-during-flight pins; ASan/TSan clean
-- [ ] B5 >=2x SPSC ping-pong or revert; pool throughput before/after
+**Phase B — MPSC channel fast path: MEASURED, DEFERRED WITH CAUSE.**
+Verdict 2026-10-09: the premise (mutex-dominated) was falsified.
+thread-buffered 155ns/op vs plain 112 (mutex ≈ 7ns of it: normal 6.5ns
+vs recursive 10.0ns per pair, microbenched); 8-sender unblocked 241ns
+(mutex bounce ≈ 40ns); 8-sender blocking 2465ns (full-queue park/wake
+dominates — a ring cannot fix backpressure wakes); rendezvous 6286ns
+(selfpipe + kevent + schedule dominate). No path offers the ≥2x gate,
+so per keep-only-what-measures no ring lands. Landed instead: threaded
+bench rows (pingpong/buffered) + this record. What WOULD move
+rendezvous: wake batching / Tier-6 transport work, out of scope.
+- [x] B0 threaded bench rows + attribution (the measurement)
+- [ ] B1-B5 superseded (see above; revisit only with a contended,
+  wake-free workload showing mutex ≥50% — none measured)
 
 **Phase C — PGO merge for worker threads.**
 `profile_table` (state.h) is per-VM; worker evidence dies at `janet_deinit`.

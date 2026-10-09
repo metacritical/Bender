@@ -91,10 +91,43 @@
   (print "pool-map " n " tasks "
     (string/format "%.1f" (* 1e9 (/ dt n))) " ns/op acc=" (res (- n 1))))
 
+(defn bench-thread-chan-pingpong [n]
+  # Cross-thread rendezvous: measures the threaded-channel path
+  # (mutex + marshal + post_event + schedule) per round trip.
+  (def a (ev/thread-chan 0))
+  (def b (ev/thread-chan 0))
+  (ev/spawn-thread
+    (for i 0 n
+      (ev/give a i)
+      (ev/take b)))
+  (def t0 (os/clock))
+  (var acc 0)
+  (for i 0 n
+    (ev/take a)
+    (ev/give b i)
+    (+= acc i))
+  (def dt (- (os/clock) t0))
+  (print "thread-pingpong " n " roundtrips "
+    (string/format "%.1f" (* 1e9 (/ dt n))) " ns/rt acc=" acc))
+
+(defn bench-thread-chan-buffered [n]
+  # Cross-thread buffered handoff: producer thread fills, main drains.
+  (def c (ev/thread-chan 1024))
+  (ev/spawn-thread
+    (for i 0 n (ev/give c i)))
+  (def t0 (os/clock))
+  (var acc 0)
+  (for i 0 n (+= acc (ev/take c)))
+  (def dt (- (os/clock) t0))
+  (print "thread-buffered " n " msgs "
+    (string/format "%.1f" (* 1e9 (/ dt (* 2 n)))) " ns/op acc=" acc))
+
 (defn main [&]
   (bench-chan-pingpong 2000)
   (bench-chan-buffered 20000)
   (bench-chan-try 20000)
+  (bench-thread-chan-pingpong 2000)
+  (bench-thread-chan-buffered 20000)
   (bench-fiber-spawn 2000)
   (bench-thread-spawn)
   (bench-pool-call 2000)
