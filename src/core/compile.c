@@ -640,21 +640,33 @@ static int function_can_inline(JanetFopts opts, JanetFunction *func, JanetSlot *
 /* Fold (string "a" "b" ...) with all-literal string args into one
  * constant. Only unwraps JANET_STRING constants (numbers, keywords
  * etc. format through `describe`/`to-string` paths whose exact output
- * is deliberately left to runtime). GC-safe: the compiler interns
- * strings throughout compilation already. */
+ * is deliberately left to runtime). Uses a malloc'd scratch buffer so
+ * no unrooted GC object is live across allocations; janet_stringv
+ * copies into a fresh interned string. */
 static int janetc_fold_string(JanetFopts opts, JanetSlot *slots, JanetSlot *out) {
     (void) opts;
     int32_t i, len = janet_v_count(slots);
     if (len < 1) return 0;
+    int32_t total = 0;
     for (i = 0; i < len; i++) {
         if (!(slots[i].flags & JANET_SLOT_CONSTANT)) return 0;
         if (!janet_checktype(slots[i].constant, JANET_STRING)) return 0;
+        int32_t slen = janet_string_length(janet_unwrap_string(slots[i].constant));
+        if (total > INT32_MAX - slen) return 0;
+        total += slen;
     }
-    JanetBuffer *b = janet_buffer(0);
+    uint8_t *scratch = (uint8_t *) janet_smalloc((size_t) total ? (size_t) total : 1);
+    int32_t off = 0;
     for (i = 0; i < len; i++) {
-        janet_buffer_push_string(b, janet_unwrap_string(slots[i].constant));
+        JanetString s = janet_unwrap_string(slots[i].constant);
+        int32_t slen = janet_string_length(s);
+        if (slen) {
+            memcpy(scratch + off, s, (size_t) slen);
+            off += slen;
+        }
     }
-    *out = janetc_cslot(janet_stringv(b->data, b->count));
+    *out = janetc_cslot(janet_stringv(scratch, total));
+    janet_sfree(scratch);
     return 1;
 }
 
