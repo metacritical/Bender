@@ -350,6 +350,40 @@
 (assert (= item1 "hello"))
 (assert (= item2 "world"))
 
+# marshal channel round-trip preserves items (exercises chanat_unmarshal;
+# ev.c must re-init with the marshalled is_threaded flag, not hardcoded 0)
+(def mchan (ev/chan 10))
+(ev/give mchan "hello-m")
+(ev/give mchan "world-m")
+(def mchan2 (-> mchan marshal unmarshal))
+(assert (= (ev/count mchan2) 2) "unmarshal count")
+(assert (= (ev/capacity mchan2) 10) "unmarshal capacity")
+(assert (= (ev/take mchan2) "hello-m"))
+(assert (= (ev/take mchan2) "world-m"))
+
+# ev/try-give / ev/try-take: non-blocking, never suspend
+(def tch (ev/chan 2))
+(assert (= (ev/try-take tch) nil) "try-take empty")
+(assert (ev/try-give tch :a) "try-give ok")
+(assert (ev/try-give tch :b) "try-give ok 2")
+(assert (= (ev/try-give tch :c) nil) "try-give full")
+(assert (= (ev/try-take tch) :a) "try-take 1")
+(assert (= (ev/try-take tch) :b) "try-take 2")
+(assert (= (ev/try-take tch) nil) "try-take drained")
+# method forms (keyword-first invocation)
+(assert (:try-give tch :x) "method try-give")
+(assert (= (:try-take tch) :x) "method try-take")
+# rendezvous channel: try-give fails with no waiter, try-take fails when empty
+(def rch (ev/chan 0))
+(assert (= (ev/try-give rch 1) nil) "rendezvous try-give no waiter")
+(assert (= (ev/try-take rch) nil) "rendezvous try-take empty")
+# try-take on closed channel yields nil even with buffered items
+# (close wins over the buffer — same as blocking ev/take, pinned here)
+(def cch (ev/chan 2))
+(ev/give cch :z)
+(ev/chan-close cch)
+(assert (= (ev/try-take cch) nil) "try-take closed drops buffer")
+
 # ev/take, suspended, channel closed
 (def ch (ev/chan))
 (ev/go |(ev/chan-close ch))

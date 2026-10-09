@@ -233,6 +233,7 @@ straight-line megafunctions aren't preemptible mid-way).
 | broadcast constants | `shared/new` |
 | cancel/wake a sleeper | `ev/interrupt` (+ `ev/cancel` to kill) |
 | hogs starving the loop | `ev/timeslice` |
+| non-blocking check (never suspends, safe in `janet_call`) | `ev/try-give` / `ev/try-take` (nil = full/empty; closed `give` panics, closed `take` gives nil) |
 
 ## Worked example: supervised physics with named broadcast config
 

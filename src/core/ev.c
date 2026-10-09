@@ -1056,6 +1056,15 @@ static int janet_channel_push_with_lock(JanetChannel *channel, Janet x, int mode
     }
     if (is_empty) {
         /* No pending reader */
+        if (mode == 3 && janet_q_count(&channel->items) >= channel->limit) {
+            /* Try-mode: report full without buffering (mode 2 keeps the
+             * historical buffer-beyond-limit behavior for supervisor
+             * pushes, which ignore the return value). Must unpack the
+             * packed copy to avoid leaking the threaded marshal buffer. */
+            janet_chan_unpack(channel, &x, 1);
+            janet_chan_unlock(channel);
+            return 1;
+        }
         if (janet_q_push(&channel->items, &x, sizeof(Janet))) {
             janet_chan_unpack(channel, &x, 1);
             janet_chan_unlock(channel);
@@ -1245,6 +1254,35 @@ JANET_CORE_FN(cfun_channel_pop,
         janet_schedule(janet_vm.root_fiber, item);
     }
     janet_await();
+}
+
+JANET_CORE_FN(cfun_channel_try_push,
+              "(ev/try-give chan val)",
+              "Non-blocking channel write. Returns `chan` if the value was "
+              "accepted, nil if the channel is full (no suspension). "
+              "Panics on a closed channel, like `ev/give`. Safe inside "
+              "`janet_call` (never suspends).") {
+    janet_fixarity(argc, 2);
+    JanetChannel *channel = janet_getchannel(argv, 0);
+    if (janet_channel_push(channel, argv[1], 3)) {
+        return janet_wrap_nil();
+    }
+    return argv[0];
+}
+
+JANET_CORE_FN(cfun_channel_try_pop,
+              "(ev/try-take chan)",
+              "Non-blocking channel read. Returns the value if one is "
+              "immediately available, nil if the channel is empty (no "
+              "suspension). A closed channel yields nil, like `ev/take`. "
+              "Safe inside `janet_call` (never suspends).") {
+    janet_fixarity(argc, 1);
+    JanetChannel *channel = janet_getchannel(argv, 0);
+    Janet item = janet_wrap_nil();
+    if (janet_channel_pop(channel, &item, 2)) {
+        return item;
+    }
+    return janet_wrap_nil();
 }
 
 JANET_CORE_FN(cfun_channel_choice,
@@ -1484,6 +1522,8 @@ static const JanetMethod ev_chanat_methods[] = {
     {"count", cfun_channel_count},
     {"take", cfun_channel_pop},
     {"give", cfun_channel_push},
+    {"try-take", cfun_channel_try_pop},
+    {"try-give", cfun_channel_try_push},
     {"capacity", cfun_channel_capacity},
     {"full", cfun_channel_full},
     {"close", cfun_channel_close},
@@ -1535,7 +1575,7 @@ static void *janet_chanat_unmarshal(JanetMarshalContext *ctx) {
     int32_t count = janet_unmarshal_int(ctx);
     if (count < 0) janet_panic("invalid negative channel count");
     if (count > limit) janet_panic("invalid channel count");
-    janet_chan_init(abst, limit, 0);
+    janet_chan_init(abst, limit, is_threaded);
     abst->closed = !!is_closed;
     for (int32_t i = 0; i < count; i++) {
         Janet item = janet_unmarshal_janet(ctx);
@@ -5019,6 +5059,8 @@ void janet_lib_ev(JanetTable *env) {
     JanetRegExt ev_cfuns_ext[] = {
         JANET_CORE_REG("ev/give", cfun_channel_push),
         JANET_CORE_REG("ev/take", cfun_channel_pop),
+        JANET_CORE_REG("ev/try-give", cfun_channel_try_push),
+        JANET_CORE_REG("ev/try-take", cfun_channel_try_pop),
         JANET_CORE_REG("ev/full", cfun_channel_full),
         JANET_CORE_REG("ev/capacity", cfun_channel_capacity),
         JANET_CORE_REG("ev/count", cfun_channel_count),
