@@ -327,22 +327,21 @@
       }
       janet_gcroot(top);
       JanetFunction *fn = janet_unwrap_function(top);
-      /* Mirror run.c janet_dobytes: synchronous continue first, so error
-      ** traces render exactly like the interpreter's; enter the event loop
-      ** afterwards for ev programs. */
+      /* Mirror run.c janet_dobytes: run to completion, then enter the
+      ** event loop for ev programs. janet_loop_fiber (as in shell.c)
+      ** rather than bare continue: quantum-INTERRUPT resumes need the
+      ** scheduler to requeue them (bare runs must complete under
+      ** default-on quanta), and ev programs pump in the same loop. */
       JanetFiber *fiber = janet_fiber(fn, 64, 0, NULL);
       fiber->env = env;
-      Janet out = janet_wrap_nil();
-      JanetSignal sig = janet_continue(fiber, janet_wrap_nil(), &out);
+      janet_gcroot(janet_wrap_fiber(fiber));
+      int fstatus = janet_loop_fiber(fiber);
       int status = 0;
-      if (sig != JANET_SIGNAL_OK && sig != JANET_SIGNAL_EVENT) {
-          janet_stacktrace_ext(fiber, out, "");
+      if (fstatus != JANET_SIGNAL_OK && fstatus != JANET_SIGNAL_EVENT) {
+          janet_stacktrace_ext(fiber, fiber->last_value, "");
           status = 1;
-      } else {
-          janet_gcroot(janet_wrap_fiber(fiber));
-          janet_loop();
-          janet_gcunroot(janet_wrap_fiber(fiber));
       }
+      janet_gcunroot(janet_wrap_fiber(fiber));
       janet_gcunroot(top);
       janet_deinit();
       return status;

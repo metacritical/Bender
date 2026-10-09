@@ -2379,9 +2379,17 @@ int janet_init(void) {
     /* Auto suspension */
     janet_vm.auto_suspend = 0;
 
-    /* M4b-2 quantum driver: off unless ev/timeslice enables it. */
+    /* M4b-2 quantum driver: ON by default (Step 2 preemptive
+     * reductions); JANET_TIMESLICE=0 restores fully cooperative
+     * scheduling per process, ev/timeslice toggles per VM. */
     janet_vm.quantum = 0;
     janet_vm.quantum_remaining = 0;
+    {
+        const char *tsenv = getenv("JANET_TIMESLICE");
+        if (NULL == tsenv || strcmp(tsenv, "0") != 0) {
+            janet_vm.quantum = 1;
+        }
+    }
 
     /* Dynamic bindings */
     janet_vm.top_dyns = NULL;

@@ -691,11 +691,17 @@ at mailboxes (ev/chan keeps zero-copy).
   needs copy-on-send (1.4) so channel/stack edges cannot hide.
 - [x] 1.4 mailbox copy semantics (owned queues copy; ev/chan shared).
 
-**Step 2 — preemptive reductions.** Quantum polls become forced
-reduction suspends (C calls stay atomic). Needs step 1 for safe
-interruption accounting.
-- [ ] 2.1 reduction counter + suspend points beyond back-edges/calls
-- [ ] 2.2 starvation reversal proof (hog + latency pair, bounded)
+**Step 2 — preemptive reductions.** SHIPPED 2026-10-10: quanta on
+by default (opt-out via ev/timeslice false, kill-switch
+JANET_TIMESLICE=0); coverage audited (back-edges only — forward code
+is finite); manual resume loops verified transparent (generator +
+2M-hog exact); C calls stay atomic (dirty work stays in pool);
+starvation latency bound pinned (infinite hog + sleepers). Drive-by:
+mkimage native runner now uses janet_loop_fiber (their template did
+bare continue without the INTERRUPT retry, so default-on quanta
+killed every AOT binary past 200 polls).
+- [x] 2.1 reduction counter + suspend points beyond back-edges/calls
+- [x] 2.2 starvation reversal proof (hog + latency pair, bounded)
 
 **Step 3 — owned mailboxes + selective receive.** SHIPPED 2026-10-10
 (examples/tasklet.janet + ev/ichan): per-task owned isolated queue +

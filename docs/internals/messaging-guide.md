@@ -253,26 +253,30 @@ Use when: watchdog timers, canceling queued/sleeping work,
 supervisor-driven shutdown. Do NOT expect it to stop running code
 (see next section for that).
 
-## 9. Fairness: `ev/timeslice`
+## 9. Fairness: `ev/timeslice` (Step 2: on by default)
 
 ```janet
-(ev/timeslice true)   # preemptive round-robin on (default off)
-(ev/timeslice)        # -> current setting (per-VM)
+(ev/timeslice)          # -> current setting (per-VM, default on)
+(ev/timeslice false)    # fully cooperative (opt out)
+(ev/timeslice true)     # back on
 ```
 
-Every resume grants 200 back-edge/call polls; exhaustion suspends
+Every resume grants 200 back-edge/call polls (count only backward
+jumps and calls — forward code is free); exhaustion suspends
 transparently (resume continues exactly — verified bit-exact) and
 the scheduler re-queues instead of unwinding. Compute hogs can no
 longer starve sleepers and takers; C calls stay atomic (polls are
-Janet ops only); try/pcall regions are transparent. External C
-quiesce still unwinds (checked first). Zero behavior change when
-off (one predictable branch); ~1% overhead measured when on.
+Janet ops only); try/pcall regions are transparent. Manual `resume`
+loops are unaffected (exhaustion inside a resumed fiber retries
+transparently). `JANET_TIMESLICE=0` starts a process fully
+cooperative. External C quiesce still unwinds (checked first).
+~1% overhead measured.
 
-Use when: mixing compute-heavy tasks with latency-sensitive ones
-in one loop (frame tasks + background baking). Do NOT use to kill
-tasks (use interrupt+cancel), across threads (opt each VM in), or
-expecting hard real-time (quanta are poll-counted, not timed;
-straight-line megafunctions aren't preemptible mid-way).
+Use `false` when: hand-rolled schedulers need run-to-completion
+atomicity, or benchmarking wants dispatch without quanta. Do NOT use
+to kill tasks (use interrupt+cancel), or expecting hard real-time
+(quanta are poll-counted, not timed; straight-line megafunctions
+aren't preemptible mid-way; native kernels don't poll).
 
 ## Decision cheat-sheet
 

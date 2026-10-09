@@ -5759,13 +5759,15 @@ JANET_CORE_FN(cfun_ev_timeslice,
               "(ev/timeslice &opt on?)",
               "Enable (truthy) or disable (false/nil) preemptive "
               "round-robin quanta for the current VM, and return the new "
-              "setting. With quanta on, every scheduled task runs at most "
+              "setting. Quanta are ON by default (Step 2 preemptive "
+              "reductions; JANET_TIMESLICE=0 starts a process with them "
+              "off): every scheduled task runs at most "
               "JANET_QUANTUM_BUDGET back-edge/call polls before it is "
               "transparently re-queued: compute hogs can no longer starve "
               "sleepers and takers, with results bit-exact. Quanta never "
               "land inside C calls or pcall regions (poll points are Janet "
               "ops only). Incompatible with external C quiesce while on. "
-              "Per-VM; workers opt in independently.") {
+              "Per-VM; workers inherit the default independently.") {
     janet_arity(argc, 0, 1);
     if (argc >= 1) {
         janet_vm.quantum = janet_truthy(argv[0]) ? 1 : 0;

@@ -31,6 +31,15 @@
   (while (< i n) (+= s i) (++ i))
   s)
 
+# 0. Step 2: quanta on by default (preemptive reductions); explicit
+# opt-out restores cooperation. First: nothing toggled it yet.
+(assert (ev/timeslice) "quanta default on")
+(ev/timeslice false)
+(assert (not (ev/timeslice)) "opt-out works")
+(ev/timeslice true)
+(assert (ev/timeslice) "opt-in works")
+(ev/timeslice false)
+
 # 1. Baseline, quanta off: the hog starves the sleeper. Forced off
 # (not assumed) so the suite also passes nested under quanta.
 (let [order @[]]
@@ -107,9 +116,9 @@
   (assert (= 40000 (ev/take done)) "buffer task exact under quanta")
   (ev/timeslice false))
 
-# 8. Quanta are per-VM: worker threads opt in independently.
+# 8. Quanta are per-VM: worker threads inherit the default independently.
 (let [h (thread/new (fn [] (ev/timeslice)))]
-  (assert (not (thread/join h)) "worker quantum defaults off"))
+  (assert (thread/join h) "worker quantum defaults on"))
 
 # 9. Macroexpansion under quanta: compile-time code runs to
 # completion (transparent resume in macex — the bug that silently
@@ -119,5 +128,18 @@
   (ev/go (fn [] (ev/give done (eval '(+ 1 2)))))
   (assert (= 3 (ev/take done)) "eval under quanta")
   (ev/timeslice false))
+
+# 10. Step 2.2 latency bound: a never-ending hog cannot starve
+# sleepers (order-based starvation without quanta is test 1; an
+# infinite hog there would hang timer processing itself, so only the
+# quanta-on bound lives here).
+(ev/timeslice true)
+(var wakes2 0)
+(def hog2 (ev/go (fn [] (var acc 0) (while true (+= acc 1)))))
+(ev/go (fn [] (repeat 4 (do (ev/sleep 0.05) (++ wakes2)))))
+(ev/sleep 0.6)
+(ev/cancel hog2 :done)
+(assert (>= wakes2 3) (string "on: sleepers wake under hog: " wakes2))
+(ev/timeslice false)
 
 (end-suite)
