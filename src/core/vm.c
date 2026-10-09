@@ -134,6 +134,19 @@
 } while (0)
 #endif
 
+/* Phase D3: catchable stack overflow. The fault handler arms
+ * fiber->stack_overflowed and commits emergency space; the error
+ * surfaces here, never in the handler. Check-and-clear, then panic
+ * like any runtime error. Only call paths check: C depth grows solely
+ * through nesting (a parked loop cannot deepen the C stack). One
+ * predictable branch per call. */
+#define vm_maybe_overflow() do { \
+    if (fiber->stack_overflowed) { \
+        fiber->stack_overflowed = 0; \
+        janet_panic("fiber native stack overflow"); \
+    } \
+} while (0)
+
 /* Templates for certain patterns in opcodes */
 #define vm_binop_immediate(op)\
     {\
@@ -1441,6 +1454,7 @@ static JanetSignal run_vm(JanetFiber *fiber, Janet in) {
     vm_checkgc_pcnext();
 
     VM_OP(JOP_CALL) {
+        vm_maybe_overflow();
         vm_maybe_auto_suspend(1);
         Janet callee = stack[E];
         if (fiber->stacktop > fiber->maxstack) {
@@ -1487,6 +1501,7 @@ static JanetSignal run_vm(JanetFiber *fiber, Janet in) {
     }
 
     VM_OP(JOP_TAILCALL) {
+        vm_maybe_overflow();
         vm_maybe_auto_suspend(1);
         Janet callee = stack[D];
         if (fiber->stacktop > fiber->maxstack) {
@@ -1540,6 +1555,7 @@ static JanetSignal run_vm(JanetFiber *fiber, Janet in) {
 
     VM_OP(JOP_RESUME) {
         Janet retreg;
+        vm_maybe_overflow();
         vm_maybe_auto_suspend(1);
         vm_assert_type(stack[B], JANET_FIBER);
         JanetFiber *child = janet_unwrap_fiber(stack[B]);
@@ -1802,6 +1818,12 @@ Janet janet_call(JanetFunction *fun, int32_t argc, const Janet *argv) {
         janet_panic("janet_call failed because there is no current fiber");
     if (janet_vm.stackn >= JANET_RECURSION_GUARD)
         janet_panic("C stack recursed too deeply");
+    /* Phase D3: C-driven nesting deepens the native stack; convert a
+     * pending fault-handler overflow the same way JOP_CALL does. */
+    if (janet_vm.fiber->stack_overflowed) {
+        janet_vm.fiber->stack_overflowed = 0;
+        janet_panic("fiber native stack overflow");
+    }
 
     /* Dirty stack */
     int32_t dirty_stack = janet_vm.fiber->stacktop - janet_vm.fiber->stackstart;
@@ -2108,6 +2130,18 @@ static JanetSignal janet_continue_no_check(JanetFiber *fiber, Janet in, Janet *o
 
     /* Clear last value */
     fiber->last_value = janet_wrap_nil();
+
+    /* Phase D3: pending red-zone overflow surfaces here (check-and-
+     * clear, mirroring the interrupt block below): the C stack already
+     * unwound past the fault by suspension, so raising is safe. */
+    if (fiber->stack_overflowed) {
+        fiber->stack_overflowed = 0;
+        Janet ov = janet_cstringv("fiber native stack overflow");
+        fiber->last_value = ov;
+        *out = ov;
+        janet_fiber_set_status(fiber, JANET_SIGNAL_ERROR);
+        return JANET_SIGNAL_ERROR;
+    }
 
 #ifdef JANET_EV
     /* M4b-1 cooperative interrupt (see ev/interrupt): a pending

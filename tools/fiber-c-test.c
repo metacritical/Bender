@@ -11,6 +11,9 @@
  * (or: make fibertest). Exit 0 on success, 1 on any failure. */
 
 #include <janet.h>
+/* state.h for janet_vm (committed-window reads in the D3 probes).
+ * Needs -Isrc/core (see the fibertest Makefile line). */
+#include "state.h"
 
 #include <assert.h>
 #include <stdio.h>
@@ -224,6 +227,57 @@ static size_t fiber_committed_window(JanetFiber *f) {
                      (char *) f->native_stack_committed);
 }
 
+/* Phase D3: self-calibrating red-zone touch. Recurse (alloca frames)
+ * until the committed window reaches the usable start — i.e. a red
+ * fault was handled and the overflow flag is armed — then unwind
+ * without descending further. Returns [levels entered?]. Bounded by
+ * maxlevel (never reached when growth works; keeps a broken handler
+ * from hanging the suite). */
+static Janet c_touch_red_rec(int level, int maxlevel, volatile char *touchp, int *entered) {
+    volatile char *pad = (volatile char *) alloca(448);
+    pad[0] = (char) level;
+    {
+        int i;
+        for (i = 1; i < 448; i++) pad[i] = (char) (pad[i - 1] + i);
+    }
+    *touchp += pad[0] + pad[447];
+    {
+        JanetFiber *f = janet_vm.fiber;
+        if (NULL != f && NULL != f->native_stack &&
+                NULL != f->native_stack_committed &&
+                f->native_stack_committed < f->native_stack) {
+            *entered = 1;
+            return janet_wrap_integer(level);
+        }
+    }
+    Janet r;
+    if (level >= maxlevel) {
+        r = janet_wrap_integer(-1);
+    } else {
+        r = c_touch_red_rec(level + 1, maxlevel, touchp, entered);
+    }
+    *touchp += pad[0];
+    return r;
+}
+
+static Janet c_touch_red(int32_t argc, Janet *argv) {
+    (void) argc;
+    (void) argv;
+    volatile char touch = 0;
+    int entered = 0;
+    Janet r = c_touch_red_rec(0, 100000, &touch, &entered);
+    Janet tup[2];
+    tup[0] = janet_wrap_integer(entered);
+    tup[1] = r;
+    return janet_wrap_tuple(janet_tuple_n(tup, 2));
+}
+
+static Janet c_noop(int32_t argc, Janet *argv) {
+    (void) argc;
+    (void) argv;
+    return janet_wrap_nil();
+}
+
 int main(int argc, char **argv) {
     (void) argc;
     (void) argv;
@@ -234,6 +288,8 @@ int main(int argc, char **argv) {
     janet_def(env, "c-rooted", janet_wrap_cfunction(c_rooted), "(test helper)");
     janet_def(env, "c-deep", janet_wrap_cfunction(c_deep), "(test helper)");
     janet_def(env, "c-grow", janet_wrap_cfunction(c_grow), "(test helper)");
+    janet_def(env, "c-touch-red", janet_wrap_cfunction(c_touch_red), "(test helper)");
+    janet_def(env, "c-noop", janet_wrap_cfunction(c_noop), "(test helper)");
 
     Janet out = janet_wrap_nil();
     if (janet_dostring(env,
@@ -241,7 +297,8 @@ int main(int argc, char **argv) {
             "(defn w2 [] (c-outer))"
             "(defn w3 [] (c-rooted))"
             "(defn w4 [d] (c-deep d))"
-            "(defn w5 [d] (c-grow d))",
+            "(defn w5 [d] (c-grow d))"
+            "(defn w6 [] (c-touch-red) (c-noop))",
             "fiber-c-test", &out)) {
         printf("FAIL: setup dostring failed\n");
         return 1;
@@ -444,6 +501,58 @@ int main(int argc, char **argv) {
         }
     }
 #endif
+
+    /* 12-14. Phase D3 catchable overflow: a red-zone touch arms the
+     * flag; the next call surfaces it. Panics inside run_vm are caught
+     * by the trampoline and delivered as ERROR returns (not host
+     * longjmps), so assert on the return, not on janet_try. */
+    {
+        JanetFiber *f = run_fn(env, "w6");
+        Janet r = janet_wrap_nil();
+        JanetSignal s = janet_continue(f, janet_wrap_nil(), &r);
+        CHECK(s == JANET_SIGNAL_ERROR, "red touch raises on the next call");
+        CHECK(janet_checktype(r, JANET_STRING) &&
+              strstr((const char *) janet_unwrap_string(r), "fiber native stack overflow") != NULL,
+              "overflow raises catchably with its message");
+        CHECK(janet_fiber_status(f) == JANET_STATUS_ERROR, "overflowed fiber errors");
+        janet_gcunroot(janet_wrap_fiber(f));
+    }
+    {
+        /* Repeatability: fresh fibers catch again (red space remains). */
+        int i;
+        for (i = 0; i < 2; i++) {
+            JanetFiber *f = run_fn(env, "w6");
+            Janet r = janet_wrap_nil();
+            JanetSignal s = janet_continue(f, janet_wrap_nil(), &r);
+            CHECK(s == JANET_SIGNAL_ERROR, "repeat overflow must raise");
+            CHECK(janet_checktype(r, JANET_STRING) &&
+                  strstr((const char *) janet_unwrap_string(r), "fiber native stack overflow") != NULL,
+                  "repeat overflow catchable");
+            janet_gcunroot(janet_wrap_fiber(f));
+        }
+    }
+    {
+        /* Reset reclaim: an errored fiber reset for reuse leaves the
+         * red zone (committed back out) with the flag clear. */
+        Janet v = janet_wrap_nil();
+        JanetFiber *f = NULL;
+        if (janet_resolve(env, janet_csymbol("w6"), &v) == JANET_BINDING_NONE) {
+            CHECK(0, "cannot resolve w6 for reset test");
+        } else {
+            f = run_fn(env, "w6");
+            Janet r = janet_wrap_nil();
+            (void) janet_continue(f, janet_wrap_nil(), &r);
+        }
+        if (NULL != f) {
+            CHECK(janet_fiber_status(f) == JANET_STATUS_ERROR, "reset subject errored");
+            f = janet_fiber_reset(f, janet_unwrap_function(v), 0, NULL);
+            CHECK(!f->stack_overflowed, "reset clears the flag");
+            CHECK(f->native_stack_committed == NULL ||
+                    f->native_stack_committed >= f->native_stack,
+                  "reset reclaims the red zone");
+            janet_gcunroot(janet_wrap_fiber(f));
+        }
+    }
 
     /* 7. Yield with no current fiber panics instead of crashing. */
     {

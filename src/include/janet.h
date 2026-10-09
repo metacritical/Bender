@@ -1049,6 +1049,10 @@ struct JanetFiber {
      * on guard faults; NULL where growth is unsupported). The guard red
      * zone below usable is never committed. */
     void *native_stack_committed;
+    /* Phase D3: set by the fault handler on red-zone entry (emergency
+     * space committed alongside); converted to a catchable error at the
+     * next call-path poll, which clears it. Surviving suspension. */
+    int stack_overflowed;
 #ifdef JANET_EV
     /* These fields are only relevant for fibers that are used as "root fibers" -
      * that is, fibers that are scheduled on the event loop and behave much like threads

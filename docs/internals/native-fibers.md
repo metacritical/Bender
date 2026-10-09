@@ -380,3 +380,22 @@ stacks are skipped under ASan (`__SANITIZE_ADDRESS__`): its allocator
 CHECK-fails deallocating around them, and ASan prints its own fault
 reports anyway (only the identified-overflow message may be lost
 there).
+
+## Addendum — catchable stack overflow (Phase D3, 2026-10-09)
+
+Red-zone faults arm `fiber->stack_overflowed` and commit emergency
+space progressively (bounded by the mapping base); below the base it
+dies identified as before. The flag converts to a catchable
+`"fiber native stack overflow"` error at the next call-path poll
+(`JOP_CALL`/`JOP_TAILCALL`/`JOP_RESUME` via `vm_maybe_overflow`,
+`janet_call` entry, resume funnel) — check-and-clear, then an ordinary
+panic, so `protect`/`try` and the trampoline handle it like any
+runtime error. Only call paths check: C depth grows solely through
+nesting, and pure-C unbounded descent still dies identified (it never
+polls — honest boundary, documented). `fiber_reset` on unwound fibers
+clears stale flags and reclaims consumed red-zone space (suspended
+fibers keep theirs: parked positions may point into it). C proofs in
+`tools/fiber-c-test.c`: red touch raises with its message, fiber
+errors, repeat overflows catch again, reset reclaims. Plain Janet
+code cannot trigger it (depth guards trip first); it exists for
+FFI-callback recursion, resume chains, and future AOT code.

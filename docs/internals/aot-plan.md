@@ -642,7 +642,7 @@ overflow identification, and the substrate for bigger caps + D3.
 D3 catchable errors remain (flag + emergency page + poll checks).
 - [x] D1 guard-fault growth, transparent to ctx_swap/trampoline
 - [x] D2 asm paths kept; ucontext fallback stays flat (documented)
-- [ ] D3 over-cap recursion = catchable Janet error, pinned
+- [x] D3 over-cap recursion = catchable Janet error, pinned
 - [x] D4 10k-fiber RSS + bit-exact resume + FFI-recursion pins
 - [x] D5 spawn timing + committed-bytes accounting (see notes)
 

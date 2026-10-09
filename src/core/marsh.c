@@ -1117,6 +1117,8 @@ static const uint8_t *unmarshal_one_fiber(
     fiber->native_stack = NULL;
     fiber->native_stack_base = NULL;
     fiber->native_stack_size = 0;
+    fiber->native_stack_committed = NULL;
+    fiber->stack_overflowed = 0;
 #ifdef JANET_EV
     fiber->sched_id = 0;
     fiber->supervisor_channel = NULL;

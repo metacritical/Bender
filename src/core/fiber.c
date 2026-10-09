@@ -147,9 +147,29 @@ static void janet_growstack_segv(int sig, siginfo_t *info, void *uctx) {
             }
             /* Commit failed: fall through and die below. */
         } else if (f >= base && f < usable) {
+            /* Red-zone entry (Phase D3): commit down to the faulting
+             * chunk the same way (bounded by the mapping base) and arm
+             * the overflow flag; a call-path poll converts it to a
+             * catchable error and clears it. Repeated entries consume
+             * the red zone progressively, so straight-line descents
+             * without polls still terminate at the base instead of
+             * livelocking. */
+            uintptr_t off = (uintptr_t) (f - base);
+            char *target = base + (off / chunk) * chunk;
+            size_t len = (size_t) (committed - target);
+            fiber->stack_overflowed = 1;
+            if (len > 0 && 0 == mprotect(target, len, PROT_READ | PROT_WRITE)) {
+                fiber->native_stack_committed = target;
+                return;
+            }
+            /* Nothing left (or commit failed): fall through and die. */
+        } else if (NULL != fiber && NULL != fiber->native_stack_base &&
+                f < (char *) fiber->native_stack_base &&
+                fiber->native_stack_committed == fiber->native_stack_base) {
+            /* Below a fully consumed mapping: our overflow, out of red
+             * space. Name it, then die via the old action. */
             static const char msg[] = "janet: fiber native stack overflow\n";
             (void) write(STDERR_FILENO, msg, sizeof(msg) - 1);
-            /* Fall through to the old action for the core dump. */
         } else {
             goto chain;
         }
@@ -401,6 +421,31 @@ static void fiber_reset(JanetFiber *fiber) {
     fiber->saved_coerce_error = 0;
     fiber->saved_stackn = 0;
     fiber->saved_gc_suspend = 0;
+    /* Phase D3: a reset restarts execution from the top (re-primed
+     * below). Clear any stale flag, and reclaim red-zone space when
+     * unwound fibers consumed it (DEAD/ERROR have no live C frames; a
+     * suspended fiber's parked position may still point into it).
+     * Gated on position, not the flag: raises clear the flag, so a
+     * flag gate would skip exactly the fibers that need reclaim. */
+    if (janet_fiber_status(fiber) == JANET_STATUS_DEAD ||
+            janet_fiber_status(fiber) == JANET_STATUS_ERROR) {
+        fiber->stack_overflowed = 0;
+#ifndef JANET_WINDOWS
+        if (NULL != fiber->native_stack_committed &&
+                NULL != fiber->native_stack &&
+                fiber->native_stack_committed < fiber->native_stack) {
+            /* Uncommit the red zone only; grown usable space persists. */
+            char *usable = (char *) fiber->native_stack;
+            char *rebased = (char *) fiber->native_stack_base +
+                fiber->native_stack_size - JANET_FIBER_STACK_INIT_BYTES;
+            if (rebased < usable) rebased = usable;
+            mprotect(fiber->native_stack_base,
+                     (size_t) (usable - (char *) fiber->native_stack_base),
+                     PROT_NONE);
+            fiber->native_stack_committed = rebased;
+        }
+#endif
+    }
     janet_fiber_ensure_native_stack(fiber);
 #ifdef JANET_EV
     fiber->sched_id = 0;
@@ -432,6 +477,7 @@ static JanetFiber *fiber_alloc(int32_t capacity) {
     fiber->native_stack = NULL;
     fiber->native_stack_size = 0;
     fiber->native_stack_committed = NULL;
+    fiber->stack_overflowed = 0;
     janet_fiber_ensure_native_stack(fiber);
     return fiber;
 }
