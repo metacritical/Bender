@@ -40,6 +40,15 @@ typedef struct JanetProcess {
     JanetArray *stash;
     JanetArray *monitors;
     Janet exit_reason;
+    /* P1.4: trap-exit flag (loop processes consult it on :down;
+     * raw bodies read it via proc/trap?). Kill bypasses it (ERROR
+     * at the take, outside every protect). */
+    int trap_exit;
+    /* P1.4b: kill-armed flag (set by proc/kill, never cleared — kill
+     * is terminal). The dispatch loop re-raises handler errors while
+     * armed (otherwise the loop's own protect would trap kills of
+     * handler-wedged fibers, converting them into replies). */
+    int killed;
 } JanetProcess;
 
 static JanetProcess *janet_getproc(const Janet *argv, int32_t n) {
@@ -124,6 +133,8 @@ JANET_CORE_FN(cfun_proc_spawn,
     proc->stash = stash;
     proc->monitors = monitors;
     proc->exit_reason = janet_wrap_nil();
+    proc->trap_exit = 0;
+    proc->killed = 0;
     janet_gcunroot(monitors_j);
     janet_gcunroot(stash_j);
     JanetFiber *fiber = janet_fiber(func, 64, 0, NULL);
@@ -244,6 +255,7 @@ JANET_CORE_FN(cfun_proc_kill,
     JanetProcess *proc = janet_getproc(argv, 0);
     JanetFiber *fiber = proc->fiber;
     if (NULL != fiber && janet_fiber_can_resume(fiber)) {
+        proc->killed = 1;
         janet_cancel(fiber, argv[1]);
     }
     return argv[0];
@@ -387,6 +399,37 @@ JANET_CORE_FN(cfun_proc_exit_reason,
     return proc->exit_reason;
 }
 
+JANET_CORE_FN(cfun_proc_trap_exit,
+              "(proc/trap-exit p flag)",
+              "P1.4: set the loop-process trap flag (read back with\n"
+              "proc/trap?). Trapping loops observe linked peers' deaths\n"
+              "as :down messages and survive; untrapped loops die with\n"
+              "the reason. Kill (proc/kill) bypasses the flag. Returns `p`.") {
+    janet_fixarity(argc, 2);
+    JanetProcess *proc = janet_getproc(argv, 0);
+    proc->trap_exit = janet_truthy(argv[1]) ? 1 : 0;
+    return argv[0];
+}
+
+JANET_CORE_FN(cfun_proc_trap,
+              "(proc/trap? p)",
+              "P1.4: the loop-process trap flag.") {
+    janet_fixarity(argc, 1);
+    JanetProcess *proc = janet_getproc(argv, 0);
+    return janet_wrap_boolean(proc->trap_exit);
+}
+
+JANET_CORE_FN(cfun_proc_killed,
+              "(proc/killed? p)",
+              "P1.4b: true once proc/kill armed this process (terminal; "
+              "the dispatch loop re-raises handler errors while armed so "
+              "kills of handler-wedged fibers cannot be trapped by the "
+              "loop's own protect).") {
+    janet_fixarity(argc, 1);
+    JanetProcess *proc = janet_getproc(argv, 0);
+    return janet_wrap_boolean(proc->killed);
+}
+
 static const JanetRegExt proc_cfuns_ext[] = {
     JANET_CORE_REG("proc/spawn", cfun_proc_spawn),
     JANET_CORE_REG("proc/self", cfun_proc_self),
@@ -404,6 +447,9 @@ static const JanetRegExt proc_cfuns_ext[] = {
     JANET_CORE_REG("proc/record-exit", cfun_proc_record_exit),
     JANET_CORE_REG("proc/done?", cfun_proc_done),
     JANET_CORE_REG("proc/exit-reason", cfun_proc_exit_reason),
+    JANET_CORE_REG("proc/trap-exit", cfun_proc_trap_exit),
+    JANET_CORE_REG("proc/trap?", cfun_proc_trap),
+    JANET_CORE_REG("proc/killed?", cfun_proc_killed),
     JANET_REG_END
 };
 

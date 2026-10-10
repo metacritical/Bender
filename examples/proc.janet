@@ -88,3 +88,113 @@
   (monitor a b [:link tag])
   (monitor b a [:link tag])
   [a b])
+
+###
+### Loop processes (P1.4): spawn-loop runs a handler over [tag
+### payload reply] triples (same convention as tasklets, so the two
+### sides interoperate). Reserved tags: :down (monitor/link reports)
+### and :proc-quit (graceful stop). Reply channels must be thread
+### channels (isolated-channel replies arrive as disconnected copies
+### — the Step 1.4 lesson). Like everything else here: sends accept
+### pids, control ops (call/quit/monitor/kill) need objects.
+###
+
+(defn- dispatch
+  "Dispatch loop for spawn-loop handlers. Untraped linked-peer death
+  re-raises (the loop dies with the reason); trapping loops observe
+  (:down [tag reason]) and survive. Handler errors reply as
+  (table :proc-error r) and never kill the loop."
+  [me handler]
+  (var running true)
+  (while running
+    (def [tag payload reply] (proc/recv me))
+    (cond
+      (= tag :proc-quit)
+      (do (set running false)
+        (when (and reply (= :core/channel (type reply)))
+          (ev/give reply :proc-stopped)))
+      (= tag :down)
+      (do (def reason reply)
+        (def linked (and (tuple? payload)
+                         (= 2 (length payload))
+                         (= :link (payload 0))))
+        (def mtag (if linked (payload 1) payload))
+        (when (and linked (not (proc/trap? me))
+                   (not= reason :normal)
+                   (not (nil? reason)))
+          (error reason))
+        (handler :down [mtag reason]))
+      (let [[ok r] (protect (handler tag payload))]
+        # P1.4b: armed kills re-raise (the loop's own protect must not
+        # convert them into replies for handler-wedged fibers).
+        (when (and (not ok) (proc/killed? me))
+          (error r))
+        (when (and reply (= :core/channel (type reply)))
+          (ev/give reply (if ok r (table :proc-error r)))))))
+  nil)
+
+(defn spawn-loop
+  "Spawn a loop process dispatching [tag payload] messages to
+  `handler` (see loop). Returns the proc."
+  [handler &opt capacity]
+  (default capacity 16)
+  (proc/spawn (fn [] (dispatch (proc/self) handler)) capacity))
+
+(defn call
+  "Synchronous request/reply with a loop process (or its pid tuple).
+  Replies travel a thread channel (capability by reference; values
+  still copy). With `timeout`, raises 'proc call timed out'. Handler
+  errors re-raise."
+  [p tag payload &opt timeout]
+  (def rch (ev/thread-chan 1))
+  (proc/send p [tag payload rch])
+  (def raw
+    (if (nil? timeout)
+      (ev/take rch)
+      (do (def tch (ev/chan 1))
+        (ev/go (fn [] (ev/sleep timeout) (ev/give tch :proc-timed-out)))
+        (def sel (ev/select rch tch))
+        (if (= tch (sel 1))
+          (error "proc call timed out")
+          (sel 2)))))
+  (if (and (table? raw) (get raw :proc-error))
+    (error (raw :proc-error))
+    raw))
+
+(defn quit
+  "Gracefully stop a loop process (proc object only — tuples cannot
+  prove liveness, and an unread quit would hang). Dead fibers return
+  at once (alive? reads the struct — no reaper needed, so double-quit
+  is safe, unlike tasklet/quit's reaper race). Raw (proc/spawn) bodies
+  that never proc/recv cannot quit. Returns `p`."
+  [p]
+  (when (not (proc/pid? p)) (error "proc/quit needs a proc object"))
+  (if (not (proc/alive? p))
+    p
+    (do (def rch (ev/thread-chan 1))
+      (proc/send p [:proc-quit nil rch])
+      (ev/take rch)
+      p)))
+
+###
+### Same-VM name registry (proc-local: pids keep identity — like the
+### tasklet registry, separate namespace).
+###
+
+(var *proc-names* @{})
+
+(defn register
+  "Bind `name` to `p`'s pid tuple in the proc registry."
+  [p name]
+  (put *proc-names* name (if (proc/pid? p) (proc/pid p) p))
+  p)
+
+(defn whereis
+  "Resolve `name` to a pid tuple (or nil). Plugs into proc/send."
+  [name]
+  (get *proc-names* name))
+
+(defn unregister
+  "Remove `name` from the proc registry."
+  [name]
+  (put *proc-names* name nil))

@@ -179,4 +179,64 @@
     (proc/monitor (proc/pid p) p :x))
   (proc/kill p :done))
 
+# 17. P1.4 loop processes: call round-trip over triples, copy
+# semantics, handler errors re-raise without killing the loop.
+(let [db (procx/spawn-loop
+           (do (var store @{})
+               (fn [tag payload]
+                 (case tag
+                   :put (put store (payload 0) (payload 1))
+                   :get (get store payload)
+                   :bad (error "loop-boom")))))]
+  (procx/call db :put [:u "amy"])
+  (assert (= "amy" (procx/call db :get :u)) "loop call")
+  (assert-error-value "loop error surfaces" "loop-boom"
+    (procx/call db :bad nil))
+  (assert (= "amy" (procx/call db :get :u)) "loop survives")
+  (procx/quit db)
+  (procx/quit db))
+
+# 18. P1.4 trap: untrapped loops die with linked peers, trapping
+# loops observe and survive.
+(let [seen @[]
+      a (procx/spawn-loop (fn [tag payload] :a))
+      b (procx/spawn-loop
+          (fn [tag payload]
+            (array/push seen [tag payload]) :b))]
+  (procx/link a b :lab)
+  (proc/trap-exit b true)
+  (def killer (proc/spawn (fn [] (error "zap"))))
+  (procx/link killer a :k)
+  (ev/sleep 0.5)
+  (assert (not (proc/alive? a)) "untrapped dies with peer")
+  (assert (proc/alive? b) "trapper survives")
+  (assert (deep= @[[:down [:lab "zap"]]] seen) "trapper observes")
+  (proc/kill killer :done)
+  (procx/quit b))
+
+# 19. P1.4 registry: names keep pid identity; call by name works.
+(let [s (procx/spawn-loop (fn [tag payload] :ok))]
+  (procx/register s :svc)
+  (def found (procx/whereis :svc))
+  (assert (tasklet/pid? found) "registry pid shape")
+  (assert (= :ok (procx/call found :ping nil)) "call by name")
+  (procx/unregister :svc)
+  (assert (nil? (procx/whereis :svc)) "unregister")
+  (procx/quit s))
+
+# 20. Call timeout fires on a wedged loop.
+(let [hog (procx/spawn-loop (fn [tag payload] (ev/sleep 30) :never))]
+  (assert-error "call times out" (procx/call hog :ping nil 0.1))
+  (proc/kill hog :done))
+
+# 21. P1.4b: kills of handler-wedged loops are not trapped by the
+# loop's own protect (armed flag re-raises instead of replying).
+(let [hog (procx/spawn-loop (fn [tag payload] (ev/sleep 30) :never))]
+  (assert-error "wedged call times out" (procx/call hog :ping nil 0.1))
+  (ev/sleep 0.2)
+  (proc/kill hog :killed)
+  (ev/sleep 0.3)
+  (assert (not (proc/alive? hog)) "wedged loop dies")
+  (assert (proc/killed? hog) "armed flag sticks"))
+
 (end-suite)

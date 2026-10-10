@@ -766,7 +766,7 @@ same-VM only until P2 proxies). Each slice lands gated or reverts.
   stays Janet-side over proc/recv + stash, like tasklets.
 - [x] P1.3 pid interop (tuple pids resolve to procs; proc pids plug
   into tasklet send/call/monitor).
-- [ ] P1.4 named loop processes + trap enforcement + registry
+- [x] P1.4 named loop processes + trap enforcement + registry
   (dispatch loop over proc primitives; :down handled by the loop).
 
 **P2 — M:N lanes.** N persistent lane threads (own loop each);
