@@ -1086,6 +1086,10 @@ struct JanetFiber {
      * birth; kept across resets (pages stay valid). */
     struct JanetSlabPage *nursery_cur[8];
     size_t gc_nursery_bytes;
+    /* P3.3 strict heaps: set for spawn-isolated proc fibers (never
+     * inherited, never unmarshalled — re-establish by construction).
+     * Slab pages claimed while running one record it (page bit). */
+    int heap_strict;
 };
 
 /* Mark if a stack frame is a tail call for debugging */

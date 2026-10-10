@@ -38,6 +38,12 @@
 #define JANET_MEM_TYPEBITS 0xFF
 #define JANET_MEM_REACHABLE 0x100
 #define JANET_MEM_DISABLED 0x200
+/* P3.3 strict heaps: set when the owning fiber is strict (spawn-
+ * isolated). Slab objects inherit their page's bit (claim-time, so
+ * recycled slots agree with the page owner); malloc-large objects
+ * take the allocating fiber's flag. Read by the barrier for the
+ * export rule; never cleared except by recycle-zero + recompute. */
+#define JANET_MEM_ISOLATED 0x400
 
 #define janet_gc_settype(m, t) ((janet_gc_header(m)->flags |= (0xFF & (t))))
 #define janet_gc_type(m) (janet_gc_header(m)->flags & 0xFF)

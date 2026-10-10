@@ -151,6 +151,11 @@ static Janet cfun_proc_spawn_impl(JanetFunction *func, int32_t cap, int isolated
     janet_gcunroot(stash_j);
     JanetFiber *fiber = janet_fiber(func, 64, 0, NULL);
     janet_assert(NULL != fiber, "bad proc fiber");
+    /* P3.3: strict fibers opt their page claims into the isolated bit
+     * (barrier-checked exports) and arm the VM-wide gate. Never
+     * inherited, never unmarshalled. */
+    fiber->heap_strict = isolated;
+    if (isolated) janet_vm.heap_strict_live = 1;
     fiber->flags |=
         JANET_FIBER_MASK_ERROR |
         JANET_FIBER_MASK_USER0 |

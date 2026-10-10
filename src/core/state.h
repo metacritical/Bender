@@ -190,6 +190,10 @@ struct JanetVM {
     /* Step P1 (proc processes): monotonic pid-serial source. 0 is
      * reserved (never issued: wrap skips it, like gc_owner). */
     uint32_t proc_serial;
+    /* P3.3 gate: set once a strict fiber exists in this VM (never
+     * cleared — conservative). The barrier's export check runs only
+     * past this flag, so legacy code pays one predicted branch. */
+    int heap_strict_live;
 
     /* GC roots */
     Janet *roots;

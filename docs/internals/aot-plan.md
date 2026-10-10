@@ -806,6 +806,10 @@ major + verify mode (P3.4), auto-trigger + scale re-measure (P3.5).
 Lane procs are spawn-copied by transport already (thread/new
 marshals fn+args).
 - [x] P3.2 strict spawn (marshal-copy entry, :isolated flag).
+- [x] P3.3 export panic (header bits, VM-gated; segregated strict
+  freelists so recycled slots keep strictness). Import allowed;
+  strings/symbols/keywords + immediates exempt; NULL-page hole
+  documented. Same-owner hot path bit-free (bits only on cross).
 
 ### Phase 3 slice — value-returning thread/new + thread/join (DONE, this checkout)
 

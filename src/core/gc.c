@@ -692,6 +692,11 @@ typedef struct JanetSlabPage {
      * with shared, the barrier records their edges. Hot loops reusing
      * their own slots keep pages pure. */
     int32_t mixed;
+    /* P3.3: set when the claiming fiber is strict (spawn-isolated).
+     * Recycled slots inherit it with the page (keeps header bits and
+     * page owners in agreement — sweep filters by owner, the barrier
+     * by header bit). */
+    int32_t isolated;
 } JanetSlabPage;
 
 #define JANET_SLAB_USABLE (JANET_SLAB_PAGE_SIZE - sizeof(JanetSlabPage))
@@ -702,6 +707,14 @@ typedef struct {
     JanetSlabPage *cur[JANET_SLAB_NCLASSES];
     JanetGCObject *young_free[JANET_SLAB_NCLASSES];
     JanetGCObject *old_free[JANET_SLAB_NCLASSES];
+    JanetGCObject *strict_free[JANET_SLAB_NCLASSES];
+    /* P3.3b segregated freelists: young slots on pure-strict pages
+     * file here (never in young_free), so strict fibers reuse strict
+     * slots (precise bits/owners) and legacy fibers never inherit
+     * strictness through recycling. Non-strict fibers never pop this
+     * list; strict fibers never pop young_free (they bump fresh pure
+     * pages instead). Survives majors (merge only touches old_free);
+     * dies at clear with the rest. */
     /* Sorted directory of live page bases for exact membership: the
      * mask+magic probe below must never read unmapped memory, and not
      * every candidate pointer lives on a slab page (malloc large path,
@@ -861,13 +874,18 @@ static void *janet_slab_alloc(int class_index) {
      * their page and mark it mixed on cross-owner reuse. */
     JanetFiber *req = janet_vm.fiber;
     uint32_t reqid = (NULL != req) ? req->gc_owner : 0;
+    /* P3.3b: freelists segregate by strictness (see release). The
+     * pop logic below is unchanged (young/old skip + mixed-marking
+     * still apply within each list). */
+    JanetGCObject **freep = (NULL != req && req->heap_strict) ?
+        &ss->strict_free[class_index] : &ss->young_free[class_index];
     /* Pop a young slot, skipping (to the old list) any slot whose page
      * has aged out since the slot was freed. Self-correcting: every pop
      * either uses or re-files the head, so it always terminates. */
     for (;;) {
-        JanetGCObject *slot_obj = ss->young_free[class_index];
+        JanetGCObject *slot_obj = *freep;
         if (NULL == slot_obj) break;
-        ss->young_free[class_index] = slot_obj->data.next;
+        *freep = slot_obj->data.next;
         JanetSlabPage *page = janet_slab_page_for(slot_obj);
         if (NULL != page && page->age < JANET_SLAB_OLD_AGE) {
             if (0 != page->owner && page->owner != reqid) page->mixed = 1;
@@ -902,6 +920,8 @@ static void *janet_slab_alloc(int class_index) {
          * Fresh pages start pure. */
         page->owner = reqid;
         page->mixed = 0;
+        /* P3.3: claiming fiber's strict flag rides with the owner. */
+        page->isolated = (NULL != req && req->heap_strict) ? 1 : 0;
         if (!janet_slab_dir_insert(page)) {
             janet_slab_page_free(page);
             return NULL;
@@ -926,8 +946,14 @@ void janet_gc_release(JanetGCObject *mem) {
         if (NULL != page) {
             int cls = page->class_index;
             if (page->age < JANET_SLAB_OLD_AGE) {
-                mem->data.next = (JanetGCObject *) ss->young_free[cls];
-                ss->young_free[cls] = mem;
+                /* P3.3b: pure-strict young slots segregate (see state). */
+                if (!page->mixed && page->isolated && 0 != page->owner) {
+                    mem->data.next = (JanetGCObject *) ss->strict_free[cls];
+                    ss->strict_free[cls] = mem;
+                } else {
+                    mem->data.next = (JanetGCObject *) ss->young_free[cls];
+                    ss->young_free[cls] = mem;
+                }
             } else {
                 mem->data.next = (JanetGCObject *) ss->old_free[cls];
                 ss->old_free[cls] = mem;
@@ -953,6 +979,7 @@ static void janet_slab_free_pages(void) {
         ss->cur[i] = NULL;
         ss->young_free[i] = NULL;
         ss->old_free[i] = NULL;
+        ss->strict_free[i] = NULL;
     }
     janet_free(ss->dir);
     ss->dir = NULL;
@@ -1148,6 +1175,61 @@ void janet_gc_barrier(void *obj, Janet value) {
             t == JANET_CFUNCTION || t == JANET_POINTER) {
         return;
     }
+    /* P3.3 strict-export rule, header bits only (no page walks, so the
+     * shared-container fast path stays fast): an isolated-heap value
+     * must not land in a non-isolated container — the edge would be
+     * invisible to per-proc majors. Imports pass silently; immutable
+     * string-heap values (no outgoing refs, ever) are exempt;
+     * malloc-large either side carries the bit via gcalloc, so no
+     * NULL-page hole. Cross-strict sharing (both bits, different
+     * owners) is checked on the slow path below, reusing its pages.
+     * Gated behind heap_strict_live: legacy VMs (never strict) skip
+     * the whole check for one predicted branch. */
+    int iso_v = 0;
+    int iso_o = 0;
+    if (janet_vm.heap_strict_live &&
+            t != JANET_STRING && t != JANET_SYMBOL && t != JANET_KEYWORD) {
+        iso_o = (janet_gc_header(obj)->flags & JANET_MEM_ISOLATED) ? 1 : 0;
+        /* Object starts (NOT unwrapped data pointers: tuples and
+         * structs point past their heads — reading flags there sees
+         * element bits as garbage and panics spuriously). */
+        void *vobj = NULL;
+        switch (t) {
+            case JANET_ARRAY:
+                vobj = (void *) janet_unwrap_array(value);
+                break;
+            case JANET_TUPLE:
+                vobj = (void *) janet_tuple_head(janet_unwrap_tuple(value));
+                break;
+            case JANET_TABLE:
+                vobj = (void *) janet_unwrap_table(value);
+                break;
+            case JANET_STRUCT:
+                vobj = (void *) janet_struct_head(janet_unwrap_struct(value));
+                break;
+            case JANET_BUFFER:
+                vobj = (void *) janet_unwrap_buffer(value);
+                break;
+            case JANET_FUNCTION:
+                vobj = (void *) janet_unwrap_function(value);
+                break;
+            case JANET_ABSTRACT:
+                vobj = (void *) janet_abstract_head(janet_unwrap_abstract(value));
+                break;
+            case JANET_FIBER:
+                vobj = (void *) janet_unwrap_fiber(value);
+                break;
+            default:
+                break;
+        }
+        if (NULL != vobj) {
+            iso_v = (janet_gc_header(vobj)->flags & JANET_MEM_ISOLATED) ? 1 : 0;
+        }
+        if (iso_v && !iso_o) {
+            janet_panic("strict proc value escaping to a shared container "
+                        "(copy it across: messages and spawn entries copy)");
+        }
+    }
     JanetSlabPage *page = janet_slab_page_for(obj);
     if (NULL == page) return;
     if (page->age >= JANET_SLAB_OLD_AGE) page->dirty = 1;
@@ -1207,6 +1289,15 @@ void janet_gc_barrier(void *obj, Janet value) {
     if (NULL == pv) return;
     uint32_t own_v = pv->mixed ? 0 : pv->owner;
     if (0 == own_v || own_v == own_o) return;
+    /* P3.3 cross-strict sharing: both bits set but different owners
+     * (two strict heaps, or strict + claimed-strict page) — refuse
+     * (message-passing keeps heaps disjoint). Reuses this path's
+     * pages: zero extra walks. Unreachable when no strict fiber ever
+     * ran (bits never set — iso_* stay 0 above). */
+    if (iso_v && iso_o) {
+        janet_panic("strict proc value shared across isolated heaps "
+                    "(copy it across: messages and spawn entries copy)");
+    }
     JanetSlabState *ss = janet_slab_state();
     if (ss->xfb_stuck) return;
     if (ss->xfb_count == ss->xfb_cap) {
@@ -1251,6 +1342,21 @@ void *janet_gcalloc(enum JanetMemoryType type, size_t size) {
 
     /* Configure block */
     mem->flags = type;
+    /* P3.3 strict bit: slab objects follow their page's quarantine
+     * (mixed pages read shared for owner AND bit — a non-strict
+     * reuse of a strict slot must not inherit strictness, or
+     * compile-time tables built on recycled slots would trip the
+     * export rule); fresh pages carry the claimer's flag; malloc-
+     * large objects (never recycled) take the allocating fiber's
+     * flag. Single funnel: every birth passes here. */
+    if (slab_class >= 0) {
+        JanetSlabPage *pg = janet_slab_page_for(mem);
+        if (NULL != pg && !pg->mixed && pg->isolated) {
+            mem->flags |= JANET_MEM_ISOLATED;
+        }
+    } else if (NULL != janet_vm.fiber && janet_vm.fiber->heap_strict) {
+        mem->flags |= JANET_MEM_ISOLATED;
+    }
 
     /* Prepend block to heap list. Immutable strings (strings, symbols,
      * keywords -- keywords intern to symbols) live on their own heap so

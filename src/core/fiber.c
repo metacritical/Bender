@@ -467,6 +467,9 @@ static JanetFiber *fiber_alloc(int32_t capacity) {
     }
     fiber->capacity = capacity;
     janet_fiber_init_owner(fiber);
+    /* P3.3: strict heaps are opt-in per fiber (spawn-isolated sets it
+     * after alloc; unmarshal leaves it clear). */
+    fiber->heap_strict = 0;
     janet_census_add(fiber);
     {
         /* Step 1.2: nursery starts empty (pages claimed on first bump). */

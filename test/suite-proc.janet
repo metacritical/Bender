@@ -336,4 +336,56 @@
     (proc/spawn-isolated (fn [] blocked)))
   (ev/cancel blocked :done))
 
+# 30. P3.3 export rule: strict tables/arrays/functions stored into
+# shared containers die with the escape panic (reason observed).
+(each mk ["table" "array" "function"]
+  (let [g @{}
+        ch (ev/thread-chan 2)
+        body (case mk
+               "table" (fn [] (put g :leak @{:x 1}) :escaped)
+               "array" (fn [] (put g :leak @[1 2]) :escaped)
+               "function" (fn [] (put g :leak (fn [] :inner)) :escaped))
+        p (proc/spawn-isolated body)]
+    (procx/monitor-chan p (keyword (string "m-" mk)) ch)
+    (ev/sleep 0.3)
+    (def d (ev/take ch))
+    (assert (= :down (d 0)) (string mk " down arrives"))
+    (assert (string/has-prefix? "strict proc value escaping" (d 2))
+            (string mk " escape reason"))))
+# Captured fibers: fresh ones copy at spawn (main-owned post-copy,
+# so their export never panics — value semantics); C-frame fibers
+# refuse at capture (test 29). Procs refuse at capture outright:
+(let [p0 (proc/spawn (fn [] (ev/sleep 30)))]
+  (assert-error "proc capture refuses"
+    (proc/spawn-isolated (fn [] p0)))
+  (proc/kill p0 :done))
+
+# 31. P3.3 non-exports pass: locals/keywords/strings/nesting in strict
+# bodies never panic; imports from shared are allowed.
+(let [rch (ev/thread-chan 1)
+      p (proc/spawn-isolated
+          (fn []
+            (def t @{:a 1 :k :kw :s "str" :t [:lit] :n @{:d @[1]}})
+            (proc/recv)
+            (ev/give rch :local-ok)))]
+  (ev/sleep 0.05)
+  (proc/send p :go)
+  (assert (= :local-ok (ev/take rch)) "strict locals fine")
+  (proc/kill p :done))
+(let [g @{:tired 0}
+      p (proc/spawn-isolated
+          (fn [] (def t @{}) (put t :g (get g :seed :dflt)) t))]
+  (put g :seed :sval)
+  (ev/sleep 0.2)
+  (proc/kill p :done))
+
+# 32. P3.3 plain procs never trip the rule (flag off, bits clear):
+# the same export completes :normal.
+(let [g @{}
+      ch (ev/thread-chan 2)
+      p (proc/spawn (fn [] (put g :leak @{:x 1}) :escaped))]
+  (procx/monitor-chan p :m ch)
+  (ev/sleep 0.3)
+  (assert (deep= [:down :m :normal] (ev/take ch)) "plain export :normal"))
+
 (end-suite)

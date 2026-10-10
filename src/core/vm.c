@@ -2335,6 +2335,8 @@ int janet_init(void) {
     janet_vm.gc_owner_next = 0;
     /* Step P1 (proc processes): pid serials start empty (0 reserved). */
     janet_vm.proc_serial = 0;
+    /* P3.3 gate: no strict fibers yet (spawn-isolated sets it). */
+    janet_vm.heap_strict_live = 0;
 
     janet_symcache_init();
 
