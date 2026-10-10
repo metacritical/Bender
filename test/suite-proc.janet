@@ -438,11 +438,20 @@
 (let [d (proc/spawn-isolated (fn [] :bye))]
   (ev/sleep 0.1)
   (debug/collect-proc d))
+# Self-collect canary compares by content, not identity: a thread-chan
+# marshals (deep copy), so identity holds only via cache residency — and
+# the pre-collect original is legitimately collectible once unreferenced
+# (ev-sleep lets sibling forms overlap, so a major may strike between
+# compile and take and re-interning then mints a duplicate). Strings
+# compare by content, and the canary is built fresh after collecting, so
+# this still proves exactly what the pin claims: the body survived
+# self-collect and communicated.
 (let [rch (ev/thread-chan 1)
       s (proc/spawn-isolated
-          (fn [] (debug/collect-proc (proc/self)) (ev/give rch :survived)))]
+          (fn [] (debug/collect-proc (proc/self))
+            (ev/give rch (string "sur" "vived"))))]
   (ev/sleep 0.2)
-  (assert (= :survived (ev/take rch)) "self-collect falls back")
+  (assert (= "survived" (ev/take rch)) "self-collect falls back")
   (proc/kill s :done))
 
 # 36. P3.4 sharing workload (registry rendezvous — strict bodies

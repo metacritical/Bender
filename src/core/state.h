@@ -166,6 +166,12 @@ struct JanetVM {
     /* Garbage collection */
     void *blocks;
     void *weak_blocks;
+    /* P3.5b deferred death-migration chains (see gc.c): parked here
+     * by fiber deinit mid-sweep, drained into the globals after all
+     * lists are walked. Immediate splicing would race the in-progress
+     * unlink and orphan chains (counted-but-unlisted). Per-VM
+     * (thread-safe); NULL outside sweeps. */
+    void *sweep_pending[3];
     /* Immutable-string heap (Phase 2b-ii): strings, symbols and keywords
      * live on their own block list so collection policy can treat them
      * independently of everything else. Sweep semantics are identical to

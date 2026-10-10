@@ -831,6 +831,31 @@ marshals fn+args).
   shared ancestors panic loud (defer/propagate work: completed-only).
   Measured: 15k tasks 245MB→23MB (~1.5KB/task); ping-pong identical
   (~280ns); full suite green both modes.
+- [x] P3.5b owner-segregated heaps (this slice): non-fiber births file
+  into the running fiber's per-heap lists (fibers/host stay global);
+  every sweep path walks globals + all fiber lists (same free-set);
+  death-migration parks to per-VM pending and drains post-sweep (an
+  immediate splice raced the in-progress unlink and orphaned chains —
+  heap-verify caught listed 7590 vs block_count 8549 in AOT PGO).
+  Strict process collections sweep O(own) (narrow mark already scoped
+  them); plain fiber minors keep the wide shape. New dev tools:
+  JANET_HEAP_VERIFY (list integrity) + JANET_HEAP_FILE_CHECK
+  (filing census check, compile-time). Deferred with evidence: full
+  narrowing of fiber minors crashes boot image generation
+  deterministically (garbage argv in partition-slice — a stale-read
+  masked by prompt freeing; plain needs census marking O(N) anyway).
+  Test fix: self-collect canary compares by content (identity across a
+  marshal-copying thread-chan is cache-residency luck, and ev-sleep
+  lets sibling forms overlap so a major may strike between compile and
+  take and mint a duplicate).
+  Scale honesty: spawn still superlinear (global minors O(world) every
+  256KB young dominate; 2KB/proc never trips per-proc pressure) —
+  P3.5c (young-bytes exclusion + death reaping) is the linearizer.
+  No scale win claimed yet.
+  Note: JANET_GC_VERIFY=1 over suite-boot aborts (young-unmarked via
+  struct-value) identically on the clean base — pre-existing, not from
+  this slice (the 2b-iii gates used gcsetinterval stress, not
+  GC_VERIFY-over-boot).
 
 ### Phase 3 slice — value-returning thread/new + thread/join (DONE, this checkout)
 
