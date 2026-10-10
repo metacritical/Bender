@@ -3360,6 +3360,9 @@ JANET_CORE_FN(cfun_ev_go,
         }
         fiber = janet_fiber(func, 64, func->def->min_arity, &value);
         janet_assert(fiber != NULL, "bad fiber-func");
+        /* P3.6: ev tasks opt into the lane-shared stack when enabled
+         * (fresh fibers only — user-supplied fibers keep theirs). */
+        fiber->shared_stack = janet_vm.shared_stacks_on;
         fiber->flags |=
             JANET_FIBER_MASK_ERROR |
             JANET_FIBER_MASK_USER0 |

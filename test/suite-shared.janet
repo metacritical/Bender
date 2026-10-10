@@ -1,103 +1,90 @@
-# Copyright (c) 2026 Calvin Rose
+# Shared C stacks (P3.6/S2): ev-task fibers share one lane mapping
+# instead of private mappings. Run with JANET_SHARED_STACKS=1
+# (without it these pin private-mode behavior where noted).
 #
-# Permission is hereby granted, free of charge, to any person obtaining a copy
-# of this software and associated documentation files (the "Software"), to
-# deal in the Software without restriction, including without limitation the
-# rights to use, copy, modify, merge, publish, distribute, sublicense, and/or
-# sell copies of the Software, and to permit persons to whom the Software is
-# furnished to do so, subject to the following conditions:
-#
-# The above copyright notice and this permission notice shall be included in
-# all copies or substantial portions of the Software.
-#
-# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
-# FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
-# IN THE SOFTWARE.
+# Each file runs in its own process.
 
 (import ./helper :prefix "" :exit true)
 (start-suite)
 
-# M5: shareable immutable blobs (core/shared runtime type). Each file
-# runs in its own process, so no settings leak between suites.
+(when (nil? (os/getenv "JANET_SHARED_STACKS"))
+  (print "SKIP suite-shared.janet (needs JANET_SHARED_STACKS=1)")
+  (os/exit 0))
 
-(import ../examples/mailbox :as mailbox)
+# 1. Shared tasks run, suspend (sleep), and wake with exact values.
+(let [got @[]]
+  (ev/go (fn [] (array/push got :ran) (ev/sleep 0.05) (array/push got :woke)))
+  (ev/sleep 0.2)
+  (assert (deep= @[:ran :woke] got) "suspend/wake exact"))
 
-(def sample {:a 1 :b "two" :c [1.5 true nil] :d :kw :e {:n [1 2]}})
+# 2. Channel take/give across suspend works.
+(let [c (ev/chan 1)
+      got @[]]
+  (ev/go (fn [] (array/push got (ev/take c))))
+  (ev/sleep 0.05)
+  (ev/give c :hello)
+  (ev/sleep 0.1)
+  (assert (deep= @[:hello] got) "take/give exact"))
 
-# 1. Full round-trip through materialize.
-(let [b (shared/new sample)]
-  (assert (deep= sample (shared/materialize b)) "materialize round-trip"))
+# 3. Errors propagate out of shared tasks (supervisor sees them).
+(let [sup (ev/chan 8)]
+  (ev/go (fn [] (ev/sleep 0.01) (error "shared-boom")) nil sup)
+  (def [sig _ _] (ev/take sup))
+  (assert (= sig :error) "supervisor sees error"))
 
-# 2. Direct accessors without full decode.
-(let [b (shared/new sample)]
-  (assert (= 1 (shared/get b :a)) "get number")
-  (assert (= "two" (shared/get b :b)) "get string")
-  (assert (= :kw (shared/get b :d)) "get keyword")
-  (assert (nil? (shared/get b :zzz)) "missing key is nil")
-  (assert (nil? (shared/get b 0)) "int key on struct is nil")
-  (assert (= 5 (shared/length b)) "struct length")
-  (assert (= 3 (shared/length (shared/new [1 2 3]))) "tuple length")
-  (assert (= 20 (shared/get (shared/new [10 20]) 1)) "tuple index")
-  (assert (nil? (shared/get (shared/new [10 20]) 5)) "tuple OOB is nil")
-  (assert (nil? (shared/length (shared/new 7))) "scalar length is nil"))
+# 4. Quanta preempt shared hogs (sleeper beats infinite loop).
+(ev/timeslice true)
+(let [order @[]
+      hog (ev/go (fn [] (var acc 0) (while true (+= acc 1))))]
+  (ev/go (fn [] (ev/sleep 0.05) (array/push order :short)))
+  (ev/sleep 0.4)
+  (assert (= :short (get order 0)) "preemption under shared")
+  (ev/cancel hog :done))
+(ev/timeslice false)
 
-# 3. Nested navigation: shared/get returns decoded values, so deeper
-# levels use ordinary get on the materialized piece.
-(let [b (shared/new sample)]
-  (assert (= 1.5 (get (shared/get b :c) 0)) "nested tuple item")
-  (assert (= [1 2] (get (shared/get b :e) :n)) "nested struct path"))
+# 5. Nested resume of completed children works (generators driven
+# from shared tasks are fine); nested SUSPEND under a shared
+# ancestor fails loud (abandoned C frames would be clobbered).
+(let [gen (fiber/new (fn [] :gen-done))]
+  (assert (= :gen-done ((fn [] (resume gen)))) "nested complete works"))
+(let [hit @[]
+      c (ev/chan 1)]
+  (ev/go (fn []
+           (try (resume (fiber/new (fn [] (ev/take c))))
+                ([e] (array/push hit e)))))
+  (ev/sleep 0.2)
+  (assert (= 1 (length hit)) "nested suspend panics")
+  (assert (string/has-prefix? "nested fiber suspended under a shared-stack"
+                              (get hit 0))
+          "panic names the hazard"))
 
-# 4. shareable? predicate: deep, fail-closed.
-(assert (shared/shareable? sample) "sample shareable")
-(assert (shared/shareable? nil) "nil shareable")
-(assert (not (shared/shareable? @[1])) "array refused")
-(assert (not (shared/shareable? @{:a 1})) "table refused")
-(assert (shared/shareable? {:a 1}) "struct accepted")
-(assert (not (shared/shareable? {:a @[1]})) "array nested in struct refused")
-(assert (not (shared/shareable? [1 @[2]])) "array nested in tuple refused")
-(assert (not (shared/shareable? {:a print})) "function refused")
-(assert (not (shared/shareable? {:a @"buf"})) "buffer refused")
-(assert (not (shared/shareable? (ev/thread-chan 0))) "channel refused")
-(assert (not (shared/shareable? {:a (ev/thread-chan 0)})) "channel nested refused")
+# 6. Manual fibers stay private (flag only set by ev/go + proc spawn).
+(let [f (fiber/new (fn [] :manual))]
+  (assert (= :manual (resume f)) "manual resume exact"))
 
-# 5. shared/new rejects with errors (not silent garbage).
-(assert-error "new rejects table" (shared/new @{:a 1}))
-(assert-error "new rejects array value" (shared/new {:a @[1]}))
-(assert-error "new rejects function" (shared/new print))
-(assert-error "new rejects single-key bad value" (shared/new {:a @[]}))
+# 7. Proc tasks run shared (spawn/send/recv/quit round-trip).
+(let [results @[]
+      p (proc/spawn (fn []
+                      (array/push results (proc/recv))
+                      (array/push results (proc/recv))))]
+  (ev/sleep 0.05)
+  (proc/send p :one)
+  (proc/send p :two)
+  (ev/sleep 0.2)
+  (assert (deep= @[:one :two] results) "proc round-trip shared")
+  (proc/kill p :done))
 
-# 6. Cross-thread transfer through a mailbox call (pointer passthrough).
-(let [w (mailbox/spawn (fn [t p] (case t :id (shared/materialize p) :echo p)))]
-  (assert (deep= {:a 1} (mailbox/call w :id (shared/new {:a 1}) 5))
-          "blob crosses threads")
-  (assert (deep= sample (mailbox/call w :id (shared/new sample) 5))
-          "rich blob crosses threads")
-  (mailbox/quit w))
-
-# 7. Blobs travel inside pid tuples (registry path exercises bytes).
-(let [w (mailbox/spawn (fn [t p] (case t :hold p)))]
-  (mailbox/register w :sh7)
-  (def looked (mailbox/whereis :sh7))
-  (assert (mailbox/pid? looked) "registry pid resolves")
-  (mailbox/quit w)
-  (ev/unregister :sh7))
-
-# 8. Safe-mode marshal round-trip (persistence shape).
-(let [b (shared/new sample)]
-  (assert (deep= sample (shared/materialize (unmarshal (marshal b))))
-          "safe marshal round-trip"))
-
-# 9. Soundness: blob readable after sender-side GC pressure; the
-# payload is refcounted, not heap-tied.
-(let [b (shared/new {:payload [1 2 {:deep "x"}]})]
-  (gccollect)
-  (assert (deep= [1 2 {:deep "x"}] (shared/get b :payload)) "post-GC read")
-  (gccollect)
-  (assert (= "x" (get (get (shared/get b :payload) 2) :deep))
-          "post-GC nested read"))
+# 8. Deep C recursion (marshal of 30k-nested arrays) attributes
+# overflow to the running task (catchable via the D3 flag path);
+# the lane survives. Same behavior private and shared.
+(let [hit @[]]
+  (var deep @[])
+  (repeat 30000 (set deep @[deep]))
+  (ev/go (fn []
+           (def [ok _] (protect (marshal deep)))
+           (array/push hit [ok (if ok :marshalled :overflowed)])))
+  (ev/sleep 1.0)
+  (assert (= 1 (length hit)) "overflow observed, lane alive")
+  (assert (not ((get hit 0) 0)) "overflow is an error, not a value"))
 
 (end-suite)

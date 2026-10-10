@@ -128,11 +128,29 @@ static void janet_growstack_segv(int sig, siginfo_t *info, void *uctx) {
     (void) uctx;
     JanetFiber *fiber = janet_vm.fiber;
     void *fault = (NULL != info) ? info->si_addr : NULL;
-    if (NULL != fiber && NULL != fault && NULL != fiber->native_stack_base &&
-            NULL != fiber->native_stack_committed) {
-        char *base = (char *) fiber->native_stack_base;
-        char *usable = (char *) fiber->native_stack;
-        char *committed = (char *) fiber->native_stack_committed;
+    /* P3.6: resolve the faulting windows from the private mapping or,
+     * for shared-stack fibers, the lane mapping (attributed to the
+     * running fiber — only one runs per thread). Committed write-back
+     * goes to the matching owner below. */
+    char *base = NULL;
+    char *usable = NULL;
+    char *committed = NULL;
+    int is_shared = 0;
+    if (NULL != fiber && NULL != fault) {
+        if (fiber->shared_stack && NULL != janet_vm.shared_stack_base &&
+                NULL != janet_vm.shared_stack_committed) {
+            base = (char *) janet_vm.shared_stack_base;
+            usable = (char *) janet_vm.shared_stack;
+            committed = (char *) janet_vm.shared_stack_committed;
+            is_shared = 1;
+        } else if (NULL != fiber->native_stack_base &&
+                NULL != fiber->native_stack_committed) {
+            base = (char *) fiber->native_stack_base;
+            usable = (char *) fiber->native_stack;
+            committed = (char *) fiber->native_stack_committed;
+        }
+    }
+    if (NULL != base) {
         char *f = (char *) fault;
         size_t chunk = (size_t) JANET_FIBER_STACK_GROW_BYTES;
         if (f >= usable && f < committed) {
@@ -142,7 +160,8 @@ static void janet_growstack_segv(int sig, siginfo_t *info, void *uctx) {
             char *target = usable + (off / chunk) * chunk;
             size_t len = (size_t) (committed - target);
             if (0 == mprotect(target, len, PROT_READ | PROT_WRITE)) {
-                fiber->native_stack_committed = target;
+                if (is_shared) janet_vm.shared_stack_committed = target;
+                else fiber->native_stack_committed = target;
                 return;
             }
             /* Commit failed: fall through and die below. */
@@ -153,19 +172,20 @@ static void janet_growstack_segv(int sig, siginfo_t *info, void *uctx) {
              * catchable error and clears it. Repeated entries consume
              * the red zone progressively, so straight-line descents
              * without polls still terminate at the base instead of
-             * livelocking. */
+             * livelocking. Shared fibers get the identical treatment
+             * (flag is per-fiber). */
             uintptr_t off = (uintptr_t) (f - base);
             char *target = base + (off / chunk) * chunk;
             size_t len = (size_t) (committed - target);
             fiber->stack_overflowed = 1;
             if (len > 0 && 0 == mprotect(target, len, PROT_READ | PROT_WRITE)) {
-                fiber->native_stack_committed = target;
+                if (is_shared) janet_vm.shared_stack_committed = target;
+                else fiber->native_stack_committed = target;
                 return;
             }
             /* Nothing left (or commit failed): fall through and die. */
-        } else if (NULL != fiber && NULL != fiber->native_stack_base &&
-                f < (char *) fiber->native_stack_base &&
-                fiber->native_stack_committed == fiber->native_stack_base) {
+        } else if (NULL != fiber && f < base &&
+                committed == base) {
             /* Below a fully consumed mapping: our overflow, out of red
              * space. Name it, then die via the old action. */
             static const char msg[] = "janet: fiber native stack overflow\n";
@@ -322,6 +342,8 @@ void janet_fiber_native_stack_free(JanetFiber *fiber) {
 #else
   #define JANET_CTX_SYM "janet_fiber_ctx_swap"
 #endif
+/* P3.6 lazy mapping: re-prime helper, declared early for reset. */
+static void janet_fiber_reprime(JanetFiber *fiber);
 #if defined(__x86_64__)
 __asm__(
   ".text\n"
@@ -446,7 +468,9 @@ static void fiber_reset(JanetFiber *fiber) {
         }
 #endif
     }
-    janet_fiber_ensure_native_stack(fiber);
+    /* Reset restarts from the top: re-prime mapped fibers, leave
+     * unmapped ones for the resume path (P3.6 lazy mapping). */
+    janet_fiber_reprime(fiber);
 #ifdef JANET_EV
     fiber->sched_id = 0;
     fiber->ev_callback = NULL;
@@ -472,6 +496,8 @@ static JanetFiber *fiber_alloc(int32_t capacity) {
     fiber->heap_strict = 0;
     /* P3.5: no owning proc (proc spawn sets it). */
     fiber->proc = NULL;
+    /* P3.6: private stacks by default (ev/go + proc spawn opt in). */
+    fiber->shared_stack = 0;
     /* P3.5b: heap lists start empty (births file here). */
     {
         int hli;
@@ -492,13 +518,14 @@ static JanetFiber *fiber_alloc(int32_t capacity) {
     }
     janet_vm.next_collection += sizeof(Janet) * capacity;
     fiber->data = data;
-    /* This fiber's private native C stack (with a guard region) */
+    /* This fiber's native mapping is created lazily on first resume
+     * (see janet_continue_no_check) so fibers that never run map
+     * nothing — and shared-stack fibers never map privately at all. */
     fiber->native_stack_base = NULL;
     fiber->native_stack = NULL;
     fiber->native_stack_size = 0;
     fiber->native_stack_committed = NULL;
     fiber->stack_overflowed = 0;
-    janet_fiber_ensure_native_stack(fiber);
     return fiber;
 }
 
@@ -515,6 +542,9 @@ void janet_fiber_init_owner(JanetFiber *fiber) {
  * context to enter the VM trampoline. See fiber.h for when re-priming
  * is valid. */
 void janet_fiber_ensure_native_stack(JanetFiber *fiber) {
+    /* P3.6: shared-stack fibers hold no private mapping (each resume
+     * re-primes on the lane mapping instead). */
+    if (fiber->shared_stack) return;
     if (!fiber->native_stack_base) {
         size_t guard = 0;
         void *committed = NULL;
@@ -532,11 +562,41 @@ void janet_fiber_ensure_native_stack(JanetFiber *fiber) {
         fiber->native_stack_committed = NULL;
 #endif
     }
+    janet_fiber_reprime(fiber);
+}
+
+/* Re-prime a mapped fiber's switch context (trampoline entry).
+ * Mapping must exist (no-op otherwise — resume paths map first). */
+static void janet_fiber_reprime(JanetFiber *fiber) {
     if (fiber->native_stack) {
         size_t usable = fiber->native_stack_size -
             (size_t)((char *)fiber->native_stack -
                      (char *)fiber->native_stack_base);
         janet_fiber_ctx_prime(&fiber->ctx, fiber->native_stack, usable,
+                              janet_fiber_trampoline);
+    }
+}
+
+/* P3.6 lane-shared mapping: same reserve/commit/guard shape as private
+ * stacks (fiber_native_stack_alloc), but VM-scoped and created lazily
+ * so VMs without shared fibers map nothing. Growth/red-zone/overflow
+ * handling is shared with the private path (see the fault handler —
+ * shared faults attribute to the running fiber). */
+void janet_fiber_shared_prime(JanetFiber *fiber) {
+    if (NULL == janet_vm.shared_stack_base) {
+        size_t guard = 0;
+        void *committed = NULL;
+        void *base = fiber_native_stack_alloc(&janet_vm.shared_stack_size,
+                                              &guard, &committed);
+        janet_vm.shared_stack_base = base;
+        janet_vm.shared_stack = (char *)base + guard;
+        janet_vm.shared_stack_committed = committed;
+    }
+    {
+        size_t usable = janet_vm.shared_stack_size -
+            (size_t)((char *)janet_vm.shared_stack -
+                     (char *)janet_vm.shared_stack_base);
+        janet_fiber_ctx_prime(&fiber->ctx, janet_vm.shared_stack, usable,
                               janet_fiber_trampoline);
     }
 }

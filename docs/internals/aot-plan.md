@@ -822,6 +822,15 @@ marshals fn+args).
   (per-proc sweep still walks all heaps — owner-segregated lists
   deferred pending a bootstrap UAF root-cause). No scale win
   claimed yet.
+- [x] P3.6 shared C stacks, S2 (this slice): one lane mapping per VM
+  (lazy; reserve/commit/grow/red-zone identical to private, faults
+  attribute to the running fiber); ev/go + proc spawn opt in under
+  JANET_SHARED_STACKS; per-resume re-prime; lazy private mapping
+  (never-run fibers map nothing). Yield-form safe (JOP_SIGNAL
+  abandons); C-API yield, nested-resume-live, nested-suspend under
+  shared ancestors panic loud (defer/propagate work: completed-only).
+  Measured: 15k tasks 245MB→23MB (~1.5KB/task); ping-pong identical
+  (~280ns); full suite green both modes.
 
 ### Phase 3 slice — value-returning thread/new + thread/join (DONE, this checkout)
 

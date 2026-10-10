@@ -194,6 +194,17 @@ struct JanetVM {
      * cleared — conservative). The barrier's export check runs only
      * past this flag, so legacy code pays one predicted branch. */
     int heap_strict_live;
+    /* P3.6 shared lane stack: one native mapping per VM, lazily
+     * created on the first shared resume (NULL until then, so
+     * non-users map nothing). Same reserve/commit/grow shape as
+     * private stacks; faults attribute to the running fiber. */
+    void *shared_stack_base;
+    void *shared_stack;
+    size_t shared_stack_size;
+    void *shared_stack_committed;
+    /* P3.6 gate: ev/go + proc spawn opt fibers in when set (from
+     * JANET_SHARED_STACKS in the environment, read once at init). */
+    int shared_stacks_on;
 
     /* GC roots */
     Janet *roots;

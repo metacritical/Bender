@@ -101,6 +101,13 @@ void janet_fiber_ensure_native_stack(JanetFiber *fiber);
  * from the GC sweep in gc.c. */
 void janet_fiber_native_stack_free(JanetFiber *fiber);
 
+/* P3.6: lazily create the lane-shared native mapping (reserve + INIT
+ * commit + guard, same shape as private stacks) and prime `fiber`'s
+ * switch context onto it. No-op when already mapped. Shared fibers
+ * re-prime on every resume (their parked position is always the
+ * committed pc — suspend paths abandon C frames by discipline). */
+void janet_fiber_shared_prime(JanetFiber *fiber);
+
 /* Step 1 (process heaps): assign a fresh owner id from the VM counter
  * (0 reserved for shared). Used at every fiber birth site (alloc,
  * unmarshal); resets keep the id (same logical fiber). */

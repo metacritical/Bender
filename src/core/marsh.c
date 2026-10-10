@@ -1121,6 +1121,9 @@ static const uint8_t *unmarshal_one_fiber(
     }
     fiber->proc = NULL;
     fiber->heap_strict = 0;
+    /* P3.6: unmarshalled fibers always take private stacks (sharedness
+     * is a lane-local scheduling property, never marshalled). */
+    fiber->shared_stack = 0;
     fiber->flags = 0;
     fiber->frame = 0;
     fiber->stackstart = 0;

@@ -1100,6 +1100,14 @@ struct JanetFiber {
      * of O(world). Global collections walk these plus globals (dead
      * fibers migrate theirs at free). NULL at birth. */
     void *heap_lists[3];
+    /* P3.6 shared C stacks: ev-task fibers opt in (JANET_SHARED_STACKS
+     * + ev/go or proc spawn). Shared fibers hold no private native
+     * mapping (base stays NULL); each resume re-primes their context
+     * on the lane-shared mapping (see JanetVM). Suspend paths abandon
+     * C frames by discipline, so nothing stack-bound survives a
+     * switch — except raw yield and nested resume, which panic
+     * (fail loud, generators stay private). */
+    int shared_stack;
 };
 
 /* Mark if a stack frame is a tail call for debugging */

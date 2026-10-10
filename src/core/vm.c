@@ -377,7 +377,11 @@ static Janet janet_binop_call(const char *lmethod, const char *rmethod, Janet lh
 
 /* Forward declaration */
 static JanetSignal janet_check_can_resume(JanetFiber *fiber, Janet *out, int is_cancel);
-static JanetSignal janet_continue_no_check(JanetFiber *fiber, Janet in, Janet *out);
+/* P3.6: walk the resume chain for shared-stack fibers parked mid-C
+ * (child links verified intact — a stale link means that ancestor
+ * already unwound normally). Self excluded (the suspender abandons
+ * cleanly and re-primes). Bounded. */
+static int janet_fiber_chain_has_shared(JanetFiber *fiber);static JanetSignal janet_continue_no_check(JanetFiber *fiber, Janet in, Janet *out);
 static void janet_suspend_swap(JanetFiber *fiber, JanetSignal sig, Janet payload);
 
 /* PGO type-profile collector (Phase 1). Records observed param/return
@@ -1572,6 +1576,17 @@ static JanetSignal run_vm(JanetFiber *fiber, Janet in) {
         JanetSignal sig = janet_continue_no_check(child, stack[C], &retreg);
         stack = fiber->data + fiber->frame;
         if (sig != JANET_SIGNAL_OK && !(child->flags & (1 << sig))) {
+            /* P3.6: nested child suspended (not completed): parking
+             * here would strand live C frames for others to clobber
+             * if any parked party is shared. Fail loud instead
+             * (nested-complete flows through untouched). */
+            if ((sig == JANET_SIGNAL_EVENT || sig == JANET_SIGNAL_YIELD ||
+                    sig == JANET_SIGNAL_INTERRUPT) &&
+                    janet_fiber_chain_has_shared(fiber)) {
+                vm_throw("nested fiber suspended under a shared-stack "
+                         "ancestor (await outside protect, or use private "
+                         "fibers for coroutines)");
+            }
             vm_return(sig, retreg);
         }
         fiber->child = NULL;
@@ -1611,6 +1626,15 @@ static JanetSignal run_vm(JanetFiber *fiber, Janet in) {
         fiber->child = child;
         JanetSignal sig = janet_continue_signal(child, stack[C], &retreg, JANET_SIGNAL_ERROR);
         if (sig != JANET_SIGNAL_OK && !(child->flags & (1 << sig))) {
+            /* P3.6: same nested-suspend hazard as JOP_RESUME (a
+             * cancelled child may catch and keep running). */
+            if ((sig == JANET_SIGNAL_EVENT || sig == JANET_SIGNAL_YIELD ||
+                    sig == JANET_SIGNAL_INTERRUPT) &&
+                    janet_fiber_chain_has_shared(fiber)) {
+                vm_throw("nested fiber suspended under a shared-stack "
+                         "ancestor (await outside protect, or use private "
+                         "fibers for coroutines)");
+            }
             vm_return(sig, retreg);
         }
         fiber->child = NULL;
@@ -1927,6 +1951,24 @@ Janet janet_call(JanetFunction *fun, int32_t argc, const Janet *argv) {
     return *janet_vm.return_reg;
 }
 
+/* P3.6: walk the resume chain for shared-stack fibers parked
+ * mid-C (child links verified intact — a stale link means that
+ * ancestor already unwound normally and is safe). Self excluded:
+ * the suspender abandons cleanly and re-primes on wake. Bounded. */
+static int janet_fiber_chain_has_shared(JanetFiber *fiber) {
+    int depth = 0;
+    JanetFiber *prev = fiber;
+    JanetFiber *f = fiber->resume_fiber;
+    while (NULL != f && depth < 1024) {
+        if (f->child != prev) break;
+        if (f->shared_stack) return 1;
+        prev = f;
+        f = f->resume_fiber;
+        depth++;
+    }
+    return 0;
+}
+
 static JanetSignal janet_check_can_resume(JanetFiber *fiber, Janet *out, int is_cancel) {
     /* Check conditions */
     JanetFiberStatus old_status = janet_fiber_status(fiber);
@@ -1982,8 +2024,7 @@ void janet_restore(JanetTryState *state) {
     janet_vm.coerce_error = state->coerce_error;
 }
 
-/* Phase 1.1 swap-suspension (see docs/internals/native-fibers.md). The VM
- * dynamic registers always describe the RUNNING party. When a fiber
+/* Phase 1.1 swap-suspension (see docs/internals/native-fibers.md). The VM * dynamic registers always describe the RUNNING party. When a fiber
  * suspends with live C frames, its registers are parked in the fiber and
  * the resumer's parked registers loaded, so nothing points into the
  * frozen C stack while the resumer runs. janet_continue_no_check does the
@@ -2054,6 +2095,13 @@ Janet janet_fiber_yield(Janet v) {
     JanetFiber *fiber = janet_vm.fiber;
     if (NULL == fiber) janet_panic("janet_fiber_yield failed because there is no current fiber");
     if (NULL == fiber->resume_ctx) janet_panic("janet_fiber_yield failed because the fiber was never resumed");
+    /* P3.6: raw yield needs its C frames preserved across the switch
+     * (resume continues them), which shared stacks cannot do (others
+     * clobber the region). Fail loud — coroutines stay private. */
+    if (fiber->shared_stack) {
+        janet_panic("cannot yield from a shared-stack fiber "
+                    "(use private fibers for coroutines)");
+    }
     JanetSignal sig = JANET_SIGNAL_YIELD;
     for (;;) {
         janet_suspend_swap(fiber, sig, v);
@@ -2246,6 +2294,15 @@ static JanetSignal janet_continue_no_check(JanetFiber *fiber, Janet in, Janet *o
     fiber->in_value = in;
     fiber->resume_ctx = caller_ctx;
     fiber->resume_fiber = caller;
+    /* P3.6: stacks materialize on first resume (never at alloc, so
+     * never-run fibers map nothing). Shared fibers re-prime on the
+     * lane mapping every resume (parked position is always the
+     * committed pc); private fibers map+prime once. One branch each. */
+    if (fiber->shared_stack) {
+        janet_fiber_shared_prime(fiber);
+    } else if (NULL == fiber->native_stack_base) {
+        janet_fiber_ensure_native_stack(fiber);
+    }
     janet_fiber_ctx_swap(caller_ctx, &fiber->ctx);
 
     JanetSignal sig = fiber->out_signal;
@@ -2340,6 +2397,13 @@ int janet_init(void) {
     janet_vm.proc_serial = 0;
     /* P3.3 gate: no strict fibers yet (spawn-isolated sets it). */
     janet_vm.heap_strict_live = 0;
+    /* P3.6: lane-shared stack unmapped until first shared resume;
+     * opt-in read once (any set value enables). */
+    janet_vm.shared_stack_base = NULL;
+    janet_vm.shared_stack = NULL;
+    janet_vm.shared_stack_size = 0;
+    janet_vm.shared_stack_committed = NULL;
+    janet_vm.shared_stacks_on = (NULL != getenv("JANET_SHARED_STACKS")) ? 1 : 0;
 
     janet_symcache_init();
 

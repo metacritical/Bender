@@ -133,6 +133,9 @@ static Janet cfun_proc_spawn_impl(JanetFunction *func, int32_t cap, int isolated
      * inherited, never unmarshalled. */
     fiber->heap_strict = isolated;
     if (isolated) janet_vm.heap_strict_live = 1;
+    /* P3.6: lane-shared stacks when enabled (same suspend discipline
+     * as ev tasks — proc bodies block in ev ops, never raw-yield). */
+    fiber->shared_stack = janet_vm.shared_stacks_on;
     fiber->flags |=
         JANET_FIBER_MASK_ERROR |
         JANET_FIBER_MASK_USER0 |
