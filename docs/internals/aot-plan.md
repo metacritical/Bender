@@ -760,10 +760,14 @@ same-VM only until P2 proxies). Each slice lands gated or reverts.
   mailbox) + `send`/`recv`(take-next)/`self`/`kill`/`alive?`/`pid?`
   + pins (15). Shares the channel push/pop funnel (lane pin rides
   along); env-carried self (no wrapper closure); marshal refuses.
-- [ ] P1.2 selective receive (C stash + match) + C monitor/link
-  lists + trap flag (no reaper fibers) + completion observation.
+- [x] P1.2 selective receive (C stash + Janet match loop) + C
+  monitor/link lists + completion observation (done/reason for late
+  monitors). Wake values bypass C (await discipline), so matching
+  stays Janet-side over proc/recv + stash, like tasklets.
 - [ ] P1.3 pid interop (tuple pids resolve to procs; proc pids plug
   into tasklet send/call/monitor).
+- [ ] P1.4 named loop processes + trap enforcement + registry
+  (dispatch loop over proc primitives; :down handled by the loop).
 
 **P2 — M:N lanes.** N persistent lane threads (own loop each);
 spawn-on-lane placement; cross-lane copy sends via lane proxies;

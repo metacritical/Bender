@@ -32,19 +32,29 @@ typedef struct JanetProcess {
     JanetFiber *fiber;  /* the process fiber (ev/go-scheduled) */
     uint32_t serial;    /* pid serial (never 0) */
     int done;           /* completion observed (quit/kill fast path) */
+    /* P1.2: selective-recv stash (Janet-scanned) + monitor list
+     * (flat [tag watcher] pairs, Janet-pumped via reapers) +
+     * recorded exit reason (late monitors). All marked below. */
+    JanetArray *stash;
+    JanetArray *monitors;
+    Janet exit_reason;
 } JanetProcess;
 
 static JanetProcess *janet_getproc(const Janet *argv, int32_t n) {
     return janet_getabstract(argv, n, &janet_proc_type);
 }
 
-/* Mark everything the process owns (fiber, both channels). */
+/* Mark everything the process owns (fiber, both channels, P1.2
+ * stash + monitors + exit reason). */
 static int janet_procat_mark(void *p, size_t size) {
     (void) size;
     JanetProcess *proc = (JanetProcess *) p;
     if (NULL != proc->fiber) janet_mark(janet_wrap_fiber(proc->fiber));
     if (NULL != proc->mbox) janet_mark(janet_wrap_abstract(proc->mbox));
     if (NULL != proc->sup) janet_mark(janet_wrap_abstract(proc->sup));
+    if (NULL != proc->stash) janet_mark(janet_wrap_array(proc->stash));
+    if (NULL != proc->monitors) janet_mark(janet_wrap_array(proc->monitors));
+    janet_mark(proc->exit_reason);
     return 0;
 }
 
@@ -101,6 +111,19 @@ JANET_CORE_FN(cfun_proc_spawn,
     proc->fiber = NULL;
     proc->serial = janet_proc_next_serial();
     proc->done = 0;
+    /* P1.2 fields: rooted individually until assigned (the proc root
+     * covers them after; mark keeps them after that). */
+    JanetArray *stash = janet_array(0);
+    Janet stash_j = janet_wrap_array(stash);
+    janet_gcroot(stash_j);
+    JanetArray *monitors = janet_array(0);
+    Janet monitors_j = janet_wrap_array(monitors);
+    janet_gcroot(monitors_j);
+    proc->stash = stash;
+    proc->monitors = monitors;
+    proc->exit_reason = janet_wrap_nil();
+    janet_gcunroot(monitors_j);
+    janet_gcunroot(stash_j);
     JanetFiber *fiber = janet_fiber(func, 64, 0, NULL);
     janet_assert(NULL != fiber, "bad proc fiber");
     fiber->flags |=
@@ -222,6 +245,77 @@ JANET_CORE_FN(cfun_proc_pid,
         janet_abstract_type(janet_unwrap_abstract(argv[0])) == &janet_proc_type);
 }
 
+JANET_CORE_FN(cfun_proc_stash,
+              "(proc/stash p)",
+              "P1.2: the process's selective-receive stash array (live "
+              "object — scan/remove/push from Janet; the match loop in "
+              "examples/proc.janet owns the discipline).") {
+    janet_fixarity(argc, 1);
+    JanetProcess *proc = janet_getproc(argv, 0);
+    return janet_wrap_array(proc->stash);
+}
+
+JANET_CORE_FN(cfun_proc_sup_of,
+              "(proc/sup-of p)",
+              "P1.2: the process's completion (supervisor) channel. "
+              "Reapers take completion events here; bodies never touch it.") {
+    janet_fixarity(argc, 1);
+    JanetProcess *proc = janet_getproc(argv, 0);
+    return janet_wrap_abstract(proc->sup);
+}
+
+JANET_CORE_FN(cfun_proc_monitor,
+              "(proc/monitor watched watcher tag)",
+              "P1.2: record that `watcher` (a proc) wants [:down tag "
+              "reason] when `watched` completes. Appends to the watched "
+              "process's C monitor list (no reaper fibers here — pumping "
+              "lives in examples/proc.janet). Late monitors (already "
+              "done) must check proc/done? first — this just records. "
+              "Returns `watcher`.") {
+    janet_fixarity(argc, 3);
+    JanetProcess *watched = janet_getproc(argv, 0);
+    JanetProcess *watcher = janet_getproc(argv, 1);
+    janet_array_push(watched->monitors, argv[2]);
+    janet_array_push(watched->monitors, janet_wrap_abstract(watcher));
+    return argv[1];
+}
+
+JANET_CORE_FN(cfun_proc_monitors_of,
+              "(proc/monitors-of p)",
+              "P1.2: the flat [tag watcher] monitor array (live — reapers "
+              "drain it, then clear it).") {
+    janet_fixarity(argc, 1);
+    JanetProcess *proc = janet_getproc(argv, 0);
+    return janet_wrap_array(proc->monitors);
+}
+
+JANET_CORE_FN(cfun_proc_record_exit,
+              "(proc/record-exit p reason)",
+              "P1.2: mark the process done with `reason` (reapers call "
+              "this once, right after taking the completion event).") {
+    janet_fixarity(argc, 2);
+    JanetProcess *proc = janet_getproc(argv, 0);
+    proc->done = 1;
+    proc->exit_reason = argv[1];
+    return argv[0];
+}
+
+JANET_CORE_FN(cfun_proc_done,
+              "(proc/done? p)",
+              "P1.2: true once the exit was recorded (late-monitor path).") {
+    janet_fixarity(argc, 1);
+    JanetProcess *proc = janet_getproc(argv, 0);
+    return janet_wrap_boolean(proc->done);
+}
+
+JANET_CORE_FN(cfun_proc_exit_reason,
+              "(proc/exit-reason p)",
+              "P1.2: the recorded exit reason (:normal on clean exit).") {
+    janet_fixarity(argc, 1);
+    JanetProcess *proc = janet_getproc(argv, 0);
+    return proc->exit_reason;
+}
+
 static const JanetRegExt proc_cfuns_ext[] = {
     JANET_CORE_REG("proc/spawn", cfun_proc_spawn),
     JANET_CORE_REG("proc/self", cfun_proc_self),
@@ -230,6 +324,13 @@ static const JanetRegExt proc_cfuns_ext[] = {
     JANET_CORE_REG("proc/kill", cfun_proc_kill),
     JANET_CORE_REG("proc/alive?", cfun_proc_alive),
     JANET_CORE_REG("proc/pid?", cfun_proc_pid),
+    JANET_CORE_REG("proc/stash", cfun_proc_stash),
+    JANET_CORE_REG("proc/sup-of", cfun_proc_sup_of),
+    JANET_CORE_REG("proc/monitor", cfun_proc_monitor),
+    JANET_CORE_REG("proc/monitors-of", cfun_proc_monitors_of),
+    JANET_CORE_REG("proc/record-exit", cfun_proc_record_exit),
+    JANET_CORE_REG("proc/done?", cfun_proc_done),
+    JANET_CORE_REG("proc/exit-reason", cfun_proc_exit_reason),
     JANET_REG_END
 };
 

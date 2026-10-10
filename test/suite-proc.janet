@@ -71,4 +71,71 @@
   (proc/kill a :done)
   (proc/kill b :done))
 
+(import ../examples/proc :as procx)
+
+# 8. P1.2 selective receive: out-of-order arrival, in-order match,
+# non-matching stashed (C stash, Janet-scanned).
+(let [results @[]
+      c (proc/spawn (fn []
+                      (array/push results (procx/select (fn [m] (= :a m))))
+                      (array/push results (procx/select (fn [m] (= :b m))))
+                      (array/push results (procx/select (fn [m] (= :c m))))))]
+  (proc/send c :b)
+  (proc/send c :c)
+  (proc/send c :a)
+  (ev/sleep 0.3)
+  (assert (deep= @[:a :b :c] results) "selective order")
+  (assert (= 0 (length (proc/stash c))) "stash drained")
+  (proc/kill c :done))
+
+# 9. Stash holds skipped messages across selects.
+(let [results @[]
+      c (proc/spawn (fn []
+                      (array/push results (procx/select (fn [m] (= :b m))))
+                      (array/push results (procx/select (fn [m] (= :a m))))))]
+  (proc/send c :a)
+  (proc/send c :b)
+  (ev/sleep 0.3)
+  (assert (deep= @[:b :a] results) "stashed message found later")
+  (proc/kill c :done))
+
+# 10. P1.2 monitors: crash observed with reason, clean exit :normal.
+(let [results @[]
+      crasher (proc/spawn (fn [] (ev/sleep 0.05) (error "bang")))
+      cleaner (proc/spawn (fn [] :bye))
+      watcher (proc/spawn (fn [] (repeat 2 (array/push results (proc/recv)))))]
+  (procx/monitor crasher watcher :w)
+  (procx/monitor cleaner watcher :c)
+  (ev/sleep 1.0)
+  (def downs (sorted
+               (filter (fn [m] (and (tuple? m) (= :down (m 0)))) results)))
+  (assert (= 2 (length downs)) "both downs")
+  (assert (deep= [:down :c :normal] (downs 0)) "clean :normal")
+  (assert (deep= [:down :w "bang"] (downs 1)) "crash reason")
+  (proc/kill watcher :done))
+
+# 11. Late monitors deliver from the retained completion event.
+# The process completes long before anyone watches (no reaper yet,
+# so done? is false); monitoring afterwards still delivers :normal.
+(let [results @[]
+      quick (proc/spawn (fn [] :bye))
+      watcher (proc/spawn (fn [] (array/push results (proc/recv))))]
+  (ev/sleep 0.5)
+  (assert (not (proc/alive? quick)) "quick completed")
+  (procx/monitor quick watcher :late)
+  (ev/sleep 0.5)
+  (assert (deep= @[[:down :late :normal]] results) "late :down")
+  (assert (proc/done? quick) "exit recorded by reaper")
+  (proc/kill watcher :done))
+
+# 12. Links are symmetric fate with [:link tag] marks.
+(let [results @[]
+      a (proc/spawn (fn [] (ev/sleep 30)))
+      b (proc/spawn (fn [] (array/push results (proc/recv))))]
+  (procx/link a b :lab)
+  (proc/kill a :boom)
+  (ev/sleep 0.6)
+  (assert (deep= @[[:down [:link :lab] :boom]] results) "link observed")
+  (proc/kill b :done))
+
 (end-suite)
