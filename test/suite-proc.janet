@@ -264,4 +264,23 @@
   (procx/lane-stop l1)
   (procx/lane-stop l2))
 
+# 24. P2.2 placement pool: round-robin spreads 6 procs over 3 lanes.
+(let [pool (procx/pool-spawn 3)
+      pids @[]]
+  (repeat 6 (array/push pids (procx/pool-spawn-on pool (fn [] (ev/sleep 30)))))
+  (assert (deep= @[0 1 2 0 1 2]
+                 (map (fn [p] (- (p 1) ((get pids 0) 1))) pids))
+          "round-robin placement")
+  (procx/pool-stop pool))
+
+# 25. P2.2 remote call through the pool (exact reply + timeout bound).
+(let [pool (procx/pool-spawn 2)
+      db (procx/pool-spawn-loop-on pool (fn [tag payload] [:got payload]))
+      hog (procx/pool-spawn-loop-on pool
+            (fn [tag payload] (ev/sleep 30) :never))]
+  (assert (deep= [:got :hey] (procx/call db :ping :hey)) "pool call")
+  (assert-error "remote call times out"
+    (procx/call hog :ping nil 0.1))
+  (procx/pool-stop pool))
+
 (end-suite)

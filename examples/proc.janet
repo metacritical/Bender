@@ -277,3 +277,45 @@
   (ev/give (lane :ctl) [:proc-stop])
   (thread/join (lane :thread))
   lane)
+
+###
+### Placement pools (P2.2): round-robin spawn across N lanes (M
+### processes over N threads — the M:N multiplexer). Least-loaded
+### would need lane queue-depth feedback (a :proc-stat round-trip per
+### spawn); round-robin is the honest baseline and matches how the C
+### pool's shared queue behaves in practice. Remote call rides the
+### forward (timeout-bounded); monitors stay same-lane.
+###
+
+(defn pool-spawn
+  "Spawn a placement pool of `n` lanes. Returns {:lanes :next}."
+  [n]
+  (def lanes @[])
+  (repeat n (array/push lanes (lane-spawn)))
+  {:lanes lanes :next @[0]})
+
+(defn pool-pick
+  "Next lane round-robin (internal; exposed for pins)."
+  [pool]
+  (def lanes (pool :lanes))
+  (def i (% ((pool :next) 0) (length lanes)))
+  (put (pool :next) 0 (+ ((pool :next) 0) 1))
+  (get lanes i))
+
+(defn pool-spawn-on
+  "Spawn `thunk` on the next lane round-robin. Returns the remote pid."
+  [pool thunk &opt cap]
+  (default cap 16)
+  (spawn-on (pool-pick pool) thunk cap))
+
+(defn pool-spawn-loop-on
+  "Spawn-loop on the next lane round-robin."
+  [pool handler &opt cap]
+  (default cap 16)
+  (spawn-loop-on (pool-pick pool) handler cap))
+
+(defn pool-stop
+  "Stop every lane in `pool` (joins all threads). Returns `pool`."
+  [pool]
+  (each lane (pool :lanes) (lane-stop lane))
+  pool)
