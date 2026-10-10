@@ -239,4 +239,29 @@
   (assert (not (proc/alive? hog)) "wedged loop dies")
   (assert (proc/killed? hog) "armed flag sticks"))
 
+# 22. P2.1 lanes: spawn-on runs remotely; replies route back through
+# the forward (thread-chans pass by reference through both marshals).
+(let [lane (procx/lane-spawn)
+      rch (ev/thread-chan 1)
+      rpid (procx/spawn-on lane
+             (fn [] (def m (proc/recv)) (ev/give (m 1) (m 0))))]
+  (assert (= (lane :id) (rpid 1)) "remote node id")
+  (proc/send rpid [42 rch])
+  (assert (= 42 (ev/take rch)) "lane echo round-trip")
+  (procx/lane-stop lane))
+
+# 23. P2.1 loop-on-lane: call works through the forward; dead remote
+# sends are a silent no-op; two lanes place independently.
+(let [l1 (procx/lane-spawn)
+      l2 (procx/lane-spawn)
+      db (procx/spawn-loop-on l1 (fn [tag payload] [:echoed payload]))]
+  (assert (deep= [:echoed 99] (procx/call db :ping 99)) "lane call")
+  (assert (not= (l1 :id) (l2 :id)) "distinct lanes")
+  (def other (procx/spawn-on l2 (fn [] (ev/sleep 30))))
+  (assert (= (l2 :id) (other 1)) "placed on lane 2")
+  (proc/send [:pid 999 12345 (l1 :ctl)] :ghost)
+  (ev/sleep 0.1)
+  (procx/lane-stop l1)
+  (procx/lane-stop l2))
+
 (end-suite)

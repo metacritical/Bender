@@ -769,9 +769,19 @@ same-VM only until P2 proxies). Each slice lands gated or reverts.
 - [x] P1.4 named loop processes + trap enforcement + registry
   (dispatch loop over proc primitives; :down handled by the loop).
 
-**P2 — M:N lanes.** N persistent lane threads (own loop each);
-spawn-on-lane placement; cross-lane copy sends via lane proxies;
-no live migration (4.3 boundary: relocate by respawn).
+**P2 — M:N lanes (design 2026-10-10).** Lanes are persistent
+thread VMs running a Janet control loop (control = thread-chan,
+passed in — threaded abstracts cross by reference). Placement at
+spawn time; no live migration (4.3 boundary). Pids grow into their
+node slot: [:pid 0 serial mbox] local, [:pid lane serial ctl]
+remote. proc/send resolves node 0 by direct give, remote by
+forwarding [:proc-fwd serial msg] over ctl (thread-chans inside
+pass by reference, so call replies route back). Fire-and-forget to
+dead remotes is a silent no-op (Erlang parity); calls are timeout-
+bounded anyway. monitor/kill/link stay same-lane objects.
+- [x] P2.1 lane boot + spawn-on + node-aware send (C resolver).
+- [ ] P2.2 placement pool (round-robin/least-loaded) + remote call.
+- [ ] P2.3 cross-lane :down forwarding (or documented boundary).
 
 **P3 — density + heap isolation.** Lazy queues/channels, small
 stacks (→ ~2KB/proc); per-process majors (→ O(n) spawn). The

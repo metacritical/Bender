@@ -198,3 +198,82 @@
   "Remove `name` from the proc registry."
   [name]
   (put *proc-names* name nil))
+
+###
+### M:N lanes (P2.1): persistent thread VMs running a control loop.
+### Placement happens at spawn time (no live migration — 4.3
+### boundary). Pids grow into their node slot: [:pid 0 serial mbox]
+### local, [:pid lane serial ctl] remote. Sends to remote pids
+### forward [:proc-fwd serial msg] over the lane control channel
+### (C side); thread-chans inside forward by reference, so call
+### replies route back. Fire-and-forget to a dead remote is a silent
+### no-op (Erlang parity). monitor/kill/link stay same-lane objects.
+###
+
+(var *lane-next* 0)
+
+(defn- lane-loop
+  "Control loop running ON the lane thread: spawn locally, forward
+  into local mailboxes (dropping for unknown/dead serials), stop on
+  :proc-stop (then the thread is joinable)."
+  [ctl procs]
+  (var running true)
+  (while running
+    (def m (ev/take ctl))
+    (def cmd (m 0))
+    (cond
+      (= cmd :proc-spawn)
+      (do (def thunk (m 1))
+        (def cap (m 2))
+        (def reply (m 3))
+        (def p (proc/spawn thunk cap))
+        (put procs (proc/serial p) p)
+        (ev/give reply [:proc-ok (proc/serial p)]))
+      (= cmd :proc-fwd)
+      (do (def p (get procs (m 1)))
+        (when p
+          (try (proc/send p (m 2)) ([_] nil))))
+      (= cmd :proc-stop)
+      # Teardown: kill everything hosted (parked fibers hold the
+      # worker's janet_loop open — the thread can only exit once the
+      # loop drains), then return so the thread becomes joinable.
+      (do (eachk serial procs
+            (try (proc/kill (get procs serial) :lane-stopped) ([_] nil)))
+        (set running false)))
+  nil))
+
+(defn lane-spawn
+  "Spawn a lane (persistent worker thread + loop). Returns {:id :ctl
+  :thread}. Stop with lane-stop (required — unstopped lanes leak
+  their thread, like pools)."
+  []
+  (def ctl (ev/thread-chan 64))
+  (++ *lane-next*)
+  (def id *lane-next*)
+  (def h (thread/new (fn [c] (lane-loop c @{})) ctl))
+  {:id id :ctl ctl :thread h})
+
+(defn spawn-on
+  "Spawn `thunk` (0-arg function) as a raw process on `lane`.
+  Returns the remote pid [:pid lane serial ctl]."
+  [lane thunk &opt cap]
+  (default cap 16)
+  (def reply (ev/thread-chan 1))
+  (ev/give (lane :ctl) [:proc-spawn thunk cap reply])
+  (def res (ev/take reply))
+  [:pid (lane :id) (res 1) (lane :ctl)])
+
+(defn spawn-loop-on
+  "Spawn-loop on `lane`: like spawn-loop, but the loop runs there.
+  Call it with procx/call (replies route back through the forward)."
+  [lane handler &opt cap]
+  (default cap 16)
+  (spawn-on lane (fn [] (dispatch (proc/self) handler)) cap))
+
+(defn lane-stop
+  "Stop `lane`: poison-pill the control loop, then join the thread.
+  Lane-hosted processes die with their VM. Returns `lane`."
+  [lane]
+  (ev/give (lane :ctl) [:proc-stop])
+  (thread/join (lane :thread))
+  lane)

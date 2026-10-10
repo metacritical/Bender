@@ -185,11 +185,38 @@ JANET_CORE_FN(cfun_proc_send,
               "through the carried channel, so cross-kind delivery works "
               "if the sender honors the receiver's convention: proc "
               "bodies take single values, tasklet loops take "
-              "[tag payload reply] triples). Blocks at capacity. "
-              "Returns `p`.") {
+              "[tag payload reply] triples). Node 0 sends give directly; "
+              "remote nodes (P2.1) forward [:proc-fwd serial msg] over "
+              "the carried lane-control channel (a thread channel — "
+              "forgery with a plain channel shares by reference: user "
+              "error, remote pids come from spawn-on). Blocks at "
+              "capacity. Returns `p`.") {
     janet_fixarity(argc, 2);
     if (janet_vm.coerce_error) {
         janet_panic("cannot proc/send inside janet_call");
+    }
+    /* Remote pid? Forward through the lane control channel. */
+    if (janet_checktype(argv[0], JANET_TUPLE)) {
+        const Janet *tup = janet_unwrap_tuple(argv[0]);
+        if (4 == janet_tuple_length(tup) &&
+                janet_checktype(tup[0], JANET_KEYWORD) &&
+                janet_unwrap_keyword(tup[0]) == janet_unwrap_keyword(janet_ckeywordv("pid")) &&
+                janet_checktype(tup[1], JANET_NUMBER) &&
+                0 != (int64_t) janet_unwrap_number(tup[1])) {
+            if (!janet_checktype(tup[2], JANET_NUMBER)) {
+                janet_panic("remote pid serial must be a number");
+            }
+            JanetChannel *ctl = (JanetChannel *) janet_unwrap_abstract(tup[3]);
+            Janet fwd[3];
+            fwd[0] = janet_ckeywordv("proc-fwd");
+            fwd[1] = tup[2];
+            fwd[2] = argv[1];
+            Janet fwdmsg = janet_wrap_tuple(janet_tuple_n(fwd, 3));
+            if (janet_channel_push(ctl, fwdmsg, 0)) {
+                janet_await();
+            }
+            return argv[0];
+        }
     }
     JanetChannel *mbox = janet_proc_resolve_mbox(argv[0]);
     if (janet_channel_push(mbox, argv[1], 0)) {
@@ -215,13 +242,16 @@ JANET_CORE_FN(cfun_proc_recv,
         janet_panic("proc/recv outside a process");
     }
     if (argc >= 1) {
-        /* Own pid tuple? Serial must match (node 0, same VM). */
+        /* Own pid tuple? Local node + serial must match (remote
+         * serials repeat per lane — node disambiguates). */
         if (janet_checktype(argv[0], JANET_TUPLE)) {
             const Janet *tup = janet_unwrap_tuple(argv[0]);
             JanetProcess *mine = (JanetProcess *) janet_unwrap_abstract(self);
             if (!(4 == janet_tuple_length(tup) &&
                     janet_checktype(tup[0], JANET_KEYWORD) &&
                 janet_unwrap_keyword(tup[0]) == janet_unwrap_keyword(janet_ckeywordv("pid")) &&
+                    janet_checktype(tup[1], JANET_NUMBER) &&
+                    0 == (int64_t) janet_unwrap_number(tup[1]) &&
                     janet_checktype(tup[2], JANET_NUMBER) &&
                     (uint32_t) janet_unwrap_number(tup[2]) == mine->serial)) {
                 janet_panic("proc/recv reads only the caller's own mailbox");
