@@ -283,4 +283,31 @@
     (procx/call hog :ping nil 0.1))
   (procx/pool-stop pool))
 
+# 26. P2.3 cross-lane monitors: remote crash/clean observed on an
+# owner channel; unknown serials answer :noproc.
+(let [lane (procx/lane-spawn)
+      ch (ev/thread-chan 4)
+      rcrash (procx/spawn-on lane
+               (fn [] (ev/sleep 0.05) (error "remote-boom")))
+      rclean (procx/spawn-on lane (fn [] :remote-bye))]
+  (procx/monitor-chan rcrash :rc ch)
+  (procx/monitor-chan rclean :rl ch)
+  (def d1 (ev/take ch))
+  (def d2 (ev/take ch))
+  (assert (or (deep= [:down :rc "remote-boom"] d1)
+              (deep= [:down :rc "remote-boom"] d2))
+          "remote crash observed")
+  (assert (or (deep= [:down :rl :normal] d1)
+              (deep= [:down :rl :normal] d2))
+          "remote clean observed")
+  (procx/monitor-chan [:pid 999 424242 (lane :ctl)] :ghost ch)
+  (assert (deep= [:down :ghost :noproc] (ev/take ch)) "unknown :noproc")
+  (procx/lane-stop lane))
+
+# 27. P2.3 local channel watchers (same mechanism, no lane).
+(let [lw (ev/chan 2)
+      lp (proc/spawn (fn [] (ev/sleep 0.02) (error "local-boom")))]
+  (procx/monitor lp lw :lw)
+  (assert (deep= [:down :lw "local-boom"] (ev/take lw)) "channel watcher"))
+
 (end-suite)

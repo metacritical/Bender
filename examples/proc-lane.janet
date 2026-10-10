@@ -1,0 +1,170 @@
+###
+### Lane processes (P2.3): M:N lane machinery in a module whose
+### environment NEVER holds procs. Background: thread/new marshals
+### the lane boot closure following global function references by
+### value — if that graph reaches a proc (e.g. proc.janet's
+### *reapers* table via ensure-reaper), every later lane-spawn
+### refuses marshal. This module references only core/ev/thread
+### CFUNCTIONS plus lane-local state (created at runtime on the
+### lane, never in module tables), so its marshal graph is always
+### clean. Rule for lane-bound code: close only over marshallable
+### state; use core proc/* + ev/* directly.
+###
+###   (lane-spawn) (spawn-on lane thunk) (spawn-loop-on lane handler)
+###   (lane-stop lane) (pool-spawn n) (pool-pick pool) ...
+###
+
+(var *lane-next* 0)
+
+(defn dispatch
+  "Dispatch loop for spawn-loop handlers (marshallable: references
+  only core CFUNCTIONS, so on-lane thunks can close over it). See
+  proc epic P1.4 for the convention."
+  [me handler]
+  (var running true)
+  (while running
+    (def [tag payload reply] (proc/recv me))
+    (cond
+      (= tag :proc-quit)
+      (do (set running false)
+        (when (and reply (= :core/channel (type reply)))
+          (ev/give reply :proc-stopped)))
+      (= tag :down)
+      (do (def reason reply)
+        (def linked (and (tuple? payload)
+                         (= 2 (length payload))
+                         (= :link (payload 0))))
+        (def mtag (if linked (payload 1) payload))
+        (when (and linked (not (proc/trap? me))
+                   (not= reason :normal)
+                   (not (nil? reason)))
+          (error reason))
+        (handler :down [mtag reason]))
+      (let [[ok r] (protect (handler tag payload))]
+        # P1.4b: armed kills re-raise (the loop's own protect must not
+        # convert them into replies for handler-wedged fibers).
+        (when (and (not ok) (proc/killed? me))
+          (error r))
+        (when (and reply (= :core/channel (type reply)))
+          (ev/give reply (if ok r (table :proc-error r)))))))
+  nil)
+
+(defn- lane-ensure-reaper
+  "Lane-local single-shot reaper (no module state: dedup lives in
+  the `reaped` table owned by the lane loop)."
+  [reaped watched]
+  (when (nil? (get reaped watched))
+    (put reaped watched true)
+    (def sup (proc/sup-of watched))
+    (ev/go
+      (fn []
+        (def [sig fib _] (ev/take sup))
+        (def reason (if (= sig :ok) :normal (fiber/last-value fib)))
+        (proc/record-exit watched reason)
+        (def mons (proc/monitors-of watched))
+        (var i 0)
+        (while (< i (length mons))
+          (def mtag (get mons i))
+          (def w (get mons (+ i 1)))
+          # P2.3 watchers are always channels (cross-lane targets).
+          (ev/give w [:down mtag reason])
+          (+= i 2))
+        (array/clear mons)))))
+
+(defn- lane-loop
+  "Control loop running ON the lane thread (see proc epic P2)."
+  [ctl procs reaped]
+  (var running true)
+  (while running
+    (def m (ev/take ctl))
+    (def cmd (m 0))
+    (cond
+      (= cmd :proc-spawn)
+      (do (def p (proc/spawn (m 1) (m 2)))
+        (put procs (proc/serial p) p)
+        (ev/give (m 3) [:proc-ok (proc/serial p)]))
+      (= cmd :proc-fwd)
+      (do (def p (get procs (m 1)))
+        (when p
+          (try (proc/send p (m 2)) ([_] nil))))
+      (= cmd :proc-monitor)
+      (do (def p (get procs (m 1)))
+        (if (nil? p)
+          (ev/give (m 3) [:down (m 2) :noproc])
+          (do (proc/monitor p (m 3) (m 2))
+            (lane-ensure-reaper reaped p))))
+      (= cmd :proc-stop)
+      (do (eachk serial procs
+            (try (proc/kill (get procs serial) :lane-stopped) ([_] nil)))
+        (set running false))))
+  nil)
+
+(defn lane-spawn
+  "Spawn a lane (persistent worker thread + loop). Returns {:id :ctl
+  :thread}. Stop with lane-stop (required — unstopped lanes leak
+  their thread, like pools)."
+  []
+  (def ctl (ev/thread-chan 64))
+  (++ *lane-next*)
+  (def id *lane-next*)
+  (def h (thread/new (fn [c] (lane-loop c @{} @{})) ctl))
+  {:id id :ctl ctl :thread h})
+
+(defn spawn-on
+  "Spawn `thunk` (0-arg function) as a raw process on `lane`.
+  Returns the remote pid [:pid lane serial ctl]. `thunk` must close
+  only over marshallable state (see module docs)."
+  [lane thunk &opt cap]
+  (default cap 16)
+  (def reply (ev/thread-chan 1))
+  (ev/give (lane :ctl) [:proc-spawn thunk cap reply])
+  (def res (ev/take reply))
+  [:pid (lane :id) (res 1) (lane :ctl)])
+
+(defn spawn-loop-on
+  "Spawn-loop on `lane` (loop body + handler marshal by value — same
+  self-containment rule as spawn-on)."
+  [lane handler &opt cap]
+  (default cap 16)
+  (spawn-on lane (fn [] (dispatch (proc/self) handler)) cap))
+
+(defn lane-stop
+  "Stop `lane`: poison-pill the control loop, then join the thread.
+  Lane-hosted processes die with their VM. Returns `lane`."
+  [lane]
+  (ev/give (lane :ctl) [:proc-stop])
+  (thread/join (lane :thread))
+  lane)
+
+(defn pool-spawn
+  "Spawn a placement pool of `n` lanes. Returns {:lanes :next}."
+  [n]
+  (def lanes @[])
+  (repeat n (array/push lanes (lane-spawn)))
+  {:lanes lanes :next @[0]})
+
+(defn pool-pick
+  "Next lane round-robin (internal; exposed for pins)."
+  [pool]
+  (def lanes (pool :lanes))
+  (def i (% ((pool :next) 0) (length lanes)))
+  (put (pool :next) 0 (+ ((pool :next) 0) 1))
+  (get lanes i))
+
+(defn pool-spawn-on
+  "Spawn `thunk` on the next lane round-robin. Returns the remote pid."
+  [pool thunk &opt cap]
+  (default cap 16)
+  (spawn-on (pool-pick pool) thunk cap))
+
+(defn pool-spawn-loop-on
+  "Spawn-loop on the next lane round-robin."
+  [pool handler &opt cap]
+  (default cap 16)
+  (spawn-loop-on (pool-pick pool) handler cap))
+
+(defn pool-stop
+  "Stop every lane in `pool` (joins all threads). Returns `pool`."
+  [pool]
+  (each lane (pool :lanes) (lane-stop lane))
+  pool)

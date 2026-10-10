@@ -779,9 +779,19 @@ forwarding [:proc-fwd serial msg] over ctl (thread-chans inside
 pass by reference, so call replies route back). Fire-and-forget to
 dead remotes is a silent no-op (Erlang parity); calls are timeout-
 bounded anyway. monitor/kill/link stay same-lane objects.
+P2.3 adds cross-lane monitor-chan (lane :proc-monitor RPC, :noproc
+for unknown serials) + generalized C watcher slot (procs and
+channels). Lane code lives in examples/proc-lane.janet (NOT
+proc.janet): thread/new marshals the boot closure following global
+function references by value — when lane-loop reached ensure-reaper,
+the graph hit proc.janet's *reapers* (proc keys refuse marshal) and
+every later lane-spawn failed. The lane module references only
+core/ev/thread CFUNCTIONS plus runtime-local state, so its graph is
+always clean; lane-bound user code must close only over
+marshallable state (module header).
 - [x] P2.1 lane boot + spawn-on + node-aware send (C resolver).
 - [x] P2.2 placement pool (round-robin/least-loaded) + remote call.
-- [ ] P2.3 cross-lane :down forwarding (or documented boundary).
+- [x] P2.3 cross-lane :down forwarding (or documented boundary).
 
 **P3 — density + heap isolation.** Lazy queues/channels, small
 stacks (→ ~2KB/proc); per-process majors (→ O(n) spawn). The

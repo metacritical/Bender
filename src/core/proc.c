@@ -379,17 +379,17 @@ JANET_CORE_FN(cfun_proc_sup_of,
 
 JANET_CORE_FN(cfun_proc_monitor,
               "(proc/monitor watched watcher tag)",
-              "P1.2: record that `watcher` (a proc) wants [:down tag "
-              "reason] when `watched` completes. Appends to the watched "
-              "process's C monitor list (no reaper fibers here — pumping "
-              "lives in examples/proc.janet). Late monitors (already "
-              "done) must check proc/done? first — this just records. "
-              "Returns `watcher`.") {
+              "P1.2: record that `watcher` wants [:down tag reason] when\n"
+              "`watched` completes. `watcher` is a proc (same-lane) or,\n"
+              "since P2.3, any channel (cross-lane monitor targets and\n"
+              "same-lane channel taps — reapers give to channels, send\n"
+              "to procs). Appends to the watched process's C monitor\n"
+              "list. Late monitors (already done) must check proc/done?\n"
+              "first — this just records. Returns `watcher`.") {
     janet_fixarity(argc, 3);
     JanetProcess *watched = janet_getproc(argv, 0);
-    JanetProcess *watcher = janet_getproc(argv, 1);
     janet_array_push(watched->monitors, argv[2]);
-    janet_array_push(watched->monitors, janet_wrap_abstract(watcher));
+    janet_array_push(watched->monitors, argv[1]);
     return argv[1];
 }
 

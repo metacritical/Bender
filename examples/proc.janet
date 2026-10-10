@@ -12,6 +12,20 @@
 ### (nil = miss); raw bodies that protect everything can trap kills.
 ###
 
+(import ./proc-lane :as lane)
+
+# Lane API re-exported here so (import :as procx) covers lanes too
+# (local aliases only — never marshalled, so the split stays clean).
+(def lane-spawn lane/lane-spawn)
+(def spawn-on lane/spawn-on)
+(def spawn-loop-on lane/spawn-loop-on)
+(def lane-stop lane/lane-stop)
+(def pool-spawn lane/pool-spawn)
+(def pool-pick lane/pool-pick)
+(def pool-spawn-on lane/pool-spawn-on)
+(def pool-spawn-loop-on lane/pool-spawn-loop-on)
+(def pool-stop lane/pool-stop)
+
 (defn select
   "Selective receive on the calling process's mailbox: return the
   first message satisfying `pred`, stashing the rest in arrival order
@@ -49,6 +63,14 @@
 
 (var *reapers* @{})
 
+(defn- deliver-down
+  "P2.3: route a :down message to a watcher (proc object or channel).
+  Channels cover cross-lane monitor targets and same-lane taps."
+  [w msg]
+  (if (proc/pid? w)
+    (proc/send w msg)
+    (ev/give w msg)))
+
 (defn- ensure-reaper [watched]
   (when (nil? (get *reapers* watched))
     (put *reapers* watched true)
@@ -63,20 +85,43 @@
         (while (< i (length mons))
           (def mtag (get mons i))
           (def nch (get mons (+ i 1)))
-          (proc/send nch [:down mtag reason])
+          (deliver-down nch [:down mtag reason])
           (+= i 2))
         (array/clear mons)))))
 
 (defn monitor
-  "Watch `watched`: when it completes, watcher proc `w` receives
-  [:down tag reason]. Already-completed processes deliver immediately
-  from the recorded exit. Returns `w`."
+  "Watch `watched` (proc object): when it completes, watcher `w`
+  (proc or channel) receives [:down tag reason]. Already-completed
+  processes deliver immediately from the recorded exit. Remote
+  watched tuples need monitor-chan (a proc watcher cannot receive
+  cross-lane — its mailbox copy would disconnect). Returns `w`."
   [watched w tag]
+  (when (tuple? watched)
+    (if (= 0 (watched 1))
+      (error "local pid tuples need their proc object for monitor")
+      (error "cross-lane watched needs monitor-chan (proc watchers cannot receive cross-lane)")))
   (if (proc/done? watched)
-    (proc/send w [:down tag (proc/exit-reason watched)])
+    (deliver-down w [:down tag (proc/exit-reason watched)])
     (do (proc/monitor watched w tag)
       (ensure-reaper watched)))
   w)
+
+(defn monitor-chan
+  "P2.3: watch `watched` (proc object or remote pid tuple) with
+  channel `ch`: `ch` receives [:down tag reason] on completion.
+  Remote watches RPC the lane (:proc-monitor); unknown/dead remote
+  serials answer [:down tag :noproc] from the lane. Returns `ch`."
+  [watched tag ch]
+  (if (proc/pid? watched)
+    (if (proc/done? watched)
+      (ev/give ch [:down tag (proc/exit-reason watched)])
+      (do (proc/monitor watched ch tag)
+        (ensure-reaper watched)))
+    (do (def node (watched 1))
+      (when (= 0 node)
+        (error "local tuple pid needs its proc object (or monitor-chan a remote one)"))
+      (ev/give (watched 3) [:proc-monitor (watched 2) tag ch])))
+  ch)
 
 (defn link
   "Symmetric link between two procs: when either completes, the other
@@ -99,46 +144,12 @@
 ### pids, control ops (call/quit/monitor/kill) need objects.
 ###
 
-(defn- dispatch
-  "Dispatch loop for spawn-loop handlers. Untraped linked-peer death
-  re-raises (the loop dies with the reason); trapping loops observe
-  (:down [tag reason]) and survive. Handler errors reply as
-  (table :proc-error r) and never kill the loop."
-  [me handler]
-  (var running true)
-  (while running
-    (def [tag payload reply] (proc/recv me))
-    (cond
-      (= tag :proc-quit)
-      (do (set running false)
-        (when (and reply (= :core/channel (type reply)))
-          (ev/give reply :proc-stopped)))
-      (= tag :down)
-      (do (def reason reply)
-        (def linked (and (tuple? payload)
-                         (= 2 (length payload))
-                         (= :link (payload 0))))
-        (def mtag (if linked (payload 1) payload))
-        (when (and linked (not (proc/trap? me))
-                   (not= reason :normal)
-                   (not (nil? reason)))
-          (error reason))
-        (handler :down [mtag reason]))
-      (let [[ok r] (protect (handler tag payload))]
-        # P1.4b: armed kills re-raise (the loop's own protect must not
-        # convert them into replies for handler-wedged fibers).
-        (when (and (not ok) (proc/killed? me))
-          (error r))
-        (when (and reply (= :core/channel (type reply)))
-          (ev/give reply (if ok r (table :proc-error r)))))))
-  nil)
-
 (defn spawn-loop
   "Spawn a loop process dispatching [tag payload] messages to
   `handler` (see loop). Returns the proc."
   [handler &opt capacity]
   (default capacity 16)
-  (proc/spawn (fn [] (dispatch (proc/self) handler)) capacity))
+  (proc/spawn (fn [] (lane/dispatch (proc/self) handler)) capacity))
 
 (defn call
   "Synchronous request/reply with a loop process (or its pid tuple).
@@ -199,123 +210,3 @@
   [name]
   (put *proc-names* name nil))
 
-###
-### M:N lanes (P2.1): persistent thread VMs running a control loop.
-### Placement happens at spawn time (no live migration — 4.3
-### boundary). Pids grow into their node slot: [:pid 0 serial mbox]
-### local, [:pid lane serial ctl] remote. Sends to remote pids
-### forward [:proc-fwd serial msg] over the lane control channel
-### (C side); thread-chans inside forward by reference, so call
-### replies route back. Fire-and-forget to a dead remote is a silent
-### no-op (Erlang parity). monitor/kill/link stay same-lane objects.
-###
-
-(var *lane-next* 0)
-
-(defn- lane-loop
-  "Control loop running ON the lane thread: spawn locally, forward
-  into local mailboxes (dropping for unknown/dead serials), stop on
-  :proc-stop (then the thread is joinable)."
-  [ctl procs]
-  (var running true)
-  (while running
-    (def m (ev/take ctl))
-    (def cmd (m 0))
-    (cond
-      (= cmd :proc-spawn)
-      (do (def thunk (m 1))
-        (def cap (m 2))
-        (def reply (m 3))
-        (def p (proc/spawn thunk cap))
-        (put procs (proc/serial p) p)
-        (ev/give reply [:proc-ok (proc/serial p)]))
-      (= cmd :proc-fwd)
-      (do (def p (get procs (m 1)))
-        (when p
-          (try (proc/send p (m 2)) ([_] nil))))
-      (= cmd :proc-stop)
-      # Teardown: kill everything hosted (parked fibers hold the
-      # worker's janet_loop open — the thread can only exit once the
-      # loop drains), then return so the thread becomes joinable.
-      (do (eachk serial procs
-            (try (proc/kill (get procs serial) :lane-stopped) ([_] nil)))
-        (set running false)))
-  nil))
-
-(defn lane-spawn
-  "Spawn a lane (persistent worker thread + loop). Returns {:id :ctl
-  :thread}. Stop with lane-stop (required — unstopped lanes leak
-  their thread, like pools)."
-  []
-  (def ctl (ev/thread-chan 64))
-  (++ *lane-next*)
-  (def id *lane-next*)
-  (def h (thread/new (fn [c] (lane-loop c @{})) ctl))
-  {:id id :ctl ctl :thread h})
-
-(defn spawn-on
-  "Spawn `thunk` (0-arg function) as a raw process on `lane`.
-  Returns the remote pid [:pid lane serial ctl]."
-  [lane thunk &opt cap]
-  (default cap 16)
-  (def reply (ev/thread-chan 1))
-  (ev/give (lane :ctl) [:proc-spawn thunk cap reply])
-  (def res (ev/take reply))
-  [:pid (lane :id) (res 1) (lane :ctl)])
-
-(defn spawn-loop-on
-  "Spawn-loop on `lane`: like spawn-loop, but the loop runs there.
-  Call it with procx/call (replies route back through the forward)."
-  [lane handler &opt cap]
-  (default cap 16)
-  (spawn-on lane (fn [] (dispatch (proc/self) handler)) cap))
-
-(defn lane-stop
-  "Stop `lane`: poison-pill the control loop, then join the thread.
-  Lane-hosted processes die with their VM. Returns `lane`."
-  [lane]
-  (ev/give (lane :ctl) [:proc-stop])
-  (thread/join (lane :thread))
-  lane)
-
-###
-### Placement pools (P2.2): round-robin spawn across N lanes (M
-### processes over N threads — the M:N multiplexer). Least-loaded
-### would need lane queue-depth feedback (a :proc-stat round-trip per
-### spawn); round-robin is the honest baseline and matches how the C
-### pool's shared queue behaves in practice. Remote call rides the
-### forward (timeout-bounded); monitors stay same-lane.
-###
-
-(defn pool-spawn
-  "Spawn a placement pool of `n` lanes. Returns {:lanes :next}."
-  [n]
-  (def lanes @[])
-  (repeat n (array/push lanes (lane-spawn)))
-  {:lanes lanes :next @[0]})
-
-(defn pool-pick
-  "Next lane round-robin (internal; exposed for pins)."
-  [pool]
-  (def lanes (pool :lanes))
-  (def i (% ((pool :next) 0) (length lanes)))
-  (put (pool :next) 0 (+ ((pool :next) 0) 1))
-  (get lanes i))
-
-(defn pool-spawn-on
-  "Spawn `thunk` on the next lane round-robin. Returns the remote pid."
-  [pool thunk &opt cap]
-  (default cap 16)
-  (spawn-on (pool-pick pool) thunk cap))
-
-(defn pool-spawn-loop-on
-  "Spawn-loop on the next lane round-robin."
-  [pool handler &opt cap]
-  (default cap 16)
-  (spawn-loop-on (pool-pick pool) handler cap))
-
-(defn pool-stop
-  "Stop every lane in `pool` (joins all threads). Returns `pool`."
-  [pool]
-  (each lane (pool :lanes) (lane-stop lane))
-  pool)
