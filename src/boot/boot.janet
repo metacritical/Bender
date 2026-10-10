@@ -2278,6 +2278,143 @@
 
 ###
 ###
+### Multimethods
+###
+###
+
+(var *multimethods*
+  "Registry of multimethod functions to method tables (internal;
+  public so macro expansions can reference it — prefer `methods`,
+  `get-method`, `defmethod` over touching it directly)."
+  @{})
+
+(defn- multi-invoke [t args]
+  (def dv (apply (get t :dispatch) args))
+  (def method (if (nil? dv)
+                (in (get t :methods) (get t :default))
+                (or (in (get t :methods) dv)
+                    (in (get t :methods) (get t :default)))))
+  (if (nil? method)
+    (error (string "no method for dispatch value " (describe dv))))
+  (apply method args))
+
+(defn methods
+  ``Return the live method table of multimethod `m` (dispatch value
+  to function). Add and remove entries with `defmethod` and
+  `remove-method`.``
+  [m]
+  (def t (in *multimethods* m))
+  (if (nil? t) (error (string "not a multimethod: " (describe m))))
+  (get t :methods))
+
+(defn get-method
+  ``The method `m` would invoke for dispatch value `v` (with
+  `:default` fallback), or nil.``
+  [m v]
+  (def t (in *multimethods* m))
+  (if (nil? t) (error (string "not a multimethod: " (describe m))))
+  (if (nil? v)
+    (in (get t :methods) (get t :default))
+    (or (in (get t :methods) v)
+        (in (get t :methods) (get t :default)))))
+
+(defn remove-method
+  ``Remove the method for dispatch value `v` from multimethod `m`.
+  Returns `m`.``
+  [m v]
+  (put (methods m) v nil)
+  m)
+
+(defmacro defmulti
+  ``Define a multimethod `name` dispatching by `dispatch-fn` (called
+  with the same args; its return selects the method). Single-arity
+  methods only in v1; no hierarchies (exact dispatch values plus a
+  `:default` fallback, default `:default`). Dispatch values must be
+  hashable. Same-VM typical (the registry is core-local). Emits a
+  single top-level `def` (a `do`-wrapped `def` would scope it
+  invisibly — `do` opens a scope).``
+  [name dispatch-fn &opt opts]
+  (let [inv multi-invoke]
+    ~(def ,name
+       ((fn [t] (def f (fn [& args] (,inv t args))) (put *multimethods* f t) f)
+        {:dispatch ,dispatch-fn
+         :methods @{}
+         :default ,(if opts (get opts :default) :default)}))))
+
+(defmacro defmethod
+  ``Install a method for `name` (defined by `defmulti`) at dispatch
+  value `dispatch-val`. A single call form (no top-level `def`, same
+  scoping reason as `defmulti`). Errors loudly on an unknown
+  multimethod.``
+  [name dispatch-val & fntail]
+  ~((fn [t v]
+      (if (nil? t) (error (string "not a multimethod: " ',name)))
+      (put (get t :methods) v
+           (fn ,(first fntail) ,;(tuple/slice fntail 1))))
+    (in *multimethods* ,name) ,dispatch-val))
+
+###
+###
+### Atoms (same-VM synchronous state)
+###
+### Single-threaded boxes: `atom`, `deref`, `swap!`, `reset!`,
+### `compare-and-set!`, with optional `:validator`. No locking is
+### involved — sharing one across OS threads is a user error; move
+### state across threads through channels (or results through
+### futures/promises, which settle exactly once). Validators run on
+### every proposed value and reject by returning nil/false (error).
+
+(defn atom
+  ``Create an atom holding `x`. `opts` (`:validator f`) installs a
+  predicate every proposed value must satisfy.``
+  [x &opt opts]
+  @{:kind :atom
+    :state x
+    :validator (if opts (get opts :validator))})
+
+(defn atom?
+  "True for atoms."
+  [x]
+  (and (table? x) (= :atom (get x :kind))))
+
+(defn deref
+  "Read an atom's current value."
+  [a]
+  (if (atom? a)
+    (get a :state)
+    (error (string "deref expects an atom, got " (describe a)))))
+
+(defn- atom-check [a v]
+  (def valid (get a :validator))
+  (when (and valid (not (valid v)))
+    (error "atom validator rejected the proposed value"))
+  v)
+
+(defn reset!
+  "Set atom `a` to `v` (validated), returning `v`."
+  [a v]
+  (put a :state (atom-check a v))
+  v)
+
+(defn swap!
+  "Set atom `a` to `(f state args...)` (validated), returning the new
+  value. Single-threaded: no retry loop (nothing can interleave)."
+  [a f & args]
+  (def nv (apply f (get a :state) args))
+  (put a :state (atom-check a nv))
+  nv)
+
+(defn compare-and-set!
+  "Set atom `a` to `new` iff its current value `=`s `old`
+  (validated). Returns true on success, false otherwise."
+  [a old new]
+  (if (= old (get a :state))
+    (do (put a :state (atom-check a new))
+      true)
+    false))
+
+###
+###
 ### Pattern Matching
 ###
 ###
