@@ -111,17 +111,20 @@
 (assert (>= (debug/fiber-nursery) 0) "nursery readable")
 
 # 6. Barrier recording: same-fiber stores never record (deterministic
-# negative control — same owner or shared on either side skips); a
-# cross-fiber store records its container.
+# negative control — same owner or shared on either side skips).
+# Integer keys are immediates (no edges by construction); values are
+# own-fiber arrays. Assert non-growth (not equality): a major mid-test
+# legitimately restarts the epoch and shrinks the count.
 (let [before ((debug/slab-stats) :remembered)
       f (fiber/new (fn []
                      (def box @[])
                      (def tab @{})
                      (repeat 200 (array/push box (array/new 4)))
-                     (each v box (put tab (gensym) v))
+                     (var i 0)
+                     (each v box (put tab i v) (++ i))
                      tab))]
   (resume f)
-  (assert (= before ((debug/slab-stats) :remembered)) "same-fiber silent"))
+  (assert (<= ((debug/slab-stats) :remembered) before) "same-fiber silent"))
 # Positive: fresh per-iteration tables in main + values spread across a
 # big foreign box; loop until one cross-owned edge records (fresh
 # pages unavoidable at volume; bound fails loudly if broken).
@@ -145,5 +148,17 @@
       (set grew true)))
   (assert grew "cross-fiber store recorded")
   (assert (> (length lot) 0) "setup live"))
+
+# P3.1 cross-fiber epoch: majors restart the remembered set (stale
+# entries would pin dead containers as roots forever). This file's
+# earlier tests leave remembered > 0 (test 6 just proved growth), so
+# a major here must zero it. (A fresh setup late in the file would
+# starve — all pages read mixed/shared by then, which is correct
+# barrier behavior, not missing edges.)
+(let []
+  (assert (> ((debug/slab-stats) :remembered) 0) "epoch has entries")
+  (gccollect)
+  (assert (= 0 ((debug/slab-stats) :remembered)) "major restarts epoch")
+  (assert (not ((debug/slab-stats) :remember-stuck)) "not stuck"))
 
 (end-suite)

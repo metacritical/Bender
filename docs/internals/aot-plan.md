@@ -793,9 +793,14 @@ marshallable state (module header).
 - [x] P2.2 placement pool (round-robin/least-loaded) + remote call.
 - [x] P2.3 cross-lane :down forwarding (or documented boundary).
 
-**P3 — density + heap isolation.** Lazy queues/channels, small
-stacks (→ ~2KB/proc); per-process majors (→ O(n) spawn). The
-million road; needs copy-on-send + skippable foreign stacks.
+**P3 — density + heap isolation.** P3.1 SHIPPED 2026-10-10:
+cross-fiber epoch (majors restart the remembered set; the observer
+truncates its own self-edges) — the lifecycle per-proc collection
+needs. Density measured first: ~17KB/proc floor = struct + Janet
+stack + one touched 16KB page (parked C frames; macOS pages) —
+park/unpark is UNSOUND (the VM's own C frames park on that stack),
+so Erlang density needs 4K pages and/or shared-stack fibers (future).
+Next: per-proc majors (copy-on-send + skippable foreign stacks).
 
 ### Phase 3 slice — value-returning thread/new + thread/join (DONE, this checkout)
 

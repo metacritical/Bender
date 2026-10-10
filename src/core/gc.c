@@ -1003,6 +1003,14 @@ static void janet_slab_major_reset(void) {
     }
     janet_slab_merge_free();
     janet_vm.gc_young_bytes = 0;
+    /* P3.1 cross-fiber epoch: a major saw every edge, so the set
+     * restarts empty (stale entries would pin dead containers as
+     * roots forever; stuck clears too — capacity is per-epoch now).
+     * Behavior-neutral today (marking is complete without xfb; the
+     * census carries fiber minors). Load-bearing later: a per-proc
+     * collection younger than the last major sees complete edges. */
+    ss->xfb_count = 0;
+    ss->xfb_stuck = 0;
 }
 
 /* Step 1 introspection: per-owner slab page counts. Returns
@@ -1011,6 +1019,12 @@ static void janet_slab_major_reset(void) {
  * stack (rooted across the table builds below). */
 JanetTable *janet_slab_owner_stats(void) {
     JanetSlabState *ss = janet_slab_state();
+    /* P3.1: the observer must not perturb — table building below
+     * stores interned keys (foreign-owned pages) and would record
+     * cross-fiber edges for the introspection itself. The set is
+     * append-only and order-free, so truncate to the entry count on
+     * the way out (stuck flag untouched: cap pressure is real). */
+    size_t xfb_entry = ss->xfb_count;
     JanetTable *out = janet_table(0);
     Janet out_j = janet_wrap_table(out);
     janet_gcroot(out_j);
@@ -1039,9 +1053,11 @@ JanetTable *janet_slab_owner_stats(void) {
     janet_table_put(out, janet_ckeywordv("owned"), owned_j);
     /* Step 1.2: cross-fiber remembered edges pending (pruned in 1.3). */
     janet_table_put(out, janet_ckeywordv("remembered"),
-                    janet_wrap_integer((int64_t) ss->xfb_count));
+                    janet_wrap_integer((int64_t) xfb_entry));
     janet_table_put(out, janet_ckeywordv("remember-stuck"),
                     janet_wrap_boolean(ss->xfb_stuck));
+    /* P3.1 observer hygiene (see entry): drop this call's self-edges. */
+    if (ss->xfb_count > xfb_entry) ss->xfb_count = xfb_entry;
     janet_gcunroot(owned_j);
     janet_gcunroot(out_j);
     return out;
