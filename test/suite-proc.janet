@@ -138,4 +138,45 @@
   (assert (deep= @[[:down [:link :lab] :boom]] results) "link observed")
   (proc/kill b :done))
 
+(import ../examples/tasklet :as tasklet)
+
+# 13. P1.3 pid face: portable [:pid node serial mbox] tuple, same
+# shape as tasklet pids (tasklet.janet untouched).
+(let [p (proc/spawn (fn [] (proc/recv)))]
+  (def pid (proc/pid p))
+  (assert (tasklet/pid? pid) "tuple passes tasklet/pid?")
+  (assert (= (pid 2) (proc/serial p)) "serial matches slot 2")
+  (assert (= 0 (pid 1)) "node 0 (same VM)")
+  (proc/kill p :done))
+
+# 14. proc/send resolves tuples (own or foreign); tasklets deliver
+# to proc tuples through the carried channel (conventions documented:
+# proc bodies take single values, tasklet loops take triples).
+(let [got @[]
+      p (proc/spawn (fn [] (repeat 2 (array/push got (proc/recv)))))]
+  (proc/send (proc/pid p) :via-tuple)
+  (tasklet/send (proc/pid p) :note "hello")
+  (ev/sleep 0.3)
+  (assert (deep= @[:via-tuple [:note "hello" nil]] got) "both land")
+  (proc/kill p :done))
+
+# 15. Procs reach tasklets via registry tuples with triple payloads.
+(let [seen @[]
+      t (tasklet/spawn (fn [tag payload] (array/push seen [tag payload])))]
+  (tasklet/register t :tmp-svc)
+  (proc/send (tasklet/whereis :tmp-svc) [:ping 1 nil])
+  (ev/sleep 0.3)
+  (assert (= 1 (length seen)) "tasklet handler ran")
+  (assert (= :ping ((get seen 0) 0)) "tag dispatched")
+  (tasklet/unregister :tmp-svc)
+  (tasklet/quit t))
+
+# 16. monitor/kill need objects (C lists/fibers live there): tuples
+# give a clear error, not a crash.
+(let [p (proc/spawn (fn [] (ev/sleep 30)))]
+  (assert-error "kill rejects tuples" (proc/kill (proc/pid p) :x))
+  (assert-error "monitor rejects tuples"
+    (proc/monitor (proc/pid p) p :x))
+  (proc/kill p :done))
+
 (end-suite)

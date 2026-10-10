@@ -25,6 +25,8 @@
 
 /* Forward: abstract type defined below (used by the getter). */
 extern const JanetAbstractType janet_proc_type;
+/* Forward: pid-tuple resolver (defined with proc/pid, used by send). */
+static JanetChannel *janet_proc_resolve_mbox(Janet x);
 
 typedef struct JanetProcess {
     JanetChannel *mbox; /* owned isolated mailbox (copy in/out) */
@@ -166,14 +168,20 @@ JANET_CORE_FN(cfun_proc_self,
 
 JANET_CORE_FN(cfun_proc_send,
               "(proc/send p msg)",
-              "Deliver `msg` to process `p`'s mailbox (marshal-copied, "
-              "like all isolated traffic). Blocks at capacity. Returns `p`.") {
+              "Deliver `msg` to `p`'s mailbox (marshal-copied, like all "
+              "isolated traffic). `p` is a proc or a [:pid node serial "
+              "chan] pid tuple (proc or tasklet shape — sends resolve "
+              "through the carried channel, so cross-kind delivery works "
+              "if the sender honors the receiver's convention: proc "
+              "bodies take single values, tasklet loops take "
+              "[tag payload reply] triples). Blocks at capacity. "
+              "Returns `p`.") {
     janet_fixarity(argc, 2);
-    JanetProcess *proc = janet_getproc(argv, 0);
     if (janet_vm.coerce_error) {
         janet_panic("cannot proc/send inside janet_call");
     }
-    if (janet_channel_push(proc->mbox, argv[1], 0)) {
+    JanetChannel *mbox = janet_proc_resolve_mbox(argv[0]);
+    if (janet_channel_push(mbox, argv[1], 0)) {
         janet_await();
     }
     return argv[0];
@@ -196,10 +204,23 @@ JANET_CORE_FN(cfun_proc_recv,
         janet_panic("proc/recv outside a process");
     }
     if (argc >= 1) {
-        JanetProcess *want = janet_getproc(argv, 0);
-        JanetProcess *mine = (JanetProcess *) janet_unwrap_abstract(self);
-        if (want != mine) {
-            janet_panic("proc/recv reads only the caller's own mailbox");
+        /* Own pid tuple? Serial must match (node 0, same VM). */
+        if (janet_checktype(argv[0], JANET_TUPLE)) {
+            const Janet *tup = janet_unwrap_tuple(argv[0]);
+            JanetProcess *mine = (JanetProcess *) janet_unwrap_abstract(self);
+            if (!(4 == janet_tuple_length(tup) &&
+                    janet_checktype(tup[0], JANET_KEYWORD) &&
+                janet_unwrap_keyword(tup[0]) == janet_unwrap_keyword(janet_ckeywordv("pid")) &&
+                    janet_checktype(tup[2], JANET_NUMBER) &&
+                    (uint32_t) janet_unwrap_number(tup[2]) == mine->serial)) {
+                janet_panic("proc/recv reads only the caller's own mailbox");
+            }
+        } else {
+            JanetProcess *want = janet_getproc(argv, 0);
+            JanetProcess *mine = (JanetProcess *) janet_unwrap_abstract(self);
+            if (want != mine) {
+                janet_panic("proc/recv reads only the caller's own mailbox");
+            }
         }
     }
     JanetProcess *proc = (JanetProcess *) janet_unwrap_abstract(self);
@@ -243,6 +264,56 @@ JANET_CORE_FN(cfun_proc_pid,
     janet_fixarity(argc, 1);
     return janet_wrap_boolean(janet_checktype(argv[0], JANET_ABSTRACT) &&
         janet_abstract_type(janet_unwrap_abstract(argv[0])) == &janet_proc_type);
+}
+
+/* P1.3 pid interop: a proc's portable face is a [:pid node serial
+ * mbox] tuple (same shape as tasklet pids). Sends resolve through
+ * the carried channel (no registry needed); monitor/kill need the
+ * object (C lists/fibers live there). Tasklet.janet stays untouched:
+ * tasklets already resolve unknown pids via the carried channel. */
+static JanetChannel *janet_proc_resolve_mbox(Janet x) {
+    if (janet_checktype(x, JANET_ABSTRACT) &&
+            janet_abstract_type(janet_unwrap_abstract(x)) == &janet_proc_type) {
+        return ((JanetProcess *) janet_unwrap_abstract(x))->mbox;
+    }
+    if (janet_checktype(x, JANET_TUPLE)) {
+        const Janet *tup = janet_unwrap_tuple(x);
+        /* Keywords intern to unique pointers: pointer compare is exact. */
+        if (4 == janet_tuple_length(tup) &&
+                janet_checktype(tup[0], JANET_KEYWORD) &&
+                janet_unwrap_keyword(tup[0]) == janet_unwrap_keyword(janet_ckeywordv("pid")) &&
+                janet_checktype(tup[3], JANET_ABSTRACT)) {
+            void *abst = janet_unwrap_abstract(tup[3]);
+            /* Carried mailbox: isolated (proc pid) or any channel
+             * (tasklet pid — caller owns the triple convention). */
+            return (JanetChannel *) abst;
+        }
+    }
+    janet_panic("expected a proc or [:pid node serial chan] pid");
+}
+
+JANET_CORE_FN(cfun_proc_pid_of,
+              "(proc/pid p)",
+              "P1.3: the process's portable pid tuple [:pid node serial\n"
+              "mbox] (same shape as tasklet pids — passes tasklet/pid?).\n"
+              "Sends to it deliver via the carried mailbox; monitor/kill\n"
+              "need the object.") {
+    janet_fixarity(argc, 1);
+    JanetProcess *proc = janet_getproc(argv, 0);
+    Janet tup[4];
+    tup[0] = janet_ckeywordv("pid");
+    tup[1] = janet_wrap_integer(0);
+    tup[2] = janet_wrap_integer((int64_t) proc->serial);
+    tup[3] = janet_wrap_abstract(proc->mbox);
+    return janet_wrap_tuple(janet_tuple_n(tup, 4));
+}
+
+JANET_CORE_FN(cfun_proc_serial,
+              "(proc/serial p)",
+              "P1.3: the process's numeric serial (pid tuple slot 2).") {
+    janet_fixarity(argc, 1);
+    JanetProcess *proc = janet_getproc(argv, 0);
+    return janet_wrap_integer((int64_t) proc->serial);
 }
 
 JANET_CORE_FN(cfun_proc_stash,
@@ -324,6 +395,8 @@ static const JanetRegExt proc_cfuns_ext[] = {
     JANET_CORE_REG("proc/kill", cfun_proc_kill),
     JANET_CORE_REG("proc/alive?", cfun_proc_alive),
     JANET_CORE_REG("proc/pid?", cfun_proc_pid),
+    JANET_CORE_REG("proc/pid", cfun_proc_pid_of),
+    JANET_CORE_REG("proc/serial", cfun_proc_serial),
     JANET_CORE_REG("proc/stash", cfun_proc_stash),
     JANET_CORE_REG("proc/sup-of", cfun_proc_sup_of),
     JANET_CORE_REG("proc/monitor", cfun_proc_monitor),

@@ -764,7 +764,7 @@ same-VM only until P2 proxies). Each slice lands gated or reverts.
   monitor/link lists + completion observation (done/reason for late
   monitors). Wake values bypass C (await discipline), so matching
   stays Janet-side over proc/recv + stash, like tasklets.
-- [ ] P1.3 pid interop (tuple pids resolve to procs; proc pids plug
+- [x] P1.3 pid interop (tuple pids resolve to procs; proc pids plug
   into tasklet send/call/monitor).
 - [ ] P1.4 named loop processes + trap enforcement + registry
   (dispatch loop over proc primitives; :down handled by the loop).
