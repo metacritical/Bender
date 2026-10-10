@@ -151,6 +151,17 @@
   (default capacity 16)
   (proc/spawn (fn [] (lane/dispatch (proc/self) handler)) capacity))
 
+(defn spawn-loop-isolated
+  "Strict loop: like spawn-loop, but the entry (handler included) is
+  marshal-copied and the fiber opts into the strict heap (P3.2). The
+  handler must close only over marshallable state (same rule as
+  spawn-isolated); callers reach it by pid/registry, replies route
+  through thread channels."
+  [handler &opt capacity]
+  (default capacity 16)
+  (proc/spawn-isolated
+    (fn [] (lane/dispatch (proc/self) handler)) capacity))
+
 (defn call
   "Synchronous request/reply with a loop process (or its pid tuple).
   Replies travel a thread channel (capability by reference; values

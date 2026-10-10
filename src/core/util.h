@@ -158,6 +158,11 @@ const JanetKV *janet_dict_find_keyword(
 
 Janet janet_table_get_keyword(JanetTable *t, const char *keyword);
 
+/* P3.4 bookkeeping put (marshal memo, threaded registry): like
+ * janet_table_put but generational-dirty only (no xfb record, no
+ * export panic). */
+void janet_table_put_raw(JanetTable *t, Janet key, Janet value);
+
 /* Registry functions */
 void janet_registry_put(
     JanetCFunction key,

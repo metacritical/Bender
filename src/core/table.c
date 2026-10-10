@@ -233,6 +233,36 @@ void janet_table_put(JanetTable *t, Janet key, Janet value) {
     }
 }
 
+/* P3.4 bookkeeping put (marshal memo, threaded registry): identical
+ * to janet_table_put except generational-dirty only (janet_gc_touch)
+ * — no xfb record, no export panic. The containers are identity maps
+ * (never the value graph); dirty keeps minors sound. Declared in
+ * util.h for cross-TU use. */
+void janet_table_put_raw(JanetTable *t, Janet key, Janet value) {
+    if (janet_checktype(key, JANET_NIL)) return;
+    if (janet_checktype(key, JANET_NUMBER) && isnan(janet_unwrap_number(key))) return;
+    if (janet_checktype(value, JANET_NIL)) {
+        janet_table_remove(t, key);
+    } else {
+        JanetKV *bucket = janet_table_find(t, key);
+        if (NULL != bucket && !janet_checktype(bucket->key, JANET_NIL)) {
+            bucket->value = value;
+            janet_gc_touch(t);
+        } else {
+            if (NULL == bucket || 2 * (t->count + t->deleted + 1) > t->capacity) {
+                janet_table_rehash(t, janet_tablen(2 * t->count + 2));
+            }
+            bucket = janet_table_find(t, key);
+            if (janet_checktype(bucket->value, JANET_BOOLEAN))
+                --t->deleted;
+            bucket->key = key;
+            bucket->value = value;
+            ++t->count;
+            janet_gc_touch(t);
+        }
+    }
+}
+
 /* Used internally so don't check arguments
  * Put into a table, but if the key already exists do nothing. */
 static void janet_table_put_no_overwrite(JanetTable *t, Janet key, Janet value) {

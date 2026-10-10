@@ -148,6 +148,8 @@ static Janet cfun_proc_spawn_impl(JanetFunction *func, int32_t cap, int isolated
     fiber->env->proto = janet_vm.fiber->env;
     janet_table_put(fiber->env, janet_ckeywordv("proc-self"), proc_j);
     proc->fiber = fiber;
+    /* P3.5: back-pointer for auto-trigger routing. */
+    fiber->proc = proc;
     fiber->supervisor_channel = proc->sup;
     janet_schedule(fiber, janet_wrap_nil());
     janet_gcunroot(proc_j);

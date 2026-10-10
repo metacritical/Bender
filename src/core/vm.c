@@ -102,7 +102,10 @@
 /* Next instruction variations */
 #define maybe_collect() do {\
     JanetFiber *mcf_ = janet_vm.fiber; \
-    if (JANET_UNLIKELY(NULL != mcf_ && mcf_->gc_nursery_bytes >= janet_vm.gc_minor_threshold)) janet_collect_fiber_minor(mcf_); \
+    if (JANET_UNLIKELY(NULL != mcf_ && mcf_->gc_nursery_bytes >= janet_vm.gc_minor_threshold)) { \
+        /* P3.5: strict proc fibers route to per-proc majors (back-pointer pinned by mutual marking); else fiber minors. */ \
+        if (mcf_->heap_strict && NULL != mcf_->proc) janet_collect_process(mcf_->proc); \
+        else janet_collect_fiber_minor(mcf_); } \
     else if (JANET_UNLIKELY(janet_vm.gc_young_bytes >= janet_vm.gc_minor_threshold)) janet_collect_minor(); \
     else if (JANET_UNLIKELY(janet_vm.next_collection >= janet_vm.gc_interval)) janet_collect(); } while (0)
 #define vm_checkgc_next() maybe_collect(); vm_next()

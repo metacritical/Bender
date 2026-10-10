@@ -483,4 +483,38 @@
   (assert-error "proc capture refuses" (proc/spawn-isolated (fn [] q)))
   (proc/kill q :done))
 
+# 38. P3.5 auto-trigger: a strict fiber's nursery pressure routes to
+# per-proc majors by itself (peak/drop shape mirrors the 1.3 pin).
+# (This hung pre-P3.4-raw-puts: marshal memo puts tripped the export
+# rule mid-give.)
+(let [rch (ev/thread-chan 4)
+      p (proc/spawn-isolated
+          (fn []
+            (var peak 0)
+            (var drops 0)
+            (repeat 40000
+              (array/new 4)
+              (def n (debug/fiber-nursery))
+              (when (> n peak) (set peak n))
+              (when (and (> peak 200000) (< n peak)) (++ drops)))
+            (ev/give rch [peak drops])))]
+  (ev/sleep 2)
+  (def res (ev/take rch))
+  (assert (> (res 0) 200000) "pressure passed threshold")
+  (assert (> (res 1) 0) "auto per-proc majors reset pressure")
+  (proc/kill p :done))
+
+# 39. Strict loops: isolated entry + dispatch + call/quit all work;
+# threaded reply channels unpack clean on the strict side.
+(let [db (procx/spawn-loop-isolated
+           (do (var store @{})
+               (fn [tag payload]
+                 (case tag
+                   :put (put store (payload 0) (payload 1))
+                   :get (get store payload)))))]
+  (assert (proc/isolated? db) "loop is strict")
+  (procx/call db :put [:u "amy"])
+  (assert (= "amy" (procx/call db :get :u)) "strict call")
+  (procx/quit db))
+
 (end-suite)

@@ -815,6 +815,13 @@ marshals fn+args).
   (foreign-stack candidate scan, dev-only) + plain-channel push
   rule (mode-2 supervisor exempt). Strict bodies rendezvous via
   registry (closures capture lexically — peers never captured).
+- [x] P3.5 auto-trigger (maybe_collect routes strict pressure via
+  fiber back-pointer, pinned by mutual marking) + raw marshal puts
+  (memo/registry bookkeeping skips export panic, keeps dirty).
+  Scale honesty: strict churn ~2x slower than plain at N=1000
+  (per-proc sweep still walks all heaps — owner-segregated lists
+  deferred pending a bootstrap UAF root-cause). No scale win
+  claimed yet.
 
 ### Phase 3 slice — value-returning thread/new + thread/join (DONE, this checkout)
 

@@ -418,12 +418,12 @@ void janet_marshal_janet(JanetMarshalContext *ctx, Janet x) {
         Janet _check = janet_table_get(&st->seen, x); \
         if (!janet_checktype(_check, JANET_NIL)) janet_eprintf("double MARK_SEEN on %v\n", x); \
         janet_eprintf("made reference %d (%t) to %v\n", st->nextid, x, x); \
-        janet_table_put(&st->seen, x, janet_wrap_integer(st->nextid++)); \
+        janet_table_put_raw(&st->seen, x, janet_wrap_integer(st->nextid++)); \
     } } while (0)
 #else
 #define MARK_SEEN() \
     do { if (st->maybe_cycles) { \
-        janet_table_put(&st->seen, x, janet_wrap_integer(st->nextid++)); \
+        janet_table_put_raw(&st->seen, x, janet_wrap_integer(st->nextid++)); \
     } } while (0)
 #endif
 
@@ -1111,6 +1111,16 @@ static const uint8_t *unmarshal_one_fiber(
             fiber->nursery_cur[nci] = NULL;
         fiber->gc_nursery_bytes = 0;
     }
+    {
+        /* P3.5b: heap lists start empty (see fiber_alloc). Unmarshalled
+         * fibers must not inherit garbage heads (gcalloc doesn't zero
+         * fresh bump slots) — births would file into wild memory. */
+        int hli;
+        for (hli = 0; hli < 3; hli++)
+            fiber->heap_lists[hli] = NULL;
+    }
+    fiber->proc = NULL;
+    fiber->heap_strict = 0;
     fiber->flags = 0;
     fiber->frame = 0;
     fiber->stackstart = 0;
@@ -1689,7 +1699,7 @@ static const uint8_t *unmarshal_one(
                 Janet check = janet_table_get(&janet_vm.threaded_abstracts, *out);
                 if (janet_checktype(check, JANET_NIL)) {
                     /* Transfers reference from threaded channel buffer to current heap */
-                    janet_table_put(&janet_vm.threaded_abstracts, *out, janet_wrap_false());
+                    janet_table_put_raw(&janet_vm.threaded_abstracts, *out, janet_wrap_false());
                 } else {
                     /* Heap reference already accounted for, remove threaded channel reference. */
                     janet_abstract_decref(u.ptr);

@@ -93,6 +93,10 @@ void janet_collect_fiber_minor(JanetFiber *f);
 struct JanetProcess;
 void janet_collect_process(struct JanetProcess *proc);
 
+/* Weak-ref dropping at majors (sweep helper, defined with the slab
+ * code so it can walk per-fiber weak lists). */
+void janet_sweep_weak_drop(void);
+
 /* Generational write barrier (Phase 2b-iii policy): record an old
  * container that newly references a heap value, so minor collections
  * (which skip clean old tables/arrays) still find the edge. Immediates
@@ -106,6 +110,12 @@ void janet_gc_barrier(void *obj, Janet value);
  * All whole-object frees must go through here; subsidiary buffers still
  * use janet_free directly. */
 void janet_gc_release(JanetGCObject *mem);
+
+/* P3.4 bookkeeping puts (marshal memo, threaded registry): mark an old
+ * container dirty without barrier duties (no xfb record, no export
+ * panic). Dirty is always safe (over-traversal); the skipped duties
+ * would false-panic on transient identity maps holding strict refs. */
+void janet_gc_touch(void *obj);
 
 /* Step 1 introspection (process heaps): per-owner slab page counts as
  * @{ :pages total :unowned n :owned @{id count} }. */

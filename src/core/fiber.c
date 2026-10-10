@@ -470,6 +470,14 @@ static JanetFiber *fiber_alloc(int32_t capacity) {
     /* P3.3: strict heaps are opt-in per fiber (spawn-isolated sets it
      * after alloc; unmarshal leaves it clear). */
     fiber->heap_strict = 0;
+    /* P3.5: no owning proc (proc spawn sets it). */
+    fiber->proc = NULL;
+    /* P3.5b: heap lists start empty (births file here). */
+    {
+        int hli;
+        for (hli = 0; hli < 3; hli++)
+            fiber->heap_lists[hli] = NULL;
+    }
     janet_census_add(fiber);
     {
         /* Step 1.2: nursery starts empty (pages claimed on first bump). */

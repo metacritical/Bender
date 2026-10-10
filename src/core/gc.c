@@ -61,6 +61,8 @@ static uint32_t janet_slab_obj_owner(void *ptr);
 static void janet_slab_major_reset(void);
 /* Step 1.3 census removal at sweep-free; defined with the slab code. */
 static void janet_census_remove(JanetFiber *f);
+static void janet_sweep_heaps(void);
+static void janet_sweep_fiber_owned(JanetFiber *f);
 
 /* Hint to the GC that we may need to collect */
 void janet_gcpressure(size_t s) {
@@ -326,6 +328,12 @@ recur:
         return;
     janet_gc_mark(fiber);
 
+    /* P3.5: proc fibers pin their proc (and procs pin their fibers
+     * in procat_mark), so neither pointer dangles while the other
+     * lives; the cycle collects together. */
+    if (NULL != fiber->proc) {
+        janet_mark(janet_wrap_abstract(fiber->proc));
+    }
     janet_mark(fiber->last_value);
     /* Values in flight across a context switch. The resume argument and
      * the last result live in the fiber struct (not in fiber->data), so
@@ -411,6 +419,29 @@ static void janet_deinit_block(JanetGCObject *mem) {
                 janet_ev_dec_refcount();
             }
 #endif
+            /* P3.5b: migrate the dead fiber's heap lists into the
+             * globals (O(1) splices — live leftovers stay discoverable
+             * for global sweeps; per-fiber sweeps never see them).
+             * Pointer moves only: safe mid-sweep (missed heads float
+             * one cycle, never unsound). */
+            {
+                void **gheads[3];
+                int khi;
+                gheads[0] = &janet_vm.blocks;
+                gheads[1] = &janet_vm.string_blocks;
+                gheads[2] = &janet_vm.weak_blocks;
+                for (khi = 0; khi < 3; khi++) {
+                    JanetGCObject *fl = (JanetGCObject *) f->heap_lists[khi];
+                    if (NULL != fl) {
+                        JanetGCObject *tail = fl;
+                        while (NULL != tail->data.next)
+                            tail = tail->data.next;
+                        tail->data.next = (JanetGCObject *) *gheads[khi];
+                        *gheads[khi] = (void *) fl;
+                        f->heap_lists[khi] = NULL;
+                    }
+                }
+            }
             /* Step 1.3: leave the live-fiber census before release. */
             janet_census_remove(f);
             janet_free(f->data);
@@ -524,75 +555,8 @@ static void janet_sweep_list(JanetGCObject **head, int heap_kind, int is_minor,
     }
 }
 
-void janet_sweep_weak_drop(void) {
-    /* Weak-ref dropping runs at majors only. In minors the mark is
-     * partial (old heap unscanned), so liveness verdicts would be wrong;
-     * weak tables are instead traversed conservatively via the normal
-     * mark exemption for weak types, and clearing waits for a major. */
-    if (janet_vm.gc_minor_phase) return;
-    JanetGCObject *current = janet_vm.weak_blocks;
-    JanetGCObject *next;
-    while (NULL != current) {
-        next = current->data.next;
-        if (current->flags & (JANET_MEM_REACHABLE | JANET_MEM_DISABLED)) {
-            /* Check for dead references */
-            enum JanetMemoryType type = janet_gc_type(current);
-            if (type == JANET_MEMORY_ARRAY_WEAK) {
-                JanetArray *array = (JanetArray *) current;
-                for (uint32_t i = 0; i < (uint32_t) array->count; i++) {
-                    if (!janet_check_liveref(array->data[i])) {
-                        array->data[i] = janet_wrap_nil();
-                    }
-                }
-            } else {
-                JanetTable *table = (JanetTable *) current;
-                int check_values = (type == JANET_MEMORY_TABLE_WEAKV) || (type == JANET_MEMORY_TABLE_WEAKKV);
-                int check_keys = (type == JANET_MEMORY_TABLE_WEAKK) || (type == JANET_MEMORY_TABLE_WEAKKV);
-                JanetKV *end = table->data + table->capacity;
-                JanetKV *kvs = table->data;
-                while (kvs < end) {
-                    int drop = 0;
-                    if (check_keys && !janet_check_liveref(kvs->key)) drop = 1;
-                    if (check_values && !janet_check_liveref(kvs->value)) drop = 1;
-                    if (drop) {
-                        /* Inlined from janet_table_remove without search */
-                        table->count--;
-                        table->deleted++;
-                        kvs->key = janet_wrap_nil();
-                        kvs->value = janet_wrap_false();
-                    }
-                    kvs++;
-                }
-            }
-        }
-        current = next;
-    }
-}
+static void janet_sweep_weak_drop_list(JanetGCObject *current);
 
-/* Sweep all three heaps' blocks (minor-aware). In a minor collection
- * only young dead blocks are freed; old blocks wait for a major.
- * Weak-ref dropping is separate (majors only); the ev threaded section
- * below also runs at majors only. */
-static void janet_sweep_heaps(void) {
-    /* Sweep weak heap to free blocks (minor-aware via helper). */
-    janet_sweep_list((JanetGCObject **) &janet_vm.weak_blocks, 2, janet_vm.gc_minor_phase, 0);
-
-    /* Sweep both strong heaps with identical semantics (Phase 2b-ii):
-     * the main heap, then the immutable-string heap. */
-    janet_sweep_list((JanetGCObject **) &janet_vm.blocks, 0, janet_vm.gc_minor_phase, 0);
-    janet_sweep_list((JanetGCObject **) &janet_vm.string_blocks, 1, janet_vm.gc_minor_phase, 0);
-}
-
-/* Step 1.3: sweep all three heaps freeing only unmarked young blocks
- * owned by only_owner (0 behaves like the shared sweep above).
- * Foreign young unmarked blocks are spared (floating garbage until a
- * global collection); foreign marked blocks were already spared by
- * the mark. */
-static void janet_sweep_heaps_owned(uint32_t only_owner) {
-    janet_sweep_list((JanetGCObject **) &janet_vm.weak_blocks, 2, 1, only_owner);
-    janet_sweep_list((JanetGCObject **) &janet_vm.blocks, 0, 1, only_owner);
-    janet_sweep_list((JanetGCObject **) &janet_vm.string_blocks, 1, 1, only_owner);
-}
 
 void janet_sweep(void) {
     janet_sweep_weak_drop();
@@ -1040,6 +1004,89 @@ static void janet_slab_major_reset(void) {
     ss->xfb_count = 0;
     ss->xfb_stuck = 0;
 }
+void janet_sweep_weak_drop(void) {
+    /* Weak-ref dropping runs at majors only. In minors the mark is
+     * partial (old heap unscanned), so liveness verdicts would be wrong;
+     * weak tables are instead traversed conservatively via the normal
+     * mark exemption for weak types, and clearing waits for a major. */
+    if (janet_vm.gc_minor_phase) return;
+    janet_sweep_weak_drop_list(janet_vm.weak_blocks);
+    /* P3.5b-REVERTED: globals only. */
+}
+
+static void janet_sweep_weak_drop_list(JanetGCObject *current) {
+    JanetGCObject *next;
+    while (NULL != current) {
+        next = current->data.next;
+        if (current->flags & (JANET_MEM_REACHABLE | JANET_MEM_DISABLED)) {
+            /* Check for dead references */
+            enum JanetMemoryType type = janet_gc_type(current);
+            if (type == JANET_MEMORY_ARRAY_WEAK) {
+                JanetArray *array = (JanetArray *) current;
+                for (uint32_t i = 0; i < (uint32_t) array->count; i++) {
+                    if (!janet_check_liveref(array->data[i])) {
+                        array->data[i] = janet_wrap_nil();
+                    }
+                }
+            } else {
+                JanetTable *table = (JanetTable *) current;
+                int check_values = (type == JANET_MEMORY_TABLE_WEAKV) || (type == JANET_MEMORY_TABLE_WEAKKV);
+                int check_keys = (type == JANET_MEMORY_TABLE_WEAKK) || (type == JANET_MEMORY_TABLE_WEAKKV);
+                JanetKV *end = table->data + table->capacity;
+                JanetKV *kvs = table->data;
+                while (kvs < end) {
+                    int drop = 0;
+                    if (check_keys && !janet_check_liveref(kvs->key)) drop = 1;
+                    if (check_values && !janet_check_liveref(kvs->value)) drop = 1;
+                    if (drop) {
+                        /* Inlined from janet_table_remove without search */
+                        table->count--;
+                        table->deleted++;
+                        kvs->key = janet_wrap_nil();
+                        kvs->value = janet_wrap_false();
+                    }
+                    kvs++;
+                }
+            }
+        }
+        current = next;
+    }
+}
+
+/* Sweep all three heaps' blocks (minor-aware). In a minor collection
+ * only young dead blocks are freed; old blocks wait for a major.
+ * Weak-ref dropping is separate (majors only); the ev threaded section
+ * below also runs at majors only.
+ * P3.5b: global lists plus every census fiber's lists. Live index
+ * iteration (no snapshot): freeing a fiber swap-removes it from the
+ * census, which can only SKIP later fibers (their lists float one
+ * cycle — sound, never dangling, since listed fibers are allocated).
+ * New births can't happen mid-sweep (no allocation in sweep paths),
+ * so the count only shrinks and the loop terminates. */
+static void janet_sweep_heaps(void) {
+    /* P3.5b-REVERTED: globals only. */
+    janet_sweep_list((JanetGCObject **) &janet_vm.weak_blocks, 2, janet_vm.gc_minor_phase, 0);
+    janet_sweep_list((JanetGCObject **) &janet_vm.blocks, 0, janet_vm.gc_minor_phase, 0);
+    janet_sweep_list((JanetGCObject **) &janet_vm.string_blocks, 1, janet_vm.gc_minor_phase, 0);
+}
+
+/* Step 1.3: sweep one fiber's three lists freeing only unmarked young
+ * blocks owned by it (P3.5b: O(own) instead of O(world)). Foreign
+ * young unmarked blocks are spared (floating garbage until a global
+ * collection); foreign marked blocks were already spared by the mark.
+ * All callers pass live fibers (never freed mid-sweep here). */
+static void janet_sweep_fiber_owned(JanetFiber *f) {
+    /* P3.5b-REVERTED: owner filter over globals (original 1.3 shape). */
+    uint32_t owner = f->gc_owner;
+    janet_sweep_list((JanetGCObject **) &janet_vm.weak_blocks, 2, 1, owner);
+    janet_sweep_list((JanetGCObject **) &janet_vm.blocks, 0, 1, owner);
+    janet_sweep_list((JanetGCObject **) &janet_vm.string_blocks, 1, 1, owner);
+}
+
+static void janet_sweep_heaps_owned(JanetFiber *f) {
+    janet_sweep_fiber_owned(f);
+}
+
 
 /* Step 1 introspection: per-owner slab page counts. Returns
  * @{ :pages total :unowned n :owned @{id count} } (pure numbers: fiber
@@ -1119,6 +1166,15 @@ static void janet_census_remove(JanetFiber *f) {
             return;
         }
     }
+}
+
+/* P3.4 bookkeeping touch (see gc.h): old containers go dirty, and
+ * nothing else happens. Used by raw table puts for marshal identity
+ * maps (never the value graph). */
+void janet_gc_touch(void *obj) {
+    JanetSlabPage *page = janet_slab_page_for(obj);
+    if (NULL == page) return;
+    if (page->age >= JANET_SLAB_OLD_AGE) page->dirty = 1;
 }
 
 /* Minor-mode reachability gate (Phase 2b-iii policy): during a minor
@@ -1604,7 +1660,7 @@ void janet_collect_fiber_minor(JanetFiber *f) {
             janet_mark_fiber(ss->fibers[i]);
     }
     janet_vm.gc_mark_phase = 0;
-    janet_sweep_heaps_owned(f->gc_owner);
+    janet_sweep_heaps_owned(f);
     janet_vm.gc_minor_phase = 0;
     f->gc_nursery_bytes = 0;
 }
@@ -1736,14 +1792,15 @@ static void janet_proc_verify(JanetProcess *proc, JanetGCObject **cands, size_t 
  * FFI/manual C smuggling stays documented-unsound and is what
  * JANET_PROC_VERIFY=1 audits for. No aging, no global pressure
  * reset, no weak dropping (minor rules); only the fiber's nursery
- * counter resets. Non-strict, unowned, dead, or currently-running
- * fibers degrade to a full minor (never unsound, just global). */
+ * counter resets. Non-strict, unowned, or dead fibers degrade to a
+ * full minor (never unsound, just global). Running fibers collect
+ * like fiber minors (instruction-boundary stacks are consistent).
+ */
 void janet_collect_process(JanetProcess *proc) {
     JanetFiber *f;
     if (janet_vm.gc_suspend) return;
     if (NULL == proc || NULL == (f = proc->fiber) || 0 == f->gc_owner ||
-            !proc->isolated_heap || !janet_fiber_can_resume(f) ||
-            f == janet_vm.fiber) {
+            !proc->isolated_heap || !janet_fiber_can_resume(f)) {
         janet_collect_minor();
         return;
     }
@@ -1781,7 +1838,7 @@ void janet_collect_process(JanetProcess *proc) {
         }
         janet_proc_verify(proc, cands, ncand);
     }
-    janet_sweep_heaps_owned(f->gc_owner);
+    janet_sweep_heaps_owned(f);
     janet_vm.gc_minor_phase = 0;
     f->gc_nursery_bytes = 0;
 }

@@ -1090,6 +1090,16 @@ struct JanetFiber {
      * inherited, never unmarshalled — re-establish by construction).
      * Slab pages claimed while running one record it (page bit). */
     int heap_strict;
+    /* P3.5 auto-trigger: owning proc (set by proc spawn for proc
+     * fibers, NULL otherwise). maybe_collect routes strict pressure
+     * to per-proc majors through this. */
+    struct JanetProcess *proc;
+    /* P3.5b owner-segregated sweep: blocks born on this fiber file by
+     * heap kind here (0 main, 1 strings, 2 weak) instead of the
+     * global lists, so per-fiber/per-proc sweeps walk O(own) instead
+     * of O(world). Global collections walk these plus globals (dead
+     * fibers migrate theirs at free). NULL at birth. */
+    void *heap_lists[3];
 };
 
 /* Mark if a stack frame is a tail call for debugging */
