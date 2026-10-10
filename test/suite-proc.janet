@@ -310,4 +310,30 @@
   (procx/monitor lp lw :lw)
   (assert (deep= [:down :lw "local-boom"] (ev/take lw)) "channel watcher"))
 
+# 28. P3.2 strict spawn: entry captures arrive by value (mutating the
+# original afterwards is invisible inside).
+(let [cfg @{:mode :fast :tags @[1 2]}
+      rch (ev/thread-chan 1)
+      p (proc/spawn-isolated
+          (fn [] (proc/recv) (ev/give rch cfg)))]
+  (assert (proc/isolated? p) "strict flag set")
+  (ev/sleep 0.05)
+  (put cfg :mode :slow)
+  (array/push (cfg :tags) 99)
+  (proc/send p :go)
+  (assert (deep= @{:mode :fast :tags @[1 2]} (ev/take rch))
+          "entry copied at spawn")
+  (proc/kill p :done))
+
+# 29. P3.2 strict spawn: plain procs are not flagged; C-frame fiber
+# captures refuse (fresh fibers copy — 4.3 value semantics).
+(let [q (proc/spawn (fn [] nil))]
+  (assert (not (proc/isolated? q)) "plain not flagged")
+  (proc/kill q :done))
+(let [blocked (ev/go (fn [] (ev/take (ev/chan 1)) :never))]
+  (ev/sleep 0.05)
+  (assert-error "cframe capture refuses"
+    (proc/spawn-isolated (fn [] blocked)))
+  (ev/cancel blocked :done))
+
 (end-suite)

@@ -800,7 +800,12 @@ needs. Density measured first: ~17KB/proc floor = struct + Janet
 stack + one touched 16KB page (parked C frames; macOS pages) —
 park/unpark is UNSOUND (the VM's own C frames park on that stack),
 so Erlang density needs 4K pages and/or shared-stack fibers (future).
-Next: per-proc majors (copy-on-send + skippable foreign stacks).
+P3 track (strict isolated heaps → per-proc majors → O(n) spawn):
+spawn-copy entry (P3.2), barrier-checked stores (P3.3), per-proc
+major + verify mode (P3.4), auto-trigger + scale re-measure (P3.5).
+Lane procs are spawn-copied by transport already (thread/new
+marshals fn+args).
+- [x] P3.2 strict spawn (marshal-copy entry, :isolated flag).
 
 ### Phase 3 slice — value-returning thread/new + thread/join (DONE, this checkout)
 

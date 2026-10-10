@@ -49,6 +49,9 @@ typedef struct JanetProcess {
      * armed (otherwise the loop's own protect would trap kills of
      * handler-wedged fibers, converting them into replies). */
     int killed;
+    /* P3.2 strict isolation: entry was marshal-copied at spawn (no
+     * captured aliases), the first step toward per-proc majors. */
+    int isolated_heap;
 } JanetProcess;
 
 static JanetProcess *janet_getproc(const Janet *argv, int32_t n) {
@@ -99,20 +102,28 @@ static uint32_t janet_proc_next_serial(void) {
     return id;
 }
 
-JANET_CORE_FN(cfun_proc_spawn,
-              "(proc/spawn thunk &opt capacity)",
-              "Spawn a raw process: schedule 0-argument `thunk` as a "
-              "fiber on this lane's event loop with an owned isolated "
-              "mailbox (capacity `capacity`, default 16). The process "
-              "reads its own mailbox with proc/recv and learns itself "
-              "via proc/self. Returns the proc (a core/proc distinct "
-              "type; refuses marshal — same-VM only for now).") {
-    janet_arity(argc, 1, 2);
-    JanetFunction *func = janet_getfunction(argv, 0);
-    if (func->def->min_arity > 0) {
-        janet_panic("proc thunk must accept 0 arguments");
+/* P3.2: marshal-copy a spawn entry (same-VM, malloc transit buffer
+ * like channel pack — proven shape). Closures copy by value
+ * (bytecode travels); fibers suspended with C frames refuse (no
+ * aliased stacks into the isolated heap). Caller roots the result
+ * across subsequent allocations. */
+static JanetFunction *janet_proc_copy_entry(JanetFunction *func) {
+    JanetBuffer *buf = janet_malloc(sizeof(JanetBuffer));
+    if (NULL == buf) {
+        JANET_OUT_OF_MEMORY;
     }
-    int32_t cap = janet_optnat(argv, argc, 1, 16);
+    janet_buffer_init(buf, 64);
+    janet_marshal(buf, janet_wrap_function(func), NULL, JANET_MARSHAL_UNSAFE);
+    Janet copy = janet_unmarshal(buf->data, buf->count, JANET_MARSHAL_UNSAFE, NULL, NULL);
+    janet_buffer_deinit(buf);
+    janet_free(buf);
+    if (!janet_checktype(copy, JANET_FUNCTION)) {
+        janet_panic("proc entry did not survive copy");
+    }
+    return janet_unwrap_function(copy);
+}
+
+static Janet cfun_proc_spawn_impl(JanetFunction *func, int32_t cap, int isolated) {
     JanetProcess *proc = janet_abstract(&janet_proc_type, sizeof(JanetProcess));
     Janet proc_j = janet_wrap_abstract(proc);
     /* Root across the allocations below (fiber + tables can collect). */
@@ -135,6 +146,7 @@ JANET_CORE_FN(cfun_proc_spawn,
     proc->exit_reason = janet_wrap_nil();
     proc->trap_exit = 0;
     proc->killed = 0;
+    proc->isolated_heap = isolated;
     janet_gcunroot(monitors_j);
     janet_gcunroot(stash_j);
     JanetFiber *fiber = janet_fiber(func, 64, 0, NULL);
@@ -158,6 +170,54 @@ JANET_CORE_FN(cfun_proc_spawn,
     janet_schedule(fiber, janet_wrap_nil());
     janet_gcunroot(proc_j);
     return proc_j;
+}
+
+JANET_CORE_FN(cfun_proc_spawn,
+              "(proc/spawn thunk &opt capacity)",
+              "Spawn a raw process: schedule 0-argument `thunk` as a "
+              "fiber on this lane's event loop with an owned isolated "
+              "mailbox (capacity `capacity`, default 16). The process "
+              "reads its own mailbox with proc/recv and learns itself "
+              "via proc/self. Returns the proc (a core/proc distinct "
+              "type; refuses marshal — same-VM only for now).") {
+    janet_arity(argc, 1, 2);
+    JanetFunction *func = janet_getfunction(argv, 0);
+    if (func->def->min_arity > 0) {
+        janet_panic("proc thunk must accept 0 arguments");
+    }
+    int32_t cap = janet_optnat(argv, argc, 1, 16);
+    return cfun_proc_spawn_impl(func, cap, 0);
+}
+
+JANET_CORE_FN(cfun_proc_spawn_isolated,
+              "(proc/spawn-isolated thunk &opt capacity)",
+              "P3.2 strict spawn: like proc/spawn, but the entry is "
+              "marshal-copied first — captured values arrive by value, "
+              "never by alias (fresh fibers copy too; fibers suspended "
+              "with C frames refuse with a clear error). First step "
+              "toward per-proc majors: the process starts with no shared "
+              "references of its own. Reads of shared state afterwards "
+              "are still the body's discipline (barrier-checked in P3.3).") {
+    janet_arity(argc, 1, 2);
+    JanetFunction *func = janet_getfunction(argv, 0);
+    if (func->def->min_arity > 0) {
+        janet_panic("proc thunk must accept 0 arguments");
+    }
+    int32_t cap = janet_optnat(argv, argc, 1, 16);
+    JanetFunction *copy = janet_proc_copy_entry(func);
+    Janet copy_j = janet_wrap_function(copy);
+    janet_gcroot(copy_j);
+    Janet ret = cfun_proc_spawn_impl(copy, cap, 1);
+    janet_gcunroot(copy_j);
+    return ret;
+}
+
+JANET_CORE_FN(cfun_proc_isolated,
+              "(proc/isolated? p)",
+              "P3.2: true for strict (spawn-copied) processes.") {
+    janet_fixarity(argc, 1);
+    JanetProcess *proc = janet_getproc(argv, 0);
+    return janet_wrap_boolean(proc->isolated_heap);
 }
 
 JANET_CORE_FN(cfun_proc_self,
@@ -462,6 +522,8 @@ JANET_CORE_FN(cfun_proc_killed,
 
 static const JanetRegExt proc_cfuns_ext[] = {
     JANET_CORE_REG("proc/spawn", cfun_proc_spawn),
+    JANET_CORE_REG("proc/spawn-isolated", cfun_proc_spawn_isolated),
+    JANET_CORE_REG("proc/isolated?", cfun_proc_isolated),
     JANET_CORE_REG("proc/self", cfun_proc_self),
     JANET_CORE_REG("proc/send", cfun_proc_send),
     JANET_CORE_REG("proc/recv", cfun_proc_recv),
