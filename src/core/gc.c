@@ -26,6 +26,7 @@
 #include "state.h"
 #include "symcache.h"
 #include "gc.h"
+#include "proc.h"
 #include "util.h"
 #include "fiber.h"
 #include "vector.h"
@@ -1603,6 +1604,183 @@ void janet_collect_fiber_minor(JanetFiber *f) {
             janet_mark_fiber(ss->fibers[i]);
     }
     janet_vm.gc_mark_phase = 0;
+    janet_sweep_heaps_owned(f->gc_owner);
+    janet_vm.gc_minor_phase = 0;
+    f->gc_nursery_bytes = 0;
+}
+
+/* P3.4 selective C roots for per-proc majors: everything mark_roots
+ * covers EXCEPT fibers and the spawn queue (foreign stacks are the
+ * point of skipping). Mirrors the shared parts (small, stable). */
+static void janet_mark_proc_shared(void) {
+    uint32_t i;
+    size_t orig_rootcount = janet_vm.root_count;
+    if (janet_vm.top_dyns) {
+        janet_mark(janet_wrap_table(janet_vm.top_dyns));
+    }
+    if (janet_vm.profile_table) {
+        janet_mark(janet_wrap_table(janet_vm.profile_table));
+    }
+    {
+        JanetCompiler *comp;
+        for (comp = janet_vm.compiler_stack; comp; comp = comp->compiler_next) {
+            janet_mark_compiler(comp);
+        }
+    }
+    for (i = 0; i < orig_rootcount; i++)
+        janet_mark(janet_vm.roots[i]);
+    for (i = 0; i < janet_vm.shadow_count; i++)
+        janet_mark(janet_vm.shadow_roots[i]);
+    /* Remembered cross-owner containers (holes route through here —
+     * keep + traverse, never trust). */
+    {
+        JanetSlabState *xss = (JanetSlabState *) janet_vm.slab_state;
+        if (NULL != xss) {
+            size_t xi;
+            for (xi = 0; xi < xss->xfb_count; xi++)
+                janet_mark(xss->xfb[xi]);
+        }
+    }
+}
+
+/* P3.4 verify support: does Janet value x point at object o
+ * (object-start-exact, same head discipline as the barrier)? */
+static int janet_verify_points_at(Janet x, JanetGCObject *o) {
+    void *p = NULL;
+    switch (janet_type(x)) {
+        case JANET_STRING:
+        case JANET_SYMBOL:
+        case JANET_KEYWORD:
+            return 0;
+        case JANET_ARRAY:
+            p = (void *) janet_unwrap_array(x);
+            break;
+        case JANET_TUPLE:
+            p = (void *) janet_tuple_head(janet_unwrap_tuple(x));
+            break;
+        case JANET_TABLE:
+            p = (void *) janet_unwrap_table(x);
+            break;
+        case JANET_STRUCT:
+            p = (void *) janet_struct_head(janet_unwrap_struct(x));
+            break;
+        case JANET_BUFFER:
+            p = (void *) janet_unwrap_buffer(x);
+            break;
+        case JANET_FUNCTION:
+            p = (void *) janet_unwrap_function(x);
+            break;
+        case JANET_ABSTRACT:
+            p = (void *) janet_abstract_head(janet_unwrap_abstract(x));
+            break;
+        case JANET_FIBER:
+            p = (void *) janet_unwrap_fiber(x);
+            break;
+        default:
+            return 0;
+    }
+    return p == (void *) o;
+}
+
+/* P3.4 verify (JANET_PROC_VERIFY=1, dev only): audit that no swept
+ * candidate is reachable from a foreign stack (struct fields, stack
+ * slots, fiber env tables shallow). Candidates were P-owned young
+ * unmarked — any hit is a would-be-unsound free: report + abort. */
+#define JANET_PROC_VERIFY_MAXCAND 4096
+static void janet_proc_verify(JanetProcess *proc, JanetGCObject **cands, size_t ncand) {
+    JanetSlabState *ss = (JanetSlabState *) janet_vm.slab_state;
+    size_t ci, fi;
+    if (NULL == ss) return;
+    for (fi = 0; fi < ss->fibers_count; fi++) {
+        JanetFiber *f = ss->fibers[fi];
+        if (f == proc->fiber) continue;
+        for (ci = 0; ci < ncand; ci++) {
+            int32_t s;
+            for (s = 0; s < f->stacktop; s++) {
+                if (janet_verify_points_at(f->data[s], cands[ci])) {
+                    fprintf(stderr, "proc-verify: foreign stack holds swept candidate %p\n",
+                            (void *) cands[ci]);
+                    abort();
+                }
+            }
+            if (janet_verify_points_at(f->last_value, cands[ci]) ||
+                    janet_verify_points_at(f->in_value, cands[ci]) ||
+                    janet_verify_points_at(f->out_payload, cands[ci])) {
+                fprintf(stderr, "proc-verify: foreign fiber field holds swept candidate %p\n",
+                        (void *) cands[ci]);
+                abort();
+            }
+            if (NULL != f->env) {
+                int32_t k;
+                for (k = 0; k < f->env->capacity; k++) {
+                    JanetKV *kv = &f->env->data[k];
+                    if (janet_verify_points_at(kv->key, cands[ci]) ||
+                            janet_verify_points_at(kv->value, cands[ci])) {
+                        fprintf(stderr, "proc-verify: foreign env holds swept candidate %p\n",
+                                (void *) cands[ci]);
+                        abort();
+                    }
+                }
+            }
+        }
+    }
+}
+
+/* P3.4 per-proc major: free only the target strict proc's young
+ * unmarked blocks (foreign young floats until a global collection).
+ * Marking is P-roots (fiber + struct fields + env) plus shared C
+ * roots plus the remembered set — foreign FIBER stacks are skipped,
+ * which is sound exactly when no P-young is reachable from them:
+ * spawn-copy entry (P3.2) + export panics (P3.3 table/array puts +
+ * plain-channel gives) + copy sends close every programmatic path;
+ * FFI/manual C smuggling stays documented-unsound and is what
+ * JANET_PROC_VERIFY=1 audits for. No aging, no global pressure
+ * reset, no weak dropping (minor rules); only the fiber's nursery
+ * counter resets. Non-strict, unowned, dead, or currently-running
+ * fibers degrade to a full minor (never unsound, just global). */
+void janet_collect_process(JanetProcess *proc) {
+    JanetFiber *f;
+    if (janet_vm.gc_suspend) return;
+    if (NULL == proc || NULL == (f = proc->fiber) || 0 == f->gc_owner ||
+            !proc->isolated_heap || !janet_fiber_can_resume(f) ||
+            f == janet_vm.fiber) {
+        janet_collect_minor();
+        return;
+    }
+    depth = JANET_RECURSION_GUARD;
+    janet_vm.gc_mark_phase = 1;
+    janet_vm.gc_minor_phase = 1;
+    janet_mark_proc_shared();
+    janet_mark_fiber(f);
+    if (NULL != f->env) janet_mark(janet_wrap_table(f->env));
+    if (NULL != proc->mbox) janet_mark(janet_wrap_abstract(proc->mbox));
+    if (NULL != proc->sup) janet_mark(janet_wrap_abstract(proc->sup));
+    if (NULL != proc->stash) janet_mark(janet_wrap_array(proc->stash));
+    if (NULL != proc->monitors) janet_mark(janet_wrap_array(proc->monitors));
+    janet_mark(proc->exit_reason);
+    janet_vm.gc_mark_phase = 0;
+    if (NULL != getenv("JANET_PROC_VERIFY")) {
+        /* Gather P-owned young unmarked candidates (bounded sample). */
+        JanetGCObject *cands[JANET_PROC_VERIFY_MAXCAND];
+        size_t ncand = 0;
+        JanetGCObject *lists[3] = {
+            (JanetGCObject *) janet_vm.blocks,
+            (JanetGCObject *) janet_vm.string_blocks,
+            (JanetGCObject *) janet_vm.weak_blocks
+        };
+        int li;
+        for (li = 0; li < 3; li++) {
+            JanetGCObject *cur;
+            for (cur = lists[li]; NULL != cur; cur = cur->data.next) {
+                if (ncand == JANET_PROC_VERIFY_MAXCAND) break;
+                if ((cur->flags & (JANET_MEM_REACHABLE | JANET_MEM_DISABLED))) continue;
+                if (janet_slab_obj_old(cur)) continue;
+                if (janet_slab_obj_owner(cur) != f->gc_owner) continue;
+                cands[ncand++] = cur;
+            }
+        }
+        janet_proc_verify(proc, cands, ncand);
+    }
     janet_sweep_heaps_owned(f->gc_owner);
     janet_vm.gc_minor_phase = 0;
     f->gc_nursery_bytes = 0;

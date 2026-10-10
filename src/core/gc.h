@@ -87,6 +87,12 @@ void janet_collect_minor(void);
  * Falls back to a full minor for unowned fibers and stuck sets. */
 void janet_collect_fiber_minor(JanetFiber *f);
 
+/* P3.4 per-proc major (see implementation): frees only the target
+ * strict proc's young unmarked (foreign young floats). Falls back to
+ * a full minor for non-strict/dead/running fibers. */
+struct JanetProcess;
+void janet_collect_process(struct JanetProcess *proc);
+
 /* Generational write barrier (Phase 2b-iii policy): record an old
  * container that newly references a heap value, so minor collections
  * (which skip clean old tables/arrays) still find the edge. Immediates

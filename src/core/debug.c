@@ -24,6 +24,7 @@
 #include "features.h"
 #include <janet.h>
 #include "gc.h"
+#include "proc.h"
 #include "state.h"
 #include "util.h"
 #include "vector.h"
@@ -532,6 +533,21 @@ JANET_CORE_FN(cfun_debug_collect_fiber,
     return janet_wrap_nil();
 }
 
+JANET_CORE_FN(cfun_debug_collect_proc,
+              "(debug/collect-proc p)",
+              "P3.4: run a per-proc major for strict process `p` (frees "
+              "only its young unmarked; foreign young floats). Skips "
+              "foreign fiber stacks (sound under strict isolation: "
+              "spawn-copy + export panics + copy sends; FFI/manual-C "
+              "smuggling stays documented-unsound — audit with "
+              "JANET_PROC_VERIFY=1). Falls back to a full minor for "
+              "non-strict/dead/running fibers. Returns nil.") {
+    janet_fixarity(argc, 1);
+    void *abst = janet_getabstract(argv, 0, &janet_proc_type);
+    janet_collect_process((struct JanetProcess *) abst);
+    return janet_wrap_nil();
+}
+
 /* Module entry point */
 void janet_lib_debug(JanetTable *env) {
     JanetRegExt debug_cfuns[] = {
@@ -552,6 +568,7 @@ void janet_lib_debug(JanetTable *env) {
         JANET_CORE_REG("debug/fiber-owner", cfun_debug_fiber_owner),
         JANET_CORE_REG("debug/fiber-nursery", cfun_debug_fiber_nursery),
         JANET_CORE_REG("debug/collect-fiber", cfun_debug_collect_fiber),
+        JANET_CORE_REG("debug/collect-proc", cfun_debug_collect_proc),
         JANET_REG_END
     };
     janet_core_cfuns_ext(env, NULL, debug_cfuns);

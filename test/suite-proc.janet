@@ -388,4 +388,99 @@
   (ev/sleep 0.3)
   (assert (deep= [:down :m :normal] (ev/take ch)) "plain export :normal"))
 
+# 33. P3.4 per-proc major: nursery counter resets; live values in
+# the target survive its own collection.
+(let [rch (ev/thread-chan 4)
+      p (proc/spawn-isolated
+          (fn []
+            (def box @[])
+            (repeat 100 (array/push box (array/new 4)))
+            (ev/give rch (debug/fiber-nursery))
+            (proc/recv)
+            (ev/give rch (length box))
+            (ev/give rch (debug/fiber-nursery))))]
+  (ev/sleep 0.1)
+  (def charged (ev/take rch))
+  (assert (> charged 0) "nursery charged")
+  (debug/collect-proc p)
+  (proc/send p :go)
+  (assert (= 100 (ev/take rch)) "live survives own major")
+  (assert (= 0 (ev/take rch)) "counter reset")
+  (proc/kill p :done))
+
+# 34. P3.4 firewall: another proc's values survive my collection
+# (foreign young floats until a global collection takes them).
+# Bodies self-report (captured arrays would copy at spawn).
+(let [rch (ev/thread-chan 4)
+      mkbox (fn []
+              (def box @[])
+              (repeat 100 (array/push box (array/new 4)))
+              (proc/recv)
+              (ev/give rch (length box)))
+      a (proc/spawn-isolated mkbox)
+      b (proc/spawn-isolated mkbox)]
+  (ev/sleep 0.1)
+  (debug/collect-proc a)
+  (gccollect)
+  (proc/send a :go)
+  (proc/send b :go)
+  (assert (= 100 (ev/take rch)) "owner box intact")
+  (assert (= 100 (ev/take rch)) "foreign box intact")
+  (proc/kill a :done)
+  (proc/kill b :done))
+
+# 35. P3.4 fallbacks (never unsound, just global): plain procs, dead
+# procs, and self-collect degrade to a full minor without crashing.
+(let [p (proc/spawn (fn [] (proc/recv)))]
+  (ev/sleep 0.05)
+  (debug/collect-proc p)
+  (proc/kill p :done))
+(let [d (proc/spawn-isolated (fn [] :bye))]
+  (ev/sleep 0.1)
+  (debug/collect-proc d))
+(let [rch (ev/thread-chan 1)
+      s (proc/spawn-isolated
+          (fn [] (debug/collect-proc (proc/self)) (ev/give rch :survived)))]
+  (ev/sleep 0.2)
+  (assert (= :survived (ev/take rch)) "self-collect falls back")
+  (proc/kill s :done))
+
+# 36. P3.4 sharing workload (registry rendezvous — strict bodies
+# cannot lexically capture peers, closures would copy/disconnect):
+# message exchange + shared reads collect clean (also green under
+# JANET_PROC_VERIFY=1, run manually as gate evidence).
+(let [db (procx/spawn-loop (fn [tag payload] payload))]
+  (procx/register db :p34db)
+  (def a (proc/spawn-isolated
+           (fn []
+             (def box @[])
+             (repeat 200 (array/push box (array/new 4)))
+             (proc/send (procx/whereis :p34db) [:store [1 2 3] nil])
+             (def got (procx/select (fn [m] (= :ping m))))
+             (array/push box got)
+             (array/push box (length box))
+             (proc/recv))))
+  (def b (proc/spawn-isolated
+           (fn []
+             (def box @[])
+             (repeat 200 (array/push box (array/new 4)))
+             (proc/recv))))
+  (ev/sleep 0.1)
+  (proc/send (procx/whereis :p34db) :ping)
+  (proc/send a :go)
+  (proc/send b :go)
+  (ev/sleep 0.2)
+  (debug/collect-proc a)
+  (debug/collect-proc b)
+  (proc/kill a :done)
+  (proc/kill b :done)
+  (procx/quit db)
+  (procx/unregister :p34db))
+
+# 37. P3.4 discipline: capturing a proc in a strict entry refuses
+# (pids travel by registry/message, never by closure capture).
+(let [q (proc/spawn (fn [] (ev/sleep 30)))]
+  (assert-error "proc capture refuses" (proc/spawn-isolated (fn [] q)))
+  (proc/kill q :done))
+
 (end-suite)

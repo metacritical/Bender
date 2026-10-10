@@ -5927,6 +5927,8 @@
      "src/core/gc.h"
      "src/core/vector.h"
      "src/core/fiber.h"
+     "src/core/ev.h"
+     "src/core/proc.h"
      "src/core/regalloc.h"
      "src/core/compile.h"
      "src/core/emit.h"

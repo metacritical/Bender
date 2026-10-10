@@ -810,6 +810,11 @@ marshals fn+args).
   freelists so recycled slots keep strictness). Import allowed;
   strings/symbols/keywords + immediates exempt; NULL-page hole
   documented. Same-owner hot path bit-free (bits only on cross).
+- [x] P3.4 per-proc major (P-young only, foreign stacks skipped;
+  C roots + xfb + struct marked) + JANET_PROC_VERIFY audit
+  (foreign-stack candidate scan, dev-only) + plain-channel push
+  rule (mode-2 supervisor exempt). Strict bodies rendezvous via
+  registry (closures capture lexically — peers never captured).
 
 ### Phase 3 slice — value-returning thread/new + thread/join (DONE, this checkout)
 

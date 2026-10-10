@@ -19,6 +19,7 @@
 #include "state.h"
 #include "fiber.h"
 #include "ev.h"
+#include "proc.h"
 #endif
 
 #ifdef JANET_EV
@@ -28,31 +29,7 @@ extern const JanetAbstractType janet_proc_type;
 /* Forward: pid-tuple resolver (defined with proc/pid, used by send). */
 static JanetChannel *janet_proc_resolve_mbox(Janet x);
 
-typedef struct JanetProcess {
-    JanetChannel *mbox; /* owned isolated mailbox (copy in/out) */
-    JanetChannel *sup;  /* plain completion channel (embeds fiber) */
-    JanetFiber *fiber;  /* the process fiber (ev/go-scheduled) */
-    uint32_t serial;    /* pid serial (never 0) */
-    int done;           /* completion observed (quit/kill fast path) */
-    /* P1.2: selective-recv stash (Janet-scanned) + monitor list
-     * (flat [tag watcher] pairs, Janet-pumped via reapers) +
-     * recorded exit reason (late monitors). All marked below. */
-    JanetArray *stash;
-    JanetArray *monitors;
-    Janet exit_reason;
-    /* P1.4: trap-exit flag (loop processes consult it on :down;
-     * raw bodies read it via proc/trap?). Kill bypasses it (ERROR
-     * at the take, outside every protect). */
-    int trap_exit;
-    /* P1.4b: kill-armed flag (set by proc/kill, never cleared — kill
-     * is terminal). The dispatch loop re-raises handler errors while
-     * armed (otherwise the loop's own protect would trap kills of
-     * handler-wedged fibers, converting them into replies). */
-    int killed;
-    /* P3.2 strict isolation: entry was marshal-copied at spawn (no
-     * captured aliases), the first step toward per-proc majors. */
-    int isolated_heap;
-} JanetProcess;
+/* JanetProcess lives in proc.h (shared with gc.c for P3.4 majors). */
 
 static JanetProcess *janet_getproc(const Janet *argv, int32_t n) {
     return janet_getabstract(argv, n, &janet_proc_type);

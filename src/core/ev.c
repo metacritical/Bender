@@ -1069,6 +1069,56 @@ static int janet_channel_push_with_lock(JanetChannel *channel, Janet x, int mode
         janet_chan_unlock(channel);
         janet_panic("cannot write to closed channel");
     }
+    /* P3.4: plain (non-packing) channels share by reference, so a
+     * strict-heap value pushed here would leak invisibly to per-proc
+     * majors. Refuse (packing channels marshal-copy, so they are
+     * safe). Mode-2 supervisor pushes exempt: their events stay
+     * reachable from the owning proc struct (marked + traversed —
+     * no hole). Gated: legacy VMs skip for one branch; immediate and
+     * immutable string-heap values exempt (no refs to leak). */
+    if (2 != mode && janet_vm.heap_strict_live && !janet_chan_needs_pack(channel)) {
+        JanetType xt = janet_type(x);
+        if (xt != JANET_NIL && xt != JANET_BOOLEAN && xt != JANET_NUMBER &&
+                xt != JANET_CFUNCTION && xt != JANET_POINTER &&
+                xt != JANET_STRING && xt != JANET_SYMBOL && xt != JANET_KEYWORD) {
+            void *xobj = NULL;
+            switch (xt) {
+                case JANET_ARRAY:
+                    xobj = (void *) janet_unwrap_array(x);
+                    break;
+                case JANET_TUPLE:
+                    xobj = (void *) janet_tuple_head(janet_unwrap_tuple(x));
+                    break;
+                case JANET_TABLE:
+                    xobj = (void *) janet_unwrap_table(x);
+                    break;
+                case JANET_STRUCT:
+                    xobj = (void *) janet_struct_head(janet_unwrap_struct(x));
+                    break;
+                case JANET_BUFFER:
+                    xobj = (void *) janet_unwrap_buffer(x);
+                    break;
+                case JANET_FUNCTION:
+                    xobj = (void *) janet_unwrap_function(x);
+                    break;
+                case JANET_ABSTRACT:
+                    xobj = (void *) janet_abstract_head(janet_unwrap_abstract(x));
+                    break;
+                case JANET_FIBER:
+                    xobj = (void *) janet_unwrap_fiber(x);
+                    break;
+                default:
+                    break;
+            }
+            if (NULL != xobj &&
+                    (janet_gc_header(xobj)->flags & JANET_MEM_ISOLATED)) {
+                janet_chan_unlock(channel);
+                janet_panic("strict proc value escaping through a "
+                            "non-copying channel (use ev/ichan or "
+                            "ev/thread-chan)");
+            }
+        }
+    }
     if (janet_chan_pack(channel, &x)) {
         janet_chan_unlock(channel);
         janet_panicf("failed to pack value for channel: %v", x);
