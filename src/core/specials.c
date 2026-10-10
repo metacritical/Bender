@@ -163,6 +163,42 @@ static JanetSlot janetc_unquote(JanetFopts opts, int32_t argn, const Janet *argv
 /* Perform destructuring. Be careful to
  * keep the order registers are freed.
  * Returns if the slot 'right' can be freed. */
+/* Byte-compare two string-like keys (symbol/keyword/string), so `:or`
+ * defaults keyed by symbol `a` match keyword lookups for `:a`. */
+static int destructure_key_bytes_equal(Janet a, Janet b) {
+    const uint8_t *ab = NULL, *bb = NULL;
+    int32_t alen = 0, blen = 0;
+    switch (janet_type(a)) {
+        case JANET_SYMBOL:
+            ab = janet_unwrap_symbol(a);
+            break;
+        case JANET_KEYWORD:
+            ab = janet_unwrap_keyword(a);
+            break;
+        case JANET_STRING:
+            ab = janet_unwrap_string(a);
+            break;
+        default:
+            return 0;
+    }
+    switch (janet_type(b)) {
+        case JANET_SYMBOL:
+            bb = janet_unwrap_symbol(b);
+            break;
+        case JANET_KEYWORD:
+            bb = janet_unwrap_keyword(b);
+            break;
+        case JANET_STRING:
+            bb = janet_unwrap_string(b);
+            break;
+        default:
+            return 0;
+    }
+    alen = janet_string_length(ab);
+    blen = janet_string_length(bb);
+    if (alen != blen) return 0;
+    return !memcmp(ab, bb, (size_t) alen);
+}
 static int destructure(JanetCompiler *c,
                        Janet left,
                        JanetSlot right,
@@ -271,15 +307,134 @@ static int destructure(JanetCompiler *c,
             const JanetKV *kvs = NULL;
             int32_t cap = 0, len = 0;
             janet_dictionary_view(left, &kvs, &len, &cap);
+            /* Clojure-style `:or {key default}`: first pass collects
+             * the defaults dict (literal values only — patterns are
+             * data, so defaults cannot be computed). A non-dict `:or`
+             * value falls through to a normal key binding. */
+            const JanetKV *orkvs = NULL;
+            int32_t orlen = 0, orcap = 0;
+            {
+                int32_t oi;
+                for (oi = 0; oi < cap; oi++) {
+                    if (janet_checktype(kvs[oi].key, JANET_KEYWORD)) {
+                    }
+                    if (janet_checktype(kvs[oi].key, JANET_KEYWORD) &&
+                            !janet_cstrcmp(janet_unwrap_keyword(kvs[oi].key), "or") &&
+                            (janet_checktype(kvs[oi].value, JANET_TABLE) ||
+                             janet_checktype(kvs[oi].value, JANET_STRUCT))) {
+                        {
+                            Janet vv = kvs[oi].value;
+                        }
+                        janet_dictionary_view(kvs[oi].value, &orkvs, &orlen, &orcap);
+                        break;
+                    }
+                }
+            }
             for (int32_t i = 0; i < cap; i++) {
                 if (janet_checktype(kvs[i].key, JANET_NIL)) continue;
-                JanetSlot nextright = janetc_farslot(c);
-                JanetSlot k = janetc_value(janetc_fopts_default(c), kvs[i].key);
-                janetc_emit_sss(c, JOP_IN, nextright, right, k, 1);
-                c->recursion_guard--;
-                if (destructure(c, kvs[i].value, nextright, leaf, attr))
-                    janetc_freeslot(c, nextright);
-                c->recursion_guard++;
+                /* The `:or` defaults entry was consumed in the first
+                 * pass; never bind it as a key. */
+                if (NULL != orkvs &&
+                        janet_checktype(kvs[i].key, JANET_KEYWORD) &&
+                        !janet_cstrcmp(janet_unwrap_keyword(kvs[i].key), "or"))
+                    continue;
+                /* `:keys [a b]` shorthand: symbol S binds S from keyword
+                 * :S; keyword :K binds its symbol form from :K. A
+                 * non-sequential `:keys` value is a normal binding. */
+                if (janet_checktype(kvs[i].key, JANET_KEYWORD) &&
+                        !janet_cstrcmp(janet_unwrap_keyword(kvs[i].key), "keys") &&
+                        (janet_checktype(kvs[i].value, JANET_TUPLE) ||
+                         janet_checktype(kvs[i].value, JANET_ARRAY))) {
+                    const Janet *names = NULL;
+                    int32_t nlen = 0;
+                    int32_t ni;
+                    janet_indexed_view(kvs[i].value, &names, &nlen);
+                    for (ni = 0; ni < nlen; ni++) {
+                        const uint8_t *nb = NULL;
+                        const uint8_t *kb = NULL;
+                        Janet key;
+                        if (janet_checktype(names[ni], JANET_SYMBOL)) {
+                            nb = janet_unwrap_symbol(names[ni]);
+                            kb = nb;
+                        } else if (janet_checktype(names[ni], JANET_KEYWORD)) {
+                            kb = janet_unwrap_keyword(names[ni]);
+                            nb = kb;
+                        } else {
+                            janetc_error(c, janet_formatc("expected symbol or keyword in :keys vector, got %v", names[ni]));
+                            return 1;
+                        }
+                        key = janet_keywordv(kb, janet_string_length(kb));
+                        {
+                            Janet bindpat = janet_wrap_symbol(janet_symbol(nb, janet_string_length(nb)));
+                            JanetSlot nextright = janetc_farslot(c);
+                            JanetSlot k = janetc_value(janetc_fopts_default(c), key);
+                            Janet dflt = janet_wrap_nil();
+                            int has_dflt = 0;
+                            int32_t oj;
+                            for (oj = 0; oj < orcap; oj++) {
+                                if (janet_checktype(orkvs[oj].key, JANET_NIL)) continue;
+                                if (destructure_key_bytes_equal(orkvs[oj].key, key)) {
+                                    dflt = orkvs[oj].value;
+                                    has_dflt = 1;
+                                    break;
+                                }
+                            }
+                            janetc_emit_sss(c, JOP_IN, nextright, right, k, 1);
+                            if (has_dflt) {
+                                int32_t lab = janetc_emit_si(c, JOP_JUMP_IF_NOT_NIL, nextright, 0, 0);
+                                JanetSlot d = janetc_value(janetc_fopts_default(c), dflt);
+                                janetc_copy(c, nextright, d);
+                                {
+                                    int32_t cur = janet_v_count(c->buffer);
+                                    check_16bit_jump(c, lab, cur);
+                                    c->buffer[lab] |= (uint32_t)(cur - lab) << 16;
+                                }
+                            }
+                            c->recursion_guard--;
+                            if (destructure(c, bindpat, nextright, leaf, attr))
+                                janetc_freeslot(c, nextright);
+                            c->recursion_guard++;
+                        }
+                    }
+                    continue;
+                }
+                /* NOTE: no `:as` whole-binding: `{:as sym}` keeps its
+                 * legacy meaning (bind `(get m :as)`), which the
+                 * `import*` calling convention depends on
+                 * (`(def {:as as :prefix prefix ...} kargs)`). A
+                 * Clojure-style whole-binding would silently redefine
+                 * every such use — caught by suite-array via broken
+                 * imports. */
+                {
+                    JanetSlot nextright = janetc_farslot(c);
+                    JanetSlot k = janetc_value(janetc_fopts_default(c), kvs[i].key);
+                    Janet dflt = janet_wrap_nil();
+                    int has_dflt = 0;
+                    int32_t oj;
+                    for (oj = 0; oj < orcap; oj++) {
+                        if (janet_checktype(orkvs[oj].key, JANET_NIL)) continue;
+                        if (destructure_key_bytes_equal(orkvs[oj].key, kvs[i].key)) {
+                            dflt = orkvs[oj].value;
+                            has_dflt = 1;
+                            break;
+                        }
+                    }
+                    janetc_emit_sss(c, JOP_IN, nextright, right, k, 1);
+                    if (has_dflt) {
+                        int32_t lab = janetc_emit_si(c, JOP_JUMP_IF_NOT_NIL, nextright, 0, 0);
+                        JanetSlot d = janetc_value(janetc_fopts_default(c), dflt);
+                        janetc_copy(c, nextright, d);
+                        {
+                            int32_t cur = janet_v_count(c->buffer);
+                            check_16bit_jump(c, lab, cur);
+                            c->buffer[lab] |= (uint32_t)(cur - lab) << 16;
+                        }
+                    }
+                    c->recursion_guard--;
+                    if (destructure(c, kvs[i].value, nextright, leaf, attr))
+                        janetc_freeslot(c, nextright);
+                    c->recursion_guard++;
+                }
             }
         }
         return 1;
@@ -359,7 +514,6 @@ static JanetTable *handleattr(JanetCompiler *c, const char *kind, int32_t argn, 
         switch (janet_type(attr)) {
             case JANET_TUPLE:
                 if (argn > 10) {
-                    janet_eprintf("DBG def %s argn=%d\n", binding_name, (int) argn);
                     for (int32_t q = 0; q < argn; q++) {
                         JanetString dstr = janet_description(argv[q]);
                         janet_eprintf("  argv[%d] type=%d len=%d: ",
