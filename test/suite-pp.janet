@@ -143,4 +143,16 @@
          "?? at [bc] (index 2)\nstack [5]:\n  [0]: \"a\"\n  [1]: 1\n  [2]: true\n  [3]: {}\n  [4]: @[]\n")
         "pretty format should not eat explicit newlines")
 
+# puts: Ruby-like line printing (one argument per line, arrays flatten,
+# nil prints blank, returns nil).
+(with-dyns [:out @""]
+  (assert (nil? (puts "a" 1)) "puts returns nil")
+  (assert (deep= (dyn :out) @"a\n1\n") "puts scalars one per line"))
+(with-dyns [:out @""]
+  (puts [1 [2 3]] :done nil)
+  (assert (deep= (dyn :out) @"1\n2\n3\ndone\n\n") "puts flattens, nil blanks"))
+(with-dyns [:out @""]
+  (puts)
+  (assert (deep= (dyn :out) @"") "puts of nothing prints nothing"))
+
 (end-suite)

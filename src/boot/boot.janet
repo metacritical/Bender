@@ -2256,6 +2256,19 @@
   (printf (dyn *pretty-format* "%q") x)
   (flush))
 
+(defn puts
+  ``Ruby-like `puts`: print each argument on its own line to stdout (or
+  `(dyn *out*)`). Arrays and tuples print element-wise (recursively, so
+  nested structures flatten one element per line); `nil` prints a blank
+  line; anything else prints as `print` would. Returns `nil`.``
+  [& xs]
+  (each x xs
+    (cond
+      (nil? x) (print)
+      (indexed? x) (each y x (puts y))
+      (print x)))
+  nil)
+
 (defn file/lines
   "Return an iterator over the lines of a file."
   [file]
