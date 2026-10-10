@@ -10,6 +10,17 @@ Conventions used below: `mb` is a mailbox table, `p` a pool, `pid` a
 no retries); a dead peer's sends block at capacity rather than error
 (monitors turn that into information).
 
+## 0. The ladder (pick the cheapest tier that fits)
+
+Bottom to top, each tier multiplexing the one below: OS processes
+(`os/spawn`, §10) → pthreads (`thread/new`, §1) → lane VMs and the C
+pool (§6) → procs (§11: Erlang-style, isolated heaps) → tasklets
+(§6b: actors over fibers) → ev tasks/fibers (cooperative). Fibers stay
+pinned (no migration); M:N exists only at job level over one shared
+queue. There is no thread-affinity control (only an `os/cpu-count`
+query) — workers float; pinning is deferred to a workload that shows
+migration costs (risky on Apple Silicon E/P cores).
+
 ## 1. One-shot tasks: `thread/new`, `thread/join`, `thread/alive?`
 
 ```janet
@@ -330,6 +341,10 @@ aren't preemptible mid-way; native kernels don't poll).
 | non-blocking check (never suspends, safe in `janet_call`) | `ev/try-give` / `ev/try-take` (nil = full/empty; closed `give` panics, closed `take` gives nil) |
 | isolated same-VM mailbox (copy, no lock) | `ev/ichan` — payloads marshal-copy like thread-chans; single-VM only |
 | bare-fiber actor (send/call/recv/link/monitor) | `examples/tasklet.janet` (`spawn`, `spawn-raw`, `recv`, `link`, `monitor`, `register`) |
+| Erlang-style proc (owned mailbox, pid, lanes) | `proc/spawn`, `proc/send`/`recv`, `proc/pid`, `proc/spawn-isolated` (§11) |
+| one value, many blocking consumers | `future`/`deref` (examples/future.janet) |
+| single-assignment box across tasks | `promise`/`deliver`/`deref` |
+| heaviest isolation (crash-proof workers) | `os/spawn` + pipes (§10) |
 
 ## Worked example: supervised physics with named broadcast config
 
@@ -366,11 +381,73 @@ aren't preemptible mid-way; native kernels don't poll).
   workers/threads (FIFO per queue only).
 - Cooperative supervision only: no preemptive or untrappable kill;
   propagation needs live, mailbox-pumping workers.
-- Pids resolve node-locally; no cross-node routing yet.
+- Pids resolve node-locally; no cross-node routing yet. `monitor` /
+  `kill` / `link` need the live object (C state lives there) — pids
+  are send addresses, not control capabilities. No `demonitor` for
+  proc/tasklet monitors yet (thread `ev/monitor` has refs).
 - Registry values are copies (snapshots); mutating the original
-  after registering changes nothing already looked up.
+  after registering changes nothing already looked up. Proc/tasklet
+  registries are same-VM; only `ev/register` is process-global.
 - Shared blobs are immutable-by-construction; reads copy out;
   `nil` reasons never propagate; OOB array-kernel indices abort
   (see AOT notes, not this layer).
 - Timeslice quanta are poll-counted (back-edges/calls), invisibly
   exact, but not timed; incompatible with external C quiesce while on.
+- No restart supervisor for procs yet (tasklets have
+  `supervisor-start`); proc supervision is reapers + loops today.
+- Agents/STM are designed, unbuilt; atoms are same-VM only (no
+  locking — cross-thread state goes through channels).
+
+## 10. OS processes: `os/spawn` and pipes
+
+Strongest isolation (a crashing worker cannot corrupt anyone), true
+parallelism, highest spawn cost (fork+exec, ~ms) and per-message
+serialization. The pattern for Erlang-style messaging over OS procs —
+framed marshal over piped stdio with pid-shaped addresses and a
+mailbox-holder task — is designed, unbuilt; today `os/spawn` gives
+byte streams (`:out :pipe`), and pids carry a `node` slot in
+anticipation of cross-node routing.
+
+```janet
+(def p (os/spawn ["./worker" "arg"] :p {:out :pipe}))
+(def out (:read (p :out) :all))
+(os/proc-wait p)
+```
+
+## 11. First-class procs: `core/proc` + lanes
+
+One GC object per process (mailbox fiber + supervisor channel +
+serial). Same-lane basics, M:N lanes via `examples/proc-lane.janet`
+(control thread-chans; placement pools), strict isolated heaps for
+density + per-proc collection.
+
+```janet
+(def p (proc/spawn (fn [] (pp (proc/recv)))))
+(proc/pid p)           # => (:pid 0 1 <core/channel ...>)
+(proc/send p :hi)      # by object or pid tuple — same delivery
+(proc/send pid :hi)    # tasklet <-> proc interop rides the channel
+# remote: (:pid lane serial ctl), forwarded; dead remotes silent no-op
+(proc/spawn-isolated (fn [] ...))  # marshal-copied entry, own heap
+```
+
+## 12. Futures and promises: `examples/future.janet`
+
+`(future & body)` runs on the shared pool and returns immediately;
+`deref` blocks (any number of consumers — the `thread/join` gap),
+caches, re-raises errors, takes `timeout` / `timeout-val`;
+`realized?` peeks without consuming; `future-cancel` is best-effort
+(running workers finish). `(promise)` + `(deliver p v)` (first wins)
++ blocking `deref`. Handles pin the lane: same-VM typical.
+
+```janet
+(import ../examples/future :as fut)
+(def f (fut/future (compute x)))
+(fut/deref f 5 :too-slow)
+```
+
+## 13. Shared C stacks: `JANET_SHARED_STACKS=1`
+
+Opt-in lane-shared native stacks for ev tasks and procs (~1.5KB/task
+measured, 10x down; context-switch cost identical). Raw C-API yield
+and nested suspend under shared ancestors fail loud (generators stay
+private); `defer`/`propagate` are completed-only and safe.
