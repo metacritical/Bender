@@ -746,6 +746,33 @@ live fibers).
 - [x] 5.1 kill that cannot be trapped by wedged tasks
 - [x] 5.2 supervisor trees (one_for_one first)
 
+### Proc epic — first-class M:N processes (started 2026-10-10)
+
+Tasklets stay untouched (convenience layer over fibers). Procs are
+the dedicated mechanism underneath: one `core/proc` GC object per
+process (mailbox + fiber + supervisor channel + serial), C monitor
+lists (no reaper fibers), C API ready for lanes (P2) and heap
+attribution (P3). Pids are the objects themselves (refuse marshal:
+same-VM only until P2 proxies). Each slice lands gated or reverts.
+
+**P1 — same-lane procs (this VM).**
+- [x] P1.1 raw processes: `proc/spawn` (0-arg thunk, owned isolated
+  mailbox) + `send`/`recv`(take-next)/`self`/`kill`/`alive?`/`pid?`
+  + pins (15). Shares the channel push/pop funnel (lane pin rides
+  along); env-carried self (no wrapper closure); marshal refuses.
+- [ ] P1.2 selective receive (C stash + match) + C monitor/link
+  lists + trap flag (no reaper fibers) + completion observation.
+- [ ] P1.3 pid interop (tuple pids resolve to procs; proc pids plug
+  into tasklet send/call/monitor).
+
+**P2 — M:N lanes.** N persistent lane threads (own loop each);
+spawn-on-lane placement; cross-lane copy sends via lane proxies;
+no live migration (4.3 boundary: relocate by respawn).
+
+**P3 — density + heap isolation.** Lazy queues/channels, small
+stacks (→ ~2KB/proc); per-process majors (→ O(n) spawn). The
+million road; needs copy-on-send + skippable foreign stacks.
+
 ### Phase 3 slice — value-returning thread/new + thread/join (DONE, this checkout)
 
 `ev/thread` suspends until completion but always returns nil. New

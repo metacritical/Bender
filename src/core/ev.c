@@ -586,8 +586,9 @@ void janet_ev_mark(void) {
     }
 }
 
-static int janet_channel_push(JanetChannel *channel, Janet x, int mode);
-static int janet_channel_pop(JanetChannel *channel, Janet *item, int is_choice);
+/* Push/pop bodies live here; proc.c shares them via ev.h (Step P1). */
+int janet_channel_push(JanetChannel *channel, Janet x, int mode);
+int janet_channel_pop(JanetChannel *channel, Janet *item, int is_choice);
 /* Phase C: harvest helper defined with the pool code below (used by
  * both thread/new completions and pool worker exits). */
 static int janet_profile_harvest_bytes(uint8_t **out_bytes, size_t *out_len);
@@ -1150,7 +1151,7 @@ static int janet_channel_push_with_lock(JanetChannel *channel, Janet x, int mode
     return 0;
 }
 
-static int janet_channel_push(JanetChannel *channel, Janet x, int mode) {
+int janet_channel_push(JanetChannel *channel, Janet x, int mode) {
     /* Step 4.1 home-lane pin: isolated channels are lock-free, so a
      * foreign thread would race silently — refuse loudly instead
      * (use ev/thread-chan across threads). One predictable branch on
@@ -1219,7 +1220,7 @@ static int janet_channel_pop_with_lock(JanetChannel *channel, Janet *item, int i
     return 1;
 }
 
-static int janet_channel_pop(JanetChannel *channel, Janet *item, int is_choice) {
+int janet_channel_pop(JanetChannel *channel, Janet *item, int is_choice) {
     /* Step 4.1 home-lane pin (see push). */
     if (channel->isolated && channel->owner != &janet_vm) {
         janet_panic("isolated channel used from a foreign thread "

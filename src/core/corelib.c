@@ -1169,6 +1169,7 @@ static void janet_load_libs(JanetTable *env) {
 #endif
 #ifdef JANET_EV
     janet_lib_ev(env);
+    janet_lib_proc(env);
 #ifdef JANET_FILEWATCH
     janet_lib_filewatch(env);
 #endif

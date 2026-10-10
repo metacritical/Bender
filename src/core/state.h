@@ -187,6 +187,9 @@ struct JanetVM {
      * 0 is reserved (shared/unowned); wraps past 4B fibers (reissue
      * is accounting-only noise, never a dangling pointer). */
     uint32_t gc_owner_next;
+    /* Step P1 (proc processes): monotonic pid-serial source. 0 is
+     * reserved (never issued: wrap skips it, like gc_owner). */
+    uint32_t proc_serial;
 
     /* GC roots */
     Janet *roots;

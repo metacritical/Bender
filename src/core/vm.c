@@ -2333,6 +2333,8 @@ int janet_init(void) {
     janet_vm.gc_minor_threshold = 256 * 1024;
     /* Step 1 (process heaps): owner-id source starts empty (0 reserved). */
     janet_vm.gc_owner_next = 0;
+    /* Step P1 (proc processes): pid serials start empty (0 reserved). */
+    janet_vm.proc_serial = 0;
 
     janet_symcache_init();
 

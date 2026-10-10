@@ -5958,6 +5958,7 @@
      "src/core/parse.c"
      "src/core/peg.c"
      "src/core/pp.c"
+     "src/core/proc.c"
      "src/core/regalloc.c"
      "src/core/run.c"
      "src/core/specials.c"
