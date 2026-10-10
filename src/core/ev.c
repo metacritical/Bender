@@ -1228,7 +1228,13 @@ static int janet_channel_pop_with_lock(JanetChannel *channel, Janet *item, int i
     int is_threaded = janet_chan_is_threaded(channel);
     if (janet_q_pop(&channel->items, item, sizeof(Janet))) {
         /* Queue empty */
-        if (is_choice == 2) return 0; /* Skip pending read */
+        if (is_choice == 2) {
+            /* Try-mode: report empty without suspending (never leaves
+             * the lock held — a leaked mutex would deadlock every
+             * later operation on this channel). */
+            janet_chan_unlock(channel);
+            return 0; /* Skip pending read */
+        }
         JanetChannelPending pending;
         pending.thread = &janet_vm;
         pending.fiber = janet_vm.root_fiber,
@@ -3579,6 +3585,8 @@ typedef struct {
     int done;
     int joined;
     int is_error;
+    int is_daemon;   /* daemon threads never pin process exit (no ev
+                      * refcount); joining still works if they complete */
     Janet result;
     Janet profile_rows;   /* Phase C: harvested worker profile rows (or nil) */
     JanetFiber *waiter;
@@ -3750,7 +3758,7 @@ static void janet_thread_new_complete(JanetEVGenericMessage msg) {
     /* M2: monitors fire after join delivery so the join path is
      * unaffected; :down messages are best-effort (at-most-once). */
     janet_thread_deliver_monitors(h, is_error, result);
-    janet_ev_dec_refcount();
+    if (!h->is_daemon) janet_ev_dec_refcount();
     /* Release worker ref last; may free handle (with result) if owner
      * dropped it. Do not touch h after this. */
     janet_abstract_decref_maybe_free(h);
@@ -3805,14 +3813,16 @@ static JanetThreadCompletion *janet_thread_new_run(JanetThreadNewArgs *targs) {
     JanetTryState tstate;
     JanetSignal signal = janet_try(&tstate);
     if (!signal) {
-        if (!(flags & 0x2)) {
+        /* Flag bits match the owner side (thread/new "acd"): :a skips
+         * the abstract registry, :c skips the cfunction registry. */
+        if (!(flags & 0x1)) {
             Janet aregv = janet_unmarshal(nextbytes, endbytes - nextbytes,
                 JANET_MARSHAL_UNSAFE, NULL, &nextbytes);
             janet_assert(janet_checktype(aregv, JANET_TABLE), "expected table for abstract registry");
             janet_vm.abstract_registry = janet_unwrap_table(aregv);
             janet_gcroot(janet_wrap_table(janet_vm.abstract_registry));
         }
-        if (!(flags & 0x4)) {
+        if (!(flags & 0x2)) {
             uint32_t count1;
             memcpy(&count1, nextbytes, sizeof(count1));
             size_t count = (size_t) count1;
@@ -3953,7 +3963,10 @@ JANET_CORE_FN(cfun_thread_new,
               "`main` is a function taking 0 or 1 arguments, or a fiber; `value` is passed as the argument. "
               "The thread runs an isolated VM (share-nothing: args marshalled in, result marshalled back). "
               "Use `(thread/join handle)` to wait for completion and get the return value (re-raises thread errors). "
-              "Flags: `:a` don't copy abstract registry, `:c` don't copy cfunction registry.") {
+              "Flags: `:a` don't copy abstract registry, `:c` don't copy cfunction registry. "
+              "`:d` daemon: the thread never pins process exit (no ev refcount); "
+              "joining still works if it completes. Long-lived service threads "
+              "(pools) should pass `:d`, or the event loop waits for them forever.") {
     janet_sandbox_assert(JANET_SANDBOX_THREADS);
     janet_arity(argc, 1, 3);
     Janet value = argc >= 2 ? argv[1] : janet_wrap_nil();
@@ -3967,17 +3980,20 @@ JANET_CORE_FN(cfun_thread_new,
     }
     uint64_t flags = 0;
     if (argc >= 3) {
-        flags = janet_getflags(argv, 2, "ac");
+        flags = janet_getflags(argv, 2, "acd");
     }
     JanetBuffer *buffer = janet_malloc(sizeof(JanetBuffer));
     if (NULL == buffer) {
         JANET_OUT_OF_MEMORY;
     }
     janet_buffer_init(buffer, 0);
-    if (!(flags & 0x2)) {
+    /* Flag bits follow janet_getflags order ("acd"): :a skips the
+     * abstract registry, :c skips the cfunction registry, :d daemonizes
+     * (no exit refcount — see below). */
+    if (!(flags & 0x1)) {
         janet_marshal(buffer, janet_wrap_table(janet_vm.abstract_registry), NULL, JANET_MARSHAL_UNSAFE);
     }
-    if (!(flags & 0x4)) {
+    if (!(flags & 0x2)) {
         janet_assert(janet_vm.registry_count <= INT32_MAX, "assert failed size check");
         uint32_t temp = (uint32_t) janet_vm.registry_count;
         janet_buffer_push_bytes(buffer, (uint8_t *) &temp, sizeof(temp));
@@ -3991,6 +4007,7 @@ JANET_CORE_FN(cfun_thread_new,
     handle->done = 0;
     handle->joined = 0;
     handle->is_error = 0;
+    handle->is_daemon = (flags & 0x4) ? 1 : 0;
     handle->result = janet_wrap_nil();
     handle->profile_rows = janet_wrap_nil();
     handle->waiter = NULL;
@@ -4012,12 +4029,17 @@ JANET_CORE_FN(cfun_thread_new,
     /* Phase C: the worker inherits the collector when profiling. */
     targs->profile_active = (janet_vm.profile_table != NULL);
     janet_abstract_incref(handle);
-    janet_ev_inc_refcount();
+    /* Daemon threads never pin process exit (long-lived service
+     * threads would hold the event loop forever); joining still
+     * works if they complete (the completion path skips its dec). */
+    if (!handle->is_daemon) {
+        janet_ev_inc_refcount();
+    }
 #ifdef JANET_WINDOWS
     HANDLE wh = CreateThread(NULL, 0, janet_thread_new_worker, targs, 0, NULL);
     if (NULL == wh) {
         janet_abstract_decref_maybe_free(handle);
-        janet_ev_dec_refcount();
+        if (!handle->is_daemon) janet_ev_dec_refcount();
         janet_buffer_deinit(buffer);
         janet_free(buffer);
         janet_free(targs);
@@ -4029,7 +4051,7 @@ JANET_CORE_FN(cfun_thread_new,
     int err = pthread_create(&worker, &janet_vm.new_thread_attr, janet_thread_new_worker, targs);
     if (err) {
         janet_abstract_decref_maybe_free(handle);
-        janet_ev_dec_refcount();
+        if (!handle->is_daemon) janet_ev_dec_refcount();
         janet_buffer_deinit(buffer);
         janet_free(buffer);
         janet_free(targs);
@@ -4467,14 +4489,16 @@ static void janet_pool_worker_boot(JanetPool *pool) {
     const uint8_t *nextbytes = pool->prologue;
     const uint8_t *endbytes = nextbytes + pool->prologue_len;
     uint32_t flags = pool->flags;
-    if (!(flags & 0x2)) {
+    /* Same numbering as the owner side ("ac"): :a skips abstract, :c
+     * skips cfunction (previously off by one on both sides). */
+    if (!(flags & 0x1)) {
         Janet aregv = janet_unmarshal(nextbytes, endbytes - nextbytes,
             JANET_MARSHAL_UNSAFE, NULL, &nextbytes);
         janet_assert(janet_checktype(aregv, JANET_TABLE), "pool prologue: abstract registry");
         janet_vm.abstract_registry = janet_unwrap_table(aregv);
         janet_gcroot(janet_wrap_table(janet_vm.abstract_registry));
     }
-    if (!(flags & 0x4)) {
+    if (!(flags & 0x2)) {
         uint32_t count1;
         memcpy(&count1, nextbytes, sizeof(count1));
         size_t count = (size_t) count1;
@@ -4777,14 +4801,17 @@ JANET_CORE_FN(cfun_pool_spawn,
      * pool/profile-harvest). */
     pool->profile_active = (janet_vm.profile_table != NULL);
     /* Prologue: registries marshalled once, shared read-only (same
-     * layout thread/new builds per thread). */
+     * layout thread/new builds per thread). Flag bits follow
+     * janet_getflags order ("ac"): :a skips abstract, :c skips
+     * cfunction (previously off by one — :a matched nothing, :c
+     * skipped the wrong registry; existing pins were insensitive). */
     {
         JanetBuffer prologue;
         janet_buffer_init(&prologue, 0);
-        if (!(flags & 0x2)) {
+        if (!(flags & 0x1)) {
             janet_marshal(&prologue, janet_wrap_table(janet_vm.abstract_registry), NULL, JANET_MARSHAL_UNSAFE);
         }
-        if (!(flags & 0x4)) {
+        if (!(flags & 0x2)) {
             janet_assert(janet_vm.registry_count <= INT32_MAX, "assert failed size check");
             uint32_t temp = (uint32_t) janet_vm.registry_count;
             janet_buffer_push_bytes(&prologue, (uint8_t *) &temp, sizeof(temp));
