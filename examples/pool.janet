@@ -44,13 +44,19 @@
 
 (defn spawn
   "Start a pool of `nthreads` worker VMs sharing one task queue.
-  Returns the pool handle (a table)."
-  [nthreads &opt capacity]
+  Returns the pool handle (a table). With `flags`, passed to each
+  `thread/new` — notably `:d` (daemon workers never pin process
+  exit; required for pools that outlive explicit `stop`)."
+  [nthreads &opt capacity flags]
   (default capacity 1024)
+  (default flags nil)
   (unless (and (int? nthreads) (pos? nthreads))
     (error "pool thread count must be a positive integer"))
   (def q (ev/thread-chan capacity))
-  (def workers (core-map (fn [_] (thread/new worker-loop q)) (range nthreads)))
+  (def mkworker (if (nil? flags)
+                  (fn [_] (thread/new worker-loop q))
+                  (fn [_] (thread/new worker-loop q flags))))
+  (def workers (core-map mkworker (range nthreads)))
   @{:queue q :workers workers})
 
 (defn submit

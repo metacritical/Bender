@@ -117,4 +117,13 @@
   # suite process exit.
   (ev/cancel blocked :done))
 
+# Daemon threads (:d): joinable with values like normal threads; the
+# exit-pinning difference is process-level (covered by suite-future
+# exiting cleanly on an unstopped daemon pool).
+(let [h (thread/new (fn [x] (* x x)) 7 :d)]
+  (assert (= 49 (thread/join h)) "daemon joins with value"))
+(let [h (thread/new (fn [] :daemon-ok) nil :d)]
+  (ev/sleep 0.1)
+  (assert (= :daemon-ok (thread/join h)) "daemon flag with explicit nil value"))
+
 (end-suite)

@@ -1,0 +1,80 @@
+# Copyright (c) 2026 Calvin Rose & contributors
+#
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to
+# deal in the Software without restriction, including without limitation the
+# rights to use, copy, modify, merge, publish, distribute, sublicense, and/or
+# sell copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in
+# all copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+# FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
+# IN THE SOFTWARE.
+#
+# Futures + promises over the pool (examples/future.janet).
+
+(import ./helper :prefix "" :exit true)
+(import ../examples/future :as fut)
+(import ../examples/pool :as pool)
+(start-suite)
+
+# Future value: exact, from a worker thread.
+(let [f (fut/future (+ 20 22))]
+  (assert (= 42 (fut/deref f)) "future value exact"))
+
+# Errors re-raise on every deref (and realized? stays non-raising).
+(let [f (fut/future (error "boom-x"))]
+  (assert (not (fut/realized? f)) "not realized yet")
+  (try (fut/deref f) ([e] (assert (= e "boom-x") "error re-raises")))
+  (assert (fut/realized? f) "realized after settle")
+  (try (fut/deref f) ([e] (assert (= e "boom-x") "error re-raises twice"))))
+
+# Deref caches: second deref returns without blocking.
+(let [f (fut/future :cached)]
+  (assert (= :cached (fut/deref f)) "first deref")
+  (assert (= :cached (fut/deref f 0 :too-late)) "cached (timeout irrelevant)"))
+
+# Timeout fires on a slow body; timeout-val variant returns the fallback.
+(let [slow (fut/future (do (ev/sleep 5) :slow-done))]
+  (try (fut/deref slow 0.05) ([e] (assert (= e "future timed out") "timeout fires")))
+  (assert (= :fallback (fut/deref slow 0.05 :fallback)) "timeout-val fallback"))
+
+# Multi-consumer: two tasks deref one future (the thread/join gap).
+(let [f (fut/future :shared)
+      got @[]]
+  (ev/go (fn [] (array/push got (fut/deref f))))
+  (ev/go (fn [] (array/push got (fut/deref f))))
+  (ev/sleep 0.5)
+  (assert (and (= 2 (length got))
+               (= 2 (length (filter |(= $ :shared) got))))
+          "both consumers served"))
+
+# Cancel: cooperative — deref raises, worker result dropped.
+(let [f (fut/future (do (ev/sleep 5) :late))]
+  (fut/future-cancel f)
+  (try (fut/deref f 0.2) ([e] (assert (= e "future cancelled") "cancel raises"))))
+
+# Promises: deliver once, deref many, timeout-val, double-deliver no-op.
+(let [p (fut/promise)]
+  (assert (not (fut/realized? p)) "promise pending")
+  (assert (= p (fut/deliver p 7)) "deliver returns p")
+  (assert (fut/realized? p) "promise realized")
+  (assert (= 7 (fut/deref p)) "deref value")
+  (assert (= 7 (fut/deref p)) "deref again")
+  (assert (nil? (fut/deliver p 8)) "second deliver no-op")
+  (assert (= 7 (fut/deref p)) "first wins"))
+(let [p (fut/promise)]
+  (assert (= :none (fut/deref p 0.05 :none)) "promise timeout-val"))
+(let [p (fut/promise)]
+  (fut/deliver p nil)
+  (assert (fut/realized? p) "nil delivery counts")
+  (assert (nil? (fut/deref p)) "nil round-trips"))
+
+(end-suite)
