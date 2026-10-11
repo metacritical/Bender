@@ -205,6 +205,11 @@ int32_t janet_abstract_decref_maybe_free(void *abst) {
     int32_t result = janet_abstract_decref(abst);
     if (0 == result) {
         JanetAbstractHead *head = janet_abstract_head(abst);
+        if (head->gc.flags & JANET_MEMORY_THREADED_ABSTRACT) {
+            janet_table_put(&janet_vm.threaded_abstracts,
+                            janet_wrap_abstract(abst),
+                            janet_wrap_nil());
+        }
         if (head->type->gc) {
             janet_assert(!head->type->gc(head->data, head->size), "finalizer failed");
         }

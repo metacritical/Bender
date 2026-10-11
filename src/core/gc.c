@@ -490,6 +490,17 @@ static void janet_deinit_block(JanetGCObject *mem) {
             break;
         case JANET_MEMORY_ABSTRACT: {
             JanetAbstractHead *head = (JanetAbstractHead *)mem;
+            if (head->gc.flags & JANET_MEMORY_THREADED_ABSTRACT) {
+                /* D3: tombstone at death. Scoped sweeps free channels
+                 * between full collects, leaving registry entries whose
+                 * header is freed memory; the registry's raw-array walks
+                 * (janet_sweep's unvisited pass, clear_memory's teardown)
+                 * then read freed headers. janet_table_remove only nils
+                 * slots in place (no rehash), so iteration stays valid. */
+                janet_table_put(&janet_vm.threaded_abstracts,
+                                janet_wrap_abstract((void *) head->data),
+                                janet_wrap_nil());
+            }
             if (head->type->gcperthread) {
                 janet_assert(!head->type->gcperthread(head->data, head->size), "per-thread finalizer failed");
             }
@@ -625,11 +636,16 @@ void janet_sweep(void) {
                 }
                 janet_abstract_decref_maybe_free(abst);
 
-                /* Mark as tombstone in place */
-                items[i].key = janet_wrap_nil();
-                items[i].value = janet_wrap_false();
-                janet_vm.threaded_abstracts.deleted++;
-                janet_vm.threaded_abstracts.count--;
+                /* Tombstone in place — skip if the decref path already
+                 * tombstoned it (abstract.c's refcount free tombstones
+                 * with its own bookkeeping; counting twice underflows
+                 * count and corrupts later registry operations). */
+                if (!janet_checktype(items[i].key, JANET_NIL)) {
+                    items[i].key = janet_wrap_nil();
+                    items[i].value = janet_wrap_false();
+                    janet_vm.threaded_abstracts.deleted++;
+                    janet_vm.threaded_abstracts.count--;
+                }
             }
 
             /* Reset for next sweep */
@@ -2113,7 +2129,14 @@ void janet_collect_process(JanetProcess *proc) {
     if (janet_vm.gc_suspend) return;
     if (NULL == proc || NULL == (f = proc->fiber) || 0 == f->gc_owner ||
             !proc->isolated_heap || !janet_fiber_can_resume(f)) {
+        /* Phase 1.1 D1: the global minor never clears the caller's
+         * nursery counter, so the next VM instruction re-fires this
+         * path — an infinite loop of O(world) minors. Clear it here.
+         * (A fiber-scoped fallback that pins proc fields is WRONG
+         * here: pinning a done proc's channels keeps chan_deinit from
+         * running, and its parked readers then wait forever.) */
         janet_collect_minor();
+        if (NULL != f) f->gc_nursery_bytes = 0;
         return;
     }
     depth = JANET_RECURSION_GUARD;
