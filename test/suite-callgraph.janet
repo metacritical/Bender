@@ -315,7 +315,10 @@
   "(defn main [] (print (halve-i 7)))\n"))
 (os/execute ["/bin/sh" "-c"
   "rm -rf /tmp/cg-dii && ./build/bender tools/callgraph.janet /tmp/cg-divimi.janet --emit-native /tmp/cg-dii > /tmp/cg-dii-out.txt"])
-(assert (not (nil? (string/find "divim needs float or nonneg-int operands"
+# Refused upstream of the operand check: boxed (/) is real division, so
+# the result slot types :double and a :long kernel refuses at the ret
+# check ("div/divim need float operands" per the divergence table).
+(assert (not (nil? (string/find "ret slot is double not long"
   (slurp "/tmp/cg-dii-out.txt")))) "int divim refused")
 
 # regression (ttfx floor-div miscompile): int64 OPERANDS in a :double

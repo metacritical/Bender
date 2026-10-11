@@ -69,10 +69,18 @@
     :unknown))
 
 (def arith-ops
-  @{'add true 'sub true 'mul true 'div true 'divf true
+  @{'add true 'sub true 'mul true 'divf true
     'mod true 'rem true})
+# Real division: boxed (/) always produces a double, so div/divim
+# result slots type :double (the emitter only ever emits them as
+# float kernels -- int widths refuse). Typing them int-family let
+# call-site widening narrow a callee's :number-seeded param to :long,
+# and a fractional value then wrapped in an int64 kernel (caught by
+# the parity gate as PGO PARITY FAILED on an unhinted numeric program).
+(def div-ops
+  @{'div true 'divim true})
 (def arith-im-ops
-  @{'addim true 'subim true 'mulim true 'divim true})
+  @{'addim true 'subim true 'mulim true})
 # Bitwise ops: int32-domain (boxed errors outside int32, wraps inside).
 # Join rule is int-family-only -- a :double/:number operand refuses
 # (unknown), since C would silently truncate where Janet errors.
@@ -229,6 +237,8 @@
         (= op 'movf) (put st (ins 2) (get st (ins 1) :unknown))
         (get arith-im-ops op)
         (put st (ins 1) (arith-join (get st (ins 2) :unknown) :long))
+        (get div-ops op)
+        (put st (ins 1) :double)
         (get arith-ops op)
         (put st (ins 1)
              (arith-join (get st (ins 2) :unknown) (get st (ins 3) :unknown)))
