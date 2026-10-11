@@ -155,8 +155,22 @@
       (array/push kept2 f)))
   (set forms kept2))
 
+# run-main parity: if the script defines a top-level main, append an
+# explicit export of it onto the fiber env — AOT chunks are one do-form,
+# so main is a mere local and nothing else can reach it from C (probe:
+# bare `main` resolves, (curenv) is nil, no funcenv, no table constant).
+(def has-main
+  (truthy?
+    (find (fn [f] (and (tuple? f) (>= (length f) 2) (symbol? (get f 0))
+                       (symbol? (get f 1))
+                       (= (get f 1) 'main)
+                       (has-value? [:def :defn :var :varfn] (keyword (get f 0)))))
+          forms)))
+(def forms2
+  (if has-main (array/push (array ;forms) '(setdyn :aot-main main)) forms))
+
 # One thunk for the whole file: correct cross-form refs, zero build-time run.
-(def program (tuple/slice @['do ;forms] 0))
+(def program (tuple/slice @['do ;forms2] 0))
 (def thunk
   (try (compile program env srcpath)
     ([err] (eprint srcpath ": compile error: " err) (os/exit 1))))
@@ -340,6 +354,37 @@
       if (fstatus != JANET_SIGNAL_OK && fstatus != JANET_SIGNAL_EVENT) {
           janet_stacktrace_ext(fiber, fiber->last_value, "");
           status = 1;
+      }
+      /* run-main parity: the interpreter's run-context calls
+      ** (main ;subargs) after the script chunk completes (boot.janet
+      ** run-main). AOT binaries skipped that step entirely — scripts
+      ** that only define main ran as silent empty binaries. Mirror
+      ** it: look up main in the script env and run it with argv[1..]
+      ** (everything after the program name), same fiber-driving and
+      ** ev-loop rules as the chunk. */
+      if ((fstatus == JANET_SIGNAL_OK || fstatus == JANET_SIGNAL_EVENT)) {
+          /* mkimage appends (setdyn :aot-main main) when the script
+          ** defines a top-level main — AOT chunks are one do-form so
+          ** main is otherwise unreachable from C (no funcenv, no table
+          ** constant, (curenv) nil). Read it back and run it with the
+          ** env, exactly what run-main would have used. */
+          Janet mainv = janet_table_get(env, janet_ckeywordv("aot-main"));
+          JanetTable *script_env = env;
+          if (janet_checktype(mainv, JANET_FUNCTION)) {
+              JanetArray *ma = janet_array(argc > 1 ? argc - 1 : 0);
+              for (int ai = 1; ai < argc; ai++)
+                  janet_array_push(ma, janet_cstringv(argv[ai]));
+              JanetFiber *mfb = janet_fiber(janet_unwrap_function(mainv),
+                                            64, ma->count, ma->data);
+              mfb->env = script_env;
+              janet_gcroot(janet_wrap_fiber(mfb));
+              int mstatus = janet_loop_fiber(mfb);
+              if (mstatus != JANET_SIGNAL_OK && mstatus != JANET_SIGNAL_EVENT) {
+                  janet_stacktrace_ext(mfb, mfb->last_value, "");
+                  status = 1;
+              }
+              janet_gcunroot(janet_wrap_fiber(mfb));
+          }
       }
       janet_gcunroot(janet_wrap_fiber(fiber));
       janet_gcunroot(top);
