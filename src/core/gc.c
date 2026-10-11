@@ -29,6 +29,7 @@
 #include "proc.h"
 #include "util.h"
 #include "fiber.h"
+#include "ev.h"
 #include "vector.h"
 #include "compile.h"
 #endif
@@ -381,6 +382,9 @@ recur:
     if (fiber->ev_callback) {
         fiber->ev_callback(fiber, JANET_ASYNC_EVENT_MARK);
     }
+    /* Pending-registration reverse edge: parked fibers pin their
+     * channels (see janet_ev_chanpends_mark). */
+    janet_ev_chanpends_mark(fiber);
 #endif
 
     /* Explicit tail recursion */
@@ -418,6 +422,11 @@ static void janet_deinit_block(JanetGCObject *mem) {
             } else if (f->gc.flags & JANET_FIBER_EV_GCFLAG_SUSPENDED) {
                 janet_ev_dec_refcount();
             }
+            /* Channel-pending registrations (unlink-on-free): entries
+             * still queued get flagged dead in their nodes — consumer
+             * paths reclaim them lazily and never dereference this
+             * fiber again — and unqueued nodes are freed now. */
+            janet_ev_chanpends_deinit(f);
 #endif
             /* P3.5b: park the dead fiber's heap lists for post-sweep
              * drain into the globals (see sweep_pending). Immediate

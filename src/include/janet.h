@@ -1100,6 +1100,13 @@ struct JanetFiber {
      * of O(world). Global collections walk these plus globals (dead
      * fibers migrate theirs at free). NULL at birth. */
     void *heap_lists[3];
+    /* Channel-pending registrations (JanetChanPendReg list, ev.c).
+     * One node per pending queue entry this fiber is parked behind,
+     * claimed by the channel when the entry is consumed and freed at
+     * fiber free (janet_ev_chanpends_deinit) — the unlink-on-free
+     * discipline that replaced probe-on-read for stale entries.
+     * Opaque here: nodes belong to ev.c. */
+    void *chan_pends;
     /* P3.6 shared C stacks: ev-task fibers opt in (JANET_SHARED_STACKS
      * + ev/go or proc spawn). Shared fibers hold no private native
      * mapping (base stays NULL); each resume re-primes their context

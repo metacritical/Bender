@@ -504,6 +504,9 @@ static JanetFiber *fiber_alloc(int32_t capacity) {
         for (hli = 0; hli < 3; hli++)
             fiber->heap_lists[hli] = NULL;
     }
+    /* Channel-pending registrations start empty (gcalloc does not
+     * zero fresh bump slots — same rule as heap_lists above). */
+    fiber->chan_pends = NULL;
     janet_census_add(fiber);
     {
         /* Step 1.2: nursery starts empty (pages claimed on first bump). */

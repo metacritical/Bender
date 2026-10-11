@@ -18,5 +18,15 @@ int janet_channel_push(JanetChannel *channel, Janet x, int mode);
  * Nonzero = item obtained now (caller schedules root fiber with it);
  * zero = caller must janet_await. */
 int janet_channel_pop(JanetChannel *channel, Janet *item, int is_choice);
+/* Channel-pending registration lifecycle (unlink-on-free): entries
+ * still queued when a fiber is freed are flagged dead in their
+ * registration node, so every consumer path reclaims them without
+ * ever dereferencing the freed fiber (replaces the unsound GC
+ * probe-on-read and the never-wired janet_channel_purge_fiber). */
+void janet_ev_chanpends_deinit(JanetFiber *fiber);
+/* GC mark hook: fibers pin the channels they are parked behind. */
+void janet_ev_chanpends_mark(JanetFiber *fiber);
+void janet_channel_set_proc_alive(JanetChannel *channel, int alive);
+int janet_channel_proc_alive(JanetChannel *channel);
 
 #endif

@@ -1121,6 +1121,9 @@ static const uint8_t *unmarshal_one_fiber(
     }
     fiber->proc = NULL;
     fiber->heap_strict = 0;
+    /* Unmarshalled fibers have no channel pendings here (a suspended
+     * fiber cannot be mid-park across a marshal). */
+    fiber->chan_pends = NULL;
     /* P3.6: unmarshalled fibers always take private stacks (sharedness
      * is a lane-local scheduling property, never marshalled). */
     fiber->shared_stack = 0;

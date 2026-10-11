@@ -27,6 +27,7 @@
 #include "gc.h"
 #include "state.h"
 #include "fiber.h"
+#include "proc.h"
 #endif
 
 #ifdef JANET_EV
@@ -62,6 +63,8 @@
 #endif
 #endif
 
+typedef struct JanetChanPendReg JanetChanPendReg;
+
 typedef struct {
     JanetVM *thread;
     JanetFiber *fiber;
@@ -73,7 +76,166 @@ typedef struct {
         JANET_CP_MODE_CHOICE_WRITE,
         JANET_CP_MODE_CLOSE
     } mode;
+    /* Back-pointer into the owning fiber's chan_pends registration
+     * list. Unlink-on-free discipline: the node is claimed (and
+     * freed) by whoever consumes the entry last — a channel pop, a
+     * close revival, channel deinit, or fiber free. Fibers are only
+     * ever dereferenced through an entry whose node proves them alive
+     * (dead bit clear), replacing the unsound GC probe-on-read. */
+    JanetChanPendReg *reg;
 } JanetChannelPending;
+
+/* Channel-pending registration (see JanetFiber.chan_pends). Malloc'd,
+ * never a GC object. Bit semantics:
+ *   in_queue  — the entry is linked into the channel queue right now
+ *   dequeued  — a threaded-channel pop claimed the entry under lock;
+ *               the owner thread prunes the node at next park/deinit
+ *   dead      — the owning fiber was freed; the entry must never
+ *               schedule (or dereference) its fiber again
+ *   chan_dead — the owning channel was freed; queue storage is gone
+ * Plain/isolated channels are same-thread by contract (their home
+ * lane), so their node mutations need no lock. Threaded channels
+ * mutate `dequeued` and `dead` under the channel lock. */
+typedef struct JanetChanPendReg {
+    struct JanetChanPendReg *next;
+    JanetChannel *chan;
+    uint8_t is_write;
+    uint8_t in_queue;
+    uint8_t dequeued;
+    uint8_t dead;
+    uint8_t chan_dead;
+} JanetChanPendReg;
+
+/* Drop finished registrations from the fiber's list (called on the
+ * fiber's own thread at park time). Nodes are freed here exactly when
+ * no channel-side reference can reach them anymore. */
+static void janet_chanpends_prune(JanetFiber *f) {
+    JanetChanPendReg **link = (JanetChanPendReg **) &f->chan_pends;
+    while (NULL != *link) {
+        JanetChanPendReg *reg = *link;
+        /* chan_dead nodes are kept even once unqueued: a freed
+         * channel's abandoned queue storage may still hold entries
+         * that reference the node, and a push into that
+         * freed-but-unreused channel (upstream's zombie discipline)
+         * must find a valid node, never freed memory. They are
+         * reclaimed by the zombie claim or, absent one, leak bounded
+         * records on this broken-ownership path. */
+        if (reg->dead || reg->dequeued || (!reg->in_queue && !reg->chan_dead)) {
+            *link = reg->next;
+            janet_free(reg);
+        } else {
+            link = &reg->next;
+        }
+    }
+}
+
+/* Register a new pending entry: node onto the fiber list, then the
+ * caller fills pending.reg and pushes to the channel queue. */
+static JanetChanPendReg *janet_chanpend_register(JanetFiber *f, JanetChannel *chan, int is_write) {
+    janet_chanpends_prune(f);
+    JanetChanPendReg *reg = janet_malloc(sizeof(JanetChanPendReg));
+    reg->next = (JanetChanPendReg *) f->chan_pends;
+    reg->chan = chan;
+    reg->is_write = (uint8_t) is_write;
+    reg->in_queue = 1;
+    reg->dequeued = 0;
+    reg->dead = 0;
+    reg->chan_dead = 0;
+    f->chan_pends = reg;
+    return reg;
+}
+
+/* Remove a node from the fiber's list and free it. The fiber must be
+ * alive and on this thread (same-VM claim path only). */
+static void janet_chanpends_unlink(JanetFiber *f, JanetChanPendReg *reg) {
+    JanetChanPendReg **link = (JanetChanPendReg **) &f->chan_pends;
+    while (NULL != *link) {
+        if (*link == reg) {
+            *link = reg->next;
+            break;
+        }
+        link = &(*link)->next;
+    }
+    janet_free(reg);
+}
+
+/* Consume a same-VM pending entry popped from a plain/isolated
+ * channel queue. The dead bit makes the fiber-liveness check sound
+ * (no GC probing): a dead fiber is never dereferenced, its entry is
+ * just reclaimed. Returns 1 when pending.fiber may be scheduled
+ * (alive and sched-consistent), 0 when the entry was consumed as
+ * stale. */
+static int janet_chanpend_claim_plain(JanetChannelPending *p) {
+    JanetChanPendReg *reg = p->reg;
+    reg->in_queue = 0;
+    if (reg->dead) {
+        janet_free(reg);
+        return 0;
+    }
+    int live = p->sched_id == p->fiber->sched_id;
+    janet_chanpends_unlink(p->fiber, reg);
+    return live;
+}
+
+/* Consume a threaded-channel entry popped under the channel lock:
+ * only the node is touched (the fiber may live on another thread).
+ * The owner thread reclaims the node at its next park or at free. */
+static void janet_chanpend_claim_threaded(JanetChannelPending *p) {
+    JanetChanPendReg *reg = p->reg;
+    reg->in_queue = 0;
+    reg->dequeued = 1;
+}
+
+/* Fiber free hook (called from janet_deinit_block's fiber case).
+ * Entries still queued stay in the queues with `dead` set — channels
+ * reclaim them lazily and never dereference the fiber again. No
+ * channel locks are taken here: this runs inside the GC sweep, and a
+ * thread mid-channel-op can be the one collecting (allocation under
+ * the chan lock would self-deadlock). Plain/isolated mutations are
+ * same-thread by the home-lane contract; a queued *threaded* entry
+ * roots its fiber, so a queued threaded node is unreachable from
+ * fiber free. Nodes whose channel already died are kept (dead
+ * flagged) because abandoned queue storage may still reference them;
+ * only dequeued nodes free here. */
+void janet_ev_chanpends_deinit(JanetFiber *f) {
+    JanetChanPendReg *reg = (JanetChanPendReg *) f->chan_pends;
+    while (NULL != reg) {
+        JanetChanPendReg *next = reg->next;
+        if (!reg->chan_dead && !reg->dequeued) {
+            /* Queued on a living channel: flag dead, channel reclaims.
+             * (Dequeuing is impossible for a freed fiber.) */
+            reg->dead = 1;
+        } else if (reg->chan_dead) {
+            /* Channel freed before this fiber: abandoned queue
+             * storage may still reference the node — keep it (dead
+             * flagged) so zombie claims stay sound; unclaimed nodes
+             * leak bounded records. */
+            reg->dead = 1;
+        } else {
+            janet_free(reg);
+        }
+        reg = next;
+    }
+    f->chan_pends = NULL;
+}
+
+/* GC reverse edge (called from janet_mark_fiber): a fiber with
+ * pending registrations pins its channels, mirroring the channel's
+ * own pin on parked fibers (mark_fq). Without this, a scoped or
+ * global sweep could free a channel out from under a parked fiber's
+ * pending entry (observed: proc-scoped collection freeing an
+ * attributed mailbox). Dead-flagged nodes reference freed fibers
+ * (skip) and chan_dead nodes reference freed channels (skip); every
+ * other node's channel is alive, so the dereference is safe. */
+void janet_ev_chanpends_mark(JanetFiber *f) {
+    JanetChanPendReg *reg = (JanetChanPendReg *) f->chan_pends;
+    while (NULL != reg) {
+        if (!reg->chan_dead && !reg->dead) {
+            janet_mark(janet_wrap_abstract(reg->chan));
+        }
+        reg = reg->next;
+    }
+}
 
 struct JanetChannel {
     JanetQueue items;
@@ -82,6 +244,13 @@ struct JanetChannel {
     int32_t limit;
     int closed;
     int is_threaded;
+    /* P3.5c: proc mailboxes go quiet on proc death (sends drop as a
+     * silent no-op, Erlang parity). Set at creation; cleared when the
+     * owning proc's fiber dies (kill/completion/sweep-free). Plain
+     * and threaded channels ignore it (always 1). Read lock-free on
+     * the send path (isolated mailboxes are home-thread only, and
+     * the bit moves true->false exactly once). */
+    int proc_alive;
     /* Step 1.4: isolated channels marshal-copy values like threaded
      * ones (same transit ownership) but take no lock: single-VM by
      * contract (tasklet mailboxes). Cross-thread use is user error. */
@@ -826,6 +995,7 @@ static void janet_chan_init(JanetChannel *chan, int32_t limit, int threaded, int
     chan->closed = 0;
     chan->is_threaded = threaded;
     chan->isolated = isolated;
+    chan->proc_alive = 1;
     /* Step 4.1: isolated channels pin to the home lane (this thread's
      * VM — one VM per thread, so the address is the lane identity).
      * Unmarshal re-inits, so ownership follows the value. */
@@ -834,6 +1004,22 @@ static void janet_chan_init(JanetChannel *chan, int32_t limit, int threaded, int
     janet_q_init(&chan->read_pending);
     janet_q_init(&chan->write_pending);
     janet_os_mutex_init((JanetOSMutex *) &chan->lock);
+}
+
+/* (The old janet_chan_purge_fiber is gone: it was dead code — no
+ * death path ever called it, which is how stale pendings survived to
+ * crash push walks. The chan_pends registration makes reclamation
+ * structural instead: fiber free marks its queued entries dead, and
+ * every consumer path reclaims them. Root balance still mirrors
+ * registration: only threaded pendings root, and every threaded
+ * claim/unroot is preserved below.) */
+
+void janet_channel_set_proc_alive(JanetChannel *chan, int alive) {
+    chan->proc_alive = alive;
+}
+
+int janet_channel_proc_alive(JanetChannel *chan) {
+    return chan->proc_alive;
 }
 
 static void janet_chan_lock(JanetChannel *chan) {
@@ -846,20 +1032,59 @@ static void janet_chan_unlock(JanetChannel *chan) {
     janet_os_mutex_unlock((JanetOSMutex *) &chan->lock);
 }
 
+/* Drain one pending queue at channel deinit: entries die with the
+ * queue, nodes are released or left to their (living) fibers with
+ * chan_dead set. Never dereferences fibers — only nodes. */
+static void flag_chanpend_node(JanetChannelPending *p) {
+    JanetChanPendReg *reg = p->reg;
+    if (NULL != reg) {
+        reg->in_queue = 0;
+        reg->chan_dead = 1;
+        /* Only dead-fiber nodes free here. A dequeued node whose
+         * fiber still lives remains on that fiber's chan_pends list —
+         * freeing it here would leave a dangling entry for the
+         * fiber's prune/deinit to double-free. The fiber reclaims it
+         * (dequeued ⇒ prune's free branch); a dead fiber's node has
+         * no future walker, so it frees here. */
+        if (reg->dead) janet_free(reg);
+    }
+}
+
+/* Flag one pending queue's nodes at channel deinit. The queue array
+ * itself is abandoned intact (upstream discipline): its bytes die
+ * with the storage, but a later push into a freed-but-unreused
+ * channel still walks those entries — same as upstream — and each
+ * entry's `reg` node is stable malloc'd memory the fiber still owns,
+ * so the claim path stays sound. Nodes are flagged chan_dead here
+ * (fibers never touch the channel again) and reclaimed by their
+ * fibers' prune/deinit. Never dereferences fibers — only nodes. */
+static void janet_chan_deinit_q(JanetQueue *q) {
+    JanetChannelPending *pending = q->data;
+    if (NULL != pending) {
+        if (q->head <= q->tail) {
+            for (int32_t i = q->head; i < q->tail; i++) flag_chanpend_node(pending + i);
+        } else {
+            for (int32_t i = q->head; i < q->capacity; i++) flag_chanpend_node(pending + i);
+            for (int32_t i = 0; i < q->tail; i++) flag_chanpend_node(pending + i);
+        }
+    }
+    janet_q_deinit(q);
+}
+
 static void janet_chan_deinit(JanetChannel *chan) {
     if (janet_chan_needs_pack(chan)) {
         Janet item;
         janet_chan_lock(chan);
-        janet_q_deinit(&chan->read_pending);
-        janet_q_deinit(&chan->write_pending);
+        janet_chan_deinit_q(&chan->read_pending);
+        janet_chan_deinit_q(&chan->write_pending);
         while (!janet_q_pop(&chan->items, &item, sizeof(item))) {
             janet_chan_unpack(chan, &item, 1);
         }
         janet_q_deinit(&chan->items);
         janet_chan_unlock(chan);
     } else {
-        janet_q_deinit(&chan->read_pending);
-        janet_q_deinit(&chan->write_pending);
+        janet_chan_deinit_q(&chan->read_pending);
+        janet_chan_deinit_q(&chan->write_pending);
         janet_q_deinit(&chan->items);
     }
     janet_os_mutex_deinit((JanetOSMutex *) &chan->lock);
@@ -907,8 +1132,16 @@ static int janet_chanat_gcperthread(void *p, size_t s) {
     (void) s;
     JanetChannel *chan = p;
     janet_chan_lock(chan);
-    /* Make sure that the internals of the threaded channel no longer reference _this_ thread. Replace
-     * those references with NULL. */
+    /* Make sure that the internals of the channel no longer reference
+     * _this_ thread. Replace those references with NULL. Entries are
+     * deliberately NOT dropped here: this finalizer also fires when a
+     * plain/isolated channel is freed while its parked fibers are
+     * still alive (owner-heap retirement), and a later push must
+     * still schedule them through the NULL-thread entry (the original
+     * upstream discipline). Node lifecycle is untouched by this
+     * callback: chan_deinit runs right after it, flags remaining
+     * nodes chan_dead, and each fiber's prune/deinit reclaims the
+     * node without ever dereferencing the channel again. */
     janet_chanat_remove_vmref(&chan->read_pending);
     janet_chanat_remove_vmref(&chan->write_pending);
     janet_chan_unlock(chan);
@@ -919,12 +1152,15 @@ static void janet_chanat_mark_fq(JanetQueue *fq) {
     JanetChannelPending *pending = fq->data;
     if (fq->head <= fq->tail) {
         for (int32_t i = fq->head; i < fq->tail; i++)
-            janet_mark(janet_wrap_fiber(pending[i].fiber));
+            if (!(pending[i].reg->dead))
+                janet_mark(janet_wrap_fiber(pending[i].fiber));
     } else {
         for (int32_t i = fq->head; i < fq->capacity; i++)
-            janet_mark(janet_wrap_fiber(pending[i].fiber));
+            if (!(pending[i].reg->dead))
+                janet_mark(janet_wrap_fiber(pending[i].fiber));
         for (int32_t i = 0; i < fq->tail; i++)
-            janet_mark(janet_wrap_fiber(pending[i].fiber));
+            if (!(pending[i].reg->dead))
+                janet_mark(janet_wrap_fiber(pending[i].fiber));
     }
 }
 
@@ -999,6 +1235,7 @@ static void janet_thread_chan_cb(JanetEVGenericMessage msg) {
             JanetChannelPending reader;
             int sent = 0;
             while (!janet_q_pop(&channel->read_pending, &reader, sizeof(reader))) {
+                janet_chanpend_claim_threaded(&reader);
                 JanetVM *vm = reader.thread;
                 if (!vm) continue;
                 JanetEVGenericMessage msg;
@@ -1020,6 +1257,7 @@ static void janet_thread_chan_cb(JanetEVGenericMessage msg) {
         } else {
             JanetChannelPending writer;
             while (!janet_q_pop(&channel->write_pending, &writer, sizeof(writer))) {
+                janet_chanpend_claim_threaded(&writer);
                 JanetVM *vm = writer.thread;
                 if (!vm) continue;
                 JanetEVGenericMessage msg;
@@ -1043,14 +1281,21 @@ static void janet_thread_chan_cb(JanetEVGenericMessage msg) {
  * so each root is released exactly once. Fibers of other threads are never
  * dereferenced. Must hold the channel lock. Only scans when the queue length is
  * a power of two, which keeps this amortized O(1) per call while bounding stale
- * entries to about the number of live ones. */
+ * entries to about the number of live ones. Dead-node entries (fiber freed —
+ * only possible post-gcperthread, when the root is already gone) are dropped
+ * without touching the fiber. */
 static void janet_chan_remove_stale(JanetQueue *fq) {
     int32_t count = janet_q_count(fq);
     if (count & (count - 1)) return;
     for (int32_t i = 0; i < count; i++) {
         JanetChannelPending pending;
         janet_q_pop(fq, &pending, sizeof(pending));
-        if (pending.thread == &janet_vm && pending.sched_id != pending.fiber->sched_id) {
+        if (pending.reg->dead) {
+            /* Fiber gone: no root held (threaded roots keep fibers
+             * alive), reclaim the node. */
+            janet_free(pending.reg);
+        } else if (pending.thread == &janet_vm && pending.sched_id != pending.fiber->sched_id) {
+            janet_chanpend_claim_threaded(&pending);
             janet_gcunroot(janet_wrap_fiber(pending.fiber));
         } else {
             /* Live items must be inserted back in the same order */
@@ -1127,10 +1372,17 @@ static int janet_channel_push_with_lock(JanetChannel *channel, Janet x, int mode
     if (is_threaded) {
         /* don't dereference fiber from another thread */
         is_empty = janet_q_pop(&channel->read_pending, &reader, sizeof(reader));
+        if (!is_empty) janet_chanpend_claim_threaded(&reader);
     } else {
-        do {
+        for (;;) {
             is_empty = janet_q_pop(&channel->read_pending, &reader, sizeof(reader));
-        } while (!is_empty && (reader.sched_id != reader.fiber->sched_id));
+            if (is_empty) break;
+                    /* Registration makes this sound without GC probing: dead
+             * fibers are reclaimed by node and never dereferenced;
+             * stale entries (fiber rescheduled some other way) drop
+             * here exactly as in the pre-P3.5c discipline. */
+            if (janet_chanpend_claim_plain(&reader)) break;
+        }
     }
     if (is_empty) {
         /* No pending reader */
@@ -1162,6 +1414,7 @@ static int janet_channel_push_with_lock(JanetChannel *channel, Janet x, int mode
             if (is_threaded) {
                 janet_chan_remove_stale(&channel->write_pending);
             }
+            pending.reg = janet_chanpend_register(pending.fiber, channel, 1);
             janet_q_push(&channel->write_pending, &pending, sizeof(pending));
             janet_chan_unlock(channel);
             if (is_threaded) {
@@ -1243,6 +1496,7 @@ static int janet_channel_pop_with_lock(JanetChannel *channel, Janet *item, int i
         if (is_threaded) {
             janet_chan_remove_stale(&channel->read_pending);
         }
+        pending.reg = janet_chanpend_register(pending.fiber, channel, 0);
         janet_q_push(&channel->read_pending, &pending, sizeof(pending));
         janet_chan_unlock(channel);
         if (is_threaded) {
@@ -1252,8 +1506,18 @@ static int janet_channel_pop_with_lock(JanetChannel *channel, Janet *item, int i
     }
     janet_assert(!janet_chan_unpack(channel, item, 0), "bad channel packing");
     if (!janet_q_pop(&channel->write_pending, &writer, sizeof(writer))) {
-        /* Pending writer */
-        if (is_threaded) {
+        /* Pending writer. Same staleness discipline as the read side:
+         * dead fibers are reclaimed by node (never dereferenced);
+         * same-VM stale entries drop; threaded entries address foreign
+         * VMs and are root-pinned while queued. */
+        if (!is_threaded && janet_chanpend_claim_plain(&writer)) {
+            if (writer.mode == JANET_CP_MODE_CHOICE_WRITE) {
+                janet_schedule(writer.fiber, make_write_result(channel));
+            } else {
+                janet_schedule(writer.fiber, janet_wrap_abstract(channel));
+            }
+        } else if (is_threaded) {
+            janet_chanpend_claim_threaded(&writer);
             JanetVM *vm = writer.thread;
             JanetEVGenericMessage msg;
             msg.tag = writer.mode;
@@ -1263,12 +1527,6 @@ static int janet_channel_pop_with_lock(JanetChannel *channel, Janet *item, int i
             msg.argj = janet_wrap_nil();
             if (vm) {
                 janet_ev_post_event(vm, janet_thread_chan_cb, msg);
-            }
-        } else {
-            if (writer.mode == JANET_CP_MODE_CHOICE_WRITE) {
-                janet_schedule(writer.fiber, make_write_result(channel));
-            } else {
-                janet_schedule(writer.fiber, janet_wrap_abstract(channel));
             }
         }
     }
@@ -1586,6 +1844,7 @@ JANET_CORE_FN(cfun_channel_close,
         JanetChannelPending writer;
         while (!janet_q_pop(&channel->write_pending, &writer, sizeof(writer))) {
             if (writer.thread != &janet_vm) {
+                janet_chanpend_claim_threaded(&writer);
                 JanetVM *vm = writer.thread;
                 JanetEVGenericMessage msg;
                 msg.fiber = writer.fiber;
@@ -1596,7 +1855,10 @@ JANET_CORE_FN(cfun_channel_close,
                 if (vm) {
                     janet_ev_post_event(vm, janet_thread_chan_cb, msg);
                 }
-            } else {
+            } else if (janet_chan_is_threaded(channel)) {
+                /* Same-VM entry riding a threaded channel: root was
+                 * held by this queue entry, release it now. */
+                janet_chanpend_claim_threaded(&writer);
                 if (janet_fiber_can_resume(writer.fiber) && writer.sched_id == writer.fiber->sched_id) {
                     if (writer.mode == JANET_CP_MODE_CHOICE_WRITE) {
                         janet_schedule(writer.fiber, make_close_result(channel));
@@ -1604,14 +1866,23 @@ JANET_CORE_FN(cfun_channel_close,
                         janet_schedule(writer.fiber, janet_wrap_nil());
                     }
                 }
-                if (janet_chan_is_threaded(channel)) {
-                    janet_gcunroot(janet_wrap_fiber(writer.fiber));
+                janet_gcunroot(janet_wrap_fiber(writer.fiber));
+            } else {
+                /* Plain/isolated: same-VM, unrooted entries. */
+                int live = janet_chanpend_claim_plain(&writer);
+                if (live && janet_fiber_can_resume(writer.fiber) && writer.sched_id == writer.fiber->sched_id) {
+                    if (writer.mode == JANET_CP_MODE_CHOICE_WRITE) {
+                        janet_schedule(writer.fiber, make_close_result(channel));
+                    } else {
+                        janet_schedule(writer.fiber, janet_wrap_nil());
+                    }
                 }
             }
         }
         JanetChannelPending reader;
         while (!janet_q_pop(&channel->read_pending, &reader, sizeof(reader))) {
             if (reader.thread != &janet_vm) {
+                janet_chanpend_claim_threaded(&reader);
                 JanetVM *vm = reader.thread;
                 JanetEVGenericMessage msg;
                 msg.fiber = reader.fiber;
@@ -1622,7 +1893,10 @@ JANET_CORE_FN(cfun_channel_close,
                 if (vm) {
                     janet_ev_post_event(vm, janet_thread_chan_cb, msg);
                 }
-            } else {
+            } else if (janet_chan_is_threaded(channel)) {
+                /* Same-VM entry riding a threaded channel: root was
+                 * held by this queue entry, release it now. */
+                janet_chanpend_claim_threaded(&reader);
                 if (janet_fiber_can_resume(reader.fiber) && reader.sched_id == reader.fiber->sched_id) {
                     if (reader.mode == JANET_CP_MODE_CHOICE_READ) {
                         janet_schedule(reader.fiber, make_close_result(channel));
@@ -1630,8 +1904,16 @@ JANET_CORE_FN(cfun_channel_close,
                         janet_schedule(reader.fiber, janet_wrap_nil());
                     }
                 }
-                if (janet_chan_is_threaded(channel)) {
-                    janet_gcunroot(janet_wrap_fiber(reader.fiber));
+                janet_gcunroot(janet_wrap_fiber(reader.fiber));
+            } else {
+                /* Plain/isolated: same-VM, unrooted entries. */
+                int live = janet_chanpend_claim_plain(&reader);
+                if (live && janet_fiber_can_resume(reader.fiber) && reader.sched_id == reader.fiber->sched_id) {
+                    if (reader.mode == JANET_CP_MODE_CHOICE_READ) {
+                        janet_schedule(reader.fiber, make_close_result(channel));
+                    } else {
+                        janet_schedule(reader.fiber, janet_wrap_nil());
+                    }
                 }
             }
         }
@@ -1803,6 +2085,14 @@ JanetFiber *janet_loop1(void) {
         JanetSignal sig = janet_continue_signal(task.fiber, task.value, &res, task.sig);
         if (!janet_fiber_can_resume(task.fiber)) {
             janet_table_remove(&janet_vm.active_tasks, janet_wrap_fiber(task.fiber));
+            /* P3.5c: a completed proc retires its mailbox (go quiet so
+             * later sends drop silently, Erlang parity). Completed
+             * fibers hold no self-pendings (recv is own-mailbox only),
+             * so no purge is needed — only the flag. All objects are
+             * listed-valid here (mid-mutator, pre-sweep). */
+            if (NULL != task.fiber->proc && NULL != task.fiber->proc->mbox) {
+                janet_channel_set_proc_alive(task.fiber->proc->mbox, 0);
+            }
         }
         void *sv = task.fiber->supervisor_channel;
         int is_suspended = sig == JANET_SIGNAL_EVENT || sig == JANET_SIGNAL_YIELD || sig == JANET_SIGNAL_INTERRUPT;
