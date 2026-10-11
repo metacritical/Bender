@@ -730,8 +730,25 @@ JanetArray *janet_profile_rows(void) {
                         double lo = janet_unwrap_number(mn->data[j]);
                         double hi = janet_unwrap_number(mx->data[j]);
                         if (lo <= hi) {
-                            janet_array_push(mins, janet_wrap_number(lo));
-                            janet_array_push(maxs, janet_wrap_number(hi));
+                            /* Non-finite bounds serialize as tagged
+                             * strings: the printer emits bare inf/-inf,
+                             * which parse reads back as a symbol and
+                             * killed every profile re-load (unknown
+                             * symbol inf). callgraph maps the strings
+                             * back to float infinities. NaN never
+                             * reaches here (lo <= hi fails -> nil). */
+                            if (isinf(lo)) {
+                                janet_array_push(mins,
+                                    janet_cstringv(lo < 0 ? "-inf" : "inf"));
+                            } else {
+                                janet_array_push(mins, janet_wrap_number(lo));
+                            }
+                            if (isinf(hi)) {
+                                janet_array_push(maxs,
+                                    janet_cstringv(hi < 0 ? "-inf" : "inf"));
+                            } else {
+                                janet_array_push(maxs, janet_wrap_number(hi));
+                            }
                         } else {
                             janet_array_push(mins, janet_wrap_nil());
                             janet_array_push(maxs, janet_wrap_nil());

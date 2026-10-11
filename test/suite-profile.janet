@@ -125,6 +125,27 @@
     (assert (= 4 ((get info :maxs) 1)) "dumped max 1")))
 (assert saw-mm "prof-mm in dump")
 
+# non-finite bounds round-trip: inf/-inf serialize as tagged strings
+# (bare inf prints fine but parse reads it back as a symbol, which
+# aborted every profile re-load with "unknown symbol inf"); NaN stays
+# a nil sentinel. Loaders map the strings back to float infinities.
+(debug/profile-start)
+(defn prof-inf [x] x)
+(prof-inf 1.5)
+(prof-inf math/inf)
+(prof-inf (- math/inf))
+(prof-inf math/nan)
+(debug/profile-dump "/tmp/suite-profile-inf.jdn")
+(def back-inf (parse (slurp "/tmp/suite-profile-inf.jdn")))
+(var saw-inf false)
+(each [id info] back-inf
+  (when (= (id 2) "prof-inf")
+    (set saw-inf true)
+    (assert (= "-inf" ((get info :mins) 0)) "-inf min tagged string")
+    (assert (= "inf" ((get info :maxs) 0)) "inf max tagged string")))
+(assert saw-inf "prof-inf in dump")
+(debug/profile-stop)
+
 # Phase C: worker harvest. Profiling off -> empty harvest, nil thread rows.
 # (The range test above leaves the collector on; stop it first.)
 (debug/profile-stop)

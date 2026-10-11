@@ -131,4 +131,18 @@
 (assert (string/find "profile-seed wkernel 0 double worker" cg-m-text)
         "worker-only evidence seeds")
 
+# ---- inf-bearing profile loads (non-finite bounds serialize as tagged
+# strings; the loader used to die on unknown symbol inf) ----
+(spit "/tmp/pmg-inf.jdn"
+  (string/format "%j"
+    @[@[@["/tmp/pmg-wonly.janet" 1 "wkernel"]
+        @{:calls 5 :params @[@[:double]] :mins @["-inf"] :maxs @["inf"]
+          :elems @[] :rets @[:double] :from :worker}]]))
+(def [cg-i-code cg-i-text]
+  (run-out "./build/bender" "tools/callgraph.janet" "/tmp/pmg-wonly.janet"
+           "--profile" "/tmp/pmg-inf.jdn"))
+(assert (zero? cg-i-code) "callgraph loads inf-bearing profile")
+(assert (string/find "profile-seed wkernel 0 double worker" cg-i-text)
+        "inf-bearing evidence still seeds")
+
 (end-suite)

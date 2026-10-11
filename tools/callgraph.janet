@@ -881,6 +881,15 @@
 (var profile-index nil)
 (when profile-file
   (def rows (eval (parse (slurp profile-file))))
+  # Non-finite range bounds arrive as tagged strings ("inf"/"-inf"):
+  # the C dumper cannot emit bare inf (parse reads it back as a symbol
+  # and aborted every profile re-load). Map them to float infinities;
+  # NaN slots were already serialized as nil sentinels.
+  (defn prof-bound [x]
+    (cond
+      (string? x) (case x "inf" math/inf "-inf" (- math/inf) nil)
+      (number? x) x
+      nil))
   (set profile-index @{})
   (each row rows
     (def id (row 0))
@@ -889,8 +898,8 @@
     (when nm
       (def bucket (or (get profile-index nm) @[]))
       (array/push bucket {:params (get info :params @[])
-                          :mins (get info :mins @[])
-                          :maxs (get info :maxs @[])
+                          :mins (map prof-bound (get info :mins @[]))
+                          :maxs (map prof-bound (get info :maxs @[]))
                           :calls (get info :calls 0)
                           :from (get info :from :home)})
       (put profile-index nm bucket)))
