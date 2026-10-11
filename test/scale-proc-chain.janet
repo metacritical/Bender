@@ -1,0 +1,81 @@
+# Scale test: a chain of N processes passes a number mailbox-to-mailbox,
+# each incrementing once. Final must equal N (exact-once accounting).
+#
+# NOT part of `make test` (name avoids test/suite*.janet): 1M takes ~1 min,
+# 10M takes several minutes and needs segmenting (all N parked fibers are
+# simultaneously alive; ~1KB+ each).
+#
+# Usage: bender test/scale-proc-chain.janet N [segments]
+#   N        total increments (e.g. 10000, 1000000, 10000000)
+#   segments chain splits for large N (default 1; use >=10 for 10M on 16GB)
+#
+# Each segment builds a chain back-to-front (closures capture `next`),
+# feeds the running total into the head, and collects the tail via a
+# thread-chan. Continuity asserted per segment; throughput printed.
+
+(def args (array/slice (dyn :args) 1))
+
+(defn usage-die []
+  (print "usage: bender test/scale-proc-chain.janet N [segments]")
+  (os/exit 1))
+
+(when (empty? args) (usage-die))
+(def total-n (scan-number (args 0)))
+(when (or (nil? total-n) (<= total-n 0)) (usage-die))
+(def n-segments (if (> (length args) 1) (scan-number (args 1)) 1))
+(when (or (nil? n-segments) (<= n-segments 0)) (usage-die))
+(when (not= (% total-n n-segments) 0)
+  (print "N must divide evenly by segments")
+  (os/exit 1))
+(def seg-len (/ total-n n-segments))
+
+# Failsafe: a stuck chain exits nonzero instead of hanging forever.
+(def timeout-s (+ 120 (* 90 (/ total-n 1000000))))
+(ev/go (fn [] (ev/sleep timeout-s) (print "TIMEOUT: chain stalled") (os/exit 1)))
+
+# Body factory: parameters are fresh bindings per call, so closures
+# never alias across loop iterations (def-in-loop would share a slot).
+(defn- make-link [nxt done]
+  (if (nil? nxt)
+    (fn [] (ev/give done (+ (proc/recv) 1)))
+    (fn [] (proc/send nxt (+ (proc/recv) 1)))))
+
+(defn run-segment [m feed]
+  (def done (ev/thread-chan 1))
+  (var next nil)
+  # Build tail-first so each link captures its live successor.
+  # The tail reports to `done` instead of a next process.
+  (for i 0 m
+    (set next (proc/spawn (make-link next done))))
+  (proc/send next feed)
+  (ev/take done))
+
+(defn main []
+  (print (string "chain: n=" total-n " segments=" n-segments
+                 " seg-len=" seg-len " timeout-s=" timeout-s))
+  (flush)
+  (def t0 (os/clock))
+  (var carry 0)
+  (for s 0 n-segments
+    (def out (run-segment seg-len carry))
+    (def expect (+ carry seg-len))
+    (when (not= out expect)
+      (print (string "MISMATCH seg " s ": got " out " want " expect))
+      (os/exit 1))
+    (set carry out)
+    (print (string "seg " s " ok (" carry "/" total-n ")"))
+    (flush))
+  (def dt (- (os/clock) t0))
+  (when (not= carry total-n)
+    (print (string "FINAL MISMATCH: got " carry " want " total-n))
+    (os/exit 1))
+  (print (string "PASS final=" carry " time_s=" (string/format "%.2f" dt)
+                 " us/hop=" (string/format "%.2f" (* 1e6 (/ dt total-n)))))
+  (flush)
+  (os/exit 0))
+
+(main)
+
+# Recorded baseline (master 520cd378 + 84c7a149): 100k = 9.3 s PASS,
+# 92.7 us/hop; 10k = 0.4 s. See bench/agents.janet for the spawn/park
+# density split.
