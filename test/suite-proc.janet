@@ -336,8 +336,11 @@
     (proc/spawn-isolated (fn [] blocked)))
   (ev/cancel blocked :done))
 
-# 30. P3.3 export rule: strict tables/arrays/functions stored into
-# shared containers die with the escape panic (reason observed).
+# 30. P3.3 export rule, P3.5c attribution: lexically captured tables
+# disconnect into the child heap at spawn (copy semantics), so strict
+# stores into them are intra-heap (no panic) and never touch the
+# original. Genuinely shared stores (module env, never captured)
+# still die with the escape panic (reason observed).
 (each mk ["table" "array" "function"]
   (let [g @{}
         ch (ev/thread-chan 2)
@@ -350,8 +353,19 @@
     (ev/sleep 0.3)
     (def d (ev/take ch))
     (assert (= :down (d 0)) (string mk " down arrives"))
-    (assert (string/has-prefix? "strict proc value escaping" (d 2))
-            (string mk " escape reason"))))
+    (assert (= :normal (d 2)) (string mk " capture disconnects: clean exit"))
+    (assert (nil? (get g :leak)) (string mk " original untouched"))))
+(let [ch (ev/thread-chan 2)
+      p (proc/spawn-isolated
+          (fn [] (put (table/getproto (curenv)) :smuggle @{:x 1}) :done))]
+  (procx/monitor-chan p :m-escape ch)
+  (ev/sleep 0.3)
+  (def d (ev/take ch))
+  (assert (= :down (d 0)) "shared-store down arrives")
+  (assert (string/has-prefix? "strict proc value escaping" (d 2))
+          "shared-store escape reason")
+  (put (table/getproto (curenv)) :smuggle nil)
+  (proc/kill p :done))
 # Captured fibers: fresh ones copy at spawn (main-owned post-copy,
 # so their export never panics — value semantics); C-frame fibers
 # refuse at capture (test 29). Procs refuse at capture outright:
