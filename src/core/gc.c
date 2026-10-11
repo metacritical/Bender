@@ -2084,6 +2084,39 @@ static int janet_gc_verify_minor(void) {
  * full minors/majors. Only the target's nursery counter resets. A stuck
  * remembered set degrades to a full minor (missing edges would be
  * unsound to ignore). */
+
+/* Phase 1 density: remembered-set ownership filter. An xfb entry is
+ * only relevant to a fiber minor if its target block lives on the
+ * minor-ing fiber's OWN lists — foreign targets are kept alive by
+ * their owners and cost a pointer compare to skip, versus a full
+ * mark chain (proc -> fiber -> channels) per entry otherwise. The
+ * 100k-agent profile: 185k live xfb entries dominated every minor.
+ * Returns 1 when the entry must be marked. Non-GC values and
+ * malloc-large blocks (no owning page) mark conservatively. */
+static int janet_xfb_relevant(Janet x, uint32_t owner) {
+    void *p;
+    switch (janet_type(x)) {
+        default:
+            return 1;
+        case JANET_ABSTRACT:
+            p = janet_unwrap_abstract(x);
+            break;
+        case JANET_ARRAY:
+            p = janet_unwrap_array(x);
+            break;
+        case JANET_TABLE:
+            p = janet_unwrap_table(x);
+            break;
+        case JANET_FIBER:
+            p = janet_unwrap_fiber(x);
+            break;
+    }
+    if (NULL == p) return 1;
+    JanetSlabPage *page = janet_slab_page_for(p);
+    if (NULL == page) return 1;
+    return janet_slab_obj_owner((JanetGCObject *) p) == owner;
+}
+
 void janet_collect_fiber_minor(JanetFiber *f) {
     JanetSlabState *ss;
     size_t i;
@@ -2107,23 +2140,33 @@ void janet_collect_fiber_minor(JanetFiber *f) {
     janet_vm.gc_minor_phase = 1;
     /* Phase 1 census removal: a fiber minor marks its OWN world plus
      * the cross-fiber remember set — NOT every registered fiber (the
-     * old loop was O(N fibers x stack) per minor; the profile showed
-     * it as the chain-100k stall's mark side). Soundness: only f's
-     * lists are swept, so foreign blocks survive unmarked; foreign
-     * references INTO this heap were recorded by the cross-fiber
-     * barrier (xfb) and are marked here; a stuck remember set already
+     * old loop was O(N fibers x stack) per minor) and NOT the root
+     * env (the 100k-spawn profile showed mark_roots as the quadratic
+     * term: each child's minor walked the root env, which the
+     * workload's own bookkeeping fills with N proc handles).
+     * Soundness: only f's lists are swept, so foreign blocks survive
+     * unmarked; foreign references INTO this heap — including any
+     * root env entry — went through the write barrier and are
+     * recorded in xfb, marked here; a stuck remember set already
      * degraded to a global minor above. Registered fibers prune
      * synchronously at deinit (census_remove), so no dangling
      * registry reads. */
-    janet_mark_roots();
     janet_mark_fiber(f);
     {
         size_t xi;
         for (xi = 0; xi < ss->xfb_count; xi++)
-            janet_mark(ss->xfb[xi]);
+            if (janet_xfb_relevant(ss->xfb[xi], f->gc_owner))
+                janet_mark(ss->xfb[xi]);
     }
     janet_vm.gc_mark_phase = 0;
     janet_sweep_heaps_owned(f);
+    if (getenv("JANET_ROOT_TRACE")) {
+        static long cfmi = 0;
+        if (++cfmi <= 12 || 0 == cfmi % 2000)
+            fprintf(stderr, "[CFM2] n=%ld fiber=%p owner=%u nurs=%d xfb=%d\n",
+                    cfmi, (void *) f, f->gc_owner,
+                    (int) f->gc_nursery_bytes, (int) ss->xfb_count);
+    }
 #ifdef JANET_GC_COUNT
     g_n_owned++;
 #endif
@@ -2134,7 +2177,7 @@ void janet_collect_fiber_minor(JanetFiber *f) {
 /* P3.4 selective C roots for per-proc majors: everything mark_roots
  * covers EXCEPT fibers and the spawn queue (foreign stacks are the
  * point of skipping). Mirrors the shared parts (small, stable). */
-static void janet_mark_proc_shared(void) {
+static void janet_mark_proc_shared(uint32_t owner_id) {
     uint32_t i;
     size_t orig_rootcount = janet_vm.root_count;
     if (janet_vm.top_dyns) {
@@ -2159,8 +2202,10 @@ static void janet_mark_proc_shared(void) {
         JanetSlabState *xss = (JanetSlabState *) janet_vm.slab_state;
         if (NULL != xss) {
             size_t xi;
+            /* Ownership filter: same rationale as the fiber minor. */
             for (xi = 0; xi < xss->xfb_count; xi++)
-                janet_mark(xss->xfb[xi]);
+                if (janet_xfb_relevant(xss->xfb[xi], owner_id))
+                    janet_mark(xss->xfb[xi]);
         }
     }
 }
@@ -2281,7 +2326,7 @@ void janet_collect_process(JanetProcess *proc) {
     depth = JANET_RECURSION_GUARD;
     janet_vm.gc_mark_phase = 1;
     janet_vm.gc_minor_phase = 1;
-    janet_mark_proc_shared();
+    janet_mark_proc_shared(f->gc_owner);
     janet_mark_fiber(f);
     if (NULL != f->env) janet_mark(janet_wrap_table(f->env));
     if (NULL != proc->mbox) janet_mark(janet_wrap_abstract(proc->mbox));
