@@ -2438,7 +2438,15 @@ int janet_init(void) {
     janet_vm.shared_stack = NULL;
     janet_vm.shared_stack_size = 0;
     janet_vm.shared_stack_committed = NULL;
-    janet_vm.shared_stacks_on = (NULL != getenv("JANET_SHARED_STACKS")) ? 1 : 0;
+    /* P3.6 shared C stacks default ON for ev-task + proc fibers: the
+     * spawn profile shows per-spawn stack malloc-large + OS zero-fill
+     * as the dominant density cost (~1 stack per actor). Opt OUT with
+     * JANET_SHARED_STACKS=0 (generators and C-frame yields keep private
+     * stacks regardless — suspend discipline, enforced at fiber_new). */
+    {
+        const char *ssflag = getenv("JANET_SHARED_STACKS");
+        janet_vm.shared_stacks_on = !(NULL != ssflag && 0 == strcmp(ssflag, "0"));
+    }
 
     janet_symcache_init();
 
