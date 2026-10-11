@@ -36,6 +36,19 @@
 #include <unistd.h>
 #endif
 
+/* AddressSanitizer detection: GCC defines __SANITIZE_ADDRESS__, clang
+ * does not — clang only offers __has_feature(address_sanitizer). The
+ * grow-on-fault machinery (SIGSEGV handler + malloc'd sigaltstack)
+ * conflicts with ASAN's own signal and allocator machinery, so it is
+ * compiled out under either sanitizer flavor. */
+#if defined(__SANITIZE_ADDRESS__)
+#  define JANET_ASAN 1
+#elif defined(__has_feature)
+#  if __has_feature(address_sanitizer)
+#    define JANET_ASAN 1
+#  endif
+#endif
+
 /* Stack size for a fiber's native C stack. The fibers here back VM frames
  * (as of Phase 1 the VM values live in fiber->data, so this serves the C
  * calls made while running a fiber -- cfuns, janet_call children, ev), so
@@ -105,7 +118,7 @@ static JANET_THREAD_LOCAL int janet_growstack_alt_ok = 0;
  * leaking its registration is virtual-only). Runs in normal context,
  * so malloc is fine. */
 static void janet_growstack_atfork_child(void) {
-#ifndef __SANITIZE_ADDRESS__
+#ifndef JANET_ASAN
     size_t alt_size = 256 * 1024;
     void *alt_stack = malloc(alt_size);
     if (NULL != alt_stack) {
@@ -240,7 +253,7 @@ void janet_fiber_growstack_init(void) {
          * fault reports anyway. Growth still works without one (the
          * faulting sp stays in committed space); only the identified-
          * overflow message may be lost when sp is wild. */
-#ifndef __SANITIZE_ADDRESS__
+#ifndef JANET_ASAN
         size_t alt_size = 256 * 1024;
         void *alt_stack = malloc(alt_size);
         if (NULL != alt_stack) {
