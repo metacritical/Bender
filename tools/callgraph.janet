@@ -1026,15 +1026,26 @@
     "void" true "while" true})
 (defn emit-c-name [nm]
   # Janet name characters with no C equivalent fold deterministically
-  # (! mutation convention, ? predicate convention, / module paths).
-  # Character-mapped, not PEG-replaced: ? and ! are PEG-special in
-  # string/replace-all.
+  # (! mutation convention, ? predicate convention, / module paths,
+  # + * < > = arithmetic/comparison spellings). Character-mapped, not
+  # PEG-replaced: ? and ! are PEG-special in string/replace-all. Any
+  # other non-identifier byte hex-escapes (_xHH), so symbols like
+  # widen+2 or *mul* cannot leak raw C into the kernel source.
   (def base (string/replace-all "-" "_" nm))
   (def folded (string/join
                 (map (fn [c] (cond (= c 33) "_bang"
                                   (= c 63) "_q"
                                   (= c 47) "_"
-                                  (string/from-bytes c)))
+                                  (= c 43) "_plus"
+                                  (= c 42) "_star"
+                                  (= c 60) "_lt"
+                                  (= c 62) "_gt"
+                                  (= c 61) "_eq"
+                                  (or (and (>= c 48) (<= c 57))
+                                      (and (>= c 65) (<= c 90))
+                                      (and (>= c 97) (<= c 122))
+                                      (= c 95)) (string/from-bytes c)
+                                  (string/format "_x%02X" c)))
                      (string/bytes base)) ""))
   (if (get emit-c-reserved folded) (string "k_" folded) folded))
 (defn emit-c-num [v] (string/format "%.17g" v))
