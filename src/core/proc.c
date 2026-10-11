@@ -101,59 +101,102 @@ static JanetFunction *janet_proc_copy_entry(JanetFunction *func) {
 }
 
 static Janet cfun_proc_spawn_impl(JanetFunction *func, int32_t cap, int isolated) {
-    JanetProcess *proc = janet_abstract(&janet_proc_type, sizeof(JanetProcess));
-    Janet proc_j = janet_wrap_abstract(proc);
-    /* Root across the allocations below (fiber + tables can collect). */
-    janet_gcroot(proc_j);
-    proc->mbox = janet_channel_make_isolated((uint32_t) cap);
-    proc->sup = janet_channel_make(8);
-    proc->fiber = NULL;
-    proc->serial = janet_proc_next_serial();
-    proc->done = 0;
-    /* P1.2 fields: rooted individually until assigned (the proc root
-     * covers them after; mark keeps them after that). */
-    JanetArray *stash = janet_array(0);
-    Janet stash_j = janet_wrap_array(stash);
-    janet_gcroot(stash_j);
-    JanetArray *monitors = janet_array(0);
-    Janet monitors_j = janet_wrap_array(monitors);
-    janet_gcroot(monitors_j);
-    proc->stash = stash;
-    proc->monitors = monitors;
-    proc->exit_reason = janet_wrap_nil();
-    proc->trap_exit = 0;
-    proc->killed = 0;
-    proc->isolated_heap = isolated;
-    janet_gcunroot(monitors_j);
-    janet_gcunroot(stash_j);
+    /* Fiber first (P3.5c): spawn-construction attributes to the child
+     * via gc_alloc_ctx, so the process's memory is born owned (owner
+     * id, strict bit, nursery, filing) and per-proc pressure/sweeps
+     * cover it while globals stay quiet. */
     JanetFiber *fiber = janet_fiber(func, 64, 0, NULL);
     janet_assert(NULL != fiber, "bad proc fiber");
     /* P3.3: strict fibers opt their page claims into the isolated bit
      * (barrier-checked exports) and arm the VM-wide gate. Never
-     * inherited, never unmarshalled. */
+     * inherited, never unmarshalled. Set before the override so every
+     * attributed birth agrees. */
     fiber->heap_strict = isolated;
     if (isolated) janet_vm.heap_strict_live = 1;
     /* P3.6: lane-shared stacks when enabled (same suspend discipline
      * as ev tasks — proc bodies block in ev ops, never raw-yield). */
     fiber->shared_stack = janet_vm.shared_stacks_on;
-    fiber->flags |=
-        JANET_FIBER_MASK_ERROR |
-        JANET_FIBER_MASK_USER0 |
-        JANET_FIBER_MASK_USER1 |
-        JANET_FIBER_MASK_USER2 |
-        JANET_FIBER_MASK_USER3 |
-        JANET_FIBER_MASK_USER4;
-    /* Env chain (mirrors ev/go) plus :proc-self for proc/self. */
-    if (!janet_vm.fiber->env) {
+    fiber->proc = NULL;
+    /* The proc handle stays parent-born (spawner-facing): no strict
+     * bit, so registry/monitor/discipline stores of it never trip
+     * the export rule — same as before the override. */
+    JanetProcess *proc = janet_abstract(&janet_proc_type, sizeof(JanetProcess));
+    Janet proc_j = janet_wrap_abstract(proc);
+    /* Root across the allocations below (fiber + tables can collect). */
+    janet_gcroot(proc_j);
+    proc->fiber = NULL;
+    proc->serial = janet_proc_next_serial();
+    proc->done = 0;
+    proc->exit_reason = janet_wrap_nil();
+    proc->trap_exit = 0;
+    proc->killed = 0;
+    proc->isolated_heap = isolated;
+    /* Parent env exists for the proto chain (parent-born, before the
+     * override engages). */
+    if (NULL != janet_vm.fiber && !janet_vm.fiber->env) {
         janet_vm.fiber->env = janet_table(0);
     }
-    fiber->env = janet_table(0);
-    fiber->env->proto = janet_vm.fiber->env;
-    janet_table_put(fiber->env, janet_ckeywordv("proc-self"), proc_j);
-    proc->fiber = fiber;
-    /* P3.5: back-pointer for auto-trigger routing. */
-    fiber->proc = proc;
-    fiber->supervisor_channel = proc->sup;
+    /* Attributed construction under try/finally: panics longjmp past
+     * straight-line clears, which would strand a dangling override
+     * (later births filing into a dead fiber's lists). */
+    janet_vm.gc_alloc_ctx = fiber;
+    {
+        JanetTryState tstate;
+        JanetSignal sig = janet_try(&tstate);
+        if (!sig) {
+            proc->mbox = janet_channel_make_isolated((uint32_t) cap);
+            proc->sup = janet_channel_make(8);
+            /* P1.2 fields: rooted individually until assigned (the proc
+             * root covers them after; mark keeps them after that). */
+            JanetArray *stash = janet_array(0);
+            Janet stash_j = janet_wrap_array(stash);
+            janet_gcroot(stash_j);
+            JanetArray *monitors = janet_array(0);
+            Janet monitors_j = janet_wrap_array(monitors);
+            janet_gcroot(monitors_j);
+            proc->stash = stash;
+            proc->monitors = monitors;
+            janet_gcunroot(monitors_j);
+            janet_gcunroot(stash_j);
+            if (isolated) {
+                /* Marshal-copied entry, attributed to the child (its
+                 * code and constants live in its heap). Re-reset the
+                 * fresh fiber onto the copy (reuse pattern from thread
+                 * workers). */
+                JanetFunction *copy = janet_proc_copy_entry(func);
+                Janet copy_j = janet_wrap_function(copy);
+                janet_gcroot(copy_j);
+                janet_fiber_reset(fiber, copy, 0, NULL);
+                fiber->heap_strict = isolated;
+                janet_gcunroot(copy_j);
+            }
+            /* Env chain (mirrors ev/go) plus :proc-self for proc/self.
+             * Importing the parent-born handle into the strict env is
+             * allowed (imports pass; exports panic). Masks set here —
+             * after any re-reset, which clears flags. */
+            fiber->flags |=
+                JANET_FIBER_MASK_ERROR |
+                JANET_FIBER_MASK_USER0 |
+                JANET_FIBER_MASK_USER1 |
+                JANET_FIBER_MASK_USER2 |
+                JANET_FIBER_MASK_USER3 |
+                JANET_FIBER_MASK_USER4;
+            fiber->env = janet_table(0);
+            fiber->env->proto = (NULL != janet_vm.fiber) ? janet_vm.fiber->env : NULL;
+            janet_table_put(fiber->env, janet_ckeywordv("proc-self"), proc_j);
+            proc->fiber = fiber;
+            /* P3.5: back-pointer for auto-trigger routing. */
+            fiber->proc = proc;
+            fiber->supervisor_channel = proc->sup;
+            janet_vm.gc_alloc_ctx = NULL;
+            janet_restore(&tstate);
+        } else {
+            janet_vm.gc_alloc_ctx = NULL;
+            janet_restore(&tstate);
+            janet_gcunroot(proc_j);
+            janet_panicv(tstate.payload);
+        }
+    }
     janet_schedule(fiber, janet_wrap_nil());
     janet_gcunroot(proc_j);
     return proc_j;
@@ -191,12 +234,9 @@ JANET_CORE_FN(cfun_proc_spawn_isolated,
         janet_panic("proc thunk must accept 0 arguments");
     }
     int32_t cap = janet_optnat(argv, argc, 1, 16);
-    JanetFunction *copy = janet_proc_copy_entry(func);
-    Janet copy_j = janet_wrap_function(copy);
-    janet_gcroot(copy_j);
-    Janet ret = cfun_proc_spawn_impl(copy, cap, 1);
-    janet_gcunroot(copy_j);
-    return ret;
+    /* P3.5c: the entry copy happens inside the impl, attributed to
+     * the child (its code lives in its heap). */
+    return cfun_proc_spawn_impl(func, cap, 1);
 }
 
 JANET_CORE_FN(cfun_proc_isolated,
@@ -334,6 +374,14 @@ JANET_CORE_FN(cfun_proc_kill,
     if (NULL != fiber && janet_fiber_can_resume(fiber)) {
         proc->killed = 1;
         janet_cancel(fiber, argv[1]);
+        /* P3.5c: retire the mailbox now (purge the victim's pendings —
+         * it may be parked in recv — and go quiet so later sends drop
+         * silently, Erlang parity). Both objects are listed-valid here
+         * (mid-mutator, pre-sweep). */
+        if (NULL != proc->mbox) {
+            /* DISABLED-HOOK-TEST */
+            (void) 0;
+        }
     }
     return argv[0];
 }

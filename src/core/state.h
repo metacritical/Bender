@@ -211,6 +211,14 @@ struct JanetVM {
     /* P3.6 gate: ev/go + proc spawn opt fibers in when set (from
      * JANET_SHARED_STACKS in the environment, read once at init). */
     int shared_stacks_on;
+    /* P3.5c allocation attribution: when non-NULL, slab/gcalloc births
+     * attribute to this fiber (owner id, strict bit, nursery, filing)
+     * instead of the running fiber. Set during strict/isolated spawn
+     * construction so a process's memory is born owned (per-proc
+     * pressure + narrow sweeps cover it; globals stay quiet). Cleared
+     * in a janet_try/finally (panics longjmp past straight-line
+     * clears, which would strand a dangling override). */
+    struct JanetFiber *gc_alloc_ctx;
 
     /* GC roots */
     Janet *roots;

@@ -111,6 +111,7 @@ void janet_gc_barrier(void *obj, Janet value);
  * use janet_free directly. */
 void janet_gc_release(JanetGCObject *mem);
 
+
 /* P3.4 bookkeeping puts (marshal memo, threaded registry): mark an old
  * container dirty without barrier duties (no xfb record, no export
  * panic). Dirty is always safe (over-traversal); the skipped duties

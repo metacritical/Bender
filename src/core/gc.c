@@ -49,6 +49,9 @@ static void janet_mark_abstract(void *adata);
 
 /* Local state that is only temporary for gc */
 static JANET_THREAD_LOCAL uint32_t depth = JANET_RECURSION_GUARD;
+#ifdef JANET_GC_COUNT
+static long g_n_minor = 0, g_n_major = 0, g_n_owned = 0, g_n_proc = 0;
+#endif
 
 /* Generational gate (Phase 2b-iii policy), defined with the slab code
  * below; used by the table/array markers. */
@@ -538,7 +541,12 @@ static int janet_check_liveref(Janet x) {
  * string heap, every block must be a string or symbol (keywords intern
  * to symbols); otherwise it must be neither -- misrouting is a bug.
  * Step 1.3: only_owner != 0 frees only that owner's young unmarked
- * (per-fiber minors); 0 keeps the shared behavior exactly. */
+ * (per-fiber minors); 0 keeps the shared behavior exactly.
+ * P3.5c death reaping: a dying fiber's own lists are swept inline
+ * (same filter) before its deinit parks survivors — O(own) instead
+ * of floating to globals. Sound: every caller runs post-mark, so
+ * unmarked-own is garbage; `clear_memory` bypasses the owned paths
+ * (calls deinit directly, no fresh marks). */
 static void janet_sweep_list(JanetGCObject **head, int heap_kind, int is_minor,
                              uint32_t only_owner) {
     JanetGCObject *previous = NULL;
@@ -856,8 +864,11 @@ static void *janet_slab_alloc(int class_index) {
     size_t slot = janet_slab_classes[class_index];
     /* Step 1.2 requester: the running fiber (possibly NULL on host)
      * pays nursery bytes and owns bump pages; recycled slots keep
-     * their page and mark it mixed on cross-owner reuse. */
-    JanetFiber *req = janet_vm.fiber;
+     * their page and mark it mixed on cross-owner reuse. P3.5c: a
+     * spawn-construction override redirects attribution to the child
+     * being built (owner id, strict bit, nursery, filing). */
+    JanetFiber *req = (NULL != janet_vm.gc_alloc_ctx)
+        ? janet_vm.gc_alloc_ctx : janet_vm.fiber;
     uint32_t reqid = (NULL != req) ? req->gc_owner : 0;
     /* P3.3b: freelists segregate by strictness (see release). The
      * pop logic below is unchanged (young/old skip + mixed-marking
@@ -917,7 +928,16 @@ static void *janet_slab_alloc(int class_index) {
     void *out = (char *) JANET_SLAB_SLOTS(page) + page->bump;
     page->bump += (int32_t) slot;
     if (NULL != req) req->gc_nursery_bytes += slot;
-    janet_vm.gc_young_bytes += slot;
+    /* P3.5c: strict-owned young is managed per-proc (nursery pressure
+     * routes to per-proc collections; deaths float bounded by majors).
+     * Counting it toward the global young threshold would fire
+     * O(world) global minors on proc churn (the spawn scaler).
+     * Spawn-construction attribution (override, never the running
+     * fiber) is likewise per-proc managed. Shared/host bump still
+     * counts. */
+    if (NULL == req || (req == janet_vm.fiber && !req->heap_strict)) {
+        janet_vm.gc_young_bytes += slot;
+    }
     return out;
 }
 
@@ -948,6 +968,7 @@ void janet_gc_release(JanetGCObject *mem) {
     }
     janet_free(mem);
 }
+
 
 /* Free all slab pages (used at clear; freelists die with them). */
 static void janet_slab_free_pages(void) {
@@ -1613,14 +1634,19 @@ void *janet_gcalloc(enum JanetMemoryType type, size_t size) {
      * compile-time tables built on recycled slots would trip the
      * export rule); fresh pages carry the claimer's flag; malloc-
      * large objects (never recycled) take the allocating fiber's
-     * flag. Single funnel: every birth passes here. */
+     * flag (P3.5c: attribution override included). Single funnel:
+     * every birth passes here. */
     if (slab_class >= 0) {
         JanetSlabPage *pg = janet_slab_page_for(mem);
         if (NULL != pg && !pg->mixed && pg->isolated) {
             mem->flags |= JANET_MEM_ISOLATED;
         }
-    } else if (NULL != janet_vm.fiber && janet_vm.fiber->heap_strict) {
-        mem->flags |= JANET_MEM_ISOLATED;
+    } else {
+        JanetFiber *breq = (NULL != janet_vm.gc_alloc_ctx)
+            ? janet_vm.gc_alloc_ctx : janet_vm.fiber;
+        if (NULL != breq && breq->heap_strict) {
+            mem->flags |= JANET_MEM_ISOLATED;
+        }
     }
 
     /* Prepend block to heap list. Immutable strings (strings, symbols,
@@ -1647,8 +1673,13 @@ void *janet_gcalloc(enum JanetMemoryType type, size_t size) {
         } else {
             kind = 2;
         }
-        if (NULL != janet_vm.fiber && type != JANET_MEMORY_FIBER) {
-            head = (JanetGCObject **) &janet_vm.fiber->heap_lists[kind];
+        /* P3.5c: attribution override (strict spawn construction)
+         * redirects births to the child being built (owner id, strict
+         * bit, nursery, filing). Fiber objects always stay global. */
+        JanetFiber *eff = (NULL != janet_vm.gc_alloc_ctx)
+            ? janet_vm.gc_alloc_ctx : janet_vm.fiber;
+        if (NULL != eff && type != JANET_MEMORY_FIBER) {
+            head = (JanetGCObject **) &eff->heap_lists[kind];
 #ifdef JANET_HEAP_FILE_CHECK
             {
                 JanetSlabState *css = (JanetSlabState *) janet_vm.slab_state;
@@ -1656,12 +1687,12 @@ void *janet_gcalloc(enum JanetMemoryType type, size_t size) {
                 size_t ci;
                 if (NULL != css) {
                     for (ci = 0; ci < css->fibers_count; ci++) {
-                        if (css->fibers[ci] == janet_vm.fiber) { cfound = 1; break; }
+                        if (css->fibers[ci] == eff) { cfound = 1; break; }
                     }
                 }
                 if (!cfound) {
-                    fprintf(stderr, "file-check: running fiber %p not in census (%d) for type %d kind %d\n",
-                            (void *) janet_vm.fiber,
+                    fprintf(stderr, "file-check: filing fiber %p not in census (%d) for type %d kind %d\n",
+                            (void *) eff,
                             NULL != css ? (int) css->fibers_count : -1,
                             (int) type, kind);
                     abort();
@@ -1925,6 +1956,9 @@ void janet_collect_fiber_minor(JanetFiber *f) {
     }
     janet_vm.gc_mark_phase = 0;
     janet_sweep_heaps_owned(f);
+#ifdef JANET_GC_COUNT
+    g_n_owned++;
+#endif
     janet_vm.gc_minor_phase = 0;
     f->gc_nursery_bytes = 0;
 }
@@ -2117,6 +2151,9 @@ void janet_collect_process(JanetProcess *proc) {
     /* P3.5b Slice B: strict process collections sweep O(own) (narrow
      * marking already scoped them; see sweep_proc_owned). */
     janet_sweep_proc_owned(f);
+#ifdef JANET_GC_COUNT
+    g_n_proc++;
+#endif
     janet_vm.gc_minor_phase = 0;
     f->gc_nursery_bytes = 0;
 }
@@ -2129,6 +2166,16 @@ void janet_collect_process(JanetProcess *proc) {
  * young pages age (cap old) and dirty flags clear. */
 void janet_collect_minor(void) {
     if (janet_vm.gc_suspend) return;
+#ifdef JANET_GC_COUNT
+    g_n_minor++;
+#endif
+    /* Same invariant as full collects: marking requires all REACHABLE
+     * bits clear. Scoped process collects set bits on blocks living in
+     * OTHER fibers' lists and sweep only their own, so foreign bits can
+     * be stale-set here; a conservative minor that early-returns on a
+     * stale old container orphans every young object reachable only
+     * through it (proven: closures mid-suite swept while live). */
+    janet_clear_all_reachable_bits();
     depth = JANET_RECURSION_GUARD;
     janet_vm.gc_mark_phase = 1;
     janet_vm.gc_minor_phase = 1;
@@ -2170,7 +2217,15 @@ void janet_collect_minor(void) {
 
 /* Run garbage collection */
 void janet_collect(void) {
+#ifdef JANET_GC_COUNT
+    fprintf(stderr, "gc-count: minor=%ld major=%ld owned=%ld proc=%ld\n",
+            g_n_minor, g_n_major, g_n_owned, g_n_proc);
+    fflush(stderr);
+#endif
     if (janet_vm.gc_suspend) return;
+#ifdef JANET_GC_COUNT
+    g_n_major++;
+#endif
     janet_clear_all_reachable_bits();
     depth = JANET_RECURSION_GUARD;
     janet_vm.gc_mark_phase = 1;

@@ -2417,6 +2417,8 @@ int janet_init(void) {
     janet_vm.proc_serial = 0;
     /* P3.3 gate: no strict fibers yet (spawn-isolated sets it). */
     janet_vm.heap_strict_live = 0;
+    /* P3.5c allocation attribution starts clear (spawn sets it). */
+    janet_vm.gc_alloc_ctx = NULL;
     /* P3.6: lane-shared stack unmapped until first shared resume;
      * opt-in read once (any set value enables). */
     janet_vm.shared_stack_base = NULL;
