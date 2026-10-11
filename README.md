@@ -92,7 +92,7 @@ Bender, running 200,000 RNG draws... boxed.
 
 - [x] Nimble startup times, no JIT by default (AOT images, fast binaries)
 - [~] As fast as or faster than Lua (faster than CRuby measured; Lua next)
-- [x] Hindley-Milner-style type inference (widening inference + fixpoint)
+- [x] Type inference: call-site widening + fixpoint over `{:hint}` contracts (not Hindley-Milner — no unification-based principal types; the PGO loop supplies what widening alone cannot)
 - [x] Immutable data structures (tuple/struct)
 - [x] Tail call optimisation
 - [~] Lazy/delayed evaluation (fibers, generators)
@@ -110,12 +110,16 @@ Bender, running 200,000 RNG draws... boxed.
 - [x] Easier function names over stdlib dogma
 - [x] Ease of use above performance, performance above backward compatibility
 - [x] Erlang-styled concurrency (threads, mailboxes, monitors, shared structs)
+  - Fairness: `ev/timeslice` is the only quantum API and is ON by default —
+    compute hogs cannot starve sleepers; `JANET_TIMESLICE=0` (or
+    `(ev/timeslice false)`) opts out for run-to-completion atomicity. See
+    `docs/internals/messaging-guide.md` §9.
 - [ ] Use ML to detect types
 - [~] Automatic deterministic memory management (GC exists; optional/deterministic modes later)
 - [x] Inferred static types for speed (native kernels)
 - [ ] Rust-styled optional borrowed ownership
 - [ ] Logic programming (Shen-compatible)
-- [x] No hidden performance penalties, explicit allocation (`unsafe/` module)
+- [x] No *concealed* performance penalties: allocation and boxing are explicit and inspectable (`unsafe/` module), and every AOT kernel ships with a byte-parity gate — bulk paths that skip safety machinery (e.g. `array/push`'s memcpy missing the generational write barrier, fixed 2026-10) are bugs to fix, not features
 - [x] Straightforward integration with existing C code
 - [x] Lisp macros, compile-time scripting, helpful REPL
 - [~] Threads and atomic references (threads shipped; atomics partial)
@@ -487,15 +491,22 @@ Feel free to ask questions and join the discussion on the [Janet Zulip Instance]
 
 ### How fast is it?
 
-It is about the same speed as most interpreted languages without a JIT compiler. Tight, critical
-loops should probably be written in C or C++ . Programs tend to be a bit faster than
-they would be in a language like Python due to the discouragement of slow Object-Oriented abstraction
-with lots of hash-table lookups, and making late-binding explicit. All values are boxed in an 8-byte
-representation by default and allocated on the heap, with the exception of numbers, nils and booleans. The
-PEG engine is a specialized interpreter that can efficiently process string and buffer data.
+The runtime is a hybrid: the interpreter tier is about the same speed as other
+interpreted languages without a JIT, while ahead-of-time compilation (PGO-driven)
+turns numeric hot paths into native C kernels that are unboxed and competitive
+with hand-written C on kernel-shaped code — with byte-parity verification against
+the interpreter. Programs tend to run a bit faster than Python due to the
+discouragement of slow Object-Oriented abstraction with lots of hash-table
+lookups, and making late-binding explicit. On the interpreter tier, values are
+boxed in an 8-byte representation by default and allocated on the heap, with the
+exception of numbers, nils and booleans; AOT kernels unbox arrays of numbers
+when the profile proves the types stable. The PEG engine is a specialized
+interpreter that can efficiently process string and buffer data.
 
-The GC is simple and stop-the-world, but GC knobs are exposed in the core library and separate threads
-have isolated heaps and garbage collectors. Data that is shared between threads is reference counted.
+The GC is stop-the-world per collector, but separate threads (and isolated
+procs) have their own heaps and garbage collectors, so collection cost scales
+with activity rather than world size. Data that is shared between threads is
+reference counted.
 
 YMMV.
 

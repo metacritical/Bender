@@ -969,8 +969,10 @@ JANET_API JanetAbstract janet_checkabstract(Janet x, const JanetAbstractType *at
 #define janet_checktypes(x, tps) ((1 << janet_type(x)) & (tps))
 
 /* GC Object type pun. The lower 16 bits of flags are reserved for the garbage collector,
- * but the upper 16 can be used per type for custom flags. The current collector is a linked
- * list of blocks, which is naive but works. */
+ * but the upper 16 can be used per type for custom flags. This fork's collector files
+ * blocks on per-fiber heap lists plus global lists (strings, weak, large), with a
+ * nursery of slab pages per owner: full collects walk everything, minors sweep only
+ * young blocks, and scoped process collects sweep a single proc's own lists. */
 struct JanetGCObject {
     int32_t flags;
     union {

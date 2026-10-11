@@ -1,5 +1,12 @@
 # Janet AOT plan — spike → 1.1 → 2 → threads/AOT
 
+## Authoritative test gate
+
+The whole-suite gate is `make test`: **52 suites, all green** on the current
+tree (counts evolve as slices land — this line, kept in sync with CI, is the
+single source of truth; per-slice numbers below like "47 tests" or "21 tests"
+are historical snapshots of when those slices landed, not the current gate).
+
 ## Handoff — read this first
 
 This document plus `docs/internals/native-fibers.md` is the whole plan;
