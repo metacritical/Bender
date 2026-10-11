@@ -320,13 +320,25 @@ JANET_CORE_FN(cfun_proc_recv,
               "from other mailboxes is an error). Suspends when empty.") {
     janet_arity(argc, 0, 1);
     JanetFiber *me = janet_vm.fiber;
-    if (NULL == me || NULL == me->env) {
+    if (NULL == me) {
         janet_panic("proc/recv outside a process");
     }
-    Janet self = janet_table_get(me->env, janet_ckeywordv("proc-self"));
-    if (!(janet_checktype(self, JANET_ABSTRACT) &&
-            janet_abstract_type(janet_unwrap_abstract(self)) == &janet_proc_type)) {
-        janet_panic("proc/recv outside a process");
+    /* Phase 1 fast path: the P3.5 back-pointer IS the self identity —
+     * one deref instead of an env table get per message (the 100k-agent
+     * profile showed the lookup as ~40% of the recv side). */
+    JanetProcess *me_proc = me->proc;
+    Janet self;
+    if (NULL != me_proc) {
+        self = janet_wrap_abstract(me_proc);
+    } else {
+        if (NULL == me->env) {
+            janet_panic("proc/recv outside a process");
+        }
+        self = janet_table_get(me->env, janet_ckeywordv("proc-self"));
+        if (!(janet_checktype(self, JANET_ABSTRACT) &&
+                janet_abstract_type(janet_unwrap_abstract(self)) == &janet_proc_type)) {
+            janet_panic("proc/recv outside a process");
+        }
     }
     if (argc >= 1) {
         /* Own pid tuple? Local node + serial must match (remote
