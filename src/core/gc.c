@@ -2105,10 +2105,22 @@ void janet_collect_fiber_minor(JanetFiber *f) {
     depth = JANET_RECURSION_GUARD;
     janet_vm.gc_mark_phase = 1;
     janet_vm.gc_minor_phase = 1;
+    /* Phase 1 census removal: a fiber minor marks its OWN world plus
+     * the cross-fiber remember set — NOT every registered fiber (the
+     * old loop was O(N fibers x stack) per minor; the profile showed
+     * it as the chain-100k stall's mark side). Soundness: only f's
+     * lists are swept, so foreign blocks survive unmarked; foreign
+     * references INTO this heap were recorded by the cross-fiber
+     * barrier (xfb) and are marked here; a stuck remember set already
+     * degraded to a global minor above. Registered fibers prune
+     * synchronously at deinit (census_remove), so no dangling
+     * registry reads. */
     janet_mark_roots();
-    if (NULL != ss) {
-        for (i = 0; i < ss->fibers_count; i++)
-            janet_mark_fiber(ss->fibers[i]);
+    janet_mark_fiber(f);
+    {
+        size_t xi;
+        for (xi = 0; xi < ss->xfb_count; xi++)
+            janet_mark(ss->xfb[xi]);
     }
     janet_vm.gc_mark_phase = 0;
     janet_sweep_heaps_owned(f);
