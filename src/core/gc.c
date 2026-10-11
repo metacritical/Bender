@@ -126,7 +126,21 @@ static void janet_mark_abstract(void *adata) {
     /* Check if abstract type is a threaded abstract type. If it is, marking means
      * updating the threaded_abstract table. */
     if ((janet_abstract_head(adata)->gc.flags & JANET_MEM_TYPEBITS) == JANET_MEMORY_THREADED_ABSTRACT) {
-        janet_table_put(&janet_vm.threaded_abstracts, janet_wrap_abstract(adata), janet_wrap_true());
+        /* Visit-flag semantics: the table's value is this cycle's
+         * "already visited" marker (the sweep resets every entry to
+         * false). First visit this cycle: flip it and run gcmark so
+         * the abstract's INTERNALS — channel items, pending-entry
+         * values — are marked exactly like non-threaded abstracts'.
+         * Without this, values buffered inside a channel were
+         * collectable at any GC boundary, surviving only while a
+         * sender-side reference happened to keep them alive. */
+        Janet kv = janet_wrap_abstract(adata);
+        if (!janet_truthy(janet_table_get(&janet_vm.threaded_abstracts, kv))) {
+            janet_table_put(&janet_vm.threaded_abstracts, kv, janet_wrap_true());
+            if (janet_abstract_head(adata)->type->gcmark) {
+                janet_abstract_head(adata)->type->gcmark(adata, janet_abstract_size(adata));
+            }
+        }
         return;
     }
 #endif
@@ -1079,6 +1093,43 @@ static void janet_sweep_weak_drop_list(JanetGCObject *current) {
  * before globals; fibers dying in the globals sweep park leftovers
  * for the post-sweep drain (marked survivors float one cycle —
  * sound, never dangling). Same free-set as the globals-only shape. */
+/* Clear stale REACHABLE bits across every heap list. Upstream's
+ * single-heap sweep guarantees "bits start clear at each cycle"
+ * because every sweep clears every survivor. This fork's per-fiber
+ * heap lists broke that: a scoped collect (collect_process) marks
+ * objects living on OTHER fibers' lists (e.g. a proc abstract born
+ * under the parent's attribution) and then sweeps only its own
+ * lists, leaving those foreign bits set. Any later mark then
+ * early-returns on the stale bit and skips the type's gcmark — so
+ * dependents (the proc's mailbox) are never re-marked and the next
+ * full sweep frees them while live code still holds the proc. Full
+ * collects therefore pre-clear every bit before marking, restoring
+ * the invariant explicitly. Cost: one O(heap) pass, same order as
+ * the full collect itself. */
+static void janet_clear_all_reachable_bits(void) {
+    JanetSlabState *ss = (JanetSlabState *) janet_vm.slab_state;
+    JanetGCObject *cur;
+    size_t fi;
+    int kind;
+    if (NULL != ss) {
+        for (fi = 0; fi < ss->fibers_count; fi++) {
+            JanetFiber *f = ss->fibers[fi];
+            for (kind = 0; kind < 3; kind++) {
+                for (cur = f->heap_lists[kind]; NULL != cur; cur = cur->data.next)
+                    cur->flags &= ~JANET_MEM_REACHABLE;
+            }
+        }
+    }
+    JanetGCObject *globals[3];
+    globals[0] = janet_vm.blocks;
+    globals[1] = (JanetGCObject *) janet_vm.string_blocks;
+    globals[2] = janet_vm.weak_blocks;
+    for (kind = 0; kind < 3; kind++) {
+        for (cur = globals[kind]; NULL != cur; cur = cur->data.next)
+            cur->flags &= ~JANET_MEM_REACHABLE;
+    }
+}
+
 static void janet_sweep_kind(int kind, int is_minor, uint32_t only_owner) {
     JanetGCObject **ghead;
     JanetSlabState *ss;
@@ -1863,6 +1914,7 @@ void janet_collect_fiber_minor(JanetFiber *f) {
         f->gc_nursery_bytes = 0;
         return;
     }
+    janet_clear_all_reachable_bits();
     depth = JANET_RECURSION_GUARD;
     janet_vm.gc_mark_phase = 1;
     janet_vm.gc_minor_phase = 1;
@@ -2119,6 +2171,7 @@ void janet_collect_minor(void) {
 /* Run garbage collection */
 void janet_collect(void) {
     if (janet_vm.gc_suspend) return;
+    janet_clear_all_reachable_bits();
     depth = JANET_RECURSION_GUARD;
     janet_vm.gc_mark_phase = 1;
     /* Try to prevent many major collections back to back.
