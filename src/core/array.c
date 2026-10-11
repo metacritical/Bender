@@ -218,7 +218,17 @@ JANET_CORE_FN(cfun_array_push,
     }
     int32_t newcount = array->count - 1 + argc;
     janet_array_ensure(array, newcount, 2);
-    if (argc > 1) memcpy(array->data + array->count, argv + 1, (size_t)(argc - 1) * sizeof(Janet));
+    if (argc > 1) {
+        /* Generational barrier: the memcpy bulk path skips the
+         * per-element write barrier, so an old array bulk-pushing
+         * young values would leave the old<-young edges unrecorded.
+         * Record each edge before the copy (barrier is header-only,
+         * value semantics unaffected). Same discipline array/insert
+         * already applies to its argv chunk. */
+        for (int32_t i = 1; i < argc; i++)
+            janet_gc_barrier(array, argv[i]);
+        memcpy(array->data + array->count, argv + 1, (size_t)(argc - 1) * sizeof(Janet));
+    }
     array->count = newcount;
     return argv[0];
 }

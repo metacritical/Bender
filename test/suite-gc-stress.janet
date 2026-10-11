@@ -121,5 +121,27 @@
   (gccollect)
   (assert (= :ping (ev/take ch)) "ev rendezvous under churn"))
 
+# 9. Bulk array/push write barrier: an aged (old-generation) array
+# bulk-pushing young values must record the old<-young edges — the
+# memcpy path skipped janet_gc_barrier per element (Phase 2b-iii
+# covers array/insert's argv chunk; array/push's bulk path did not).
+# Survives only if the edges are recorded before heavy minor churn;
+# value parity with the single-element path is asserted both ways.
+(let [arr @[:aged :marker]]
+  (gccollect)
+  (gccollect)
+  (var young nil)
+  (do
+    (set young [(string "bulk" 1) (string "bulk" 2) (string "bulk" 3)])
+    (array/push arr ;young))
+  (set young nil)
+  # Heavy allocation churn forces nursery minors; unrecorded edges
+  # would let the young strings be swept out from under the old array.
+  (loop [i :range [0 200000]] (string "churn" i))
+  (assert (= "bulk1" (get arr 2)) "bulk-push young survives minors")
+  (assert (= "bulk3" (get arr 4)) "bulk-push young tail survives")
+  (assert (= :marker (get arr 1)) "aged head intact")
+  (assert (= 5 (length arr)) "push arity intact"))
+
 (gcsetinterval old-interval)
 (end-suite)
