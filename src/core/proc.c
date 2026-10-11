@@ -146,18 +146,12 @@ static Janet cfun_proc_spawn_impl(JanetFunction *func, int32_t cap, int isolated
         if (!sig) {
             proc->mbox = janet_channel_make_isolated((uint32_t) cap);
             proc->sup = janet_channel_make(8);
-            /* P1.2 fields: rooted individually until assigned (the proc
-             * root covers them after; mark keeps them after that). */
-            JanetArray *stash = janet_array(0);
-            Janet stash_j = janet_wrap_array(stash);
-            janet_gcroot(stash_j);
-            JanetArray *monitors = janet_array(0);
-            Janet monitors_j = janet_wrap_array(monitors);
-            janet_gcroot(monitors_j);
-            proc->stash = stash;
-            proc->monitors = monitors;
-            janet_gcunroot(monitors_j);
-            janet_gcunroot(stash_j);
+            /* P1.2 fields, lazily allocated (density: most procs never
+             * stash or monitor — spawn no longer pays 2 arrays + 2
+             * root pairs per birth; every mark site null-checks, and
+             * the accessors allocate on first use). */
+            proc->stash = NULL;
+            proc->monitors = NULL;
             if (isolated) {
                 /* Marshal-copied entry, attributed to the child (its
                  * code and constants live in its heap). Re-reset the
@@ -472,6 +466,7 @@ JANET_CORE_FN(cfun_proc_stash,
               "examples/proc.janet owns the discipline).") {
     janet_fixarity(argc, 1);
     JanetProcess *proc = janet_getproc(argv, 0);
+    if (NULL == proc->stash) proc->stash = janet_array(0);
     return janet_wrap_array(proc->stash);
 }
 
@@ -495,6 +490,7 @@ JANET_CORE_FN(cfun_proc_monitor,
               "first — this just records. Returns `watcher`.") {
     janet_fixarity(argc, 3);
     JanetProcess *watched = janet_getproc(argv, 0);
+    if (NULL == watched->monitors) watched->monitors = janet_array(0);
     janet_array_push(watched->monitors, argv[2]);
     janet_array_push(watched->monitors, argv[1]);
     return argv[1];
@@ -506,6 +502,7 @@ JANET_CORE_FN(cfun_proc_monitors_of,
               "drain it, then clear it).") {
     janet_fixarity(argc, 1);
     JanetProcess *proc = janet_getproc(argv, 0);
+    if (NULL == proc->monitors) proc->monitors = janet_array(0);
     return janet_wrap_array(proc->monitors);
 }
 
