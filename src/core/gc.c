@@ -404,6 +404,20 @@ recur:
     janet_ev_chanpends_mark(fiber);
 #endif
 
+    /* Supervisor channel: fibers hold their sup channel outside any
+     * Janet-visible value once wired (proc spawn, ev/go and tasklet
+     * wiring set it directly). Threaded abstracts are refcounted, and
+     * janet_sweep's registry pass decrefs every unvisited entry each
+     * full collect — an unmarked sup therefore dies under a parked or
+     * running fiber, and freed channel memory is reused as Janet
+     * values (the premature-free UAF family: clobbered closure defs,
+     * registry slots, ASAN run_vm read of a freed 132-byte channel).
+     * Marking it with the fiber pins it for every collector: visited
+     * entries are never decref'd, and the pass reclaims it on the
+     * first full collect after the fiber dies. */
+    if (NULL != fiber->supervisor_channel)
+        janet_mark(janet_wrap_abstract(fiber->supervisor_channel));
+
     /* Explicit tail recursion */
     if (fiber->child) {
         fiber = fiber->child;
