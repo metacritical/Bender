@@ -172,6 +172,18 @@ struct JanetVM {
      * unlink and orphan chains (counted-but-unlisted). Per-VM
      * (thread-safe); NULL outside sweeps. */
     void *sweep_pending[3];
+    /* Phase 1.1 quarantine: blocks freed this cycle wait here INTACT
+     * (no deinit, no release) until the next full collect's weak-drop
+     * has judged weak-table entries against their pre-free mark state.
+     * Freeing immediately lets a recycled slot alias a weak entry's
+     * referent: the entry then reads the NEW occupant's mark state and
+     * survives with a dead referent (suite-ev2 count-uncollected = 100
+     * under the epoch mark). Per-VM; drained after each full collect's
+     * registry pass, or early when over capacity (the poison+guards
+     * from 3dbb2e0b make an early-drained, deinit'd header safe for
+     * the weak-drop's guarded reads). */
+    void *gc_quarantine[3];
+    size_t gc_quarantine_count;
     /* Immutable-string heap (Phase 2b-ii): strings, symbols and keywords
      * live on their own block list so collection policy can treat them
      * independently of everything else. Sweep semantics are identical to

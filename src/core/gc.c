@@ -73,6 +73,27 @@ void janet_gcpressure(size_t s) {
     janet_vm.next_collection += s;
 }
 
+static void janet_clear_all_reachable_bits(void);
+
+/* Phase 1.1 epoch mark: gc.c-local 4-bit epoch in flags 11-14. Stale
+ * bits self-invalidate; the sweep zeroes survivors, so the wrap can
+ * only cause one-cycle-late frees — no wipe, no wrap-clear. */
+static JANET_THREAD_LOCAL int32_t janet_gc_epoch = 0;
+
+#undef janet_gc_mark
+#undef janet_gc_reachable
+#define janet_gc_mark(m) (janet_gc_header(m)->flags = \
+    ((janet_gc_header(m)->flags & ~JANET_MEM_EPOCH_MASK) \
+     | (janet_gc_epoch << JANET_MEM_EPOCH_SHIFT)))
+#define janet_gc_reachable(m) \
+    (((janet_gc_header(m)->flags & JANET_MEM_EPOCH_MASK) >> JANET_MEM_EPOCH_SHIFT) \
+     == janet_gc_epoch)
+
+static void janet_gc_epoch_next(void) {
+    janet_gc_epoch = (janet_gc_epoch % 15) + 1;
+}
+
+/* Mark a value */
 /* Mark a value */
 void janet_mark(Janet x) {
     if (depth) {
@@ -140,7 +161,10 @@ static void janet_mark_abstract(void *adata) {
         Janet kv = janet_wrap_abstract(adata);
         if (!janet_truthy(janet_table_get(&janet_vm.threaded_abstracts, kv))) {
             janet_table_put(&janet_vm.threaded_abstracts, kv, janet_wrap_true());
-            if (janet_abstract_head(adata)->type->gcmark) {
+            /* Stale heap references can outlive the abstract: freed heads
+             * are poisoned (type == NULL), nothing left to mark, and
+             * reading the freed header is unsound. */
+            if (janet_abstract_head(adata)->type && janet_abstract_head(adata)->type->gcmark) {
                 janet_abstract_head(adata)->type->gcmark(adata, janet_abstract_size(adata));
             }
         }
@@ -490,6 +514,10 @@ static void janet_deinit_block(JanetGCObject *mem) {
             break;
         case JANET_MEMORY_ABSTRACT: {
             JanetAbstractHead *head = (JanetAbstractHead *)mem;
+            /* Poisoned (type == NULL) means the abstract was already
+             * finalized and released by the refcount path: skip both the
+             * tombstone and the finalizers, storage drops below. */
+            if (NULL == head->type) break;
             if (head->gc.flags & JANET_MEMORY_THREADED_ABSTRACT) {
                 /* D3: tombstone at death. Scoped sweeps free channels
                  * between full collects, leaving registry entries whose
@@ -539,8 +567,17 @@ static int janet_check_liveref(Janet x) {
         case JANET_TABLE:
         case JANET_FUNCTION:
         case JANET_BUFFER:
-        case JANET_FIBER:
-            return janet_gc_reachable(janet_unwrap_pointer(x));
+        case JANET_FIBER: {
+            int r = janet_gc_reachable(janet_unwrap_pointer(x));
+            if (getenv("JANET_ROOT_TRACE"))
+                fprintf(stderr, "[LIVEREF] fib=%p flags=%x ep=%d cur=%d live=%d\n",
+                        janet_unwrap_pointer(x),
+                        janet_gc_header(janet_unwrap_pointer(x))->flags,
+                        (int) ((janet_gc_header(janet_unwrap_pointer(x))->flags
+                                & JANET_MEM_EPOCH_MASK) >> JANET_MEM_EPOCH_SHIFT),
+                        janet_gc_epoch, r);
+            return r;
+        }
         case JANET_STRING:
         case JANET_SYMBOL:
         case JANET_KEYWORD:
@@ -588,19 +625,42 @@ static void janet_sweep_list(JanetGCObject **head, int heap_kind, int is_minor,
                          "non-string block on string heap");
         }
         /* heap_kind 2 (weak heap) carries no assert; weak types live there. */
-        if (current->flags & (JANET_MEM_REACHABLE | JANET_MEM_DISABLED)) {
+        if (current->flags & JANET_MEM_DISABLED) {
             previous = current;
-            current->flags &= ~JANET_MEM_REACHABLE;
+        } else if (janet_gc_reachable(current)) {
+            /* Zero the survivor's epoch: the field's only writer is the
+             * stamp, so zeroed = unreachable in every future cycle —
+             * the wrap never resurrects, no wipe needed. */
+            current->flags &= ~JANET_MEM_EPOCH_MASK;
+            previous = current;
         } else if ((!is_minor || !janet_slab_obj_old(current)) &&
                 (0 == only_owner || janet_slab_obj_owner(current) == only_owner)) {
             janet_vm.block_count--;
-            janet_deinit_block(current);
             if (NULL != previous) {
                 previous->data.next = next;
             } else {
                 *head = next;
             }
-            janet_gc_release(current);
+            /* Phase 1.1 quarantine: defer deinit+release by one drain.
+             * The block stays INTACT so the next weak-drop judges weak
+             * entries against real (pre-free) headers — freeing
+             * immediately lets a recycled slot alias a weak referent
+             * and keep dead entries alive (suite-ev2 count = 100 under
+             * the epoch mark). Unlinked now, so marking never reaches
+             * quarantined blocks; deinit runs once, at drain.
+             * EXCEPTION: the string heap frees immediately — strings
+             * and symbols are interned by content, and a quarantined
+             * string would be found (and later freed) by a new intern,
+             * dangling the symbol (boot image generation does exactly
+             * this, deterministically). */
+            if (heap_kind == 1) {
+                janet_deinit_block(current);
+                janet_gc_release(current);
+            } else {
+                current->data.next = janet_vm.gc_quarantine[heap_kind];
+                janet_vm.gc_quarantine[heap_kind] = current;
+                janet_vm.gc_quarantine_count++;
+            }
         } else {
             previous = current;
         }
@@ -610,6 +670,42 @@ static void janet_sweep_list(JanetGCObject **head, int heap_kind, int is_minor,
 
 static void janet_sweep_weak_drop_list(JanetGCObject *current);
 
+/* Phase 1.1: destroy the quarantined blocks. Their headers were intact
+ * through the last weak-drop; after this they are gone (deinit'd and
+ * released; the decref path poisons type — 3dbb2e0b — so any late raw
+ * read is guarded). */
+static void janet_quarantine_drain(void) {
+    int kind;
+    for (kind = 0; kind < 3; kind++) {
+        JanetGCObject *cur = janet_vm.gc_quarantine[kind];
+        janet_vm.gc_quarantine[kind] = NULL;
+        while (NULL != cur) {
+            JanetGCObject *next = cur->data.next;
+            janet_deinit_block(cur);
+            janet_gc_release(cur);
+            cur = next;
+        }
+    }
+    janet_vm.gc_quarantine_count = 0;
+}
+
+/* Cap-drain: minors quarantine without running the weak-drop, so the
+ * quarantine grows between full collects. When it passes this many
+ * blocks, drain early — the drained headers are deinit'd+poisoned
+ * (3dbb2e0b), and the next weak-drop's guarded reads treat them as
+ * dead, which is the correct verdict for quarantined blocks. */
+#define JANET_QUARANTINE_CAP 200000
+static void janet_quarantine_maybe_drain(void) {
+    if (janet_vm.gc_quarantine_count > JANET_QUARANTINE_CAP) {
+        /* Judge weak entries BEFORE releasing the quarantined blocks:
+         * an early drain without a weak-drop lets recycled slots alias
+         * dead referents (check_liveref reads the new occupant's
+         * epoch — suite-ev2 count = 100). The epoch mark makes the
+         * weak-drop valid at any point in any cycle. */
+        janet_sweep_weak_drop();
+        janet_quarantine_drain();
+    }
+}
 
 void janet_sweep(void) {
     janet_sweep_weak_drop();
@@ -620,6 +716,17 @@ void janet_sweep(void) {
     JanetKV *items = janet_vm.threaded_abstracts.data;
     for (int32_t i = 0; i < janet_vm.threaded_abstracts.capacity; i++) {
         if (janet_checktype(items[i].key, JANET_ABSTRACT)) {
+            /* Belt-and-braces for the tombstone-at-death hook: an entry
+             * whose abstract died without tombstoning this VM's registry
+             * (cross-thread free) reads a poisoned (type == NULL) header.
+             * Purge it in place instead of dereferencing freed memory. */
+            if (NULL == janet_abstract_head(janet_unwrap_abstract(items[i].key))->type) {
+                items[i].key = janet_wrap_nil();
+                items[i].value = janet_wrap_false();
+                janet_vm.threaded_abstracts.deleted++;
+                janet_vm.threaded_abstracts.count--;
+                continue;
+            }
 
             /* If item was not visited during the mark phase, then this
              * abstract type isn't present in the heap and needs its refcount
@@ -653,6 +760,10 @@ void janet_sweep(void) {
         }
     }
 #endif
+    /* Quarantine drain: the weak-drop above has judged every entry
+     * against intact headers; the quarantined blocks are now truly
+     * unreferenced and can be destroyed. */
+    janet_quarantine_drain();
     /* A full sweep leaves every survivor old: reset all page ages and
      * merge the old freelists back so old slots become reusable young
      * slots (conservative restart for the next minor cycle). */
@@ -965,7 +1076,16 @@ static void *janet_slab_alloc(int class_index) {
      * Spawn-construction attribution (override, never the running
      * fiber) is likewise per-proc managed. Shared/host bump still
      * counts. */
-    if (NULL == req || (req == janet_vm.fiber && !req->heap_strict)) {
+    if (NULL == req || (req == janet_vm.fiber && NULL == req->proc)) {
+        /* Phase 1.1: every proc fiber's churn is per-fiber-scoped
+         * (maybe_collect routes its nursery pressure to
+         * collect_fiber_minor, which sweeps only its own lists);
+         * counting it toward the global young threshold fires
+         * O(world) global minors on proc churn — the spawn-scaler
+         * grind (300k-string churn ran 90s; every global minor
+         * sweeps every list). Strict procs were already excluded
+         * (P3.5c); non-strict proc fibers join them. Shared/host and
+         * plain-fiber bump still counts. */
         janet_vm.gc_young_bytes += slot;
     }
     return out;
@@ -1099,8 +1219,11 @@ static void janet_sweep_weak_drop_list(JanetGCObject *current) {
     JanetGCObject *next;
     while (NULL != current) {
         next = current->data.next;
-        if (current->flags & (JANET_MEM_REACHABLE | JANET_MEM_DISABLED)) {
-            /* Check for dead references */
+        if ((current->flags & JANET_MEM_DISABLED) || janet_gc_reachable(current)) {
+            /* Check for dead references. The epoch compare replaces the
+             * old sticky REACHABLE gate — under the epoch mark no
+             * sticky bit is ever set, and the old gate made the entire
+             * weak-drop dead code (suite-ev2 count = 100). */
             enum JanetMemoryType type = janet_gc_type(current);
             if (type == JANET_MEMORY_ARRAY_WEAK) {
                 JanetArray *array = (JanetArray *) current;
@@ -1167,7 +1290,7 @@ static void janet_clear_all_reachable_bits(void) {
             JanetFiber *f = ss->fibers[fi];
             for (kind = 0; kind < 3; kind++) {
                 for (cur = f->heap_lists[kind]; NULL != cur; cur = cur->data.next)
-                    cur->flags &= ~JANET_MEM_REACHABLE;
+                    cur->flags &= ~JANET_MEM_EPOCH_MASK;
             }
         }
     }
@@ -1177,7 +1300,7 @@ static void janet_clear_all_reachable_bits(void) {
     globals[2] = janet_vm.weak_blocks;
     for (kind = 0; kind < 3; kind++) {
         for (cur = globals[kind]; NULL != cur; cur = cur->data.next)
-            cur->flags &= ~JANET_MEM_REACHABLE;
+            cur->flags &= ~JANET_MEM_EPOCH_MASK;
     }
 }
 
@@ -1852,7 +1975,7 @@ static int janet_gc_verify_young_marked(const char *holder, Janet v) {
     if (NULL == m) return 1;
     JanetSlabPage *page = janet_slab_page_for(m);
     if (NULL == page || page->age >= JANET_SLAB_OLD_AGE) return 1;
-    if (m->flags & JANET_MEM_REACHABLE) return 1;
+    if (janet_gc_reachable(m)) return 1;
     fprintf(stderr, "gc-verify: young unmarked %p via %s\n", (void *) m, holder);
     return 0;
 }
@@ -1882,7 +2005,7 @@ static int janet_gc_verify_minor(void) {
              * garbage as a whole (its young referents are correctly
              * unmarked too). Disabled objects are always kept+traversed,
              * so their edges count as live. */
-            if (!(m->flags & (JANET_MEM_REACHABLE | JANET_MEM_DISABLED)) &&
+            if (!(janet_gc_reachable(m) || (m->flags & JANET_MEM_DISABLED)) &&
                     !janet_slab_obj_old(m)) continue;
             int32_t type = m->flags & JANET_MEM_TYPEBITS;
             if (type == JANET_MEMORY_TABLE || type == JANET_MEMORY_TABLE_WEAKK ||
@@ -1966,7 +2089,10 @@ void janet_collect_fiber_minor(JanetFiber *f) {
     size_t i;
     if (janet_vm.gc_suspend) return;
     if (NULL == f || 0 == f->gc_owner) {
+        /* D1 (plain-fiber form): the global minor never clears the
+         * caller's gc_nursery_bytes. */
         janet_collect_minor();
+        if (NULL != f) f->gc_nursery_bytes = 0;
         return;
     }
     ss = (JanetSlabState *) janet_vm.slab_state;
@@ -1975,7 +2101,7 @@ void janet_collect_fiber_minor(JanetFiber *f) {
         f->gc_nursery_bytes = 0;
         return;
     }
-    janet_clear_all_reachable_bits();
+    janet_gc_epoch_next();
     depth = JANET_RECURSION_GUARD;
     janet_vm.gc_mark_phase = 1;
     janet_vm.gc_minor_phase = 1;
@@ -2139,6 +2265,7 @@ void janet_collect_process(JanetProcess *proc) {
         if (NULL != f) f->gc_nursery_bytes = 0;
         return;
     }
+    janet_gc_epoch_next();
     depth = JANET_RECURSION_GUARD;
     janet_vm.gc_mark_phase = 1;
     janet_vm.gc_minor_phase = 1;
@@ -2176,7 +2303,7 @@ void janet_collect_process(JanetProcess *proc) {
             JanetGCObject *cur;
             for (cur = lists[li]; NULL != cur; cur = cur->data.next) {
                 if (ncand == JANET_PROC_VERIFY_MAXCAND) break;
-                if ((cur->flags & (JANET_MEM_REACHABLE | JANET_MEM_DISABLED))) continue;
+                if (janet_gc_reachable(cur) || (cur->flags & JANET_MEM_DISABLED)) continue;
                 if (janet_slab_obj_old(cur)) continue;
                 if (janet_slab_obj_owner(cur) != f->gc_owner) continue;
                 cands[ncand++] = cur;
@@ -2212,7 +2339,7 @@ void janet_collect_minor(void) {
      * be stale-set here; a conservative minor that early-returns on a
      * stale old container orphans every young object reachable only
      * through it (proven: closures mid-suite swept while live). */
-    janet_clear_all_reachable_bits();
+    janet_gc_epoch_next();
     depth = JANET_RECURSION_GUARD;
     janet_vm.gc_mark_phase = 1;
     janet_vm.gc_minor_phase = 1;
@@ -2263,7 +2390,7 @@ void janet_collect(void) {
 #ifdef JANET_GC_COUNT
     g_n_major++;
 #endif
-    janet_clear_all_reachable_bits();
+    janet_gc_epoch_next();
     depth = JANET_RECURSION_GUARD;
     janet_vm.gc_mark_phase = 1;
     /* Try to prevent many major collections back to back.
@@ -2378,12 +2505,19 @@ int janet_gcunrootall(Janet root) {
 
 /* Free all allocated memory */
 void janet_clear_memory(void) {
+    /* Quarantined blocks are intact but dead: destroy them before the
+     * registry teardown walk (their deinit tombstones purge their
+     * entries, and freed threaded heads read poisoned under the
+     * guards). */
+    janet_quarantine_drain();
 #ifdef JANET_EV
     JanetKV *items = janet_vm.threaded_abstracts.data;
     for (int32_t i = 0; i < janet_vm.threaded_abstracts.capacity; i++) {
         if (janet_checktype(items[i].key, JANET_ABSTRACT)) {
             void *abst = janet_unwrap_abstract(items[i].key);
             JanetAbstractHead *head = janet_abstract_head(abst);
+            /* Stale entry over a freed (poisoned) abstract: skip. */
+            if (NULL == head->type) continue;
             if (head->type->gcperthread) {
                 janet_assert(!head->type->gcperthread(head->data, head->size), "per-thread finalizer failed");
             }

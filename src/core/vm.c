@@ -100,14 +100,23 @@
 } while (0)
 
 /* Next instruction variations */
+#define JANET_FIBER_MINOR_SCALE 256
+#define JANET_FIBER_MINOR_CAP (16 * 1024 * 1024)
+#define JANET_FULL_SCALE 1024
 #define maybe_collect() do {\
     JanetFiber *mcf_ = janet_vm.fiber; \
     if (JANET_UNLIKELY(NULL != mcf_ && mcf_->gc_nursery_bytes >= janet_vm.gc_minor_threshold)) { \
-        /* P3.5: strict proc fibers route to per-proc majors (back-pointer pinned by mutual marking); else fiber minors. */ \
-        if (mcf_->heap_strict && NULL != mcf_->proc) janet_collect_process(mcf_->proc); \
-        else janet_collect_fiber_minor(mcf_); } \
-    else if (JANET_UNLIKELY(janet_vm.gc_young_bytes >= janet_vm.gc_minor_threshold)) janet_collect_minor(); \
-    else if (JANET_UNLIKELY(janet_vm.next_collection >= janet_vm.gc_interval)) janet_collect(); } while (0)
+        size_t fth_ = janet_vm.gc_minor_threshold; \
+        if (!(mcf_->heap_strict && NULL != mcf_->proc)) { \
+            fth_ += (size_t) janet_vm.block_count * JANET_FIBER_MINOR_SCALE; \
+            if (fth_ > JANET_FIBER_MINOR_CAP) fth_ = JANET_FIBER_MINOR_CAP; } \
+        if (mcf_->gc_nursery_bytes >= fth_) { \
+            if (mcf_->heap_strict && NULL != mcf_->proc) janet_collect_process(mcf_->proc); \
+            else janet_collect_fiber_minor(mcf_); } } \
+    else if (JANET_UNLIKELY(janet_vm.gc_young_bytes >= janet_vm.gc_minor_threshold \
+            + (size_t) janet_vm.block_count * JANET_FIBER_MINOR_SCALE)) janet_collect_minor(); \
+    else if (JANET_UNLIKELY(janet_vm.next_collection >= janet_vm.gc_interval \
+            + (size_t) janet_vm.block_count * JANET_FULL_SCALE)) janet_collect(); } while (0)
 #define vm_checkgc_next() maybe_collect(); vm_next()
 #define vm_pcnext() pc++; vm_next()
 #define vm_checkgc_pcnext() maybe_collect(); vm_pcnext()
@@ -2403,6 +2412,10 @@ int janet_init(void) {
     janet_vm.sweep_pending[0] = NULL;
     janet_vm.sweep_pending[1] = NULL;
     janet_vm.sweep_pending[2] = NULL;
+    janet_vm.gc_quarantine[0] = NULL;
+    janet_vm.gc_quarantine[1] = NULL;
+    janet_vm.gc_quarantine[2] = NULL;
+    janet_vm.gc_quarantine_count = 0;
     janet_vm.next_collection = 0;
     janet_vm.gc_interval = 0x400000;
     janet_vm.block_count = 0;

@@ -213,6 +213,12 @@ int32_t janet_abstract_decref_maybe_free(void *abst) {
         if (head->type->gc) {
             janet_assert(!head->type->gc(head->data, head->size), "finalizer failed");
         }
+        /* Poison the header before release: any registry entry or stale
+         * heap reference that outlives the abstract (cross-thread frees,
+         * scoped sweeps, teardown interleavings) must read type == NULL
+         * instead of recycled memory, so the gc.c walks and markers can
+         * identify the dead object instead of dereferencing freed data. */
+        head->type = NULL;
         /* Free memory via the slab-aware release: threaded abstracts can
          * be freed outside sweep (and retagged post-alloc), so plain
          * janet_free would corrupt slab pages. */

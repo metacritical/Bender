@@ -85,16 +85,28 @@
                      (def box @[])
                      (var peak 0)
                      (var dropped false)
-                     (repeat 40000
+                     # Phase 1.1: the fiber-minor trigger scales with the
+                     # live block count, so the reset arrives after a
+                     # world-proportional pump; the reset itself is the
+                     # contract being tested.
+                     # Phase 1.1: the fiber-minor trigger scales with the
+                     # live block count (amortized O(world) sweeps), so
+                     # the crossing point is world-proportional. Pump
+                     # until a reset is OBSERVED — the auto minor itself
+                     # is the contract, not any fixed iteration count.
+                     (var i 0)
+                     (while (and (< i 2000000) (not dropped))
                        (array/push box (array/new 4))
                        (def n (debug/fiber-nursery))
                        (when (> n peak) (set peak n))
                        (when (and (> peak 200000) (< n peak))
-                         (set dropped true)))
-                     [peak dropped]))]
-  (def [peak dropped] (resume f))
+                         (set dropped true))
+                       (++ i))
+                     [peak dropped i]))]
+  (def [peak dropped iters] (resume f))
   (assert (> peak 200000) "pressure passed threshold")
-  (assert dropped "auto minor reset the counter"))
+  (assert dropped "auto minor reset the counter")
+  (assert (< iters 2000000) "reset within the iteration cap"))
 
 # Step 1.2: per-fiber nursery accounting + cross-fiber barrier.
 # 5. Nursery bytes charge allocations to the running fiber (bounds:

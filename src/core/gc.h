@@ -48,6 +48,9 @@
 #define janet_gc_settype(m, t) ((janet_gc_header(m)->flags |= (0xFF & (t))))
 #define janet_gc_type(m) (janet_gc_header(m)->flags & 0xFF)
 
+#define JANET_MEM_EPOCH_MASK 0xF800
+#define JANET_MEM_EPOCH_SHIFT 11
+
 #define janet_gc_mark(m) (janet_gc_header(m)->flags |= JANET_MEM_REACHABLE)
 #define janet_gc_reachable(m) (janet_gc_header(m)->flags & JANET_MEM_REACHABLE)
 
