@@ -186,6 +186,18 @@ wake path is exonerated; suspicion falls on the isolated-mbox pending
 registration/reclaim under bulk completion minors. Record: reproduce with
 `/tmp/fo_cap.janet` shape (20k spawn-local senders, one collector).
 
+Diagnosis so far (instrumented runs + lldb sampling of the stuck loop):
+- The stalled loop sits in `kevent` with `has_timeout=0` — infinite wait,
+  spawn queue empty, timers empty, listener_count > 0 (everyone parked).
+- Adding ANY periodic timer (a 1s watchdog fiber) makes the same run
+  complete: the bug behaves like a scheduled task whose drain was missed;
+  the timer's loop1 re-drain rescues it.
+- Bisect A: senders that send then PARK on a timer (`ev/sleep 3600`) never
+  stall — the completion path (proc death -> completion minor -> fiber
+  free -> chanpend deinit) is the trigger, not the send/park path.
+- The pop path DOES resume plain write-pending senders (verified by read);
+  pending rings grow dynamically to 0x7FFFFFF (no overflow at 16k writers).
+
 ## Evidence
 
 * `test/suite-lanes.janet`: 2-lane and 4-lane round trips (kids compute i²
