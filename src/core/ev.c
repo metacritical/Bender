@@ -1807,6 +1807,13 @@ JANET_CORE_FN(cfun_channel_new,
     return janet_wrap_abstract(channel);
 }
 
+JanetChannel *janet_channel_make_threaded_c(int32_t limit) {
+    JanetChannel *tchan = janet_abstract_threaded(&janet_channel_type,
+            sizeof(JanetChannel));
+    janet_chan_init(tchan, limit, 1, 0);
+    return tchan;
+}
+
 JANET_CORE_FN(cfun_channel_new_threaded,
               "(ev/thread-chan &opt limit)",
               "Create a threaded channel. A threaded channel is a channel that can be shared between threads and "
@@ -3692,7 +3699,7 @@ JANET_CORE_FN(cfun_ev_go,
 #define JANET_THREAD_SUPERVISOR_FLAG 0x100
 
 /* For ev/thread - Run an interpreter in the new thread. */
-static JanetEVGenericMessage janet_go_thread_subr(JanetEVGenericMessage args) {
+JanetEVGenericMessage janet_go_thread_subr(JanetEVGenericMessage args) {
     JanetBuffer *buffer = (JanetBuffer *) args.argp;
     const uint8_t *nextbytes = buffer->data;
     const uint8_t *endbytes = nextbytes + buffer->count;

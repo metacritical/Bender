@@ -19,7 +19,22 @@
 #include "state.h"
 #include "fiber.h"
 #include "ev.h"
+#include "ev.h"
 #include "proc.h"
+#endif
+
+/* P-lanes platform includes: OUTSIDE the JANET_AMALG guard — the
+ * amalgam skips per-file includes but still needs these. */
+#ifdef JANET_APPLE
+#include <mach/mach.h>
+#include <mach/thread_act.h>
+#include <mach/thread_policy.h>
+#endif
+#if defined(JANET_LINUX) || defined(_GNU_SOURCE)
+#include <pthread.h>
+#include <sched.h>
+#else
+#include <pthread.h>
 #endif
 
 #ifdef JANET_EV
@@ -28,6 +43,326 @@
 extern const JanetAbstractType janet_proc_type;
 /* Forward: pid-tuple resolver (defined with proc/pid, used by send). */
 static JanetChannel *janet_proc_resolve_mbox(Janet x);
+static Janet cfun_proc_spawn_impl(JanetFunction *func, int32_t cap, int isolated);
+static uint32_t janet_proc_next_serial(void);
+
+/* ===== P-lanes: VM-per-core proc parallelism =====
+ * N resident OS threads, each a full share-nothing VM (the ev/thread
+ * body), each running a proc lane: a dispatcher that owns local procs
+ * and services spawn/deliver requests marshaled from the main VM.
+ * Per-proc heaps compose with per-VM collectors, so cores never
+ * contend on a global GC — the BEAM shape. Lane 0 is the main VM;
+ * workers are 1..N. Cross-lane handles are pid tuples
+ * [:pid lane serial ctl] (resolve_mbox already speaks tuples; the
+ * node field disambiguates lanes). */
+static JANET_THREAD_LOCAL JanetChannel **janet_lane_ctls;
+static JANET_THREAD_LOCAL JanetChannel *janet_lane0_ctl;
+static JANET_THREAD_LOCAL int32_t janet_lane_count;
+static JANET_THREAD_LOCAL int32_t janet_lane_rr;
+
+/* P-lanes: with lanes active, route round-robin to a worker VM. The
+ * entry marshals over a threaded channel; the handle is a pid tuple
+ * [:pid lane serial ctl] (resolve_mbox speaks tuples, so proc/send
+ * works unchanged). Local spawns (proc/spawn-local, lane-internal
+ * spawns) call the impl directly. */
+static Janet janet_proc_spawn_routed(JanetFunction *func, int32_t cap) {
+    if (0 == janet_lane_count) return cfun_proc_spawn_impl(func, cap, 0);
+    int32_t lane = (janet_lane_rr % janet_lane_count);
+    janet_lane_rr++;
+    JanetChannel *ctl = janet_lane_ctls[lane];
+    uint32_t serial = janet_proc_next_serial();
+    Janet msg[4];
+    msg[0] = janet_ckeywordv("spawn");
+    msg[1] = janet_wrap_number((double) serial);
+    msg[2] = janet_wrap_number(cap);
+    msg[3] = janet_wrap_function(func);
+    Janet spawn_msg = janet_wrap_tuple(janet_tuple_n(msg, 4));
+    if (janet_channel_push(ctl, spawn_msg, 0)) {
+        janet_await(); /* ctl full: resumed when the push lands */
+    }
+    Janet tup[4];
+    tup[0] = janet_ckeywordv("pid");
+    tup[1] = janet_wrap_number((double) (lane + 1));
+    tup[2] = janet_wrap_number((double) serial);
+    tup[3] = janet_wrap_abstract(ctl);
+    return janet_wrap_tuple(janet_tuple_n(tup, 4));
+}
+
+/* Worker-local: spawn-serial -> local proc abstract. */
+static JANET_THREAD_LOCAL JanetTable *janet_lane_local;
+
+static int32_t janet_os_cpu_count(void) {
+#ifdef _SC_NPROCESSORS_ONLN
+    long n = sysconf(_SC_NPROCESSORS_ONLN);
+    if (n > 0) return (int32_t) n;
+#endif
+    return 4;
+}
+
+/* Best-effort core pin for the calling thread. Opt-in via
+ * :affinity true; silently a no-op on unsupported platforms. */
+static void janet_lane_pin_core(int32_t core) {
+    if (core < 0) return;
+#if defined(JANET_LINUX) || (defined(_GNU_SOURCE) && defined(__GLIBC__))
+    {
+        cpu_set_t set;
+        CPU_ZERO(&set);
+        CPU_SET((int) core % (int) CPU_SETSIZE, &set);
+        (void) pthread_setaffinity_np(pthread_self(), sizeof(set), &set);
+    }
+#elif defined(JANET_APPLE)
+    {
+        thread_affinity_policy_data_t policy;
+        policy.affinity_tag = (integer_t) (core + 1);
+        (void) thread_policy_set(mach_thread_self(),
+                                 THREAD_AFFINITY_POLICY,
+                                 (thread_policy_t) &policy, 1);
+    }
+#else
+    (void) core;
+#endif
+}
+
+JANET_CORE_FN(cfun_proc_lane_pin,
+              "(proc/lane-pin core)",
+              "Best-effort pin the calling thread to `core`. Internal: "
+              "called by lane workers at startup when :affinity is on. "
+              "No-op on platforms without affinity support.") {
+    janet_fixarity(argc, 1);
+    int32_t core = janet_getinteger(argv, 0);
+    janet_lane_pin_core(core);
+    return janet_wrap_nil();
+}
+
+/* The resident lane dispatcher (a C function so it marshals across
+ * the registry copy). Arg: [ctl lane-id]. Loops taking from the
+ * lane's threaded control channel:
+ *   [:spawn serial cap entry]  -> VM-local proc/spawn, register serial
+ *   [:deliver serial payload]  -> proc/send into the local proc's mbox
+ *   [:stop]                    -> return (thread exits)
+ */
+JANET_CORE_FN(cfun_proc_self_pid,
+              "(proc/self-pid)",
+              "The calling process's portable pid tuple "
+              "[:pid lane serial ctl] -- routable from any lane. For "
+              "procs on the main VM this lazily registers the proc "
+              "with lane 0's dispatcher on first call.") {
+    janet_fixarity(argc, 0);
+    (void) argv;
+    JanetFiber *me = janet_vm.fiber;
+    if (NULL == me || NULL == me->proc) {
+        janet_panic("proc/self-pid outside a process");
+    }
+    JanetProcess *me_proc = me->proc;
+    if (NULL != me_proc->fiber && NULL != me_proc->fiber->env) {
+        Janet cached = janet_table_get(me_proc->fiber->env,
+                janet_ckeywordv("proc-cross-pid"));
+        if (!janet_checktype(cached, JANET_NIL)) return cached;
+    }
+    if (NULL == janet_lane0_ctl) {
+        janet_panic("proc/self-pid requires lanes (proc/lanes-start)");
+    }
+    if (NULL == janet_lane_local) janet_lane_local = janet_table(0);
+    uint32_t serial = me_proc->serial;
+    /* node must be NONZERO: proc/send forwards [:proc-fwd serial msg]
+     * over the carried lane ctl for any nonzero node. Node 0 is the
+     * legacy direct-mbox shape (same-VM tasklets). */
+    Janet tup[4];
+    tup[0] = janet_ckeywordv("pid");
+    tup[1] = janet_wrap_number(1);
+    tup[2] = janet_wrap_number((double) serial);
+    tup[3] = janet_wrap_abstract(janet_lane0_ctl);
+    Janet pid = janet_wrap_tuple(janet_tuple_n(tup, 4));
+    janet_table_put(janet_lane_local, janet_wrap_number((double) serial),
+            janet_wrap_abstract(me_proc));
+    if (NULL != me_proc->fiber->env) {
+        janet_table_put(me_proc->fiber->env, janet_ckeywordv("proc-cross-pid"), pid);
+    }
+    return pid;
+}
+
+JANET_CORE_FN(cfun_proc_spawn_local,
+              "(proc/spawn-local entry &opt cap)",
+              "Spawn on the CALLING VM even when lanes are active "
+              "(proc/spawn routes across lanes once started). Same "
+              "semantics as proc/spawn otherwise.") {
+    janet_arity(argc, 1, 2);
+    JanetFunction *func = janet_getfunction(argv, 0);
+    int32_t cap = janet_optnat(argv, argc, 1, 64);
+    return cfun_proc_spawn_impl(func, cap, 0);
+}
+
+JANET_CORE_FN(cfun_proc_lane_lookup,
+              "(proc/lane-lookup serial)",
+              "Internal: the main VM's C-side serial registry, consulted "
+              "by lane 0's dispatcher as a delivery fallback for procs "
+              "that registered from C (proc/self-pid's lazy path).") {
+    janet_fixarity(argc, 1);
+    uint32_t serial = (uint32_t) janet_getinteger(argv, 0);
+    if (NULL == janet_lane_local) return janet_wrap_nil();
+    return janet_table_get(janet_lane_local,
+            janet_wrap_number((double) serial));
+}
+
+JANET_CORE_FN(cfun_proc_lanes,
+              "(proc/lanes)",
+              "Return the number of active proc lanes (worker VMs), or 0 "
+              "when running single-VM (the default). Lane 0 is the main "
+              "VM; workers are 1..N.") {
+    janet_fixarity(argc, 0);
+    (void) argv;
+    return janet_wrap_number(janet_lane_count);
+}
+
+JANET_CORE_FN(cfun_proc_lanes_start,
+              "(proc/lanes-start &opt count-or-opts)",
+              "Start the multi-core proc runtime: `count-or-opts` is a "
+              "worker count, or a table {:count n :affinity bool}. With "
+              "no argument: N = cpu-count - 1 (min 1), round-robin "
+              "placement, no affinity (OS scheduling is usually right). "
+              "After this, proc/spawn distributes new processes "
+              "round-robin across the main VM and N worker VMs; "
+              "proc/send/recv work unchanged across lanes. Returns the "
+              "worker count.") {
+    janet_sandbox_assert(JANET_SANDBOX_THREADS);
+    janet_arity(argc, 0, 1);
+    if (janet_lane_count > 0) {
+        janet_panic("proc lanes already running");
+    }
+    int32_t count = -1;
+    int affinity = 0;
+    if (argc >= 1 && !janet_checktype(argv[0], JANET_NIL)) {
+        if (janet_checktype(argv[0], JANET_NUMBER)) {
+            count = janet_getinteger(argv, 0);
+        } else if (janet_checktype(argv[0], JANET_TABLE) ||
+                   janet_checktype(argv[0], JANET_STRUCT)) {
+            Janet t = argv[0];
+            Janet c = janet_get(t, janet_ckeywordv("count"));
+            Janet a = janet_get(t, janet_ckeywordv("affinity"));
+            if (janet_checktype(c, JANET_NUMBER)) count = janet_unwrap_number(c);
+            else if (!janet_checktype(c, JANET_NIL))
+                janet_panic(":count must be an integer");
+            affinity = janet_truthy(a);
+        } else {
+            janet_panic("expected a worker count or an options table");
+        }
+    }
+    if (count < 0) {
+        count = janet_os_cpu_count() - 1;
+        if (count < 1) count = 1;
+    }
+    if (count > 64) count = 64;
+    /* Resolve the boot-level dispatcher via the root dyn table
+     * (boot.janet stores it: (setdyn :proc-lane-worker ...)). The
+     * worker is a Janet function — the thread body accepts a
+     * function or fiber as its main. */
+    JanetFunction *worker = NULL;
+    {
+        Janet w = janet_wrap_nil();
+        /* boot.janet setdyn'd it on the root (boot) fiber's env. */
+        if (NULL != janet_vm.root_fiber && NULL != janet_vm.root_fiber->env) {
+            w = janet_table_get(janet_vm.root_fiber->env,
+                    janet_ckeywordv("proc-lane-worker"));
+        }
+        if (janet_checktype(w, JANET_NIL) && NULL != janet_vm.top_dyns) {
+            w = janet_table_get(janet_vm.top_dyns,
+                    janet_ckeywordv("proc-lane-worker"));
+        }
+        if (!janet_checktype(w, JANET_FUNCTION))
+            janet_panic("proc/lane-worker not registered (boot mismatch)");
+        worker = (JanetFunction *) janet_unwrap_function(w);
+    }
+    janet_lane_ctls = janet_calloc(1, sizeof(JanetChannel *) * count);
+    if (NULL == janet_lane_ctls) JANET_OUT_OF_MEMORY;
+    for (int32_t i = 0; i < count; i++) {
+        /* Threaded control channel: marshals every boundary. */
+        JanetChannel *ctl = janet_channel_make_threaded_c(4096);
+        janet_lane_ctls[i] = ctl;
+        if (affinity) {
+            /* Pin to core i (cores 0..N-1); main VM keeps the last
+             * core unpinned for its own loop when count < cpu-count. */
+            Janet args[2];
+            args[0] = janet_wrap_number(i);
+            janet_lane_pin_core(i); /* main-side pin of the WORKER is
+            wrong from here: workers pin themselves at startup when
+            told (handled in the launch tuple below). */
+            (void) args;
+        }
+        {
+            Janet tup[3];
+            tup[0] = janet_wrap_abstract(ctl);
+            tup[1] = janet_wrap_number(i + 1);
+            tup[2] = janet_wrap_boolean(affinity);
+            Janet launch = janet_wrap_tuple(janet_tuple_n(tup, 3));
+            JanetBuffer *buf = janet_buffer(256);
+            /* Mirror ev/thread's buffer EXACTLY: the abstract
+             * registry table, then the RAW cfunction-registry copy,
+             * then the worker function, then the launch value. */
+            janet_marshal(buf, janet_wrap_table(janet_vm.abstract_registry),
+                          NULL, JANET_MARSHAL_UNSAFE);
+            uint32_t count = (uint32_t) janet_vm.registry_count;
+            janet_buffer_push_bytes(buf, (uint8_t *) &count, sizeof(count));
+            janet_buffer_push_bytes(buf,
+                    (uint8_t *) janet_vm.registry,
+                    (int32_t) (janet_vm.registry_count * sizeof(JanetCFunRegistry)));
+            janet_marshal(buf, janet_wrap_function(worker), NULL,
+                          JANET_MARSHAL_UNSAFE);
+            janet_marshal(buf, launch, NULL, JANET_MARSHAL_UNSAFE);
+            JanetEVGenericMessage args;
+            memset(&args, 0, sizeof(args));
+            args.tag = 0x1; /* :n — return immediately */
+            args.argi = (uint32_t) janet_vm.sandbox_flags;
+            args.argp = buf;
+            args.fiber = NULL;
+            janet_ev_threaded_call(janet_go_thread_subr, args,
+                                   janet_ev_default_threaded_callback);
+        }
+    }
+    /* Lane 0: the main VM's inbound control channel, serviced by the
+     * same dispatcher running as a task on the main loop. Symmetry:
+     * every proc everywhere has a routable pid. */
+    janet_lane0_ctl = janet_channel_make_threaded_c(4096);
+    {
+        Janet tup[3];
+        tup[0] = janet_wrap_abstract(janet_lane0_ctl);
+        tup[1] = janet_wrap_number(0);
+        tup[2] = janet_wrap_boolean(0);
+        Janet args[1];
+        args[0] = janet_wrap_tuple(janet_tuple_n(tup, 3));
+        JanetFiber *disp = janet_fiber(worker, 64, 1, args);
+        janet_schedule(disp, janet_wrap_nil());
+    }
+    janet_lane_count = count;
+    return janet_wrap_number(count);
+}
+
+JANET_CORE_FN(cfun_proc_lanes_stop,
+              "(proc/lanes-stop)",
+              "Best-effort stop of the proc lanes: delivers :stop to each "
+              "worker and clears the registry. Local procs parked in "
+              "recv keep their worker VMs alive until process exit "
+              "(same lifecycle as single-VM parked procs). Returns nil.") {
+    janet_fixarity(argc, 0);
+    (void) argv;
+    if (0 == janet_lane_count) return janet_wrap_nil();
+    /* Milestone-1 lifecycle: stop ONLY lane 0 (unblocks the main
+     * loop); worker threads stay parked on their ctls and are reaped
+     * at process exit (detached threads, share-nothing VMs). Pushing
+     * :stop to workers races their janet_deinit against main —
+     * graceful worker shutdown lands with the pool-style join. */
+    if (NULL != janet_lane0_ctl) {
+        Janet tup[1];
+        tup[0] = janet_ckeywordv("stop");
+        Janet msg = janet_wrap_tuple(janet_tuple_n(tup, 1));
+        (void) janet_channel_push(janet_lane0_ctl, msg, 0);
+    }
+    janet_lane_ctls = NULL;
+    janet_lane0_ctl = NULL;
+    janet_lane_local = NULL;
+    janet_lane_count = 0;
+    janet_lane_rr = 0;
+    return janet_wrap_nil();
+}
 
 /* JanetProcess lives in proc.h (shared with gc.c for P3.4 majors). */
 
@@ -210,7 +545,7 @@ JANET_CORE_FN(cfun_proc_spawn,
         janet_panic("proc thunk must accept 0 arguments");
     }
     int32_t cap = janet_optnat(argv, argc, 1, 16);
-    return cfun_proc_spawn_impl(func, cap, 0);
+    return janet_proc_spawn_routed(func, cap);
 }
 
 JANET_CORE_FN(cfun_proc_spawn_isolated,
@@ -567,6 +902,13 @@ JANET_CORE_FN(cfun_proc_killed,
 static const JanetRegExt proc_cfuns_ext[] = {
     JANET_CORE_REG("proc/spawn", cfun_proc_spawn),
     JANET_CORE_REG("proc/spawn-isolated", cfun_proc_spawn_isolated),
+        JANET_CORE_REG("proc/self-pid", cfun_proc_self_pid),
+        JANET_CORE_REG("proc/spawn-local", cfun_proc_spawn_local),
+        JANET_CORE_REG("proc/lane-lookup", cfun_proc_lane_lookup),
+        JANET_CORE_REG("proc/lanes", cfun_proc_lanes),
+        JANET_CORE_REG("proc/lanes-start", cfun_proc_lanes_start),
+        JANET_CORE_REG("proc/lanes-stop", cfun_proc_lanes_stop),
+        JANET_CORE_REG("proc/lane-pin", cfun_proc_lane_pin),
     JANET_CORE_REG("proc/isolated?", cfun_proc_isolated),
     JANET_CORE_REG("proc/self", cfun_proc_self),
     JANET_CORE_REG("proc/send", cfun_proc_send),

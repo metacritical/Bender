@@ -27,6 +27,12 @@ void janet_ev_chanpends_deinit(JanetFiber *fiber);
 /* GC mark hook: fibers pin the channels they are parked behind. */
 void janet_ev_chanpends_mark(JanetFiber *fiber);
 void janet_channel_set_proc_alive(JanetChannel *channel, int alive);
+/* P-lanes: the ev/thread worker subroutine, reused by proc/lanes-start to
+ * launch resident lane VMs (same share-nothing thread body). */
+JanetEVGenericMessage janet_go_thread_subr(JanetEVGenericMessage args);
+/* P-lanes: C-level threaded channel constructor (the struct is
+ * private to ev.c). */
+JanetChannel *janet_channel_make_threaded_c(int32_t limit);
 int janet_channel_proc_alive(JanetChannel *channel);
 
 #endif

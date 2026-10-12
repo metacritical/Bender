@@ -3342,6 +3342,44 @@
   (each x (parse-all str) (set ret (eval x env)))
   ret)
 
+###
+###
+### P-lanes: VM-per-core proc parallelism
+###
+
+(defn proc/lane-worker
+  "Resident dispatcher for one proc lane. Takes one launch tuple
+  [ctl lane-id aff]: `ctl` is the lane's threaded control channel;
+  `lane-id` is 0 for the main VM, 1..N for workers; `aff` requests
+  best-effort core pinning. Messages:
+  [:spawn serial cap entry] -> VM-local spawn, registered under serial
+  [:deliver serial payload] -> proc/send into the local proc's mailbox
+  [:stop]                   -> exit the lane"
+  [launch]
+  (def [ctl lane-id aff] launch)
+  (when aff (proc/lane-pin lane-id))
+  (def serials @{})
+  (while true
+    (def [op serial x y] (ev/take ctl))
+    (case op
+      :spawn (do
+               (def entry y)   # [:spawn serial cap entry]
+               (def cap (if (number? x) x 64))
+               (def p (proc/spawn (fn []
+                                    (setdyn :proc-cross-pid
+                                            [:pid lane-id serial ctl])
+                                    (entry))
+                                  cap))
+               (put serials serial p))
+      :deliver (if-let [p (or (get serials serial) (proc/lane-lookup serial))]
+                 (proc/send p x))
+      :proc-fwd (if-let [p (or (get serials serial) (proc/lane-lookup serial))]
+                  (proc/send p x))  # [:proc-fwd serial msg] -- 3-tuple
+      :stop (break)
+      nil)))
+
+(setdyn :proc-lane-worker proc/lane-worker)
+
 (def load-image-dict
   ``A table used in combination with `unmarshal` to unmarshal byte sequences created
   by `make-image`, such that `(load-image bytes)` is the same as `(unmarshal bytes load-image-dict)`.``
