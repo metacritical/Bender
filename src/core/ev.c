@@ -4729,6 +4729,7 @@ static void janet_pool_complete(JanetEVGenericMessage msg) {
             } else {
                 janet_schedule(w, result);
             }
+        } else {
         }
     }
     if (c->reply != NULL) {
@@ -5262,6 +5263,23 @@ JANET_CORE_FN(cfun_pool_dispatch,
     if (!is_call && timeout != INFINITY) {
         janet_panic("pool timeout needs :call");
     }
+    /* Bind the waiter BEFORE the task is enqueued: the late-binding
+     * variant wrote task->waiter after the enqueue+signal, so a fast
+     * worker could complete the task and build its completion while
+     * waiter was still the malloc-zero NULL — the completion then
+     * posted to nobody and the awaiter slept forever (the pool-call
+     * hang: main in kevent, workers idle). The root is also gcrooted
+     * here so a racing completion's unroot always pairs. */
+    JanetFiber *call_waiter = NULL;
+    uint32_t call_ws = 0;
+    if (is_call) {
+        call_waiter = janet_root_fiber();
+        if (timeout != INFINITY &&
+                !(call_waiter->gc.flags & JANET_FIBER_EV_GCFLAG_ROOT)) {
+            janet_panic("pool/call with timeout requires an ev task");
+        }
+        call_ws = call_waiter->sched_id;
+    }
     /* Validate the call shape on the owner (clear errors beat worker
      * asserts): functions take exactly nargs, fibers take the array. */
     int32_t nargs;
@@ -5307,8 +5325,9 @@ JANET_CORE_FN(cfun_pool_dispatch,
     task->bytes = bytes;
     task->len = len;
     task->owner = &janet_vm;
-    task->waiter = NULL;
-    task->waiter_sched = 0;
+    task->waiter = call_waiter;
+    task->waiter_sched = call_ws;
+    if (NULL != call_waiter) janet_gcroot(janet_wrap_fiber(call_waiter));
     task->reply = NULL;
     task->next = NULL;
     Janet replyv = janet_wrap_nil();
@@ -5323,6 +5342,7 @@ JANET_CORE_FN(cfun_pool_dispatch,
         janet_pool_unlock(pool);
         /* Hand the token back: total supply is constant, so it fits. */
         janet_channel_push(pool->tokens, janet_wrap_nil(), 2);
+        if (NULL != call_waiter) janet_gcunroot(janet_wrap_fiber(call_waiter));
         if (task->reply != NULL) janet_abstract_decref_maybe_free(task->reply);
         if (task->bytes != NULL) janet_free(task->bytes);
         janet_free(task);
@@ -5347,17 +5367,7 @@ JANET_CORE_FN(cfun_pool_dispatch,
     /* :call: single trailing suspension (take/join shape). The waiter
      * fiber is rooted; the completion unroots it. The pool itself is
      * pinned from spawn until stop. */
-    JanetFiber *root = janet_root_fiber();
-    if (timeout != INFINITY &&
-            !(root->gc.flags & JANET_FIBER_EV_GCFLAG_ROOT)) {
-        janet_panic("pool/call with timeout requires an ev task");
-    }
-    /* Late-binding the waiter: the task is already queued, so claim it. */
-    janet_pool_lock(pool);
-    task->waiter = root;
-    task->waiter_sched = root->sched_id;
-    janet_pool_unlock(pool);
-    janet_gcroot(janet_wrap_fiber(root));
+    JanetFiber *root = call_waiter;
     if (timeout != INFINITY) {
         janet_addtimeout(timeout);
     }
