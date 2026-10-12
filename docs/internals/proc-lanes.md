@@ -231,6 +231,22 @@ Narrowed so far:
   test/lanes-1m-regression.janet. The clone instrumented runs used the
   same source as master plus probes.
 
+## AOT build status (measured)
+
+The lanes machinery works identically under AOT-compiled binaries:
+`proc/lanes-start`, routed spawns, cross-thread wakes, and fan-in all
+verified (sanity scripts + 1M/8-lanes to full parking).
+
+- 1M across 8 lanes: interpreter 141 s, AOT 161.7 s (single runs, same
+  machine, not back-to-back). The spawn path is dominated by marshal +
+  per-lane GC walls, not bytecode execution, so AOT does not lift it;
+  AOT's win remains pure execution speed. Capacity is identical.
+- AOT + `proc/lanes-stop` hangs (the worker-deinit teardown race, worse
+  under AOT). AOT lane scripts must end with `(os/exit N)`. The
+  milestone-2a pool-style join replaces this path.
+- Comms matrix on AOT: not separately rerun; the interpreter numbers
+  below stand as the reference (the paths are identical C code).
+
 ## Messaging speed (measured, `bench/lanes-comms.janet`)
 
 | Shape | Throughput | Per-send |
