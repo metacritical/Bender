@@ -153,6 +153,36 @@ submissions*, not resident procs — the Erlang-friendly shape.
   in-VM cost (786k msgs/s measured AOT, 692k interpreted at 100k actors);
   stolen tasks pay marshal only for cross-lane sends they actually make.
 
+### Milestone 2 semantics (pre-implementation spec)
+
+**Pool-style join (2a).** Each worker registers its pthread handle in its
+launch record. `proc/lanes-stop` (and a new `proc/lanes-join`) delivers
+`[:stop]` to ALL lane ctls including lane 0, then joins every worker pthread
+with a bounded grace period. The worker's exit path currently runs
+`janet_deinit` for its own VM while the main VM keeps running — the observed
+teardown abort — so join requires either (a) the subr growing a
+no-deinit exit mode (a new launch flag the fork owns), or (b) deferring
+worker deinit to a completion handshake the main loop drains. Postcondition:
+after `(proc/lanes-join)`, `(proc/lanes)` is 0, all worker pthreads have
+exited, and a subsequent `(proc/lanes-start)` in the same process works.
+Tests: start 4 lanes, do work, join, assert 0, restart 2 lanes, round trip
+again — the restart-after-join shape is the feature indication.
+
+**Cross-lane monitors/kill/exit-reasons (2b).** `proc/monitor p` from lane A
+for a proc home on lane B registers in B's dispatcher (a `[:mon watcher-pid
+watched-serial]` op over B's ctl); on watched-proc exit (normal or error),
+B's dispatcher pushes `[:down watcher-pid watched-serial reason]` to A's
+ctl, where A's dispatcher delivers to the watcher's mbox. `proc/kill p
+reason` forwards `[:kill serial reason]` to the home lane; the home lane
+applies it locally (signal into the local fiber — no cross-thread fiber
+mutation, ever). Exit reasons: `:normal`, `:error`, `:killed`. Tests:
+monitor across lanes, kill the watched, assert the `:down` message shape;
+kill propagates even when the watched proc is mid-recv.
+
+**Work-stealing (2c).** Per the design above; the feature indication is a
+skewed benchmark where `:policy :steal` must beat `:round-robin` by a
+measured margin, plus a no-regression check on the uniform case.
+
 ### Milestone 2 remainder (in order)
 
 1. Pool-style join: workers take a join token; `lanes-stop` (or a new
