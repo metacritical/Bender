@@ -3697,6 +3697,11 @@ JANET_CORE_FN(cfun_ev_go,
 }
 
 #define JANET_THREAD_SUPERVISOR_FLAG 0x100
+/* Skip the worker VM's janet_deinit at thread end. Lane workers use
+ * this: several VMs' deinits race on jointly-owned structures (the
+ * observed teardown abort), and a lane worker's TLS state is bounded
+ * by the lane count anyway. */
+#define JANET_THREAD_NODEINIT_FLAG 0x8
 
 /* For ev/thread - Run an interpreter in the new thread. */
 JanetEVGenericMessage janet_go_thread_subr(JanetEVGenericMessage args) {
@@ -3810,7 +3815,9 @@ JanetEVGenericMessage janet_go_thread_subr(JanetEVGenericMessage args) {
     }
     janet_buffer_deinit(buffer);
     janet_free(buffer);
-    janet_deinit();
+    if (!(flags & JANET_THREAD_NODEINIT_FLAG)) {
+        janet_deinit();
+    }
     return args;
 }
 

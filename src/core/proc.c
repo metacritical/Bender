@@ -60,6 +60,47 @@ static JANET_THREAD_LOCAL JanetChannel *janet_lane0_ctl;
 static JANET_THREAD_LOCAL int32_t janet_lane_count;
 static JANET_THREAD_LOCAL int32_t janet_lane_rr;
 
+/* Milestone 2a: pool-style join. Workers launch on JOINABLE pthreads,
+ * each with a completion sync. lanes-stop asks every dispatcher to
+ * exit, wakes locally-parked procs (best effort), waits a bounded
+ * grace per worker, joins the ones that finished and detaches
+ * stragglers. A joined worker drops its launch refcount, so a script
+ * that stops its lanes can reach a clean loop exit (the AOT
+ * exit-hang). Straggler workers keep the process alive exactly like
+ * the milestone-1 detached workers did. */
+typedef struct JanetLaneLaunch {
+    pthread_t thread;
+    pthread_mutex_t lock;
+    pthread_cond_t cond;
+    int exited;
+    JanetBuffer *buf;
+    uint32_t sandbox_flags;
+} JanetLaneLaunch;
+
+static JANET_THREAD_LOCAL JanetLaneLaunch **janet_lane_launches;
+
+/* Grace per worker lane when stopping: procs parked in a single recv
+ * wake and finish quickly; procs in long loops hit the grace and are
+ * detached instead. */
+#define JANET_LANE_STOP_GRACE_SECONDS 2
+
+static void *janet_lane_thread_body(void *p) {
+    JanetLaneLaunch *L = p;
+    JanetEVGenericMessage args;
+    memset(&args, 0, sizeof(args));
+    args.tag = 0x1 /* :n — the caller never awaits us */
+        | 0x8 /* JANET_THREAD_NODEINIT_FLAG — see ev.c */;
+    args.argi = L->sandbox_flags;
+    args.argp = L->buf;
+    args.fiber = NULL;
+    janet_go_thread_subr(args);
+    pthread_mutex_lock(&L->lock);
+    L->exited = 1;
+    pthread_cond_broadcast(&L->cond);
+    pthread_mutex_unlock(&L->lock);
+    return NULL;
+}
+
 /* P-lanes: with lanes active, route round-robin to a worker VM. The
  * entry marshals over a threaded channel; the handle is a pid tuple
  * [:pid lane serial ctl] (resolve_mbox speaks tuples, so proc/send
@@ -281,6 +322,12 @@ JANET_CORE_FN(cfun_proc_lanes_start,
     }
     janet_lane_ctls = janet_calloc(1, sizeof(JanetChannel *) * count);
     if (NULL == janet_lane_ctls) JANET_OUT_OF_MEMORY;
+    janet_lane_launches = janet_calloc(1, sizeof(JanetLaneLaunch *) * count);
+    if (NULL == janet_lane_launches) {
+        janet_free(janet_lane_ctls);
+        janet_lane_ctls = NULL;
+        JANET_OUT_OF_MEMORY;
+    }
     for (int32_t i = 0; i < count; i++) {
         /* Threaded control channel: marshals every boundary. */
         JanetChannel *ctl = janet_channel_make_threaded_c(4096);
@@ -302,7 +349,14 @@ JANET_CORE_FN(cfun_proc_lanes_start,
             tup[1] = janet_wrap_number(i + 1);
             tup[2] = janet_wrap_boolean(affinity);
             Janet launch = janet_wrap_tuple(janet_tuple_n(tup, 3));
-            JanetBuffer *buf = janet_buffer(256);
+            /* RAW-allocate the launch buffer: janet_buffer(256) would
+             * gcalloc the struct into THIS VM's slab, and the worker
+             * frees it with ITS slab directory absent — a raw free of
+             * a slab-interior pointer (the teardown abort). Both the
+             * struct and its data must be plain malloc here. */
+            JanetBuffer *buf = janet_malloc(sizeof(JanetBuffer));
+            if (NULL == buf) JANET_OUT_OF_MEMORY;
+            janet_buffer_init(buf, 256);
             /* Mirror ev/thread's buffer EXACTLY: the abstract
              * registry table, then the RAW cfunction-registry copy,
              * then the worker function, then the launch value. */
@@ -322,8 +376,27 @@ JANET_CORE_FN(cfun_proc_lanes_start,
             args.argi = (uint32_t) janet_vm.sandbox_flags;
             args.argp = buf;
             args.fiber = NULL;
-            janet_ev_threaded_call(janet_go_thread_subr, args,
-                                   janet_ev_default_threaded_callback);
+            /* Milestone 2a: joinable launch. The buffer ownership and
+             * teardown inside janet_go_thread_subr are unchanged; we
+             * only wrap the thread so lanes-stop can join it. */
+            JanetLaneLaunch *L = janet_calloc(1, sizeof(JanetLaneLaunch));
+            if (NULL == L) JANET_OUT_OF_MEMORY;
+            L->buf = buf;
+            L->sandbox_flags = (uint32_t) janet_vm.sandbox_flags;
+            pthread_mutex_init(&L->lock, NULL);
+            pthread_cond_init(&L->cond, NULL);
+            janet_lane_launches[i] = L;
+            if (pthread_create(&L->thread, NULL, janet_lane_thread_body, L)) {
+                janet_lane_launches[i] = NULL;
+                pthread_mutex_destroy(&L->lock);
+                pthread_cond_destroy(&L->cond);
+                janet_free(L);
+                janet_panic("failed to spawn worker lane thread");
+            }
+            /* Same contract as janet_ev_threaded_call: hold the loop
+             * open while the worker lives. Dropped at join (or kept
+             * for detached stragglers, preserving today's semantics). */
+            janet_ev_inc_refcount();
         }
     }
     /* Lane 0: the main VM's inbound control channel, serviced by the
@@ -347,26 +420,96 @@ JANET_CORE_FN(cfun_proc_lanes_start,
 
 JANET_CORE_FN(cfun_proc_lanes_stop,
               "(proc/lanes-stop)",
-              "Best-effort stop of the proc lanes: delivers :stop to each "
-              "worker and clears the registry. Local procs parked in "
-              "recv keep their worker VMs alive until process exit "
-              "(same lifecycle as single-VM parked procs). Returns nil.") {
+              "Stop the proc lanes and join the worker threads. Delivers "
+              ":stop to every lane dispatcher (workers wake their locally "
+              "parked procs best-effort via proc/try-send first), waits "
+              "up to a bounded grace per worker for a clean exit, joins "
+              "the finished threads and detaches stragglers (procs in "
+              "endless loops keep their worker alive in the background, "
+              "as before). Joined workers drop their loop refcount, so a "
+              "script can reach a clean exit afterwards. Returns nil.") {
     janet_fixarity(argc, 0);
     (void) argv;
     if (0 == janet_lane_count) return janet_wrap_nil();
-    /* Milestone-1 lifecycle: stop ONLY lane 0 (unblocks the main
-     * loop); worker threads stay parked on their ctls and are reaped
-     * at process exit (detached threads, share-nothing VMs). Pushing
-     * :stop to workers races their janet_deinit against main —
-     * graceful worker shutdown lands with the pool-style join. */
+    /* Main dispatcher (lane 0) exits; the main VM itself of course
+     * keeps running. */
     if (NULL != janet_lane0_ctl) {
         Janet tup[1];
         tup[0] = janet_ckeywordv("stop");
         Janet msg = janet_wrap_tuple(janet_tuple_n(tup, 1));
         (void) janet_channel_push(janet_lane0_ctl, msg, 0);
     }
-    janet_lane_ctls = NULL;
-    janet_lane0_ctl = NULL;
+    /* Workers: ask each dispatcher to exit (try-mode: never block the
+     * stop on a busy control channel). */
+    if (NULL != janet_lane_ctls) {
+        for (int32_t i = 0; i < janet_lane_count; i++) {
+            JanetChannel *ctl = janet_lane_ctls[i];
+            if (NULL == ctl) continue;
+            Janet tup[1];
+            tup[0] = janet_ckeywordv("stop");
+            Janet msg = janet_wrap_tuple(janet_tuple_n(tup, 1));
+            (void) janet_channel_push(ctl, msg, 3);
+        }
+    }
+    /* Bounded join: wait each worker's grace, join the finished,
+     * detach stragglers. A JOINED worker's ctl is unrooted here (the
+     * worker is gone); a straggler keeps its ctl rooted so the main
+     * VM's GC can never free a channel the straggler is using. */
+    if (NULL != janet_lane_launches) {
+        for (int32_t i = 0; i < janet_lane_count; i++) {
+            JanetLaneLaunch *L = janet_lane_launches[i];
+            if (NULL == L) continue;
+            janet_lane_launches[i] = NULL;
+            int done = 0;
+#ifndef JANET_WINDOWS
+            struct timespec ts;
+            clock_gettime(CLOCK_REALTIME, &ts);
+            ts.tv_sec += JANET_LANE_STOP_GRACE_SECONDS;
+            pthread_mutex_lock(&L->lock);
+            while (!L->exited) {
+                int rc = pthread_cond_timedwait(&L->cond, &L->lock, &ts);
+                if (ETIMEDOUT == rc) break;
+            }
+            done = L->exited;
+            pthread_mutex_unlock(&L->lock);
+            if (done) {
+                pthread_join(L->thread, NULL);
+                janet_ev_dec_refcount();
+            } else {
+                pthread_detach(L->thread);
+            }
+            pthread_mutex_destroy(&L->lock);
+            pthread_cond_destroy(&L->cond);
+            janet_free(L);
+#else
+            /* Windows: no graceful join yet — milestone-1 detached
+             * semantics (documented). */
+            done = 1;
+            pthread_mutex_destroy(&L->lock);
+            pthread_cond_destroy(&L->cond);
+            janet_free(L);
+#endif
+            if (done && NULL != janet_lane_ctls && NULL != janet_lane_ctls[i]) {
+                janet_gcunroot(janet_wrap_abstract(janet_lane_ctls[i]));
+                janet_lane_ctls[i] = NULL;
+            }
+        }
+        janet_free(janet_lane_launches);
+        janet_lane_launches = NULL;
+    }
+    /* Free the worker-ctl array; surviving (straggler) entries keep
+     * their roots and their channels alive. */
+    if (NULL != janet_lane_ctls) {
+        janet_free(janet_lane_ctls);
+        janet_lane_ctls = NULL;
+    }
+    /* Lane 0's dispatcher will process its :stop on an upcoming loop
+     * turn; until then the fiber's own stack keeps the channel alive
+     * through GC, so dropping our registry root here is sound. */
+    if (NULL != janet_lane0_ctl) {
+        janet_gcunroot(janet_wrap_abstract(janet_lane0_ctl));
+        janet_lane0_ctl = NULL;
+    }
     if (NULL != janet_lane_local) {
         janet_gcunroot(janet_wrap_table(janet_lane_local));
     }
@@ -653,6 +796,40 @@ JANET_CORE_FN(cfun_proc_send,
     return argv[0];
 }
 
+JANET_CORE_FN(cfun_proc_try_send,
+              "(proc/try-send p msg)",
+              "Like `proc/send`, but never blocks: delivers when the "
+              "mailbox has room (or a reader is parked) and reports "
+              "`true`; returns `false` on a full mailbox. Remote pid "
+              "tuples forward the same way, also without blocking.") {
+    janet_fixarity(argc, 2);
+    if (janet_vm.coerce_error) {
+        janet_panic("cannot proc/send inside janet_call");
+    }
+    if (janet_checktype(argv[0], JANET_TUPLE)) {
+        const Janet *tup = janet_unwrap_tuple(argv[0]);
+        if (4 == janet_tuple_length(tup) &&
+                janet_checktype(tup[0], JANET_KEYWORD) &&
+                janet_unwrap_keyword(tup[0]) == janet_unwrap_keyword(janet_ckeywordv("pid")) &&
+                janet_checktype(tup[1], JANET_NUMBER) &&
+                0 != (int64_t) janet_unwrap_number(tup[1])) {
+            if (!janet_checktype(tup[2], JANET_NUMBER)) {
+                janet_panic("remote pid serial must be a number");
+            }
+            JanetChannel *ctl = (JanetChannel *) janet_unwrap_abstract(tup[3]);
+            Janet fwd[3];
+            fwd[0] = janet_ckeywordv("proc-fwd");
+            fwd[1] = tup[2];
+            fwd[2] = argv[1];
+            Janet fwdmsg = janet_wrap_tuple(janet_tuple_n(fwd, 3));
+            /* Try-mode push: 0 delivered, nonzero full. */
+            return janet_wrap_boolean(0 == janet_channel_push(ctl, fwdmsg, 3));
+        }
+    }
+    JanetChannel *mbox = janet_proc_resolve_mbox(argv[0]);
+    return janet_wrap_boolean(0 == janet_channel_push(mbox, argv[1], 3));
+}
+
 JANET_CORE_FN(cfun_proc_recv,
               "(proc/recv &opt p)",
               "Take the next message from the calling process's own "
@@ -924,6 +1101,7 @@ static const JanetRegExt proc_cfuns_ext[] = {
     JANET_CORE_REG("proc/isolated?", cfun_proc_isolated),
     JANET_CORE_REG("proc/self", cfun_proc_self),
     JANET_CORE_REG("proc/send", cfun_proc_send),
+    JANET_CORE_REG("proc/try-send", cfun_proc_try_send),
     JANET_CORE_REG("proc/recv", cfun_proc_recv),
     JANET_CORE_REG("proc/kill", cfun_proc_kill),
     JANET_CORE_REG("proc/alive?", cfun_proc_alive),

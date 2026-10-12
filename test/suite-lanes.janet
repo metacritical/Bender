@@ -97,5 +97,34 @@
   (ev/sleep 0.5)
   (eprint "density section passed"))
 
+# Milestone 2a: pool-style join. The density lanes above are still
+# running with 640k parked procs -- stopping must wake them (each
+# parked-recv proc gets :lane-stop, returns, dies), drain the worker
+# loops, and join every thread within the grace budget. The restart
+# then proves the registry is reusable.
+(var t-stop (os/clock))
+(proc/lanes-stop)
+(def stop-dt (- (os/clock) t-stop))
+(assert (< stop-dt 60) "lanes-stop bounded (grace join, no hang)")
+(assert (= 0 (proc/lanes)) "lanes 0 after stop")
+(eprint "join after 640k-park stop in" stop-dt "s")
+
+# Restart after join: a full round trip on fresh lanes.
+(proc/lanes-start 2)
+(assert (= 2 (proc/lanes)) "restart after join")
+(def ready (ev/thread-chan 1))
+(def collector
+  (proc/spawn-local
+    (fn []
+      (def r (proc/self-pid))
+      (ev/give ready r)
+      (def m (proc/recv))
+      (ev/give ready m))))
+(def rpid (ev/take ready))
+(proc/spawn (fn [] (proc/send rpid :restart-ok)))
+(assert (= :restart-ok (ev/take ready)) "round trip after restart")
+(proc/lanes-stop)
+(assert (= 0 (proc/lanes)) "lanes 0 after second stop")
+
 (eprint "suite-lanes: all assertions passed")
 (os/exit 0)

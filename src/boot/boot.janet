@@ -3375,7 +3375,15 @@
                  (proc/send p x))
       :proc-fwd (if-let [p (or (get serials serial) (proc/lane-lookup serial))]
                   (proc/send p x))  # [:proc-fwd serial msg] -- 3-tuple
-      :stop (break)
+      :stop (do
+              # Milestone 2a: wake locally-parked procs so the worker's
+              # event loop can drain and the lane thread can be joined.
+              # Best effort: try-send never blocks the dispatcher, and
+              # procs in long loops keep the lane alive (the join's
+              # grace detaches it instead).
+              (each p (values serials)
+                (proc/try-send p :lane-stop))
+              (break))
       nil)))
 
 (setdyn :proc-lane-worker proc/lane-worker)
