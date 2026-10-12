@@ -1,0 +1,32 @@
+# test/lanes-1m-regression.janet — the per-lane density threshold gate (bug 2).
+#
+# Root cause (fixed in gc.c): the cross-fiber remembered set (xfb) caps at
+# JANET_XFB_MAX (1M entries). Past the cap the old code set `stuck` and kept
+# collecting with janet_collect_process, whose NARROW per-proc sweep missed
+# the unrecorded cross-fiber edges — young blocks referenced from old
+# foreign containers were freed, and the next mark walk hashed a reused
+# slot (janet_hash on garbage, ~900k procs / ~225k per lane). The fix
+# degrades janet_collect_process to the global minor while stuck, exactly
+# like janet_collect_fiber_minor already did.
+#
+# This gate runs the exact repro: 1M parked procs across 4 lanes
+# (~250k/lane), every env holding a cross-thread pid reference. Expect
+# minutes of runtime and ~3GB RAM. The default battery uses the 640k
+# section in suite-lanes.janet instead; run this for the full-threshold
+# gate:
+#   bender test/lanes-1m-regression.janet
+#
+# Passes when all 1M procs spawn and park with no crash.
+
+(proc/lanes-start 4)
+(def t0 (os/clock))
+(var i 0)
+(while (< i 1000000)
+  (proc/spawn (fn [] (proc/recv)))
+  (++ i)
+  (when (zero? (mod i 250000))
+    (eprint "density at" i "t=" (- (os/clock) t0))))
+(assert (= i 1000000) "1M procs spawned across 4 lanes")
+(ev/sleep 1.0)
+(eprint "lanes-1m-regression: all assertions passed")
+(os/exit 0)

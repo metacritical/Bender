@@ -2346,6 +2346,23 @@ static void janet_proc_verify(JanetProcess *proc, JanetGCObject **cands, size_t 
 void janet_collect_process(JanetProcess *proc) {
     JanetFiber *f;
     if (janet_vm.gc_suspend) return;
+    /* Stuck remember set: cross-fiber stores past JANET_XFB_MAX go
+     * unrecorded, so the narrow per-proc mark+sweep would free young
+     * blocks still referenced from old foreign containers (the
+     * ~900k-proc / ~225k-per-lane density crash: the next mark walk
+     * hashed a reused slot). Degrade to the global minor exactly like
+     * janet_collect_fiber_minor already does — a global minor marks
+     * every registered fiber, so missing remembered edges are moot. */
+    {
+        JanetSlabState *dss = (JanetSlabState *) janet_vm.slab_state;
+        if (NULL != dss && dss->xfb_stuck) {
+            if (NULL != proc && NULL != (f = proc->fiber)) {
+                f->gc_nursery_bytes = 0;
+            }
+            janet_collect_minor();
+            return;
+        }
+    }
     if (NULL == proc || NULL == (f = proc->fiber) || 0 == f->gc_owner ||
             !proc->isolated_heap || !janet_fiber_can_resume(f)) {
         /* Phase 1.1 D1: the global minor never clears the caller's

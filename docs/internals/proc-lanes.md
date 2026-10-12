@@ -195,6 +195,42 @@ measured margin, plus a no-regression check on the uniform case.
 3. Work-stealing per the design above.
 4. The 1M-processes-across-N-lanes demo + scaling measurements.
 
+## Per-lane density threshold (bug 2, OPEN — full evidence trail)
+
+Symptom: 1M procs across 4 lanes (~250k/lane) crashes above ~750k total;
+8-lane 1M (125k/lane) and 640k/4-lane (160k/lane) complete. Crash stack
+(worker thread, libmalloc abort): `janet_hash <- janet_dict_find <-
+janet_mark_abstract table.c:114 <- janet_gc_minor_skip <- janet_mark_array
+<- janet_mark` — the minor's mark walk hashed a garbage slot in an old
+table (use-after-free-then-reuse: the slot's block was freed and its
+memory reused).
+
+Narrowed so far:
+- NOT the xfb cap alone: per-worker cross-fiber edges at 250k/lane stay
+  under JANET_XFB_MAX (1M), so the stuck path does not fire there. The
+  stuck-degradation fix committed alongside (janet_collect_process now
+  degrades to the global minor when stuck, mirroring
+  janet_collect_fiber_minor) closes a real adjacent hole but does not
+  change this crash.
+- The remembered mechanism is TWO-layer: per-object xfb (cross-fiber
+  stores) AND per-page dirty bits (old->young within traversal). The
+  crashed walk is the dirty-page re-walk of an old table whose slot is
+  garbage => a young block referenced from an old container was freed
+  WITHOUT its container's page being (or staying) dirty — a missed or
+  lost barrier somewhere in the spawn-dense path.
+- Suspect list for the missing barrier: C-level janet_table_put sites in
+  the routed-spawn path (env construction, serials bookkeeping), the
+  mbox q's C array values, and page aging racing dirty marks (page goes
+  old between store and minor).
+- Next probe (prepared, not yet run): slab-poison-on-free — stamp freed
+  young blocks with an impossible epoch (0x1F) + body magic at
+  janet_quarantine_drain's release; janet_mark aborts with a header dump
+  when it touches one. One instrumented 1M run identifies the freed
+  block's type and the walker.
+- Note: /tmp scratch was purged mid-investigation; reproduce from
+  test/lanes-1m-regression.janet. The clone instrumented runs used the
+  same source as master plus probes.
+
 ## Messaging speed (measured, `bench/lanes-comms.janet`)
 
 | Shape | Throughput | Per-send |
