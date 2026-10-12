@@ -78,5 +78,24 @@
   (assert (= 2 (proc/lanes)) "affinity option accepted")
   (proc/lanes-stop))
 
+# Density regression: 640k parked procs across 4 lanes (~160k/lane) --
+# between the historical gcroot crash zone (~550k total) and the open
+# per-lane density threshold (~225k/lane). Every parked proc holds a
+# cross-thread pid reference in its env, so this exercises cross-thread
+# refs surviving per-lane GC at scale. Skips silently on low-RAM hosts.
+# Assumes ~3GB RAM headroom (640k x ~3.5KB/proc). Hosts below that
+# should set JANET_SKIP_DENSITY=1 to skip this section.
+(unless (os/getenv "JANET_SKIP_DENSITY")
+  (proc/lanes-start 4)
+  (var i 0)
+  (while (< i 640000)
+    (proc/spawn (fn [] (proc/recv)))
+    (++ i)
+    (when (zero? (mod i 200000))
+      (eprint "density at" i)))
+  (assert (= i 640000) "640k procs spawned across 4 lanes")
+  (ev/sleep 0.5)
+  (eprint "density section passed"))
+
 (eprint "suite-lanes: all assertions passed")
 (os/exit 0)
