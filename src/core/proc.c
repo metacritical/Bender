@@ -162,7 +162,14 @@ JANET_CORE_FN(cfun_proc_self_pid,
     if (NULL == janet_lane0_ctl) {
         janet_panic("proc/self-pid requires lanes (proc/lanes-start)");
     }
-    if (NULL == janet_lane_local) janet_lane_local = janet_table(0);
+    if (NULL == janet_lane_local) {
+        janet_lane_local = janet_table(0);
+        /* Allocated under the calling fiber's ctx: root it, or the
+         * fiber's completion minor sweeps the registry out from
+         * under later deliveries (observed as janet_hash on freed
+         * memory at 500k procs across 4 lanes). */
+        janet_gcroot(janet_wrap_table(janet_lane_local));
+    }
     uint32_t serial = me_proc->serial;
     /* node must be NONZERO: proc/send forwards [:proc-fwd serial msg]
      * over the carried lane ctl for any nonzero node. Node 0 is the
@@ -277,6 +284,7 @@ JANET_CORE_FN(cfun_proc_lanes_start,
     for (int32_t i = 0; i < count; i++) {
         /* Threaded control channel: marshals every boundary. */
         JanetChannel *ctl = janet_channel_make_threaded_c(4096);
+        janet_gcroot(janet_wrap_abstract(ctl));
         janet_lane_ctls[i] = ctl;
         if (affinity) {
             /* Pin to core i (cores 0..N-1); main VM keeps the last
@@ -322,6 +330,7 @@ JANET_CORE_FN(cfun_proc_lanes_start,
      * same dispatcher running as a task on the main loop. Symmetry:
      * every proc everywhere has a routable pid. */
     janet_lane0_ctl = janet_channel_make_threaded_c(4096);
+    janet_gcroot(janet_wrap_abstract(janet_lane0_ctl));
     {
         Janet tup[3];
         tup[0] = janet_wrap_abstract(janet_lane0_ctl);
@@ -358,6 +367,9 @@ JANET_CORE_FN(cfun_proc_lanes_stop,
     }
     janet_lane_ctls = NULL;
     janet_lane0_ctl = NULL;
+    if (NULL != janet_lane_local) {
+        janet_gcunroot(janet_wrap_table(janet_lane_local));
+    }
     janet_lane_local = NULL;
     janet_lane_count = 0;
     janet_lane_rr = 0;
