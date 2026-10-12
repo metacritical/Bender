@@ -165,6 +165,27 @@ submissions*, not resident procs — the Erlang-friendly shape.
 3. Work-stealing per the design above.
 4. The 1M-processes-across-N-lanes demo + scaling measurements.
 
+## Messaging speed (measured, `bench/lanes-comms.janet`)
+
+| Shape | Throughput | Per-send |
+|---|---|---|
+| same-lane ping-pong (2 procs, 1 VM) | ~940-980k msgs/s | ~1.05 us |
+| cross-lane ping-pong (2 lanes, marshaled hops) | ~156-234k msgs/s | ~4.4-6.4 us |
+| 20k fan-in across 4 lanes -> main-VM collector | ~101k msgs/s end-to-end | incl. spawns (0.197 s) |
+
+The cross-lane tax (~4-6x) is the marshal-copy + thread handoff + dispatcher
+hop; it is the price of share-nothing and matches the design target of
+keeping hot-message traffic same-VM.
+
+**Known bug (open, pre-existing, NOT lanes-specific):** bulk fan-in of
+>=~10-20k single-shot senders to ONE collector proc loses a wakeup on some
+runs — the collector stops receiving mid-stream (reproduces with all senders
+on the SAME VM via proc/spawn-local, with collector mbox caps 64 and 4096;
+100-10000 senders complete reliably, 20000 is flaky). Same-VM, so the lane
+wake path is exonerated; suspicion falls on the isolated-mbox pending
+registration/reclaim under bulk completion minors. Record: reproduce with
+`/tmp/fo_cap.janet` shape (20k spawn-local senders, one collector).
+
 ## Evidence
 
 * `test/suite-lanes.janet`: 2-lane and 4-lane round trips (kids compute i²
