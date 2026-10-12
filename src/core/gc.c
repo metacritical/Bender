@@ -2161,6 +2161,20 @@ void janet_collect_fiber_minor(JanetFiber *f) {
      * synchronously at deinit (census_remove), so no dangling
      * registry reads. */
     janet_mark_fiber(f);
+    /* C-side VM roots: containers mutated by C code WITHOUT the janet
+     * write barrier — the roots-free design's explicit pin set. The
+     * profile table (PGO auto-collect runs it in every AOT binary)
+     * holds function keys allocated young on whatever fiber was
+     * running; unmarked, a child minor sweeps them and deinit's
+     * profile_dump walks freed keys (the AOT teardown SEGV,
+     * faulting in janet_profile_rows at 0x11). top_dyns is the same
+     * class. Both are small; child minors are rare. */
+    if (janet_vm.top_dyns) {
+        janet_mark(janet_wrap_table(janet_vm.top_dyns));
+    }
+    if (janet_vm.profile_table) {
+        janet_mark(janet_wrap_table(janet_vm.profile_table));
+    }
     {
         size_t xi;
         for (xi = 0; xi < ss->xfb_count; xi++)
