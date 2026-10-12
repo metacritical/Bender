@@ -65,7 +65,7 @@ static uint32_t janet_slab_obj_owner(void *ptr);
 static void janet_slab_major_reset(void);
 /* Step 1.3 census removal at sweep-free; defined with the slab code. */
 static void janet_census_remove(JanetFiber *f);
-static void janet_sweep_heaps(void);
+static void janet_sweep_heaps(int walk_fibers);
 static void janet_sweep_fiber_owned(JanetFiber *f);
 
 /* Hint to the GC that we may need to collect */
@@ -709,7 +709,7 @@ static void janet_quarantine_maybe_drain(void) {
 
 void janet_sweep(void) {
     janet_sweep_weak_drop();
-    janet_sweep_heaps();
+    janet_sweep_heaps(1);
 
 #ifdef JANET_EV
     /* Sweep threaded abstract types for references to decrement */
@@ -1304,7 +1304,8 @@ static void janet_clear_all_reachable_bits(void) {
     }
 }
 
-static void janet_sweep_kind(int kind, int is_minor, uint32_t only_owner) {
+static void janet_sweep_kind(int kind, int is_minor, uint32_t only_owner,
+                             int walk_fibers) {
     JanetGCObject **ghead;
     JanetSlabState *ss;
     size_t fi;
@@ -1315,8 +1316,16 @@ static void janet_sweep_kind(int kind, int is_minor, uint32_t only_owner) {
     } else {
         ghead = (JanetGCObject **) &janet_vm.weak_blocks;
     }
+    /* Phase 1 density: the GLOBAL MINOR no longer walks every
+     * registered fiber's lists. With 1M procs that loop is the
+     * quadratic engine (measured: the second 100k spawns cost 3.2x
+     * the first). Each fiber's own minor handles its own pressure;
+     * fibers get one final minor at completion (ev.c), so a global
+     * minor now sweeps only the globals. Parked-forever fibers keep
+     * their young (bounded by their real working set). The FULL
+     * collect (janet_sweep) still walks every fiber. */
     ss = (JanetSlabState *) janet_vm.slab_state;
-    if (NULL != ss) {
+    if (NULL != ss && walk_fibers) {
         for (fi = 0; fi < ss->fibers_count; fi++) {
             JanetFiber *f = ss->fibers[fi];
             janet_sweep_list((JanetGCObject **) &f->heap_lists[kind],
@@ -1414,10 +1423,10 @@ static void janet_sweep_drain_pending(void) {
     }
 }
 
-static void janet_sweep_heaps(void) {
-janet_sweep_kind(2, janet_vm.gc_minor_phase, 0);
-    janet_sweep_kind(0, janet_vm.gc_minor_phase, 0);
-    janet_sweep_kind(1, janet_vm.gc_minor_phase, 0);
+static void janet_sweep_heaps(int walk_fibers) {
+janet_sweep_kind(2, janet_vm.gc_minor_phase, 0, walk_fibers);
+    janet_sweep_kind(0, janet_vm.gc_minor_phase, 0, walk_fibers);
+    janet_sweep_kind(1, janet_vm.gc_minor_phase, 0, walk_fibers);
     janet_sweep_drain_pending();
     janet_heap_verify("global");
 }
@@ -1439,9 +1448,9 @@ static void janet_sweep_fiber_owned(JanetFiber *f) {
      * win. Strict process collections (the O(n) spawn target) use
      * the narrow sibling below. */
     uint32_t owner = f->gc_owner;
-janet_sweep_kind(2, 1, owner);
-    janet_sweep_kind(0, 1, owner);
-    janet_sweep_kind(1, 1, owner);
+janet_sweep_kind(2, 1, owner, 1);
+    janet_sweep_kind(0, 1, owner, 1);
+    janet_sweep_kind(1, 1, owner, 1);
     janet_sweep_drain_pending();
     janet_heap_verify("owned");
 }
@@ -2408,7 +2417,7 @@ void janet_collect_minor(void) {
             abort();
         }
     }
-    janet_sweep_heaps();
+    janet_sweep_heaps(0);
     janet_vm.gc_minor_phase = 0;
     /* Age surviving young pages. Dirty flags deliberately persist until
      * the next major: a young referee needs several minors to age out,

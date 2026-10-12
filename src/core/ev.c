@@ -2093,6 +2093,13 @@ JanetFiber *janet_loop1(void) {
             if (NULL != task.fiber->proc && NULL != task.fiber->proc->mbox) {
                 janet_channel_set_proc_alive(task.fiber->proc->mbox, 0);
             }
+            /* Phase 1 density: one final own-heap minor at completion.
+             * The global minor no longer walks fibers' lists (the 1M
+             * quadratic), so a dead fiber's young garbage frees HERE —
+             * O(own), at the completion boundary where the stack is
+             * final and consistent. Parked-forever fibers are the only
+             * deferred case (bounded by their real working set). */
+            janet_collect_fiber_minor(task.fiber);
         }
         void *sv = task.fiber->supervisor_channel;
         int is_suspended = sig == JANET_SIGNAL_EVENT || sig == JANET_SIGNAL_YIELD || sig == JANET_SIGNAL_INTERRUPT;
