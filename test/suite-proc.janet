@@ -540,4 +540,28 @@
   (assert (= "amy" (procx/call db :get :u)) "strict call")
   (procx/quit db))
 
+# 40. Bulk fan-in regression: many single-shot senders to one collector
+# proc, sized just above the historical danger zone. Each sender's
+# completion runs a fiber-scoped minor GC; the collector's wakeups sit
+# in the spawn task queue at that moment, so a minor that skipped the
+# queue's roots could sweep a pending wakeup and strand the collector
+# (loop parked in poll forever). Completion + exact count = no lost
+# wakeup.
+(let [n 4000
+      result (ev/thread-chan 16)
+      collector
+      (proc/spawn
+        (fn []
+          (var acc 0) (var got 0)
+          (while (< got n)
+            (set acc (+ acc (proc/recv)))
+            (++ got))
+          (ev/give result acc))
+        1024)]
+  (var i 0)
+  (while (< i n)
+    (proc/spawn-local (fn [] (proc/send collector 1)))
+    (++ i))
+  (assert (= n (ev/take result)) "fan-in: all 4000 wakeups delivered"))
+
 (end-suite)

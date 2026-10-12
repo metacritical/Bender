@@ -2175,6 +2175,19 @@ void janet_collect_fiber_minor(JanetFiber *f) {
     if (janet_vm.profile_table) {
         janet_mark(janet_wrap_table(janet_vm.profile_table));
     }
+    /* Event-loop C roots: the spawn task queue and the timeout queue
+     * are naked C arrays that hold queued wakeups — task fibers and
+     * resume values — allocated young on ANY fiber's heap (a channel
+     * claim schedules the parked reader with a value born mid-push;
+     * the loop schedules freshly spawned fibers before their parent
+     * ever references them). A fiber-scoped minor that skips them can
+     * sweep another fiber's queued wakeup: the drain then pops a
+     * swept task, the expected_sched_id check drops it silently, and
+     * the loop parks in poll forever with an empty spawn queue (the
+     * bulk proc fan-in lost-wakeup). janet_ev_mark is the same root
+     * set every full collect applies; it is bounded by live queued
+     * work, so it is cheap here. */
+    janet_ev_mark();
     {
         size_t xi;
         for (xi = 0; xi < ss->xfb_count; xi++)
