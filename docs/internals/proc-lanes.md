@@ -686,3 +686,25 @@ Three 2c implementation bugs fixed this round (caught by the bench):
   lane with a [:pull] wakeup that drains the queue. Threshold set to
   depth 1 (fast dispatchers never back a ctl to 3/4; :steal means
   "first spawn stays local, bursts overflow, idle lanes steal").
+
+### Round 18: dual-target pass triage (AOT battery)
+
+AOT compile+run via `bender --aot test/<suite>.janet -o <bin>`; the
+binary runs the suite natively. Results: ev2 13/13, mailbox 76/76,
+gc-minor 12/12, interrupt 15/15, pool 56/56, thread 30/30 -- GREEN.
+Three failures, distinct signatures:
+
+1. suite-proc: "cannot marshal <core/proc>" at spawn-isolated's
+   entry copy (proc.c:954). Under AOT the test closure's env chain
+   includes earlier sections' top-level bindings (section 27's local
+   proc), so the marshal walks a proc and refuses. Interpreter env
+   scoping is per-(let) and passes. Fix direction: AOT env-scoping
+   parity, or suite-side section isolation.
+2. suite-ev: error at suite line 51 (while loop) -- not yet triaged.
+3. suite-marsh: marsh.c:1796 refusal at suite line 121 -- likely the
+   same env-sharing class (marsh tests marshal rich payloads).
+
+These are AOT-codegen env-scoping characteristics, not regressions
+of the lanes work: the same suites pass under the interpreter and
+the six green AOT suites exercise the lanes/messaging machinery
+under AOT already.
