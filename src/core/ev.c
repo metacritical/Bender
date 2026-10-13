@@ -1072,21 +1072,27 @@ static void janet_chan_deinit_q(JanetQueue *q) {
 }
 
 static void janet_chan_deinit(JanetChannel *chan) {
+    /* LOCK the whole deinit: the pending-queue walk reads head/tail
+     * bounds and reg nodes that foreign threads mutate concurrently
+     * (claim pops, prune frees). Previously only pack channels took
+     * the lock here, and the density teardown volume exposed the
+     * unlocked walk as a use-after-free (ASAN: flag_chanpend_node
+     * reading a node freed by the owning fiber's VM mid-walk). */
+    janet_chan_lock(chan);
     if (janet_chan_needs_pack(chan)) {
         Janet item;
-        janet_chan_lock(chan);
         janet_chan_deinit_q(&chan->read_pending);
         janet_chan_deinit_q(&chan->write_pending);
         while (!janet_q_pop(&chan->items, &item, sizeof(item))) {
             janet_chan_unpack(chan, &item, 1);
         }
         janet_q_deinit(&chan->items);
-        janet_chan_unlock(chan);
     } else {
         janet_chan_deinit_q(&chan->read_pending);
         janet_chan_deinit_q(&chan->write_pending);
         janet_q_deinit(&chan->items);
     }
+    janet_chan_unlock(chan);
     janet_os_mutex_deinit((JanetOSMutex *) &chan->lock);
 }
 

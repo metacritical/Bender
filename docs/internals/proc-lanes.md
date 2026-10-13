@@ -460,3 +460,28 @@ GC" face). Next probe: capture ASAN's freed-by stack for the
 janet_hash crash to identify which free path (worker's own registry
 purge vs fiber-death migration) still releases a block the parked
 proc's env tuple references.
+
+### Round 8: home teardown completion; channel deinit lock; double-deinit lead
+
+The janet_hash crash decoded: `janet_hash` dereferenced the
+type==NULL POISON -- the observing thread had poisoned the abstract
+while the home worker hashed it mid-operation. Fix: the ENTIRE
+teardown (finalizer + poison + release) now routes to the home VM
+(e30b6e78 extended by 7060540b); the home callback is allocation-free
+(a registry tombstone inside it could trigger a collection from the
+event loop, racing the channel GC -- removed; the purges handle
+tombstones).
+
+Density: 2/4 full interpreter passes after that fix (best to date).
+
+New residual, sharply characterized: `flag_chanpend_node` UAF during
+`janet_chanat_gc -> janet_chan_deinit` on a worker. Locking the whole
+deinit (previously only pack channels locked) did NOT close it -- the
+walk now holds the lock, so the freeing thread does NOT: evidence for
+a DOUBLE DEINIT. Candidate: the abstract SWEEP path
+(janet_deinit_block's ABSTRACT case) runs the channel's gc hook
+directly on the sweeping VM, while the home-routed teardown cb runs
+it again on the home VM. Next: make threaded-abstract deinit hooks
+single-shot (a deinit'd bit on the head, checked under the chan
+lock) or route sweep-side hook invocation through the same home
+deferral.
