@@ -581,13 +581,19 @@ static int janet_procat_mark(void *p, size_t size) {
     if (NULL != proc->mbox &&
             NULL == janet_abstract_head(proc->mbox)->type) {
         JanetAbstractHead *mh = janet_abstract_head(proc->mbox);
-        char bbuf[200];
+        char bbuf[560];
         int bl = snprintf(bbuf, sizeof bbuf,
                 "[proc-mbox-tombstoned] proc=%p mbox=%p home=%p "
-                "exported=%d guard=%d refcnt=%d lane=%d\n",
+                "exported=%d guard=%d refcnt=%d lane=%d"
+                " ra0=%p ra1=%p ra2=%p ra3=%p ra4=%p\n",
                 (void *) proc, (void *) proc->mbox, mh->home_vm,
                 mh->exported, mh->teardown_started,
-                (int) mh->gc.data.refcount, janet_vm.is_lane_vm);
+                (int) mh->gc.data.refcount, janet_vm.is_lane_vm,
+                __builtin_return_address(0),
+                __builtin_return_address(1),
+                __builtin_return_address(2),
+                __builtin_return_address(3),
+                __builtin_return_address(4));
         write(2, bbuf, (size_t) bl);
         abort();
     }
@@ -602,6 +608,20 @@ static int janet_procat_mark(void *p, size_t size) {
     }
 #endif
     if (NULL != proc->fiber) janet_mark(janet_wrap_fiber(proc->fiber));
+    /* Tombstoned (type == NULL) mbox/sup are gone forever: prune the
+     * stale pointer instead of marking freed memory. A live fiber's
+     * env can hold a proc value whose channels were torn down after
+     * its claims dropped (the :proc-self self-reference outlives the
+     * mailbox's registry life); marking through the dangling pointer
+     * walked malloc-reused memory (BUG 2 density tail head). */
+    if (NULL != proc->mbox &&
+            NULL == janet_abstract_head(proc->mbox)->type) {
+        proc->mbox = NULL;
+    }
+    if (NULL != proc->sup &&
+            NULL == janet_abstract_head(proc->sup)->type) {
+        proc->sup = NULL;
+    }
     if (NULL != proc->mbox) janet_mark(janet_wrap_abstract(proc->mbox));
     if (NULL != proc->sup) janet_mark(janet_wrap_abstract(proc->sup));
     if (NULL != proc->stash) janet_mark(janet_wrap_array(proc->stash));

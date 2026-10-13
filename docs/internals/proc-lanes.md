@@ -605,3 +605,17 @@ holders: worker serials, schedule queue, a pending's sched value).
 Also: the rc teardown lattice now has 11 layers; the pinning design
 holds (4/5 and 5/5 batches under load); the tail is this one holder
 class.
+
+### Round 15: procat_mark prunes tombstoned channels — DENSITY 5/5
+
+The RA chain named the holder: janet_mark_fiber -> mark -> mark_table
+(the fiber's env) -> mark -> procat_mark -- a live fiber's :proc-self
+env binding outlives its mbox's registry life, and procat_mark marked
+through the dangling pointer (malloc-reused memory: home=0x0,
+refcnt=1024). Fix: procat_mark prunes mbox/sup pointers whose head is
+poisoned (type == NULL) before marking -- a tombstoned channel is
+gone forever, so caching the pointer was the bug. (First attempt used
+the wrong typebits test and nulled LIVE threaded mboxes -- caught by
+the suites immediately, reverted for the precise poison check.)
+
+Density: 5/5 green. proc 88/88, ev2, mailbox, ev, pool, thread green.

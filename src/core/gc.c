@@ -166,12 +166,17 @@ static void janet_mark_abstract(void *adata) {
         abort();
     }
     if (NULL == janet_abstract_head(adata)->type) {
-        char bbuf[256];
+        char bbuf[512];
         int bl = snprintf(bbuf, sizeof bbuf,
-                "[mark-tombstoned] adata=%p ra0=%p ra1=%p ra2=%p\n", adata,
+                "[mark-tombstoned] adata=%p"
+                " ra0=%p ra1=%p ra2=%p ra3=%p ra4=%p ra5=%p ra6=%p\n", adata,
                 __builtin_return_address(0),
                 __builtin_return_address(1),
-                __builtin_return_address(2));
+                __builtin_return_address(2),
+                __builtin_return_address(3),
+                __builtin_return_address(4),
+                __builtin_return_address(5),
+                __builtin_return_address(6));
         write(2, bbuf, (size_t) bl);
         abort();
     }
