@@ -350,8 +350,39 @@ the GC/completion boundary, now pinned much sharper:
   completion minors, 7733fdb7) closed one hole; a sibling hole
   remains that layout shifts expose.
 
-Next steps for the hunter: ASAN run of `fanin` at n=4000 on a
-perturbed build, then audit the completion minor's root set (spawn
-queue, mbox read/write pendings, the collector's channel buffer) for
-the remaining unmarked edge. `JANET_SKIP_DENSITY=1` gates the known-
-flaky suite sections until then.
+### Round 2 (goal continuation): two root causes found and fixed
+
+1. **Fan-in n=4000 deadlock (ALL builds post-M2b)**: the collector's
+   recv parks on its own mailbox -- which 2b made a THREADED channel.
+   Every same-VM send/recv handoff on a threaded channel went through
+   `janet_ev_post_event` -- a self-pipe write from the loop's own
+   thread. ~8000 writes at n=4000 fill the 64KB pipe; the loop then
+   blocks inside its own wakeup write. Fix: same-VM pendings on
+   threaded channels schedule inline (`janet_schedule` + unroot),
+   mirroring the close path's existing pattern. Fan-in 5/5 green;
+   suite-proc 88/88 in 11s.
+2. **Density deterministic crash (quantum yield UAF)**: M4b quantum
+   yields (status USER9 via JANET_SIGNAL_INTERRUPT) pass through the
+   drain's completion block (`janet_fiber_can_resume` is false for
+   them), so the completion minor freed the fiber's young nursery --
+   then the quantum path re-queued the fiber onto the freed memory
+   (ASAN: fiber->data poisoned, walked by later marks). Fix: the
+   quantum-yield condition is computed before the completion block
+   and bypasses the cleanup; the fiber stays registered and its
+   nursery survives. Density section passed its first full run
+   (640k procs, 4 lanes).
+
+### Residual (still open, sharply narrowed)
+
+Density segfaults ~1-in-3 runs (was deterministic). ASAN signature:
+`janet_mark_fiber` called with an ALREADY-SWEPT fiber struct (512B
+block freed; the status read itself faults). Meaning: the sweep
+freed a fiber that a surviving reference re-marked afterwards --
+a mark/sweep root inconsistency where the reference holder was not
+traversed during that collection's mark phase. Audit surface: which
+holder re-marks swept fibers at density (serials, proc->fiber,
+chanpend nodes, spawn queue) and why its mark edge was missing in
+the sweeping collection. Next instrument: poison-check at
+janet_mark_fiber entry + `__sanitizer_print_stack_trace()` of the
+marker (the harness is in gc.c under JANET_ASAN_UAF_TRACE; note the
+eprintf reentrancy -- write the trace via write(2) instead).

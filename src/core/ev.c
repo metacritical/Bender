@@ -1283,6 +1283,33 @@ static void janet_thread_chan_cb(JanetEVGenericMessage msg) {
                 janet_chanpend_claim_threaded(&reader);
                 JanetVM *vm = reader.thread;
                 if (!vm) continue;
+                if (vm == &janet_vm) {
+                    /* BUG 1 sibling: same-VM pending on a threaded
+                     * channel. Posting through the self-pipe from the
+                     * loop's own thread fills the pipe (~8000 writes
+                     * at a 4000-value fan-in) and the loop then
+                     * deadlocks inside its own wakeup write. Schedule
+                     * inline instead -- we are the loop. */
+                    uint32_t sid = (uint32_t) reader.sched_id;
+                    janet_gcunroot(janet_wrap_fiber(reader.fiber));
+                    if (reader.fiber->sched_id == sid) {
+                        if (reader.mode == JANET_CP_MODE_CHOICE_READ) {
+                            janet_assert(!janet_chan_unpack(channel, &x, 0),
+                                    "packing error");
+                            janet_schedule(reader.fiber,
+                                    make_read_result(channel, x));
+                        } else if (reader.mode == JANET_CP_MODE_READ) {
+                            janet_assert(!janet_chan_unpack(channel, &x, 0),
+                                    "packing error");
+                            janet_schedule(reader.fiber, x);
+                        } else {
+                            janet_schedule(reader.fiber,
+                                    make_write_result(channel));
+                        }
+                    }
+                    sent = 1;
+                    break;
+                }
                 JanetEVGenericMessage msg;
                 msg.tag = reader.mode;
                 msg.fiber = reader.fiber;
@@ -1564,14 +1591,31 @@ static int janet_channel_pop_with_lock(JanetChannel *channel, Janet *item, int i
         } else if (is_threaded) {
             janet_chanpend_claim_threaded(&writer);
             JanetVM *vm = writer.thread;
-            JanetEVGenericMessage msg;
-            msg.tag = writer.mode;
-            msg.fiber = writer.fiber;
-            msg.argi = (int32_t) writer.sched_id;
-            msg.argp = channel;
-            msg.argj = janet_wrap_nil();
-            if (vm) {
-                janet_ev_post_event(vm, janet_thread_chan_cb, msg);
+            if (vm == &janet_vm) {
+                /* BUG 1 sibling: same-VM writer pending on a threaded
+                 * channel -- schedule inline (see the push-side note). */
+                uint32_t sid = (uint32_t) writer.sched_id;
+                janet_gcunroot(janet_wrap_fiber(writer.fiber));
+                if (writer.fiber->sched_id == sid &&
+                        janet_fiber_can_resume(writer.fiber)) {
+                    if (writer.mode == JANET_CP_MODE_CHOICE_WRITE) {
+                        janet_schedule(writer.fiber,
+                                make_write_result(channel));
+                    } else {
+                        janet_schedule(writer.fiber,
+                                janet_wrap_channel(channel));
+                    }
+                }
+            } else {
+                JanetEVGenericMessage msg;
+                msg.tag = writer.mode;
+                msg.fiber = writer.fiber;
+                msg.argi = (int32_t) writer.sched_id;
+                msg.argp = channel;
+                msg.argj = janet_wrap_nil();
+                if (vm) {
+                    janet_ev_post_event(vm, janet_thread_chan_cb, msg);
+                }
             }
         }
     }
@@ -2135,7 +2179,14 @@ JanetFiber *janet_loop1(void) {
          * runs alike), so every run below starts full. Off = existing
          * behavior exact. */
         JanetSignal sig = janet_continue_signal(task.fiber, task.value, &res, task.sig);
-        if (!janet_fiber_can_resume(task.fiber)) {
+        /* M4b quantum yield: the fiber WILL be re-queued below (same
+         * signal, budget exhausted). It must bypass the completion
+         * cleanup -- the minor frees the fiber's young nursery, and a
+         * re-queued fiber would resume onto freed data (the density
+         * UAF: status USER9, data poisoned, walked by later marks). */
+        int quantum_yield = (sig == JANET_SIGNAL_INTERRUPT) &&
+            janet_vm.quantum && !janet_atomic_load_relaxed(&janet_vm.auto_suspend);
+        if (!janet_fiber_can_resume(task.fiber) && !quantum_yield) {
             janet_table_remove(&janet_vm.active_tasks, janet_wrap_fiber(task.fiber));
             /* P3.5c: a completed proc retires its mailbox (go quiet so
              * later sends drop silently, Erlang parity). Completed

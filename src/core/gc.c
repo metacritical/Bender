@@ -368,6 +368,14 @@ static void janet_mark_fiber(JanetFiber *fiber) {
 recur:
     if (janet_gc_reachable(fiber))
         return;
+#ifdef JANET_ASAN_UAF_TRACE
+    extern int __asan_address_is_poisoned(void const volatile *addr);
+    extern void __sanitizer_print_stack_trace(void);
+    if (__asan_address_is_poisoned(fiber)) {
+        janet_eprintf("[uaf-mark] walking a swept fiber %p\n", (void *) fiber);
+        __sanitizer_print_stack_trace();
+    }
+#endif
     janet_gc_mark(fiber);
 
     /* P3.5: proc fibers pin their proc (and procs pin their fibers
@@ -411,12 +419,26 @@ recur:
     janet_mark_many(fiber->data + fiber->stackstart,
                     fiber->stacktop - fiber->stackstart);
 
+#ifdef JANET_ASAN_UAF_TRACE
+    extern int __asan_address_is_poisoned(void const volatile *addr);
+#endif
     i = fiber->frame;
     j = fiber->stackstart - JANET_FRAME_SIZE;
     while (i > 0) {
         frame = (JanetStackFrame *)(fiber->data + i - JANET_FRAME_SIZE);
-        if (NULL != frame->func)
+        if (NULL != frame->func) {
+#ifdef JANET_ASAN_UAF_TRACE
+            if (__asan_address_is_poisoned(frame->func)) {
+                janet_eprintf("[uaf] fiber=%p status=%d proc=%p "
+                        "serial=%d data-poisoned=%d\n",
+                        (void *) fiber, (int) janet_fiber_status(fiber),
+                        (void *) fiber->proc,
+                        fiber->proc ? (int) fiber->proc->serial : -1,
+                        __asan_address_is_poisoned(fiber->data) ? 1 : 0);
+            }
+#endif
             janet_mark_function(frame->func);
+        }
         if (NULL != frame->env)
             janet_mark_funcenv(frame->env);
         /* Mark all values in the stack frame */

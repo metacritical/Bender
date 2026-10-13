@@ -578,7 +578,7 @@ void janet_fiber_ensure_native_stack(JanetFiber *fiber) {
         fiber->native_stack_committed = NULL;
 #endif
     }
-    janet_fiber_reprime(fiber);
+        janet_fiber_reprime(fiber);
 }
 
 /* Re-prime a mapped fiber's switch context (trampoline entry).
@@ -612,7 +612,7 @@ void janet_fiber_shared_prime(JanetFiber *fiber) {
         size_t usable = janet_vm.shared_stack_size -
             (size_t)((char *)janet_vm.shared_stack -
                      (char *)janet_vm.shared_stack_base);
-        janet_fiber_ctx_prime(&fiber->ctx, janet_vm.shared_stack, usable,
+                janet_fiber_ctx_prime(&fiber->ctx, janet_vm.shared_stack, usable,
                               janet_fiber_trampoline);
     }
 }
