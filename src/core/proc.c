@@ -60,6 +60,20 @@ static JANET_THREAD_LOCAL JanetChannel *janet_lane0_ctl;
 static JANET_THREAD_LOCAL int32_t janet_lane_count;
 static JANET_THREAD_LOCAL int32_t janet_lane_rr;
 
+/* Milestone 2c: work-stealing. The overflow queue is a global
+ * threaded channel owned by the main VM (created at lanes-start,
+ * rooted like lane0_ctl). Routed spawns under the :steal policy push
+ * to it when the target ctl is at high water; dispatchers drain it
+ * (up to K tasks) before parking on an empty ctl. Policy:
+ * 0 = :round-robin (default), 1 = :least-loaded (reserved, behaves
+ * as round-robin), 2 = :steal. Counters are the feature indication:
+ * lanes-stats reports pushes/pulls so tests assert stealing actually
+ * happened. */
+static JANET_THREAD_LOCAL JanetChannel *janet_lane_overflow;
+static JANET_THREAD_LOCAL int32_t janet_lane_policy;
+static volatile JanetAtomicInt janet_lane_overflow_pushed;
+static volatile JanetAtomicInt janet_lane_overflow_pulled;
+
 /* Milestone 2a: pool-style join. Workers launch on JOINABLE pthreads,
  * each with a completion sync. lanes-stop asks every dispatcher to
  * exit, wakes locally-parked procs (best effort), waits a bounded
@@ -120,6 +134,23 @@ static Janet janet_proc_spawn_routed(JanetFunction *func, int32_t cap) {
     msg[2] = janet_wrap_number(cap);
     msg[3] = janet_wrap_function(func);
     Janet spawn_msg = janet_wrap_tuple(janet_tuple_n(msg, 4));
+    /* Milestone 2c: :steal policy offloads to the overflow queue when
+     * the target ctl is at high water (3/4 capacity). The task runs
+     * wherever a lane pulls it; the spawner's pid tuple keeps the
+     * spawn-time lane (documented: sends via that tuple may hit
+     * :noproc for pulled procs -- communicate via closures or the
+     * proc's own self-pid). Try-mode never blocks the spawner. */
+    if (2 == janet_lane_policy && NULL != janet_lane_overflow &&
+            janet_channel_count(ctl) >= 8 &&
+            janet_channel_push(janet_lane_overflow, spawn_msg, 2) == 0) {
+        janet_atomic_inc(&janet_lane_overflow_pushed);
+        Janet tup[4];
+        tup[0] = janet_ckeywordv("pid");
+        tup[1] = janet_wrap_number((double) (lane + 1));
+        tup[2] = janet_wrap_number((double) serial);
+        tup[3] = janet_wrap_abstract(ctl);
+        return janet_wrap_tuple(janet_tuple_n(tup, 4));
+    }
     if (janet_channel_push(ctl, spawn_msg, 0)) {
         janet_await(); /* ctl full: resumed when the push lands */
     }
@@ -446,6 +477,24 @@ JANET_CORE_FN(cfun_proc_lanes_start,
             janet_ev_inc_refcount();
         }
     }
+    /* Milestone 2c: the global overflow queue for the :steal policy.
+     * Main-homed and rooted like lane0_ctl; abandoned at stop. */
+    janet_lane_overflow = janet_channel_make_threaded_c(4096);
+    janet_gcroot(janet_wrap_abstract(janet_lane_overflow));
+    janet_lane_overflow_pushed = 0;
+    janet_lane_overflow_pulled = 0;
+    /* Milestone 2c: hand each dispatcher its overflow queue via the
+     * control channel (marshaling it inside the launch tuple crashes
+     * the registry-dedup hash; a ctl message crosses the same way pid
+     * tuples always have). */
+    for (int32_t i = 0; i < count; i++) {
+        JanetChannel *ctl = janet_lane_ctls[i];
+        if (NULL == ctl) continue;
+        Janet tup[2];
+        tup[0] = janet_ckeywordv("overflow");
+        tup[1] = janet_wrap_abstract(janet_lane_overflow);
+        (void) janet_channel_push(ctl, janet_wrap_tuple(janet_tuple_n(tup, 2)), 0);
+    }
     /* Lane 0: the main VM's inbound control channel, serviced by the
      * same dispatcher running as a task on the main loop. Symmetry:
      * every proc everywhere has a routable pid. */
@@ -463,6 +512,78 @@ JANET_CORE_FN(cfun_proc_lanes_start,
     }
     janet_lane_count = count;
     return janet_wrap_number(count);
+}
+
+JANET_CORE_FN(cfun_proc_lanes_policy,
+              "(proc/lanes-policy &opt policy)",
+              "Get or set the spawn placement policy: :round-robin "
+              "(default -- predictable, optimal for uniform fan-out), "
+              ":steal (spawns overflow to a global queue when the "
+              "target lane's control channel is at high water; idle "
+              "lanes pull from it before parking), or :least-loaded "
+              "(reserved; currently behaves as round-robin). Returns "
+              "the effective policy keyword.") {
+    janet_arity(argc, 0, 1);
+    if (argc == 1) {
+        Janet kw = argv[0];
+        if (!janet_checktype(kw, JANET_KEYWORD))
+            janet_panic("policy must be a keyword");
+        const uint8_t *kn = janet_unwrap_keyword(kw);
+        int32_t klen = janet_length(kw);
+        if (5 == klen && 0 == memcmp(kn, "steal", 5)) {
+            janet_lane_policy = 2;
+            if (0 == janet_lane_count)
+                janet_panic(":steal requires lanes (proc/lanes-start)");
+        } else if (12 == klen && 0 == memcmp(kn, "round-robin", 11)) {
+            janet_lane_policy = 0;
+        } else if (12 == klen && 0 == memcmp(kn, "least-loaded", 12)) {
+            janet_lane_policy = 1;
+        } else {
+            janet_panic("policy must be :round-robin, :least-loaded, or :steal");
+        }
+    }
+    switch (janet_lane_policy) {
+        default:
+        case 0: return janet_ckeywordv("round-robin");
+        case 1: return janet_ckeywordv("least-loaded");
+        case 2: return janet_ckeywordv("steal");
+    }
+}
+
+JANET_CORE_FN(cfun_proc_lanes_stats,
+              "(proc/lanes-stats)",
+              "Work-stealing counters: a struct {:overflow-pushed n "
+              ":overflow-pulled n}. Pushes count :steal-policy spawns "
+              "offloaded to the overflow queue; pulls count tasks "
+              "lanes took from it. Both reset at lanes-start.") {
+    janet_fixarity(argc, 0);
+    (void) argv;
+    JanetKV *kv = janet_struct_begin(2);
+    janet_struct_put(kv, janet_ckeywordv("overflow-pushed"),
+            janet_wrap_number((double) janet_atomic_load(
+                    &janet_lane_overflow_pushed)));
+    janet_struct_put(kv, janet_ckeywordv("overflow-pulled"),
+            janet_wrap_number((double) janet_atomic_load(
+                    &janet_lane_overflow_pulled)));
+    return janet_wrap_struct(kv);
+}
+
+JANET_CORE_FN(cfun_proc_lane_pull,
+              "(proc/lane-pull)",
+              "Internal: try-pop one task from the lane's overflow "
+              "queue (non-blocking). Returns the [:spawn serial cap "
+              "entry] message or nil when empty. The dispatcher pulls "
+              "up to K of these before parking on its control "
+              "channel.") {
+    janet_fixarity(argc, 0);
+    (void) argv;
+    if (NULL == janet_lane_overflow) return janet_wrap_nil();
+    Janet item;
+    if (janet_channel_pop(janet_lane_overflow, &item, 0)) {
+        return janet_wrap_nil();
+    }
+    janet_atomic_inc(&janet_lane_overflow_pulled);
+    return item;
 }
 
 JANET_CORE_FN(cfun_proc_lanes_stop,
@@ -1229,6 +1350,9 @@ static const JanetRegExt proc_cfuns_ext[] = {
         JANET_CORE_REG("proc/lane-lookup", cfun_proc_lane_lookup),
         JANET_CORE_REG("proc/lanes", cfun_proc_lanes),
         JANET_CORE_REG("proc/lanes-start", cfun_proc_lanes_start),
+        JANET_CORE_REG("proc/lanes-policy", cfun_proc_lanes_policy),
+        JANET_CORE_REG("proc/lanes-stats", cfun_proc_lanes_stats),
+        JANET_CORE_REG("proc/lane-pull", cfun_proc_lane_pull),
         JANET_CORE_REG("proc/lanes-stop", cfun_proc_lanes_stop),
         JANET_CORE_REG("proc/lane-pin", cfun_proc_lane_pin),
     JANET_CORE_REG("proc/isolated?", cfun_proc_isolated),

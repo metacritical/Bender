@@ -1192,6 +1192,13 @@ int janet_channel_cancel_reader(JanetChannel *channel, JanetFiber *fiber, Janet 
     return cancelled;
 }
 
+/* Milestone 2c: current item depth of a channel (the :steal policy's
+ * high-water check on lane control channels). */
+JANET_API int32_t janet_channel_count(void *chan) {
+    JanetChannel *channel = chan;
+    return janet_q_count(&channel->items);
+}
+
 static int janet_chanat_gc(void *p, size_t s) {
     (void) s;
     JanetChannel *channel = p;

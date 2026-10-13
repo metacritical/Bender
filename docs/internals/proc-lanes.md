@@ -619,3 +619,31 @@ the wrong typebits test and nulled LIVE threaded mboxes -- caught by
 the suites immediately, reverted for the precise poison check.)
 
 Density: 5/5 green. proc 88/88, ev2, mailbox, ev, pool, thread green.
+
+### Round 16: milestone 2c LANDED — work-stealing first slice
+
+Implemented per the recorded design:
+- `proc/lanes-policy` knob (:round-robin default | :least-loaded
+  reserved-as-rr | :steal; :steal requires lanes).
+- Global overflow queue: a main-homed threaded channel (4096) created
+  at lanes-start, delivered to dispatchers as a [:overflow queue] ctl
+  message (marshaling it inside the launch tuple crashed the registry
+  dedup hash -- channels cross as ctl messages the way pid tuples
+  always have).
+- Routed spawn under :steal: when the target ctl depth >= 8
+  (janet_channel_count), try-push to overflow (never blocks).
+- Dispatcher idle pull: up to K=4 tasks drained before parking on an
+  empty ctl (boot.janet lane-worker handle-spawn refactor).
+- `proc/lanes-stats` counters {:overflow-pushed :overflow-pulled} --
+  the feature indication.
+- Documented limitation: the spawner's pid tuple keeps the spawn-time
+  lane; sends via it may hit :noproc for pulled procs.
+
+Tests (suite-lanes 2c section, end of suite, own start/stop cycle):
+policy round-trip, skewed 200-task workload under :steal completing
+correctly (sum 0..199), counters positive for push AND pull, stop
+clean. NOTE: task closures must capture pid tuples, not proc
+abstracts (procs refuse marshal -- same-VM only by design).
+
+Full battery green (suite-lanes FULL incl. 640k density + join 8.0s,
+plus all nine siblings).

@@ -1730,6 +1730,7 @@ JANET_NO_RETURN JANET_API void janet_ev_threaded_await(JanetThreadedSubroutine f
 /* Post callback + userdata to an event loop. Takes the vm parameter to allow posting from other
  * threads or signal handlers. Use NULL to post to the current thread. */
 JANET_API void janet_ev_post_event(JanetVM *vm, JanetCallback cb, JanetEVGenericMessage msg);
+JANET_API int32_t janet_channel_count(void *chan);
 
 /* Callback used by janet_ev_threaded_await */
 JANET_API void janet_ev_default_threaded_callback(JanetEVGenericMessage return_value);

@@ -3359,20 +3359,39 @@
   (def [ctl lane-id aff] launch)
   (when aff (proc/lane-pin lane-id))
   (def serials @{})
+  (var overflow nil)
+  (defn handle-spawn [msg]
+    # [:spawn serial cap entry] -- runs on THIS lane wherever the
+    # task came from (ctl or the :steal overflow queue).
+    (def [op serial x y] msg)
+    (def entry y)
+    (def cap (if (number? x) x 64))
+    # node = lane-id + 1 (0 is reserved for the main VM;
+    # handles and the cached cross-pid must agree).
+    (def p (proc/spawn (fn []
+                         (setdyn :proc-cross-pid
+                                 [:pid (inc lane-id) serial ctl])
+                         (entry))
+                       cap))
+    (put serials serial p))
   (while true
+    # Milestone 2c idle pull: before parking on the control channel,
+    # drain up to K tasks from the :steal overflow queue. This
+    # converts spare capacity into throughput without proc migration.
+    (when overflow
+      (var k 0)
+      (var going true)
+      (while (and going (< k 4))
+        (def task (proc/lane-pull))
+        (if task
+          (do (handle-spawn task) (++ k))
+          (set going false))))
     (def [op serial x y] (ev/take ctl))
     (case op
-      :spawn (do
-               (def entry y)   # [:spawn serial cap entry]
-               (def cap (if (number? x) x 64))
-               # node = lane-id + 1 (0 is reserved for the main VM;
-               # handles and the cached cross-pid must agree).
-               (def p (proc/spawn (fn []
-                                    (setdyn :proc-cross-pid
-                                            [:pid (inc lane-id) serial ctl])
-                                    (entry))
-                                  cap))
-               (put serials serial p))
+      # [:overflow queue] -- milestone 2c: the global steal queue,
+      # delivered here before any spawn traffic.
+      :overflow (set overflow y)
+      :spawn (handle-spawn [op serial x y])
       :deliver (if-let [p (or (get serials serial) (proc/lane-lookup serial))]
                  (proc/send p x))
       # [:proc-fwd serial msg] -- resolve to the LOCAL proc first

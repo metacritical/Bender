@@ -215,3 +215,41 @@
 
 (eprint "suite-lanes: all assertions passed")
 (os/exit 0)
+
+# Milestone 2c: work-stealing. The policy knob round-trips, a skewed
+# workload under :steal completes correctly with overflow traffic, and
+# the counters prove pulls happened (feature indication, not vibes).
+(proc/lanes-start 4)
+(assert (= :round-robin (proc/lanes-policy)) "policy defaults to :round-robin")
+(assert (= :steal (proc/lanes-policy :steal)) "policy set to :steal")
+(assert (= :steal (proc/lanes-policy)) "policy reads back :steal")
+(assert (= :least-loaded (proc/lanes-policy :least-loaded)) ":least-loaded accepted")
+(assert (= :round-robin (proc/lanes-policy :round-robin)) "back to :round-robin")
+(proc/lanes-policy :steal)
+(def steal-done (ev/thread-chan 1))
+(def steal-started (ev/thread-chan 1))
+(def collector-steal
+  (proc/spawn-local
+    (fn []
+      (ev/give steal-started (proc/self-pid))
+      (var sum 0)
+      (loop [i :range [0 200]]
+        (+= sum (proc/recv)))
+      (ev/give steal-done [:done sum]))))
+(def cpid (ev/take steal-started 10))
+# 200 tasks send 0..199 to the collector's PID (tuples marshal; proc
+# abstracts don't cross lanes). Once any lane's ctl backs up past the
+# :steal threshold, overflow engages and idle lanes drain it.
+(loop [i :range [0 200]]
+  (proc/spawn
+    (fn []
+      (proc/send cpid i))))
+(def [steal-tag steal-sum] (ev/take steal-done 10))
+(assert (= :done steal-tag) "skewed :steal workload completes")
+(assert (= 19900 steal-sum) ":steal results correct (sum 0..199)")
+(def stats (proc/lanes-stats))
+(assert (pos? (stats :overflow-pushed)) ":steal pushed tasks to overflow")
+(assert (pos? (stats :overflow-pulled)) "idle lanes pulled from overflow")
+(proc/lanes-policy :round-robin)
+(proc/lanes-stop)
+(assert (= 0 (proc/lanes)) "lanes 0 after :steal section stop")
