@@ -14,6 +14,8 @@
 /* Blocking give (mode 0), try-give (mode 3), supervisor push (mode 2).
  * Nonzero = caller must janet_await (value pends); zero = done. */
 int janet_channel_push(JanetChannel *channel, Janet x, int mode);
+/* proc/kill support: cancel a recv-parked reader with an error. */
+int janet_channel_cancel_reader(JanetChannel *channel, JanetFiber *fiber, Janet reason);
 /* Blocking take (mode 0), choice variants, supervisor drain (mode 2).
  * Nonzero = item obtained now (caller schedules root fiber with it);
  * zero = caller must janet_await. */

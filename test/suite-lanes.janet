@@ -126,5 +126,92 @@
 (proc/lanes-stop)
 (assert (= 0 (proc/lanes)) "lanes 0 after second stop")
 
+# Milestone 2b: cross-lane monitors and kill. Monitor registration
+# routes [:proc-monitor serial tag ch] to the watched proc's home
+# lane, which hosts the P2.3 reaper: [:down tag reason] back to the
+# channel (threaded push marshals cross-VM). Kill routes [:kill
+# serial reason] and is applied locally by the home lane.
+(proc/lanes-start 2)
+(def tap (ev/thread-chan 4))
+(def vpready (ev/thread-chan 1))
+(def victim
+  (proc/spawn
+    (fn []
+      (def r (proc/self-pid))
+      (ev/give vpready r)
+      (proc/recv))))
+(def vpid (ev/take vpready))
+(ev/give (vpid 3) [:proc-monitor (vpid 2) :reaped tap])
+(proc/kill vpid :shot)
+(def down (ev/take tap))
+(assert (and (tuple? down) (= :down (first down))) "monitor fired")
+(assert (= :reaped (get down 1)) "monitor tag")
+(assert (= :shot (get down 2)) "kill reason is the :down reason")
+# killing a dead proc is a silent no-op
+(proc/kill vpid :again)
+# erroring proc: the error value is the reason (rendezvous so the
+# monitor is registered before the proc dies)
+(def v2ready (ev/thread-chan 1))
+(def v2
+  (proc/spawn
+    (fn []
+      (def r (proc/self-pid))
+      (ev/give v2ready r)
+      (proc/recv)
+      (error :boom))))
+(def v2pid (ev/take v2ready))
+(ev/give (v2pid 3) [:proc-monitor (v2pid 2) :died tap])
+(proc/send v2pid :go)
+(def down2 (ev/take tap))
+(assert (= :died (get down2 1)) "error monitor tag")
+(assert (= :boom (get down2 2)) "error value is the :down reason")
+# normal return: :normal reason
+(def v3ready (ev/thread-chan 1))
+(def v3
+  (proc/spawn
+    (fn []
+      (def r (proc/self-pid))
+      (ev/give v3ready r)
+      (proc/recv)
+      42)))
+(def v3pid (ev/take v3ready))
+(ev/give (v3pid 3) [:proc-monitor (v3pid 2) :done tap])
+(proc/send v3pid :go)
+(def down3 (ev/take tap))
+(assert (= :done (get down3 1)) "normal monitor tag")
+(assert (= :normal (get down3 2)) "clean return reports :normal")
+# pid-tuple watcher: the :down routes through the watcher's own
+# mailbox (main-VM watcher proc, worker-VM victim)
+(def mready (ev/thread-chan 2))
+(def watcher
+  (proc/spawn-local
+    (fn []
+      (def r (proc/self-pid))
+      (ev/give mready r)
+      (def m (proc/recv))
+      (ev/give mready m))))
+(def wpid (ev/take mready))
+(def v4ready (ev/thread-chan 1))
+(def v4
+  (proc/spawn
+    (fn []
+      (def r (proc/self-pid))
+      (ev/give v4ready r)
+      (proc/recv))))
+(def v4pid (ev/take v4ready))
+(ev/give (v4pid 3) [:proc-monitor (v4pid 2) :via-pid wpid])
+(proc/kill v4pid :plugged)
+(def down4 (ev/take mready))
+(assert (and (tuple? down4) (= :down (first down4))) "pid-watcher fired")
+(assert (= :via-pid (get down4 1)) "pid-watcher tag")
+(assert (= :plugged (get down4 2)) "pid-watcher reason")
+# unknown serial answers :noproc from the lane
+(def ghost-ready (ev/thread-chan 1))
+(ev/give (vpid 3) [:proc-monitor 424242 :ghost ghost-ready])
+(assert (deep= [:down :ghost :noproc] (ev/take ghost-ready))
+        "unknown :noproc")
+(proc/lanes-stop)
+(assert (= 0 (proc/lanes)) "lanes stop after monitor tests")
+
 (eprint "suite-lanes: all assertions passed")
 (os/exit 0)

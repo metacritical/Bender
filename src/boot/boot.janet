@@ -3365,16 +3365,48 @@
       :spawn (do
                (def entry y)   # [:spawn serial cap entry]
                (def cap (if (number? x) x 64))
+               # node = lane-id + 1 (0 is reserved for the main VM;
+               # handles and the cached cross-pid must agree).
                (def p (proc/spawn (fn []
                                     (setdyn :proc-cross-pid
-                                            [:pid lane-id serial ctl])
+                                            [:pid (inc lane-id) serial ctl])
                                     (entry))
                                   cap))
                (put serials serial p))
       :deliver (if-let [p (or (get serials serial) (proc/lane-lookup serial))]
                  (proc/send p x))
-      :proc-fwd (if-let [p (or (get serials serial) (proc/lane-lookup serial))]
+      # [:proc-fwd serial msg] -- resolve to the LOCAL proc first
+      # (dual-key lane registry); the serials tuple would re-forward.
+      :proc-fwd (if-let [p (or (proc/lane-lookup serial) (get serials serial))]
                   (proc/send p x))  # [:proc-fwd serial msg] -- 3-tuple
+      # [:proc-monitor serial tag watcher] -- P2.3 remote monitor
+      # registration (procx/monitor-chan). Host the reaper on the
+      # watched proc's home lane: take the local sup, derive the
+      # P2.3 reason (:normal on ok, else fiber/last-value), record
+      # the exit reason, deliver [:down tag reason] to the watcher
+      # channel (a threaded push marshals across VMs). Unknown
+      # serial: :noproc.
+      :proc-monitor (do (if-let [p (proc/lane-lookup serial)]
+                      (do
+                        (def sup (proc/sup-of p))
+                        (def ch y)
+                        (def tag x)
+                        (ev/go
+                          (fn []
+                            (def [sig fib _] (ev/take sup))
+                            (def reason (if (= sig :ok) :normal (fiber/last-value fib)))
+                            (proc/record-exit p reason)
+                            # watcher: channel (give) or pid tuple (send
+                            # -- routes through the watcher's home lane)
+                            (if (= :core/channel (type ch))
+                              (ev/give ch [:down tag reason])
+                              (proc/send ch [:down tag reason])))))
+                      (ev/give y [:down x :noproc])))
+      # [:kill serial reason] -- resolve to the LOCAL proc (serials
+      # stores pid tuples; repushing would echo the op forever) and
+      # apply the kill on the home lane.
+      :kill (if-let [p (proc/lane-lookup serial)]
+              (proc/kill p x))
       :stop (do
               # Milestone 2a: wake locally-parked procs so the worker's
               # event loop can drain and the lane thread can be joined.

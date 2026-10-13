@@ -1098,6 +1098,51 @@ static Janet janet_wrap_channel(JanetChannel *channel) {
     return janet_wrap_abstract(channel);
 }
 
+/* proc/kill on a recv-parked victim: remove the fiber's read pendings
+ * from an isolated (same-VM, non-threaded) channel and error-resume it
+ * so the kill lands immediately instead of at a next resume that may
+ * never come. recv is own-mailbox only, so pendings found here belong
+ * to the victim on this VM. Returns 1 when a pending was cancelled. */
+int janet_channel_cancel_reader(JanetChannel *channel, JanetFiber *fiber, Janet reason) {
+    if (NULL == channel || channel->is_threaded) return 0;
+    JanetQueue *fq = &channel->read_pending;
+    int32_t count = janet_q_count(fq);
+    if (0 == count) return 0;
+    JanetChannelPending *kept =
+        janet_malloc(sizeof(JanetChannelPending) * (size_t) count);
+    if (NULL == kept) return 0;
+    int32_t nkept = 0;
+    int cancelled = 0;
+    int32_t i = fq->head;
+    for (int32_t n = 0; n < count; n++) {
+        JanetChannelPending p;
+        memcpy(&p, (char *) fq->data + i * sizeof(JanetChannelPending),
+               sizeof(p));
+        i = i + 1 < fq->capacity ? i + 1 : 0;
+        if (!cancelled && p.thread == &janet_vm && p.fiber == fiber) {
+            /* Claim the node: unlinks the fiber's registration, frees
+             * dead regs. Live entries schedule; stale ones drop. */
+            if (janet_chanpend_claim_plain(&p)) {
+                janet_schedule_signal(fiber, reason, JANET_SIGNAL_ERROR);
+                cancelled = 1;
+            }
+            continue; /* consumed either way */
+        }
+        kept[nkept++] = p;
+    }
+    if (cancelled) {
+        int32_t w = fq->head;
+        for (int32_t k = 0; k < nkept; k++) {
+            memcpy((char *) fq->data + w * sizeof(JanetChannelPending),
+                   kept + k, sizeof(JanetChannelPending));
+            w = w + 1 < fq->capacity ? w + 1 : 0;
+        }
+        fq->tail = w;
+    }
+    janet_free(kept);
+    return cancelled;
+}
+
 static int janet_chanat_gc(void *p, size_t s) {
     (void) s;
     JanetChannel *channel = p;

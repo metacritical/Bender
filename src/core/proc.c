@@ -195,10 +195,45 @@ JANET_CORE_FN(cfun_proc_self_pid,
         janet_panic("proc/self-pid outside a process");
     }
     JanetProcess *me_proc = me->proc;
+    if (NULL != getenv("JANET_TRACE_PID")) {
+        janet_eprintf("[pid] env=%d lane_local=%p\n",
+                (NULL != me_proc->fiber && NULL != me_proc->fiber->env) ? 1 : 0,
+                (void *) janet_lane_local);
+    }
     if (NULL != me_proc->fiber && NULL != me_proc->fiber->env) {
         Janet cached = janet_table_get(me_proc->fiber->env,
                 janet_ckeywordv("proc-cross-pid"));
-        if (!janet_checktype(cached, JANET_NIL)) return cached;
+        if (!janet_checktype(cached, JANET_NIL)) {
+            if (NULL != getenv("JANET_TRACE_PID")) {
+                janet_eprintf("[pid] CACHE-HIT registering serial=%u\n",
+                        me_proc->serial);
+            }
+            /* Milestone 2b: cached-pid procs (routed spawns) register
+             * in this VM's lane registry too -- the home lane's
+             * dispatcher resolves [:proc-monitor]/[:kill] ops through
+             * proc/lane-lookup, which reads only this table. */
+            if (NULL == janet_lane_local) {
+                janet_lane_local = janet_table(0);
+                janet_gcroot(janet_wrap_table(janet_lane_local));
+            }
+            if (NULL != getenv("JANET_TRACE_PID"))
+                janet_eprintf("[put] table=%p serial=%u\n",
+                        (void *) janet_lane_local, me_proc->serial);
+            janet_table_put(janet_lane_local,
+                    janet_wrap_number((double) me_proc->serial),
+                    janet_wrap_abstract(me_proc));
+            /* ALSO under the DISPATCH serial: the routed-spawn op
+             * allocates its own serial on the spawner's VM (the one
+             * in the pid tuple / [:proc-monitor]/[:kill] ops), while
+             * spawn_impl minted the proc's real serial here. */
+            const Janet *dtup = janet_unwrap_tuple(cached);
+            if (4 == janet_tuple_length(dtup) &&
+                    janet_checktype(dtup[2], JANET_NUMBER)) {
+                janet_table_put(janet_lane_local, dtup[2],
+                        janet_wrap_abstract(me_proc));
+            }
+            return cached;
+        }
     }
     if (NULL == janet_lane0_ctl) {
         janet_panic("proc/self-pid requires lanes (proc/lanes-start)");
@@ -247,9 +282,19 @@ JANET_CORE_FN(cfun_proc_lane_lookup,
               "that registered from C (proc/self-pid's lazy path).") {
     janet_fixarity(argc, 1);
     uint32_t serial = (uint32_t) janet_getinteger(argv, 0);
-    if (NULL == janet_lane_local) return janet_wrap_nil();
-    return janet_table_get(janet_lane_local,
+    if (NULL == janet_lane_local) {
+        if (NULL != getenv("JANET_TRACE_PID"))
+            janet_eprintf("[lookup] table NULL serial=%u\n", serial);
+        return janet_wrap_nil();
+    }
+    Janet found = janet_table_get(janet_lane_local,
             janet_wrap_number((double) serial));
+    if (NULL != getenv("JANET_TRACE_PID"))
+        janet_eprintf("[lookup] table=%p serial=%u found=%p\n",
+                (void *) janet_lane_local, serial,
+                janet_checktype(found, JANET_NIL) ? NULL
+                    : janet_unwrap_pointer(found));
+    return found;
 }
 
 JANET_CORE_FN(cfun_proc_lanes,
@@ -547,7 +592,7 @@ static int janet_procat_mark(void *p, size_t size) {
 
 const JanetAbstractType janet_proc_type = {
     "core/proc",
-    NULL, /* gc */
+    NULL, /* gc: the fiber marks the proc (see janet_mark fiber case) */
     janet_procat_mark,
     NULL, /* get */
     NULL, /* put */
@@ -634,7 +679,13 @@ static Janet cfun_proc_spawn_impl(JanetFunction *func, int32_t cap, int isolated
         JanetTryState tstate;
         JanetSignal sig = janet_try(&tstate);
         if (!sig) {
-            proc->mbox = janet_channel_make_isolated((uint32_t) cap);
+            /* Milestone 2b: the mbox is a THREADED channel — any proc
+             * must be sendable (and monitorable) from any lane, and an
+             * isolated mbox panics on foreign-thread push ("isolated
+             * channel used from a foreign thread"), which silently ate
+             * lane-N -> lane-0 deliveries. The sup channel stays
+             * isolated: only the home-lane proxy takes it. */
+            proc->mbox = janet_channel_make_threaded_c((int32_t) cap);
             proc->sup = janet_channel_make(8);
             /* P1.2 fields, lazily allocated (density: most procs never
              * stash or monitor — spawn no longer pays 2 arrays + 2
@@ -897,8 +948,32 @@ JANET_CORE_FN(cfun_proc_kill,
               "Untrappable kill: cancel the process fiber with `reason` "
               "(lands at the next resume/quantum boundary; monitors "
               "observe via the supervisor completion in P1.2). Dead "
-              "processes are a silent no-op. Returns `p`.") {
+              "processes are a silent no-op. Returns `p`. "
+              "Milestone 2b: a remote pid tuple forwards [:kill serial "
+              "reason] to the home lane's dispatcher, which applies the "
+              "kill locally.") {
     janet_fixarity(argc, 2);
+    /* Milestone 2b: remote pid — forward to the home lane. */
+    if (janet_checktype(argv[0], JANET_TUPLE)) {
+        const Janet *tup = janet_unwrap_tuple(argv[0]);
+        if (4 == janet_tuple_length(tup) &&
+                janet_checktype(tup[0], JANET_KEYWORD) &&
+                janet_unwrap_keyword(tup[0]) == janet_unwrap_keyword(janet_ckeywordv("pid")) &&
+                janet_checktype(tup[1], JANET_NUMBER) &&
+                0 != (int64_t) janet_unwrap_number(tup[1])) {
+            if (!janet_checktype(tup[2], JANET_NUMBER)) {
+                janet_panic("remote pid serial must be a number");
+            }
+            JanetChannel *ctl = (JanetChannel *) janet_unwrap_abstract(tup[3]);
+            Janet k[3];
+            k[0] = janet_ckeywordv("kill");
+            k[1] = tup[2];      /* serial */
+            k[2] = argv[1];     /* reason */
+            janet_channel_push(ctl, janet_wrap_tuple(janet_tuple_n(k, 3)), 0);
+            return argv[0];
+        }
+        janet_panic("proc/kill: bad pid tuple");
+    }
     JanetProcess *proc = janet_getproc(argv, 0);
     JanetFiber *fiber = proc->fiber;
     if (NULL != fiber && janet_fiber_can_resume(fiber)) {
@@ -909,8 +984,10 @@ JANET_CORE_FN(cfun_proc_kill,
          * silently, Erlang parity). Both objects are listed-valid here
          * (mid-mutator, pre-sweep). */
         if (NULL != proc->mbox) {
-            /* DISABLED-HOOK-TEST */
-            (void) 0;
+            /* P3.5c hook, now real: if the victim is parked in recv on
+             * its own mailbox, cancel the pending and land the kill
+             * immediately (a parked fiber has no next resume). */
+            janet_channel_cancel_reader(proc->mbox, fiber, argv[1]);
         }
     }
     return argv[0];
@@ -1011,8 +1088,18 @@ JANET_CORE_FN(cfun_proc_monitor,
               "same-lane channel taps — reapers give to channels, send\n"
               "to procs). Appends to the watched process's C monitor\n"
               "list. Late monitors (already done) must check proc/done?\n"
-              "first — this just records. Returns `watcher`.") {
+              "first — this just records. Returns `watcher`.\n\n"
+              "Milestone 2b: when `watched` is a remote pid tuple, the\n"
+              "monitor routes to the home lane's dispatcher as\n"
+              "[:mon serial watcher tag]; a proxy proc on the home lane\n"
+              "takes the watched proc's supervisor channel (same-VM\n"
+              "only) and forwards [:down tag status value] to the\n"
+              "watcher, whatever lane it lives on. Returns `watcher`.") {
     janet_fixarity(argc, 3);
+    /* Milestone 2b: remote pid tuples are handled at the dispatcher
+     * level (:proc-monitor op from procx/monitor-chan) -- registration
+     * must happen on the watched proc's home lane, where the C
+     * completion hook delivers. */
     JanetProcess *watched = janet_getproc(argv, 0);
     if (NULL == watched->monitors) watched->monitors = janet_array(0);
     janet_array_push(watched->monitors, argv[2]);
