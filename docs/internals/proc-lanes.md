@@ -425,3 +425,17 @@ the traced run sits on the full/scoped path. Next: audit janet_mark's
 recursion-guard/epoch handling for fiber blocks (a stale or unsset
 epoch on a rooted fiber explains every observation), and whether
 sweep_proc_owned's narrow mark can miss a root-honoring block.
+
+### Round 6: epoch theory eliminated; gcroot-of-dead-fiber hypothesis
+
+The free-side probe fires at deinit time, which (via quarantine) can
+LAG the sweep that judged the block dead. Reconciliation: fiber F was
+correctly judged unreachable and quarantined at collect N (unrooted
+then); LATER, a registration path gcrooted the stale F pointer
+(roots[8]); a subsequent drain deinit'd F -- the probe saw "rooted".
+The bug to hunt: WHICH registration path roots a dead-or-dying fiber.
+Probe: in janet_gcroot, for FIBER values, check
+__asan_address_is_poisoned(fiber) (or block-quarantined state) and
+backtrace -- any hit names the culprit registration site directly.
+Epoch cycling (janet_gc_epoch_next, % 15) was eliminated: the sweep
+clears survivor epochs, so stale-epoch collisions only over-retain.
