@@ -1,9 +1,7 @@
-# Fix lost-wakeup bug in Janet fork proc fan-in
+# Reconcile Phase 1, Game of Life, and Later Roadmap
 
-1. Build (`make -j8`) and reproduce flakiness (loop /tmp/fo_cap.janet with `proc/lanes-start` added or direct-abstract variant).
-2. Read src/core/ev.c: janet_loop_done/janet_loop drain ordering, janet_schedule `soon` path, pending registration (root_fiber/sched_id usage in non-root fibers), janet_ev_chanpends_deinit.
-3. Identify root cause (leading hypothesis: drain/kevent ordering hole or stale root_fiber/sched_id in pending claims for proc fibers).
-4. Implement fix in ev.c/proc.c/gc.c as needed.
-5. Verify: 8 consecutive runs of 20k repro complete with sum 20000; `make test` 52/52; suite-proc, suite-mailbox, suite-lanes exit 0.
-6. Add fan-in regression test (~4000 senders, direct-abstract) to test/suite-proc.janet.
-7. Commit only changed files with `fix(ev): ...` message.
+1. Inspect the current Janet checkout, Git status, existing task tree, documentation roadmap, and whether the Game of Life demo exists.
+2. Preserve completed Phase 1 milestones and identify the exact remaining AOT blockers and unfinished demo work without claiming them complete.
+3. Update the persistent todo tree with the full state: completed Phase 1 work, remaining AOT fixes, Game of Life implementation/verification, and later phases only where documented by the repository.
+4. Make the next concrete safe progress item, verify it narrowly, and commit any completed atomic change.
+5. Report the resulting tree and blockers honestly; leave the goal active unless the full Phase 1 objective is actually complete.
