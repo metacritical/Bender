@@ -386,3 +386,22 @@ the sweeping collection. Next instrument: poison-check at
 janet_mark_fiber entry + `__sanitizer_print_stack_trace()` of the
 marker (the harness is in gc.c under JANET_ASAN_UAF_TRACE; note the
 eprintf reentrancy -- write the trace via write(2) instead).
+
+### Round 4: stale-reader keep + unroot-on-delivery; rejected scrub
+
+The inline same-VM reader handoff initially (a) unrooted before the
+staleness check -- double-unrooting readers resumed via another
+select clause -- and (b) discarded pushed values on stale readers.
+Fixed: unroot only on live delivery; stale readers push-head the
+value into the channel and release the packed buffer, mirroring the
+pipe callback's stale path (suite-ev2's keep test green 3/3).
+
+Tried and rejected: scrubbing terminal fibers' frames during mark
+(NULL func/env + zero value ranges) to make resurrections safe. The
+scrub crashed the boot VM: the zero ranges `[i, stackstart)` do not
+match the walk's per-frame value ranges (`[i, j)` off the
+`prevframe` chain) and intersect live frame structures. A correct
+scrub must mirror the walk's exact `j` chain. Reverted; density
+residual unchanged (~1/5 green, segfault during the 200k-640k
+spawn phase; ASAN: the walked fiber's frame->func / fiber->data
+freed, reached via janet_mark_roots in a full collect).
