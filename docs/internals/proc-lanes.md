@@ -507,3 +507,25 @@ Fix design: incref the channel at push/take entry, decref at all
 exits (including panic paths); the lock then serializes teardown
 against genuinely in-flight ops. Alternative: route mutex_deinit
 deferred and keep the struct until quiescence.
+
+### Round 10: in-flight refs, two-phase deinit, routing-first
+
+Three fixes, one round:
+1. In-flight channel ops (push/pop) now take a refcount at entry and
+   drop it before each synchronous return (parked-waiter safety keeps
+   coming from the pending-node discipline). The zero-drop teardown
+   defers to a loop even under the chan lock.
+2. janet_chan_deinit_q restructured flag-then-free: duplicate pending
+   entries sharing a reg freed the reg then revisited it (single-pass
+   aliasing).
+3. THE KEY ONE: the same-VM refcount teardown ran the FINALIZER
+   (channel deinit -- freeing the pending-queue buffers) on the
+   observing thread BEFORE the home-routing check, then deferred the
+   rest -- the home VM's routed callback then deinit'd the same
+   (already-freed) queues again. Routing now precedes every hook;
+   the home callback owns finalizer + poison + release under the
+   single-shot guard.
+
+Density: 2/5 full passes (up from ~1/5-1/3); each ASAN run still
+exposes the next head in the teardown/refcount lattice, but each fix
+is smaller and more specific. proc/lanes-skip/ev2 green throughout.

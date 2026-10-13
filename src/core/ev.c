@@ -1051,21 +1051,64 @@ static void flag_chanpend_node(JanetChannelPending *p) {
 }
 
 /* Flag one pending queue's nodes at channel deinit. The queue array
- * itself is abandoned intact (upstream discipline): its bytes die
- * with the storage, but a later push into a freed-but-unreused
- * channel still walks those entries — same as upstream — and each
- * entry's `reg` node is stable malloc'd memory the fiber still owns,
- * so the claim path stays sound. Nodes are flagged chan_dead here
- * (fibers never touch the channel again) and reclaimed by their
- * fibers' prune/deinit. Never dereferences fibers — only nodes. */
+ * itself is abandoned intact (upstream discipline). Two-phase: flag
+ * every reachable reg first (chan_dead=1; dead-fiber slots are nulled
+ * and collected), then free the collected dead regs. Single-pass
+ * freed a reg and then revisited a duplicate entry sharing it
+ * (ASAN: flag_chanpend_node UAF at density), and frees must stay
+ * ordered after all flagging so no walker sees a half-state. Living
+ * fibers' regs are never freed here -- in_queue drops to 0 and their
+ * own prune reclaims them. Never dereferences fibers -- only nodes. */
 static void janet_chan_deinit_q(JanetQueue *q) {
     JanetChannelPending *pending = q->data;
     if (NULL != pending) {
+        int32_t ranges[2][2];
+        int nranges = 0;
         if (q->head <= q->tail) {
-            for (int32_t i = q->head; i < q->tail; i++) flag_chanpend_node(pending + i);
+            ranges[nranges][0] = q->head;
+            ranges[nranges++][1] = q->tail;
         } else {
-            for (int32_t i = q->head; i < q->capacity; i++) flag_chanpend_node(pending + i);
-            for (int32_t i = 0; i < q->tail; i++) flag_chanpend_node(pending + i);
+            ranges[nranges][0] = q->head;
+            ranges[nranges++][1] = q->capacity;
+            ranges[nranges][0] = 0;
+            ranges[nranges++][1] = q->tail;
+        }
+        /* Pass 1: flag, collect dead regs, null their slots. */
+        JanetChanPendReg *dead[64];
+        size_t ndead = 0;
+        int overflow = 0;
+        for (int r = 0; r < nranges; r++) {
+            for (int32_t i = ranges[r][0]; i < ranges[r][1]; i++) {
+                JanetChanPendReg *reg = pending[i].reg;
+                if (NULL == reg) continue;
+                reg->chan_dead = 1;
+                if (reg->dead) {
+                    if (ndead < 64) {
+                        dead[ndead++] = reg;
+                        pending[i].reg = NULL;
+                    } else {
+                        overflow = 1;
+                    }
+                } else {
+                    reg->in_queue = 0;
+                }
+            }
+        }
+        /* Pass 2: free the collected dead regs (no future walker:
+         * dead fibers never prune). */
+        for (size_t k = 0; k < ndead; k++) janet_free(dead[k]);
+        if (overflow) {
+            /* Rare: more than 64 dead regs. Sweep again for the
+             * remainder (slots were left intact for this pass). */
+            for (int r = 0; r < nranges; r++) {
+                for (int32_t i = ranges[r][0]; i < ranges[r][1]; i++) {
+                    JanetChanPendReg *reg = pending[i].reg;
+                    if (NULL != reg && reg->dead) {
+                        janet_free(reg);
+                        pending[i].reg = NULL;
+                    }
+                }
+            }
         }
     }
     janet_q_deinit(q);
@@ -1385,11 +1428,41 @@ static void janet_chan_remove_stale(JanetQueue *fq) {
 /* Push a value to a channel, and return 1 if channel should block, zero otherwise.
  * If the push would block, will add to the write_pending queue in the channel.
  * Handles both threaded and unthreaded channels. */
+/* BUG 2 density: in-flight channel operations on foreign VMs held no
+ * refcount, so a home teardown at refcount-0 could destroy the
+ * channel struct (and deinit its mutex) while a foreign push/pop was
+ * entering. Each op now takes a claim at entry and drops it before
+ * its synchronous return; parked-waiter safety continues to come
+ * from the pending-node discipline (deinit flags nodes, never
+ * dereferences fibers). Panic paths longjmp past the drop -- a
+ * leaked claim only over-retains. The zero-drop teardown is deferred
+ * to the loop: we may still hold the channel lock here, and freeing
+ * under it would hand the unlock a freed mutex. */
+extern void janet_abstract_home_teardown_cb(JanetEVGenericMessage msg);
+static void janet_chan_inflight_release(JanetChannel *channel) {
+    if (!janet_chan_is_threaded(channel)) return;
+    if (0 == janet_abstract_decref((void *) channel)) {
+        JanetAbstractHead *head = janet_abstract_head(channel);
+        JanetEVGenericMessage msg;
+        memset(&msg, 0, sizeof(msg));
+        msg.argp = (void *) channel;
+        janet_ev_post_event((JanetVM *) head->home_vm,
+                janet_abstract_home_teardown_cb, msg);
+    }
+}
+#define JANET_CHAN_INFLIGHT_ACQUIRE(chan) \
+    do { if (janet_chan_is_threaded(chan)) \
+        janet_abstract_incref((void *) (chan)); } while (0)
+#define JANET_CHAN_INFLIGHT_DROP(chan) \
+    do { janet_chan_inflight_release(chan); } while (0)
+
 static int janet_channel_push_with_lock(JanetChannel *channel, Janet x, int mode) {
     JanetChannelPending reader;
     int is_empty;
+    JANET_CHAN_INFLIGHT_ACQUIRE(channel);
     if (channel->closed) {
         janet_chan_unlock(channel);
+        JANET_CHAN_INFLIGHT_DROP(channel);
         janet_panic("cannot write to closed channel");
     }
     /* P3.4: plain (non-packing) channels share by reference, so a
@@ -1471,6 +1544,7 @@ static int janet_channel_push_with_lock(JanetChannel *channel, Janet x, int mode
              * packed copy to avoid leaking the threaded marshal buffer. */
             janet_chan_unpack(channel, &x, 1);
             janet_chan_unlock(channel);
+            JANET_CHAN_INFLIGHT_DROP(channel);
             return 1;
         }
         if (janet_q_push(&channel->items, &x, sizeof(Janet))) {
@@ -1481,6 +1555,7 @@ static int janet_channel_push_with_lock(JanetChannel *channel, Janet x, int mode
             /* No root fiber, we are in completion on a root fiber. Don't block. */
             if (mode == 2) {
                 janet_chan_unlock(channel);
+                JANET_CHAN_INFLIGHT_DROP(channel);
                 return 1;
             }
             /* Pushed successfully, but should block. */
@@ -1498,6 +1573,7 @@ static int janet_channel_push_with_lock(JanetChannel *channel, Janet x, int mode
             if (is_threaded) {
                 janet_gcroot(janet_wrap_fiber(pending.fiber));
             }
+            JANET_CHAN_INFLIGHT_DROP(channel);
             return 1;
         }
     } else {
@@ -1562,6 +1638,7 @@ static int janet_channel_push_with_lock(JanetChannel *channel, Janet x, int mode
         }
     }
     janet_chan_unlock(channel);
+    JANET_CHAN_INFLIGHT_DROP(channel);
     return 0;
 }
 
@@ -1584,9 +1661,12 @@ int janet_channel_push(JanetChannel *channel, Janet x, int mode) {
  * queue in the channel. */
 static int janet_channel_pop_with_lock(JanetChannel *channel, Janet *item, int is_choice) {
     JanetChannelPending writer;
+    JANET_CHAN_INFLIGHT_ACQUIRE(channel);
     if (channel->closed) {
         janet_chan_unlock(channel);
+        JANET_CHAN_INFLIGHT_DROP(channel);
         *item = janet_wrap_nil();
+        JANET_CHAN_INFLIGHT_DROP(channel);
         return 1;
     }
     int is_threaded = janet_chan_is_threaded(channel);
@@ -1613,6 +1693,7 @@ static int janet_channel_pop_with_lock(JanetChannel *channel, Janet *item, int i
         if (is_threaded) {
             janet_gcroot(janet_wrap_fiber(pending.fiber));
         }
+        JANET_CHAN_INFLIGHT_DROP(channel);
         return 0;
     }
     janet_assert(!janet_chan_unpack(channel, item, 0), "bad channel packing");
@@ -1659,6 +1740,7 @@ static int janet_channel_pop_with_lock(JanetChannel *channel, Janet *item, int i
         }
     }
     janet_chan_unlock(channel);
+    JANET_CHAN_INFLIGHT_DROP(channel);
     return 1;
 }
 

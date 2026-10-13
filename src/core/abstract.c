@@ -217,7 +217,7 @@ static void janet_abstract_release_cb(JanetEVGenericMessage msg) {
  * executed on the abstract's HOME VM. In-flight operations on the
  * home VM run between loop iterations, never mid-fiber, so a fiber
  * hashing or comparing the abstract never sees the poison. */
-static void janet_abstract_home_teardown_cb(JanetEVGenericMessage msg) {
+void janet_abstract_home_teardown_cb(JanetEVGenericMessage msg) {
     void *abst = msg.argp;
     JanetAbstractHead *head = janet_abstract_head(abst);
     /* Single-shot: the sweep's deinit_block may have torn the
@@ -255,26 +255,14 @@ int32_t janet_abstract_decref_maybe_free(void *abst) {
         }
 #endif
         JanetAbstractHead *head = janet_abstract_head(abst);
-        if (head->gc.flags & JANET_MEMORY_THREADED_ABSTRACT) {
-            janet_table_put(&janet_vm.threaded_abstracts,
-                            janet_wrap_abstract(abst),
-                            janet_wrap_nil());
-        }
-        if (head->type->gc) {
-            janet_assert(!head->type->gc(head->data, head->size), "finalizer failed");
-        }
-        /* Poison the header before release: any registry entry or stale
-         * heap reference that outlives the abstract (cross-thread frees,
-         * scoped sweeps, teardown interleavings) must read type == NULL
-         * instead of recycled memory, so the gc.c walks and markers can
-         * identify the dead object instead of dereferencing freed data. */
-        /* A foreign VM dropping the last claim must not tear the
-         * abstract down on its own thread: the home VM may still have
-         * in-flight operations (serials bookkeeping, monitor lookups)
-         * touching the block, and a poison observed mid-operation
-         * crashes hash/compare paths (BUG 2 density: janet_hash on
-         * type==NULL in worker run_vm). Route the whole teardown --
-         * finalizer, poison, tombstone, release -- to the home VM. */
+        /* ROUTING FIRST: a foreign VM dropping the last claim must run
+         * NONE of the teardown here -- not even the finalizer. The
+         * finalizer of a channel is chan_deinit, which frees the
+         * pending-queue buffers on the observing thread while the home
+         * VM's routed callback then deinit'd the same (freed) queues
+         * again (ASAN: flag_chanpend_node/janet_chan_deinit_q UAF at
+         * density). The home callback owns finalizer + poison +
+         * release under the single-shot guard. */
         if ((head->gc.flags & JANET_MEMORY_THREADED_ABSTRACT) &&
                 NULL != head->home_vm && head->home_vm != (void *) &janet_vm) {
             JanetEVGenericMessage msg;
@@ -284,9 +272,22 @@ int32_t janet_abstract_decref_maybe_free(void *abst) {
                     janet_abstract_home_teardown_cb, msg);
             return result;
         }
+        if (head->gc.flags & JANET_MEMORY_THREADED_ABSTRACT) {
+            janet_table_put(&janet_vm.threaded_abstracts,
+                            janet_wrap_abstract(abst),
+                            janet_wrap_nil());
+        }
         if (1 != janet_atomic_inc(&head->teardown_started)) {
             return result; /* sweep or home callback won the teardown */
         }
+        if (head->type->gc) {
+            janet_assert(!head->type->gc(head->data, head->size), "finalizer failed");
+        }
+        /* Poison the header before release: any registry entry or stale
+         * heap reference that outlives the abstract (cross-thread frees,
+         * scoped sweeps, teardown interleavings) must read type == NULL
+         * instead of recycled memory, so the gc.c walks and markers can
+         * identify the dead object instead of dereferencing freed data. */
         head->type = NULL;
         /* Free memory via the slab-aware release: threaded abstracts can
          * be freed outside sweep (and retagged post-alloc), so plain
