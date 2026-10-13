@@ -141,15 +141,35 @@ static Janet janet_proc_spawn_routed(JanetFunction *func, int32_t cap) {
      * :noproc for pulled procs -- communicate via closures or the
      * proc's own self-pid). Try-mode never blocks the spawner. */
     if (2 == janet_lane_policy && NULL != janet_lane_overflow &&
-            janet_channel_count(ctl) >= 8 &&
-            janet_channel_push(janet_lane_overflow, spawn_msg, 2) == 0) {
+            janet_channel_count(ctl) >= 1) {
+        int pr = janet_channel_push(janet_lane_overflow, spawn_msg, 2);
+        /* Try-mode convention: 0 = refused (queue full), nonzero =
+         * enqueued. (Mode 0 is the opposite: 0 = delivered now,
+         * nonzero = the caller must await the parked push.) */
+        if (pr != 0) {
         janet_atomic_inc(&janet_lane_overflow_pushed);
+        /* Wakeup: a dispatcher that just parked on an empty ctl will
+         * not see the overflow push (pull happens before parking).
+         * Nudge the next lane to drain the queue; it keeps pulling
+         * until the overflow is empty. */
+        if (janet_lane_count > 0) {
+            JanetChannel *wake = janet_lane_ctls[
+                    (janet_lane_rr + 1) % janet_lane_count];
+            if (NULL != wake) {
+                Janet wup[1];
+                wup[0] = janet_ckeywordv("pull");
+                (void) janet_channel_push(wake,
+                        janet_wrap_tuple(janet_tuple_n(wup, 1)), 2);
+            }
+        }
         Janet tup[4];
         tup[0] = janet_ckeywordv("pid");
         tup[1] = janet_wrap_number((double) (lane + 1));
         tup[2] = janet_wrap_number((double) serial);
         tup[3] = janet_wrap_abstract(ctl);
         return janet_wrap_tuple(janet_tuple_n(tup, 4));
+        }
+        /* try-push refused (full): fall through to the ctl path */
     }
     if (janet_channel_push(ctl, spawn_msg, 0)) {
         janet_await(); /* ctl full: resumed when the push lands */
@@ -534,7 +554,7 @@ JANET_CORE_FN(cfun_proc_lanes_policy,
             janet_lane_policy = 2;
             if (0 == janet_lane_count)
                 janet_panic(":steal requires lanes (proc/lanes-start)");
-        } else if (12 == klen && 0 == memcmp(kn, "round-robin", 11)) {
+        } else if (11 == klen && 0 == memcmp(kn, "round-robin", 11)) {
             janet_lane_policy = 0;
         } else if (12 == klen && 0 == memcmp(kn, "least-loaded", 12)) {
             janet_lane_policy = 1;
@@ -569,17 +589,19 @@ JANET_CORE_FN(cfun_proc_lanes_stats,
 }
 
 JANET_CORE_FN(cfun_proc_lane_pull,
-              "(proc/lane-pull)",
-              "Internal: try-pop one task from the lane's overflow "
+              "(proc/lane-pull queue)",
+              "Internal: try-pop one task from the given overflow "
               "queue (non-blocking). Returns the [:spawn serial cap "
               "entry] message or nil when empty. The dispatcher pulls "
               "up to K of these before parking on its control "
-              "channel.") {
-    janet_fixarity(argc, 0);
-    (void) argv;
-    if (NULL == janet_lane_overflow) return janet_wrap_nil();
+              "channel. The queue travels to lanes as a ctl message; "
+              "the C-side TLS global is only valid on the main VM.") {
+    janet_fixarity(argc, 1);
+    JanetChannel *queue = janet_getchannel(argv, 0);
     Janet item;
-    if (janet_channel_pop(janet_lane_overflow, &item, 0)) {
+    /* janet_channel_pop returns 1 when an item was obtained, 0 when
+     * the queue is empty (try semantics). */
+    if (!janet_channel_pop(queue, &item, 0)) {
         return janet_wrap_nil();
     }
     janet_atomic_inc(&janet_lane_overflow_pulled);

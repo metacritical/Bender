@@ -647,3 +647,42 @@ abstracts (procs refuse marshal -- same-VM only by design).
 
 Full battery green (suite-lanes FULL incl. 640k density + join 8.0s,
 plus all nine siblings).
+
+### Round 17: milestone 2d — agents benchmark numbers
+
+test/agents-1vN.janet (W tasks x K messages to a main-VM collector;
+checksum-verified; the clog is a CPU-bound loop that occupies its
+lane's dispatcher -- ev/sleep yields and does NOT skew a lane).
+
+4 lanes, interpreter build (messages = W*K):
+
+| phase   | policy      | msgs  | wall_ms | throughput |
+|---------|-------------|-------|---------|------------|
+| uniform | round-robin | 20000 | 124     | 160485/s   |
+| uniform | steal       | 20000 | 118     | 168995/s   |
+| skewed  | round-robin | 20000 | 197     | 101242/s   |
+| skewed  | steal       | 20000 | 218     | 91691/s    |
+| uniform | round-robin | 50000 | 343     | 145688/s   |
+| uniform | steal       | 50000 | 294     | 169542/s   |
+| skewed  | round-robin | 50000 | 265     | 188188/s   |
+| skewed  | steal       | 50000 | 255     | 195378/s   |
+
+Design expectations met: uniform fan-out round-robin ~= steal (no
+regression; steal +5-17% at scale). The skew gate is flatter than
+hoped: with a single clogged task the lane's remaining task FIBERS
+still run on their home lane in both policies (stealing moves spawn
+DISPATCH, not resident fiber execution -- the Erlang-shape
+limitation recorded in the design), and one 250ms clog dominates the
+wall either way. Recovery shows up at scale (50k msgs: 265 -> 255).
+
+Three 2c implementation bugs fixed this round (caught by the bench):
+- lane-pull inverted janet_channel_pop's convention (1 = obtained) --
+  pulled tasks were consumed and discarded.
+- the :steal try-push inverted janet_channel_push's try-mode
+  convention (0 = refused) -- "pushed" tasks were never enqueued and
+  silently skipped their ctl fallback.
+- pull-then-park race: overflow pushes landing after a dispatcher's
+  last pull stranded tasks; every overflow push now nudges the next
+  lane with a [:pull] wakeup that drains the queue. Threshold set to
+  depth 1 (fast dispatchers never back a ctl to 3/4; :steal means
+  "first spawn stays local, bursts overflow, idle lanes steal").

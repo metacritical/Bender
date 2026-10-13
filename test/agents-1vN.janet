@@ -1,0 +1,79 @@
+# Milestone 2d: the 1-vs-N-lane agents benchmark.
+#
+# Uniform phase: W compute tasks each send K messages to a collector;
+# measures fan-out throughput under :round-robin vs :steal (design
+# expectation: round-robin ~= steal, no regression).
+#
+# Skewed phase: one task clogs its lane with a sleep while the rest
+# compute; :steal should recover most of the idle-core loss (the
+# design gate).
+#
+# Usage: bender test/agents-1vN.janet [lanes] [tasks]
+# Prints one result line per phase per policy.
+
+(def script-args (dyn :args []))
+(def lanes (if (> (length script-args) 1) (scan-number (get script-args 1)) 4))
+(def W (if (> (length script-args) 2) (scan-number (get script-args 2)) 400))
+(def K 50)
+
+(eprint "bench: warm start\n")
+(defn run-phase [policy skew-clog]
+  (eprintf "bench: phase policy=%v skew=%v\n" policy skew-clog)
+  (proc/lanes-start lanes)
+  (proc/lanes-policy policy)
+  (def done (ev/thread-chan 1))
+  (def started (ev/thread-chan 1))
+  (def collector
+    (proc/spawn-local
+      (fn []
+        (ev/give started (proc/self-pid))
+        (var sum 0)
+        (var count 0)
+        (loop [i :range [0 (* W K)]]
+          (+= sum (proc/recv))
+          (++ count))
+        (ev/give done [sum count]))))
+  (def cpid (ev/take started))
+  (eprint "  collector up\n")
+  (def t0 (os/clock))
+  (loop [i :range [0 W]]
+    (proc/spawn
+      (fn []
+        # CPU-bound clog: occupies its lane's dispatcher loop (no
+        # yield points), unlike ev/sleep which frees the lane. This
+        # is the design gate's "deliberately slowed actor".
+        (when (and skew-clog (zero? i))
+          (var acc 0)
+          (loop [k :range [0 25000000]] (+= acc 1))
+          (assert (> acc 0) "clog ran"))
+        (loop [j :range [0 K]]
+          (proc/send cpid (+ i j))))))
+  (eprint "  tasks spawned\n")
+  (def [sum count] (ev/take done))
+  (eprint "  collector done\n")
+  (def dt (- (os/clock) t0))
+  (proc/lanes-policy :round-robin)
+  (proc/lanes-stop)
+  # task i sends sum_{j=0}^{K-1}(i+j) = K*i + K(K-1)/2; total over W tasks:
+  (def expected (+ (* K (/ (* W (- W 1)) 2))
+                   (* W (/ (* K (- K 1)) 2))))
+  (unless (= sum expected)
+    (eprintf "CHECKSUM FAIL: got %d want %d\n" sum expected)
+    (os/exit 1))
+  [dt (* W K)])
+
+(defn report [name policy skew [dt msgs]]
+  (print name " policy=" policy " skew=" (if skew "yes" "no")
+         " msgs=" msgs " wall_ms=" (math/floor (* 1000 dt))
+         " throughput=" (math/floor (/ msgs dt)) " msg/s"))
+
+# Warm start: bring the runtime up once (first-run marshal/registry
+# costs would skew the first measurement).
+(proc/lanes-start lanes)
+(proc/lanes-stop)
+
+(report "uniform" :round-robin false (run-phase :round-robin false))
+(report "uniform" :steal      false (run-phase :steal false))
+(report "skewed " :round-robin true  (run-phase :round-robin true))
+(report "skewed " :steal      true  (run-phase :steal true))
+(print "agents-1vN: lanes=" lanes " tasks=" W " msgs/task=" K)

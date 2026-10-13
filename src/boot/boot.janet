@@ -3382,7 +3382,7 @@
       (var k 0)
       (var going true)
       (while (and going (< k 4))
-        (def task (proc/lane-pull))
+        (def task (proc/lane-pull overflow))
         (if task
           (do (handle-spawn task) (++ k))
           (set going false))))
@@ -3391,6 +3391,14 @@
       # [:overflow queue] -- milestone 2c: the global steal queue,
       # delivered here before any spawn traffic.
       :overflow (set overflow y)
+      # [:pull] -- wakeup nudge from an overflowing spawner: drain the
+      # overflow queue fully (the dispatcher was parked; nothing else
+      # would see the tasks).
+      :pull (when overflow
+              (var going true)
+              (while going
+                (def task (proc/lane-pull overflow))
+                (if task (handle-spawn task) (set going false))))
       :spawn (handle-spawn [op serial x y])
       :deliver (if-let [p (or (get serials serial) (proc/lane-lookup serial))]
                  (proc/send p x))
