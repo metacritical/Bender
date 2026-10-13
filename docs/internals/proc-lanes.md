@@ -439,3 +439,24 @@ __asan_address_is_poisoned(fiber) (or block-quarantined state) and
 backtrace -- any hit names the culprit registration site directly.
 Epoch cycling (janet_gc_epoch_next, % 15) was eliminated: the sweep
 clears survivor epochs, so stale-epoch collisions only over-retain.
+
+### Round 7: cross-thread free routed home; 600k now reachable
+
+ASAN on density caught a worker (T22) in `janet_equals` reading a
+proc abstract that MAIN (T0) had freed -- main's threaded-registry
+purge decrefs entries not visited by MAIN's mark, and the last
+decref frees on whichever thread purges last, even while the home
+worker still has in-flight operations touching the block. Fix:
+`JanetAbstractHead.home_vm` records the creating VM; the refcount-0
+release of a foreign-homed threaded abstract is deferred via
+`janet_ev_post_event` to the home VM's loop (finalizers and poison
+still run on the observing thread). All suites green.
+
+Effect: under ASAN the density phase now passes 200k and 400k for
+the first time; the crash moved to 600k and regressed to the
+HISTORICAL BUG 2 signature -- `janet_hash` on a freed abstract in
+worker run_vm (the "cross-thread pid reference surviving per-lane
+GC" face). Next probe: capture ASAN's freed-by stack for the
+janet_hash crash to identify which free path (worker's own registry
+purge vs fiber-death migration) still releases a block the parked
+proc's env tuple references.

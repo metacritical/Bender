@@ -1203,6 +1203,13 @@ struct JanetAbstractHead {
     JanetGCObject gc;
     const JanetAbstractType *type;
     size_t size;
+    /* VM that created this threaded abstract. The refcount may drop to
+     * zero on ANY thread (whichever purges its registry claim last);
+     * the memory release must run on the home VM's thread so the home
+     * VM's in-flight operations never see the block freed underneath
+     * them (BUG 2 density: worker T22 read a proc abstract freed by
+     * main T0's registry purge). */
+    void *home_vm;
     long long data[]; /* Use long long to ensure most general alignment */
 };
 

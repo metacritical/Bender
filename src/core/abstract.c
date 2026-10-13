@@ -69,6 +69,7 @@ void *janet_abstract_begin_threaded(const JanetAbstractType *atype, size_t size)
     header->gc.data.refcount = 1;
     header->size = size;
     header->type = atype;
+    header->home_vm = (void *) &janet_vm;
     void *abstract = (void *) & (header->data);
     janet_table_put(&janet_vm.threaded_abstracts, janet_wrap_abstract(abstract), janet_wrap_false());
     return abstract;
@@ -201,9 +202,34 @@ int32_t janet_abstract_decref(void *abst) {
     return janet_atomic_dec(&janet_abstract_head(abst)->gc.data.refcount);
 }
 
+#ifdef JANET_EV
+/* BUG 2: release a threaded abstract on its HOME VM's thread. The
+ * last registry claim can be dropped by a foreign VM's sweep; the
+ * home VM may still have in-flight operations touching the block
+ * (serials bookkeeping, monitor lookups), so the free must not run
+ * on the foreign thread. */
+static void janet_abstract_release_cb(JanetEVGenericMessage msg) {
+    janet_gc_release((JanetGCObject *) msg.argp);
+}
+#endif
+
 int32_t janet_abstract_decref_maybe_free(void *abst) {
     int32_t result = janet_abstract_decref(abst);
     if (0 == result) {
+#ifdef JANET_ASAN_UAF_TRACE
+        {
+        extern int backtrace(void **, int);
+        extern void backtrace_symbols_fd(void *const *, int, int);
+        JanetAbstractHead *ph = janet_abstract_head(abst);
+            if (ph->gc.flags & JANET_MEMORY_THREADED_ABSTRACT) {
+                fprintf(stderr, "[xthread-free] abstract=%p size=%d\n",
+                        abst, (int) ph->size);
+                void *bt[16];
+                int bn = backtrace(bt, 16);
+                backtrace_symbols_fd(bt, bn, 2);
+            }
+        }
+#endif
         JanetAbstractHead *head = janet_abstract_head(abst);
         if (head->gc.flags & JANET_MEMORY_THREADED_ABSTRACT) {
             janet_table_put(&janet_vm.threaded_abstracts,
@@ -221,7 +247,19 @@ int32_t janet_abstract_decref_maybe_free(void *abst) {
         head->type = NULL;
         /* Free memory via the slab-aware release: threaded abstracts can
          * be freed outside sweep (and retagged post-alloc), so plain
-         * janet_free would corrupt slab pages. */
+         * janet_free would corrupt slab pages. The release itself runs
+         * on the abstract's HOME VM: a foreign VM dropping the last
+         * claim must not free memory the home VM may still touch
+         * in-flight (BUG 2 density cross-thread UAF). */
+        if ((head->gc.flags & JANET_MEMORY_THREADED_ABSTRACT) &&
+                NULL != head->home_vm && head->home_vm != (void *) &janet_vm) {
+            JanetEVGenericMessage msg;
+            memset(&msg, 0, sizeof(msg));
+            msg.argp = (void *) head;
+            janet_ev_post_event((JanetVM *) head->home_vm,
+                    janet_abstract_release_cb, msg);
+            return result;
+        }
         janet_gc_release((JanetGCObject *) head);
     }
     return result;

@@ -2616,6 +2616,27 @@ void janet_collect(void) {
  * and all of its children. If gcroot is called on a value n times, unroot
  * must also be called n times to remove it as a gc root. */
 void janet_gcroot(Janet root) {
+#ifdef JANET_ASAN_UAF_TRACE
+    if (janet_checktype(root, JANET_FIBER)) {
+        JanetFiber *rf = janet_unwrap_fiber(root);
+        extern int __asan_address_is_poisoned(void const volatile *addr);
+        extern int backtrace(void **, int);
+        extern void backtrace_symbols_fd(void *const *, int, int);
+        int poisoned = __asan_address_is_poisoned(rf);
+        int quarantined = 0;
+        if (poisoned || quarantined) {
+            char bbuf[128];
+            int bl = snprintf(bbuf, sizeof bbuf,
+                    "[gcroot-dead] fiber=%p poisoned=%d quarantined=%d "
+                    "status=%d\n", (void *) rf, poisoned, quarantined,
+                    (int) janet_fiber_status(rf));
+            write(2, bbuf, (size_t) bl);
+            void *bt[16];
+            int bn = backtrace(bt, 16);
+            backtrace_symbols_fd(bt, bn, 2);
+        }
+    }
+#endif
     size_t newcount = janet_vm.root_count + 1;
     if (newcount > janet_vm.root_capacity) {
         size_t newcap = 2 * newcount;
