@@ -562,6 +562,36 @@ static void janet_deinit_block(JanetGCObject *mem) {
             }
             /* Step 1.3: leave the live-fiber census before release. */
             janet_census_remove(f);
+#ifdef JANET_ASAN_UAF_TRACE
+            {
+                extern int backtrace(void **, int);
+                extern void backtrace_symbols_fd(void *const *, int, int);
+                /* Is this fiber still in vm.roots while we destroy it?
+                 * Yes => mark/sweep disagreement (a root entry that
+                 * marking never honored). No => the root entry that
+                 * later dangles was written after this free. */
+                size_t ri;
+                int rooted = 0;
+                for (ri = 0; ri < janet_vm.root_count; ri++) {
+                    Janet rv = janet_vm.roots[ri];
+                    if (janet_checktype(rv, JANET_FIBER) &&
+                            janet_unwrap_fiber(rv) == f) {
+                        rooted = 1;
+                        break;
+                    }
+                }
+                if (rooted) {
+                    char bbuf[128];
+                    int bl = snprintf(bbuf, sizeof bbuf,
+                            "[free-rooted] fiber=%p data=%p rootidx=%zu\n",
+                            (void *) f, (void *) f->data, ri);
+                    write(2, bbuf, (size_t) bl);
+                    void *bt[16];
+                    int bn = backtrace(bt, 16);
+                    backtrace_symbols_fd(bt, bn, 2);
+                }
+            }
+#endif
             janet_free(f->data);
             janet_fiber_native_stack_free(f);
         }
@@ -691,7 +721,8 @@ static void janet_sweep_list(JanetGCObject **head, int heap_kind, int is_minor,
             current->flags &= ~JANET_MEM_EPOCH_MASK;
             previous = current;
         } else if ((!is_minor || !janet_slab_obj_old(current)) &&
-                (0 == only_owner || janet_slab_obj_owner(current) == only_owner)) {
+                (0 == only_owner || janet_slab_obj_owner(current) == only_owner) &&
+                !(is_minor && JANET_MEMORY_FIBER == janet_gc_type(current))) {
             janet_vm.block_count--;
             if (NULL != previous) {
                 previous->data.next = next;

@@ -405,3 +405,23 @@ scrub must mirror the walk's exact `j` chain. Reverted; density
 residual unchanged (~1/5 green, segfault during the 200k-640k
 spawn phase; ASAN: the walked fiber's frame->func / fiber->data
 freed, reached via janet_mark_roots in a full collect).
+
+### Round 5: free-site proof + minor fiber defer
+
+New probe (fiber deinit in gc.c): prints when a destroyed fiber is
+STILL present in vm.roots. Result: `[free-rooted] fiber=... rootidx=8`
+-- a rooted fiber WAS destroyed, reached from janet_sweep's deinit
+pass (inlined janet_sweep_list/quarantine path). So the density
+residual is a genuine mark/sweep disagreement: some collection judged
+a rooted fiber unreachable (stale-epoch or scoped-mark gap), freed it
+via quarantine, and the surviving roots entry dangles into reused
+memory (the later ASAN crashes at mark time).
+
+Landed: minors now NEVER free JANET_MEMORY_FIBER blocks (fiber frees
+defer to full collects, which walk vm.roots). This closes the
+minor-scoped route and is regression-free (proc/lanes/ev2/gc suites
+green), but the flake persists (~1/5) -- the freeing collection in
+the traced run sits on the full/scoped path. Next: audit janet_mark's
+recursion-guard/epoch handling for fiber blocks (a stale or unsset
+epoch on a rooted fiber explains every observation), and whether
+sweep_proc_owned's narrow mark can miss a root-honoring block.
