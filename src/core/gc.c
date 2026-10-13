@@ -91,6 +91,14 @@ static JANET_THREAD_LOCAL int32_t janet_gc_epoch = 0;
     (((janet_gc_header(m)->flags & JANET_MEM_EPOCH_MASK) >> JANET_MEM_EPOCH_SHIFT) \
      == janet_gc_epoch)
 
+/* BUG 2 density: reachable-in-last-collect probe for the threaded
+ * teardown deferral (a GC-visible hold -- a channel queue item, a
+ * parked fiber payload, the serials table -- must postpone teardown
+ * even after the refcount hits zero). */
+int janet_gc_object_reachable(void *mem) {
+    return janet_gc_reachable((JanetGCObject *) mem);
+}
+
 static void janet_gc_epoch_next(void) {
     janet_gc_epoch = (janet_gc_epoch % 15) + 1;
 }
@@ -2730,6 +2738,9 @@ int janet_gcunrootall(Janet root) {
 
 /* Free all allocated memory */
 void janet_clear_memory(void) {
+    /* Threaded teardowns run inline from here on: the loop is gone,
+     * so routed posts would block forever on the dead self-pipe. */
+    janet_vm.gc_teardown_inline = 1;
     /* Quarantined blocks are intact but dead: destroy them before the
      * registry teardown walk (their deinit tombstones purge their
      * entries, and freed threaded heads read poisoned under the

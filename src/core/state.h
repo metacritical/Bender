@@ -236,6 +236,9 @@ struct JanetVM {
     Janet *roots;
     size_t root_count;
     size_t root_capacity;
+    /* Set during janet_clear_memory: threaded teardowns must run
+     * inline (posting to the loop would block on a dead self-pipe). */
+    int gc_teardown_inline;
 
     /* Shadow root stack for generated/C code (Phase 2b-i). Strictly LIFO;
      * everything below shadow_count is marked on every collection. Backed

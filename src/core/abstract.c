@@ -217,12 +217,29 @@ static void janet_abstract_release_cb(JanetEVGenericMessage msg) {
  * executed on the abstract's HOME VM. In-flight operations on the
  * home VM run between loop iterations, never mid-fiber, so a fiber
  * hashing or comparing the abstract never sees the poison. */
+extern int janet_gc_object_reachable(void *mem);
+
 void janet_abstract_home_teardown_cb(JanetEVGenericMessage msg) {
     void *abst = msg.argp;
     JanetAbstractHead *head = janet_abstract_head(abst);
     /* Single-shot: the sweep's deinit_block may have torn the
      * abstract down first (guard set there); skip cleanly. */
     if (1 != janet_atomic_inc(&head->teardown_started)) return;
+    /* GC-visible hold deferral (BUG 2 density): a value can sit in a
+     * same-VM channel queue / parked payload / table with no
+     * registry claim backing it. If the last collect marked the
+     * abstract, such a hold exists -- re-arm a GC-watch claim
+     * (count 0->1, registry entry false) and let the next purge
+     * re-route here when the hold dies. janet_table_put below can
+     * allocate, but this runs between loop iterations with nothing
+     * mid-teardown, so a collection here is ordinary. */
+    if (janet_gc_object_reachable(head)) {
+        janet_atomic_inc(&head->gc.data.refcount);
+        janet_table_put(&janet_vm.threaded_abstracts,
+                janet_wrap_abstract(abst), janet_wrap_false());
+        head->teardown_started = 0;
+        return;
+    }
     if (NULL != head->type && NULL != head->type->gc) {
         janet_assert(!head->type->gc(head->data, head->size),
                 "finalizer failed");
@@ -255,30 +272,37 @@ int32_t janet_abstract_decref_maybe_free(void *abst) {
         }
 #endif
         JanetAbstractHead *head = janet_abstract_head(abst);
-        /* ROUTING FIRST: a foreign VM dropping the last claim must run
-         * NONE of the teardown here -- not even the finalizer. The
-         * finalizer of a channel is chan_deinit, which frees the
-         * pending-queue buffers on the observing thread while the home
-         * VM's routed callback then deinit'd the same (freed) queues
-         * again (ASAN: flag_chanpend_node/janet_chan_deinit_q UAF at
-         * density). The home callback owns finalizer + poison +
-         * release under the single-shot guard. */
-        if ((head->gc.flags & JANET_MEMORY_THREADED_ABSTRACT) &&
-                NULL != head->home_vm && head->home_vm != (void *) &janet_vm) {
+        /* ROUTING FIRST: every threaded teardown flows through the
+         * home callback -- finalizer + poison + release + the
+         * GC-visible-hold deferral live there under the single-shot
+         * guard. (Running the finalizer inline here freed channel
+         * queue buffers on the observing thread and the home VM's
+         * routed callback re-ran the deinit on freed memory -- ASAN:
+         * flag_chanpend_node/janet_chan_deinit_q UAF at density.)
+         * Non-threaded abstracts are single-VM: teardown inline. */
+        if (head->gc.flags & JANET_MEMORY_THREADED_ABSTRACT) {
+            if (janet_vm.gc_teardown_inline) {
+                /* Shutdown: the loop is gone. Inline teardown under
+                 * the single-shot guard (skip the reachability
+                 * deferral -- GC state is being destroyed anyway). */
+                if (1 != janet_atomic_inc(&head->teardown_started)) {
+                    return result;
+                }
+                if (NULL != head->type->gc) {
+                    janet_assert(!head->type->gc(head->data, head->size),
+                            "finalizer failed");
+                }
+                head->type = NULL;
+                janet_gc_release((JanetGCObject *) head);
+                return result;
+            }
+            JanetVM *target = (NULL != head->home_vm)
+                ? (JanetVM *) head->home_vm : &janet_vm;
             JanetEVGenericMessage msg;
             memset(&msg, 0, sizeof(msg));
             msg.argp = abst;
-            janet_ev_post_event((JanetVM *) head->home_vm,
-                    janet_abstract_home_teardown_cb, msg);
+            janet_ev_post_event(target, janet_abstract_home_teardown_cb, msg);
             return result;
-        }
-        if (head->gc.flags & JANET_MEMORY_THREADED_ABSTRACT) {
-            janet_table_put(&janet_vm.threaded_abstracts,
-                            janet_wrap_abstract(abst),
-                            janet_wrap_nil());
-        }
-        if (1 != janet_atomic_inc(&head->teardown_started)) {
-            return result; /* sweep or home callback won the teardown */
         }
         if (head->type->gc) {
             janet_assert(!head->type->gc(head->data, head->size), "finalizer failed");

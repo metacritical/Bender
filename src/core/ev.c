@@ -1666,7 +1666,6 @@ static int janet_channel_pop_with_lock(JanetChannel *channel, Janet *item, int i
         janet_chan_unlock(channel);
         JANET_CHAN_INFLIGHT_DROP(channel);
         *item = janet_wrap_nil();
-        JANET_CHAN_INFLIGHT_DROP(channel);
         return 1;
     }
     int is_threaded = janet_chan_is_threaded(channel);

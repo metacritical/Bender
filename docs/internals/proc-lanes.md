@@ -529,3 +529,22 @@ Three fixes, one round:
 Density: 2/5 full passes (up from ~1/5-1/3); each ASAN run still
 exposes the next head in the teardown/refcount lattice, but each fix
 is smaller and more specific. proc/lanes-skip/ev2 green throughout.
+
+### Round 11: GC-hold deferral; shutdown inline mode
+
+New head: a worker-homed teardown freed a proc abstract still held by
+a same-VM channel queue (queue items are GC-marked but hold no
+registry claim). Design fix: the home teardown callback now defers
+when the last collect marked the abstract (janet_gc_object_reachable)
+-- it re-arms a GC-watch claim (count 0->1, registry entry false) and
+the next purge re-routes when the hold dies. All threaded teardowns
+now flow uniformly through the routed callback; decref_maybe_free
+only routes. Shutdown gets an inline mode (gc_teardown_inline):
+posting to the loop from janet_clear_memory blocked forever on the
+dead self-pipe. Also fixed a double INFLIGHT_DROP on the pop closed
+path (macro-wrapping artifact).
+
+Suites green. Density: full passes continue; flake persists (~1/5
+this batch). The reachable-check uses the last collect's epoch, so
+values created after the last collect have a narrow unprotected
+window -- documented residual.
