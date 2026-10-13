@@ -589,3 +589,19 @@ like lane-homed ones. Same-VM-only abstracts keep prompt teardown
 Suites green; density 4/5 this batch (up from ~1/7 at round 12's
 tail). ASAN build fully green end-to-end (600k + 640k + join +
 restart).
+
+### Round 14: the tail head narrowed to a freed mbox behind a stale holder
+
+New mark-side probes (JANET_ASAN_UAF_TRACE, inert in normal builds):
+janet_mark_abstract tombstone/bogus guards + procat_mark mbox/sup
+checks. Result: `[proc-mbox-tombstoned] home=0x0 exported=0 refcnt=
+1024 lane=1` -- the mbox pointer dangles into MALLOC-REUSED memory
+(home never set, refcount arbitrary): a worker proc wrapper's mbox
+was freed outside the lane pin, OR the marked "proc" is itself a
+recycled block reached from a stale holder. ra0-2 resolved to
+mark_abstract <- mark <- procat_mark (all inlined); the next probe
+extends the chain (ra3-5) to name the stale holder (candidate
+holders: worker serials, schedule queue, a pending's sched value).
+Also: the rc teardown lattice now has 11 layers; the pinning design
+holds (4/5 and 5/5 batches under load); the tail is this one holder
+class.

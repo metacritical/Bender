@@ -156,6 +156,26 @@ static void janet_mark_buffer(JanetBuffer *buffer) {
 }
 
 static void janet_mark_abstract(void *adata) {
+#ifdef JANET_ASAN_UAF_TRACE
+    if ((uintptr_t) adata < 4096) {
+        char bbuf[128];
+        int bl = snprintf(bbuf, sizeof bbuf,
+                "[bogus-abstract] adata=%p ra=%p\n", adata,
+                __builtin_return_address(0));
+        write(2, bbuf, (size_t) bl);
+        abort();
+    }
+    if (NULL == janet_abstract_head(adata)->type) {
+        char bbuf[256];
+        int bl = snprintf(bbuf, sizeof bbuf,
+                "[mark-tombstoned] adata=%p ra0=%p ra1=%p ra2=%p\n", adata,
+                __builtin_return_address(0),
+                __builtin_return_address(1),
+                __builtin_return_address(2));
+        write(2, bbuf, (size_t) bl);
+        abort();
+    }
+#endif
 #ifdef JANET_EV
     /* Check if abstract type is a threaded abstract type. If it is, marking means
      * updating the threaded_abstract table. */

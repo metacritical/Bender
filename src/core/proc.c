@@ -577,6 +577,30 @@ static JanetProcess *janet_getproc(const Janet *argv, int32_t n) {
 static int janet_procat_mark(void *p, size_t size) {
     (void) size;
     JanetProcess *proc = (JanetProcess *) p;
+#ifdef JANET_ASAN_UAF_TRACE
+    if (NULL != proc->mbox &&
+            NULL == janet_abstract_head(proc->mbox)->type) {
+        JanetAbstractHead *mh = janet_abstract_head(proc->mbox);
+        char bbuf[200];
+        int bl = snprintf(bbuf, sizeof bbuf,
+                "[proc-mbox-tombstoned] proc=%p mbox=%p home=%p "
+                "exported=%d guard=%d refcnt=%d lane=%d\n",
+                (void *) proc, (void *) proc->mbox, mh->home_vm,
+                mh->exported, mh->teardown_started,
+                (int) mh->gc.data.refcount, janet_vm.is_lane_vm);
+        write(2, bbuf, (size_t) bl);
+        abort();
+    }
+    if (NULL != proc->sup &&
+            NULL == janet_abstract_head(proc->sup)->type) {
+        char bbuf[160];
+        int bl = snprintf(bbuf, sizeof bbuf,
+                "[proc-sup-tombstoned] proc=%p sup=%p\n",
+                (void *) proc, (void *) proc->sup);
+        write(2, bbuf, (size_t) bl);
+        abort();
+    }
+#endif
     if (NULL != proc->fiber) janet_mark(janet_wrap_fiber(proc->fiber));
     if (NULL != proc->mbox) janet_mark(janet_wrap_abstract(proc->mbox));
     if (NULL != proc->sup) janet_mark(janet_wrap_abstract(proc->sup));
