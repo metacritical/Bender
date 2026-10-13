@@ -170,6 +170,14 @@
   (if has-main (array/push (array ;forms) '(setdyn :aot-main main)) forms))
 
 # One thunk for the whole file: correct cross-form refs, zero build-time run.
+#
+# (2026-10: a per-form-chunks variant was tried and reverted — see
+# docs/internals/proc-lanes.md round 21. Top-level defs write into the
+# COMPILE-TIME env table (a bytecode constant), and mkimage never runs
+# forms at build time, so a later chunk folds an earlier def to its
+# build-time value (nil). The interpreter only works per-form because
+# run-context compiles each form AFTER the previous one ran. The one
+# do-form keeps cross-form refs as frame locals — marshal-safe.)
 (def program (tuple/slice @['do ;forms2] 0))
 (def thunk
   (try (compile program env srcpath)
@@ -333,6 +341,15 @@
               janet_table_put(reg, janet_csymbolv(janet_aot_names[i]), v);
       }
       janet_gcroot(janet_wrap_table(reg));
+      /* Chunk env: one fresh table proto-linked to the module env.
+      ** run-context gives script fibers an env whose proto is the
+      ** module env; a bare core env has no proto, so scripts doing
+      ** (table/getproto (curenv)) saw nil and broke (the shared-store
+      ** escape test). Shared by all chunks so cross-form setdyn sees
+      ** earlier forms, exactly like the interpreter's script runs. */
+      JanetTable *chunk_env = janet_table(0);
+      chunk_env->proto = env;
+      janet_gcroot(janet_wrap_table(chunk_env));
       Janet top = janet_unmarshal(janet_aot_image, janet_aot_image_len, 0, reg, NULL);
       if (janet_checktype(top, JANET_NIL)) {
           fprintf(stderr, "aot: unmarshal failed\n");
@@ -340,20 +357,45 @@
           return 2;
       }
       janet_gcroot(top);
-      JanetFunction *fn = janet_unwrap_function(top);
-      /* Mirror run.c janet_dobytes: run to completion, then enter the
-      ** event loop for ev programs. janet_loop_fiber (as in shell.c)
-      ** rather than bare continue: quantum-INTERRUPT resumes need the
-      ** scheduler to requeue them (bare runs must complete under
-      ** default-on quanta), and ev programs pump in the same loop. */
-      JanetFiber *fiber = janet_fiber(fn, 64, 0, NULL);
-      fiber->env = env;
-      janet_gcroot(janet_wrap_fiber(fiber));
-      int fstatus = janet_loop_fiber(fiber);
+      /* Per-form chunks: the image is a tuple of functions (one per
+      ** top-level form), run in order — the way run.c executes a
+      ** script form by form. A bare function means a legacy
+      ** one-chunk image. Mirror run.c janet_dobytes per chunk: run
+      ** to completion, then enter the event loop for ev programs
+      ** (janet_loop_fiber as in shell.c: quantum-INTERRUPT resumes
+      ** need the scheduler to requeue them, and ev programs pump in
+      ** the same loop). An error aborts the script with status 1. */
       int status = 0;
-      if (fstatus != JANET_SIGNAL_OK && fstatus != JANET_SIGNAL_EVENT) {
-          janet_stacktrace_ext(fiber, fiber->last_value, "");
-          status = 1;
+      int chunks_ok = 1;
+      if (janet_checktype(top, JANET_TUPLE)) {
+          JanetTuple chunks = janet_unwrap_tuple(top);
+          for (int32_t ci = 0; ci < janet_tuple_length(chunks); ci++) {
+              if (!janet_checktype(chunks[ci], JANET_FUNCTION)) continue;
+              JanetFunction *fn = janet_unwrap_function(chunks[ci]);
+              JanetFiber *fiber = janet_fiber(fn, 64, 0, NULL);
+              fiber->env = chunk_env;
+              janet_gcroot(janet_wrap_fiber(fiber));
+              int fstatus = janet_loop_fiber(fiber);
+              if (fstatus != JANET_SIGNAL_OK && fstatus != JANET_SIGNAL_EVENT) {
+                  janet_stacktrace_ext(fiber, fiber->last_value, "");
+                  status = 1;
+                  janet_gcunroot(janet_wrap_fiber(fiber));
+                  chunks_ok = 0;
+                  break;
+              }
+              janet_gcunroot(janet_wrap_fiber(fiber));
+          }
+      } else if (janet_checktype(top, JANET_FUNCTION)) {
+          JanetFunction *fn = janet_unwrap_function(top);
+          JanetFiber *fiber = janet_fiber(fn, 64, 0, NULL);
+          fiber->env = chunk_env;
+          janet_gcroot(janet_wrap_fiber(fiber));
+          int fstatus = janet_loop_fiber(fiber);
+          if (fstatus != JANET_SIGNAL_OK && fstatus != JANET_SIGNAL_EVENT) {
+              janet_stacktrace_ext(fiber, fiber->last_value, "");
+              status = 1;
+          }
+          janet_gcunroot(janet_wrap_fiber(fiber));
       }
       /* run-main parity: the interpreter's run-context calls
       ** (main ;subargs) after the script chunk completes (boot.janet
@@ -362,14 +404,14 @@
       ** it: look up main in the script env and run it with argv[1..]
       ** (everything after the program name), same fiber-driving and
       ** ev-loop rules as the chunk. */
-      if ((fstatus == JANET_SIGNAL_OK || fstatus == JANET_SIGNAL_EVENT)) {
+      if (chunks_ok) {
           /* mkimage appends (setdyn :aot-main main) when the script
-          ** defines a top-level main — AOT chunks are one do-form so
-          ** main is otherwise unreachable from C (no funcenv, no table
-          ** constant, (curenv) nil). Read it back and run it with the
-          ** env, exactly what run-main would have used. */
-          Janet mainv = janet_table_get(env, janet_ckeywordv("aot-main"));
-          JanetTable *script_env = env;
+          ** defines a top-level main — main is a mere local of its
+          ** chunk, unreachable from C by name. setdyn lands in the
+          ** chunk env (the current fiber env), so read it there and
+          ** run it, exactly what run-main would have used. */
+          Janet mainv = janet_table_get(chunk_env, janet_ckeywordv("aot-main"));
+          JanetTable *script_env = chunk_env;
           if (janet_checktype(mainv, JANET_FUNCTION)) {
               JanetArray *ma = janet_array(argc > 1 ? argc - 1 : 0);
               for (int ai = 1; ai < argc; ai++)
@@ -386,7 +428,7 @@
               janet_gcunroot(janet_wrap_fiber(mfb));
           }
       }
-      janet_gcunroot(janet_wrap_fiber(fiber));
+      janet_gcunroot(janet_wrap_table(chunk_env));
       janet_gcunroot(top);
       janet_deinit();
       return status;

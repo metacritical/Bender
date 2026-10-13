@@ -742,3 +742,36 @@ is the runner-side workaround).
 Dual-target status: interpreter 11/11; AOT 6/11 with ONE named
 codegen work item (closure-safe marshal-copy for isolated entries)
 plus one CLI item. Everything else in Phase 1 is landed and green.
+
+### Round 21: per-form AOT chunks — tried, proved dead, reverted
+
+Motivation: fix suite-proc under AOT ("cannot marshal <core/proc>" at
+spawn-isolated) by matching the interpreter's form-by-form scoping,
+so a section's closures capture only their own frame.
+
+Result: the env-walk refusal DID disappear (suite-proc ran past 317),
+but cross-form def visibility broke completely (later forms saw top
+level defs as nil). Root cause, proven empirically (/tmp/defenv.janet):
+a top-level def writes into the COMPILE-TIME env table (a bytecode
+constant), NOT the running fiber's env — and the compiler folds a
+def reference to its compile-time value. run-context works per-form
+only because it compiles each form AFTER the previous one ran;
+mkimage's zero-build-time-run invariant means later chunks fold
+earlier defs to nil. Per-form AOT chunks are structurally incompatible
+without either running forms at build time or dynamic-declared
+bindings. Reverted to the one-do-form image (marshal-safe, cross-form
+refs as frame locals).
+
+Kept (real improvement): the generated AOT main now runs chunk fibers
+with a dedicated env table whose proto is the core env (chunk_env),
+mirroring a script's module env — (curenv) in an AOT binary now has a
+proto chain like the interpreter's (the shared-store section's
+(table/getproto (curenv)) class). Six green AOT suites re-verified
+green after the change; main-scripts re-verified (argv passthrough,
+aot-main lookup); interpreter suite-lanes re-verified green.
+
+Remaining dual-target blockers unchanged: the 317 marshal refusal
+(one-chunk frames share slots with stale sibling sections — fix
+direction: copy_entry copies only referenced upvalue slots, or
+suite-side per-section function wrapping) and the suite-ev -e CLI
+item.
