@@ -708,3 +708,20 @@ These are AOT-codegen env-scoping characteristics, not regressions
 of the lanes work: the same suites pass under the interpreter and
 the six green AOT suites exercise the lanes/messaging machinery
 under AOT already.
+
+### Round 18 addendum: suite-ev root cause
+
+suite-ev under AOT: its os/spawn subprocess tests run
+`[janet -e "(print ...)"]`; the AOT binary's embedded main ignores
+`-e` and re-runs the embedded suite, so the child prints "Starting
+suite" (and worse, parses "janet" as a script: "invalid utf-8 in
+symbol"). The interpreter build honors -e (776/776 green). Fix
+direction: the AOT main should pass unrecognized args (esp. -e) to
+the embedded janet runtime, or the AOT test runner must plumb SUBRUN
+to a true interpreter.
+
+Dual-target status: interpreter 11/11 green. AOT 6/11 green (ev2,
+mailbox, gc-minor, interrupt, pool, thread); suite-ev (CLI), 
+suite-proc + suite-marsh (env-scoping marshal) remain -- all three
+are AOT-runtime/codegen characteristics with named fix directions,
+not lanes regressions.
