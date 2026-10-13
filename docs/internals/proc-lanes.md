@@ -289,3 +289,69 @@ Diagnosis so far (instrumented runs + lldb sampling of the stuck loop):
   sibling suites green.
 * Single-lane density baselines (apply per lane): chain-100k 2.36 s /
   23.6 µs per hop; 10k spawn+park 3.0 µs/proc; ~3.5 KB/proc resident.
+
+## Milestone 2b: cross-lane monitors, kill, exit-reasons (6cbd743a)
+
+Cross-lane supervision rides the lane dispatchers with two new ops:
+
+- `[:proc-monitor serial tag watcher]` — register the monitor on the
+  watched proc's home lane and host the P2.3 reaper there. The reaper
+  takes the local sup, derives the reason (`:normal` on ok, else
+  `fiber/last-value`), records the exit reason
+  (`proc/record-exit`), and delivers `[:down tag reason]` to the
+  watcher — `ev/give` for channels, `proc/send` for pid-tuple
+  watchers (which routes through the watcher's home lane). Unknown
+  serials answer `[:down tag :noproc]`. Delivery messages marshal
+  across threaded channels, so no value escapes its owning heap.
+- `[:kill serial reason]` — resolve the local proc through the lane
+  registry (`proc/lane-lookup`) and apply the kill on the home lane.
+  Resolving locally (not via the `serials` tuple) is load-bearing:
+  re-pushing the op from the tuple echoes forever.
+
+Supporting C changes:
+
+- self-pid: cached-pid procs (routed spawns) register in their home
+  VM's lane registry under **both** the real and the dispatch serial.
+  The routed-spawn op mints its own serial on the spawner's VM, while
+  spawn_impl mints the proc's real serial — dispatcher lookups need
+  both keys.
+- spawn wrapper pid nodes are `lane-id + 1` (0 reserved for the main
+  VM), so cached cross-pids agree with routed handles.
+- `janet_channel_cancel_reader` purge: a recv-parked kill victim is
+  cancelled and its pending removed immediately (Erlang-parity kill
+  landing), instead of at a next resume that may never come.
+
+Tests: `test/suite-lanes.janet` M2b section (monitor+kill reason
+delivery, error/normal reasons, pid-tuple watchers, `:noproc`,
+kill-of-dead no-op) green under `JANET_SKIP_DENSITY=1`, plus
+suite-proc's P2.3/P1.4 monitor suites.
+
+## BUG 2 evidence: density GC race (OPEN)
+
+The per-lane density barrier is a **layout-sensitive latent race** in
+the GC/completion boundary, now pinned much sharper:
+
+* ASAN (heap-use-after-free): `janet_mark_function` (gc.c) reading a
+  freed 512-byte block from inside `janet_mark_fiber`'s frame walk —
+  the completion minor freed the young `frame->func` of a fiber that
+  stays reachable, and a later global mark re-walked the stale frames.
+* Partial fix landed (this commit): `janet_mark_fiber` walks frames
+  only for resumable statuses (NEW/ALIVE/PENDING/DEBUG); terminal
+  fibers skip the walk. Semantically forced — nothing resumes them.
+* The race is **layout-sensitive**: semantically-inert code changes
+  (trace eprints, added-but-gated C branches, doc-adjacent boot
+  bytecode) flip bulk fan-in (n=4000 single-shot senders, suite-proc
+  #40) between clean completion and a parked-collector hang. Pure
+  HEAD: 3/3 green. Any perturbed build: reproducibly hangs; the
+  working threshold on perturbed builds measured n≤2000 clean,
+  n=4000 hang.
+* The stall shape matches the BUG 1 family: collector parked in poll,
+  spawn queue wakeups stranded mid-stream. BUG 1's fix (ev roots in
+  completion minors, 7733fdb7) closed one hole; a sibling hole
+  remains that layout shifts expose.
+
+Next steps for the hunter: ASAN run of `fanin` at n=4000 on a
+perturbed build, then audit the completion minor's root set (spawn
+queue, mbox read/write pendings, the collector's channel buffer) for
+the remaining unmarked edge. `JANET_SKIP_DENSITY=1` gates the known-
+flaky suite sections until then.

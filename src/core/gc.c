@@ -392,6 +392,21 @@ recur:
         janet_mark(janet_wrap_fiber(fiber->resume_fiber));
     }
 
+    /* BUG 2: a completed fiber's stack frames are stale. The
+     * completion minor frees the young garbage they reference
+     * (frame->func/env), while the fiber struct itself stays
+     * reachable until its own sweep -- a later mark re-walking the
+     * frames read freed memory (ASAN: janet_mark_function
+     * use-after-free at density; the crash's flip side was
+     * "janet_hash on a freed abstract"). Nothing resumes a fiber in
+     * a terminal status, so only resumable fibers walk their
+     * frames; last_value/out_payload/env above stay marked for
+     * everyone. */
+    {
+        JanetFiberStatus fst = janet_fiber_status(fiber);
+        int walk_frames = !(JANET_STATUS_DEAD == fst ||
+                            JANET_STATUS_ERROR == fst);
+        if (walk_frames) {
     /* Mark values on the argument stack */
     janet_mark_many(fiber->data + fiber->stackstart,
                     fiber->stacktop - fiber->stackstart);
@@ -408,6 +423,8 @@ recur:
         janet_mark_many(fiber->data + i, j - i);
         j = i - JANET_FRAME_SIZE;
         i = frame->prevframe;
+    }
+        }
     }
 
     if (fiber->env)
