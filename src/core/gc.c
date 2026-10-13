@@ -24,6 +24,8 @@
 #include "features.h"
 #include <janet.h>
 #include "state.h"
+#include <unistd.h>
+#include <execinfo.h>
 #include "symcache.h"
 #include "gc.h"
 #include "proc.h"
@@ -372,7 +374,21 @@ recur:
     extern int __asan_address_is_poisoned(void const volatile *addr);
     extern void __sanitizer_print_stack_trace(void);
     if (__asan_address_is_poisoned(fiber)) {
-        janet_eprintf("[uaf-mark] walking a swept fiber %p\n", (void *) fiber);
+        /* Crash-safe report: write(2) only -- janet_eprintf allocates,
+         * and a GC inside the GC is how we got here. */
+        uintptr_t fa = (uintptr_t) fiber;
+        char buf[128];
+        char *w = buf;
+        const char *pfx = "[uaf-mark] swept fiber 0x";
+        for (const char *q = pfx; *q; q++) *w++ = *q;
+        for (int shift = 60; shift >= 0; shift -= 4) {
+            int nib = (int)((fa >> shift) & 0xF);
+            *w++ = nib < 10 ? '0' + nib : 'a' + nib - 10;
+        }
+        *w++ = '\n';
+        size_t len = (size_t)(w - buf);
+        int fd = 2;
+        do { ssize_t r = write(fd, buf, len); if (r > 0) break; } while (1);
         __sanitizer_print_stack_trace();
     }
 #endif
@@ -421,6 +437,13 @@ recur:
 
 #ifdef JANET_ASAN_UAF_TRACE
     extern int __asan_address_is_poisoned(void const volatile *addr);
+    extern int backtrace(void **, int);
+    extern void backtrace_symbols_fd(void *const *, int, int);
+    if (NULL != fiber->data && __asan_address_is_poisoned(fiber->data)) {
+        void *bt[24];
+        int n = backtrace(bt, 24);
+        backtrace_symbols_fd(bt, n, 2);
+    }
 #endif
     i = fiber->frame;
     j = fiber->stackstart - JANET_FRAME_SIZE;
@@ -429,12 +452,7 @@ recur:
         if (NULL != frame->func) {
 #ifdef JANET_ASAN_UAF_TRACE
             if (__asan_address_is_poisoned(frame->func)) {
-                janet_eprintf("[uaf] fiber=%p status=%d proc=%p "
-                        "serial=%d data-poisoned=%d\n",
-                        (void *) fiber, (int) janet_fiber_status(fiber),
-                        (void *) fiber->proc,
-                        fiber->proc ? (int) fiber->proc->serial : -1,
-                        __asan_address_is_poisoned(fiber->data) ? 1 : 0);
+                __sanitizer_print_stack_trace();
             }
 #endif
             janet_mark_function(frame->func);

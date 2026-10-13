@@ -1498,17 +1498,41 @@ static int janet_channel_push_with_lock(JanetChannel *channel, Janet x, int mode
         /* Pending reader */
         if (is_threaded) {
             JanetVM *vm = reader.thread;
-            JanetEVGenericMessage msg;
-            msg.tag = reader.mode;
-            msg.fiber = reader.fiber;
-            msg.argi = (int32_t) reader.sched_id;
-            msg.argp = channel;
-            msg.argj = x;
-            if (vm) {
-                janet_ev_post_event(vm, janet_thread_chan_cb, msg);
+            if (vm == &janet_vm) {
+                /* BUG 1 sibling: same-VM reader pending on a threaded
+                 * channel (the density/recv park shape). Schedule
+                 * inline -- a self-pipe write from the loop's own
+                 * thread floods the pipe at fan-in scale and the loop
+                 * deadlocks inside its own wakeup write. */
+                uint32_t sid = (uint32_t) reader.sched_id;
+                janet_gcunroot(janet_wrap_fiber(reader.fiber));
+                if (reader.fiber->sched_id == sid) {
+                    if (reader.mode == JANET_CP_MODE_CHOICE_READ) {
+                        janet_assert(!janet_chan_unpack(channel, &x, 0),
+                                "bad channel packing");
+                        janet_schedule(reader.fiber,
+                                make_read_result(channel, x));
+                    } else {
+                        janet_assert(!janet_chan_unpack(channel, &x, 0),
+                                "bad channel packing");
+                        janet_schedule(reader.fiber, x);
+                    }
+                } else {
+                    janet_chan_unpack(channel, &x, 1);
+                }
             } else {
-                /* If no vm to send to, we must clean up (unpack) the packed payload to avoid leak */
-                janet_chan_unpack(channel, &x, 1);
+                JanetEVGenericMessage msg;
+                msg.tag = reader.mode;
+                msg.fiber = reader.fiber;
+                msg.argi = (int32_t) reader.sched_id;
+                msg.argp = channel;
+                msg.argj = x;
+                if (vm) {
+                    janet_ev_post_event(vm, janet_thread_chan_cb, msg);
+                } else {
+                    /* If no vm to send to, we must clean up (unpack) the packed payload to avoid leak */
+                    janet_chan_unpack(channel, &x, 1);
+                }
             }
         } else {
             /* Same-VM handoff: decode transit values first (no-op for
