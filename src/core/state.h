@@ -239,6 +239,14 @@ struct JanetVM {
     /* Set during janet_clear_memory: threaded teardowns must run
      * inline (posting to the loop would block on a dead self-pipe). */
     int gc_teardown_inline;
+    /* Lane-VM marker (proc.c lane thread body). Lane-homed threaded
+     * abstracts are pinned until lane stop instead of refcount-freed:
+     * pid values circulate in queues/messages with no claims, and a
+     * mid-life free dangles them (BUG 2 density janet_equals/hash
+     * class). Quarantine is a list of JanetAbstractHead linked via
+     * gc.data.next. */
+    int is_lane_vm;
+    void *home_quarantine;
 
     /* Shadow root stack for generated/C code (Phase 2b-i). Strictly LIFO;
      * everything below shadow_count is marked on every collection. Backed

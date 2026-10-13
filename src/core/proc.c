@@ -85,6 +85,7 @@ static JANET_THREAD_LOCAL JanetLaneLaunch **janet_lane_launches;
 #define JANET_LANE_STOP_GRACE_SECONDS 2
 
 static void *janet_lane_thread_body(void *p) {
+    janet_vm.is_lane_vm = 1;
     JanetLaneLaunch *L = p;
     JanetEVGenericMessage args;
     memset(&args, 0, sizeof(args));
@@ -98,7 +99,8 @@ static void *janet_lane_thread_body(void *p) {
     L->exited = 1;
     pthread_cond_broadcast(&L->cond);
     pthread_mutex_unlock(&L->lock);
-    return NULL;
+        janet_vm.is_lane_vm = 0;
+return NULL;
 }
 
 /* P-lanes: with lanes active, route round-robin to a worker VM. The

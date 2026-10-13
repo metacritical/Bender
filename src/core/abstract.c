@@ -240,6 +240,17 @@ void janet_abstract_home_teardown_cb(JanetEVGenericMessage msg) {
         head->teardown_started = 0;
         return;
     }
+    /* Lane-homed pinning (BUG 2 density): a lane's own abstracts are
+     * referenced claim-less by circulating pid values (channel queue
+     * items, parked payloads, serials). Freeing at refcount-0 dangles
+     * them; lanes pin instead and janet_clear_memory drains the
+     * quarantine at lane stop. Main-VM teardowns keep prompt
+     * semantics (suite-ev2's weakref/count tests). */
+    if (janet_vm.is_lane_vm) {
+        head->gc.data.next = janet_vm.home_quarantine;
+        janet_vm.home_quarantine = head;
+        return;
+    }
     if (NULL != head->type && NULL != head->type->gc) {
         janet_assert(!head->type->gc(head->data, head->size),
                 "finalizer failed");

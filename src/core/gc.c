@@ -2741,6 +2741,23 @@ void janet_clear_memory(void) {
     /* Threaded teardowns run inline from here on: the loop is gone,
      * so routed posts would block forever on the dead self-pipe. */
     janet_vm.gc_teardown_inline = 1;
+    /* Drain the lane-homed quarantine (BUG 2 density pinning): run
+     * finalizers, poison, and free. These blocks are malloc'd and
+     * unlinked from the GC heaps, so plain release is safe. */
+    {
+        JanetAbstractHead *hq = janet_vm.home_quarantine;
+        janet_vm.home_quarantine = NULL;
+        while (NULL != hq) {
+            JanetAbstractHead *next = (JanetAbstractHead *) hq->gc.data.next;
+            if (NULL != hq->type && NULL != hq->type->gc) {
+                janet_assert(!hq->type->gc(hq->data, hq->size),
+                        "finalizer failed");
+            }
+            hq->type = NULL;
+            janet_free(hq);
+            hq = next;
+        }
+    }
     /* Quarantined blocks are intact but dead: destroy them before the
      * registry teardown walk (their deinit tombstones purge their
      * entries, and freed threaded heads read poisoned under the

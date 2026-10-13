@@ -548,3 +548,21 @@ Suites green. Density: full passes continue; flake persists (~1/5
 this batch). The reachable-check uses the last collect's epoch, so
 values created after the last collect have a narrow unprotected
 window -- documented residual.
+
+### Round 12: lane-homed pinning — DENSITY GREEN 5/5
+
+The head-by-head teardown fixes each closed a specific race, but the
+lattice kept yielding new heads: circulating pid values (channel
+queue items, parked payloads, serials) reference lane-homed
+abstracts with no registry claims, so ANY refcount-0 free raced a
+consumer. Design resolution: lanes PIN their homed threaded
+abstracts (quarantine list linked via gc.data.next) instead of
+freeing at refcount-0; janet_clear_memory drains the quarantine at
+lane stop (finalizer, poison, free). Main-VM teardowns keep prompt
+semantics (suite-ev2's weakref/count tests unchanged). Bounded cost:
+pinned abstracts live until stop (640k procs x ~216B ~= 138MB, well
+within the suite's documented 3GB headroom).
+
+RESULT: suite-lanes FULL density 5/5 green (640k procs across 4
+lanes, lanes-stop join, restart round trip) -- first time; proc
+88/88, ev2 green. Battery gate for 2c/2d/dual-target opens.
