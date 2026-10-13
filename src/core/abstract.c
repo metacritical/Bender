@@ -211,6 +211,26 @@ int32_t janet_abstract_decref(void *abst) {
 static void janet_abstract_release_cb(JanetEVGenericMessage msg) {
     janet_gc_release((JanetGCObject *) msg.argp);
 }
+
+/* Full teardown (finalizer + poison + registry tombstone + release),
+ * executed on the abstract's HOME VM. In-flight operations on the
+ * home VM run between loop iterations, never mid-fiber, so a fiber
+ * hashing or comparing the abstract never sees the poison. */
+static void janet_abstract_home_teardown_cb(JanetEVGenericMessage msg) {
+    void *abst = msg.argp;
+    JanetAbstractHead *head = janet_abstract_head(abst);
+    if (NULL != head->type && NULL != head->type->gc) {
+        janet_assert(!head->type->gc(head->data, head->size),
+                "finalizer failed");
+    }
+    head->type = NULL;
+    /* No registry tombstone here: janet_table_put can allocate and
+     * trigger a collection from inside the event loop's callback
+     * (racing the channel GC's pending-queue walk). The observing
+     * VM's purge tombstones its own entry after its decref, and the
+     * home VM's purge purges the poisoned-type entry in place. */
+    janet_gc_release((JanetGCObject *) head);
+}
 #endif
 
 int32_t janet_abstract_decref_maybe_free(void *abst) {
@@ -244,22 +264,26 @@ int32_t janet_abstract_decref_maybe_free(void *abst) {
          * scoped sweeps, teardown interleavings) must read type == NULL
          * instead of recycled memory, so the gc.c walks and markers can
          * identify the dead object instead of dereferencing freed data. */
-        head->type = NULL;
-        /* Free memory via the slab-aware release: threaded abstracts can
-         * be freed outside sweep (and retagged post-alloc), so plain
-         * janet_free would corrupt slab pages. The release itself runs
-         * on the abstract's HOME VM: a foreign VM dropping the last
-         * claim must not free memory the home VM may still touch
-         * in-flight (BUG 2 density cross-thread UAF). */
+        /* A foreign VM dropping the last claim must not tear the
+         * abstract down on its own thread: the home VM may still have
+         * in-flight operations (serials bookkeeping, monitor lookups)
+         * touching the block, and a poison observed mid-operation
+         * crashes hash/compare paths (BUG 2 density: janet_hash on
+         * type==NULL in worker run_vm). Route the whole teardown --
+         * finalizer, poison, tombstone, release -- to the home VM. */
         if ((head->gc.flags & JANET_MEMORY_THREADED_ABSTRACT) &&
                 NULL != head->home_vm && head->home_vm != (void *) &janet_vm) {
             JanetEVGenericMessage msg;
             memset(&msg, 0, sizeof(msg));
-            msg.argp = (void *) head;
+            msg.argp = abst;
             janet_ev_post_event((JanetVM *) head->home_vm,
-                    janet_abstract_release_cb, msg);
+                    janet_abstract_home_teardown_cb, msg);
             return result;
         }
+        head->type = NULL;
+        /* Free memory via the slab-aware release: threaded abstracts can
+         * be freed outside sweep (and retagged post-alloc), so plain
+         * janet_free would corrupt slab pages. */
         janet_gc_release((JanetGCObject *) head);
     }
     return result;
