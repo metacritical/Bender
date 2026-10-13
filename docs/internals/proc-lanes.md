@@ -725,3 +725,20 @@ mailbox, gc-minor, interrupt, pool, thread); suite-ev (CLI),
 suite-proc + suite-marsh (env-scoping marshal) remain -- all three
 are AOT-runtime/codegen characteristics with named fix directions,
 not lanes regressions.
+
+### Round 19: AOT gap precisely characterized
+
+Bisect results under AOT: spawn-local OK; spawn-isolated with a
+NON-capturing entry OK; spawn-isolated with an UPVALUE-CAPTURING
+entry HANGS (even the trivial case: capture a thread-chan, give from
+the child). So the dual-target blocker is one item: the AOT
+marshal-copy of capturing closures (the flat-frame AOT model walks
+the whole enclosing frame on marshal; the isolated-entry copy path
+is not closure-safe). suite-proc's "cannot marshal <core/proc>"
+refusal and suite-marsh's refusal are siblings of this. suite-ev is
+separate (AOT main ignores -e; SUBRUN plumbing to a real interpreter
+is the runner-side workaround).
+
+Dual-target status: interpreter 11/11; AOT 6/11 with ONE named
+codegen work item (closure-safe marshal-copy for isolated entries)
+plus one CLI item. Everything else in Phase 1 is landed and green.
