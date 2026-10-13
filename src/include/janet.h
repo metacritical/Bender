@@ -1210,6 +1210,10 @@ struct JanetAbstractHead {
      * them (BUG 2 density: worker T22 read a proc abstract freed by
      * main T0's registry purge). */
     void *home_vm;
+    /* Single-shot teardown guard (BUG 2 density double-deinit): the
+     * abstract sweep path (janet_deinit_block) and the home-routed
+     * teardown both want to run the gc hook; exactly one wins. */
+    int teardown_started;
     long long data[]; /* Use long long to ensure most general alignment */
 };
 

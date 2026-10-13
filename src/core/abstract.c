@@ -70,6 +70,7 @@ void *janet_abstract_begin_threaded(const JanetAbstractType *atype, size_t size)
     header->size = size;
     header->type = atype;
     header->home_vm = (void *) &janet_vm;
+    header->teardown_started = 0;
     void *abstract = (void *) & (header->data);
     janet_table_put(&janet_vm.threaded_abstracts, janet_wrap_abstract(abstract), janet_wrap_false());
     return abstract;
@@ -219,6 +220,9 @@ static void janet_abstract_release_cb(JanetEVGenericMessage msg) {
 static void janet_abstract_home_teardown_cb(JanetEVGenericMessage msg) {
     void *abst = msg.argp;
     JanetAbstractHead *head = janet_abstract_head(abst);
+    /* Single-shot: the sweep's deinit_block may have torn the
+     * abstract down first (guard set there); skip cleanly. */
+    if (1 != janet_atomic_inc(&head->teardown_started)) return;
     if (NULL != head->type && NULL != head->type->gc) {
         janet_assert(!head->type->gc(head->data, head->size),
                 "finalizer failed");
@@ -279,6 +283,9 @@ int32_t janet_abstract_decref_maybe_free(void *abst) {
             janet_ev_post_event((JanetVM *) head->home_vm,
                     janet_abstract_home_teardown_cb, msg);
             return result;
+        }
+        if (1 != janet_atomic_inc(&head->teardown_started)) {
+            return result; /* sweep or home callback won the teardown */
         }
         head->type = NULL;
         /* Free memory via the slab-aware release: threaded abstracts can

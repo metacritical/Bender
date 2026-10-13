@@ -485,3 +485,25 @@ it again on the home VM. Next: make threaded-abstract deinit hooks
 single-shot (a deinit'd bit on the head, checked under the chan
 lock) or route sweep-side hook invocation through the same home
 deferral.
+
+### Round 9: single-shot teardown guard; density full passes; in-flight ref gap
+
+Landed the double-deinit fix: `JanetAbstractHead.teardown_started`
+(atomic single-shot) arbitrates the sweep's deinit_block hook, the
+home teardown callback, and the same-VM refcount path -- exactly one
+runs the finalizer/poison/release.
+
+Results: full density passes now occur (640k spawn + lanes-stop join
+in 8s; a 108s pass when a big collect lands mid-loop). ASAN reaches
+600k. proc/lanes-skip/ev2 green.
+
+New residual, precisely characterized: worker T23 pushing to a
+channel whose STRUCT was freed by main's home teardown (ASAN:
+janet_channel_push_with_lock reading a T0-freed, T23-realloc'd 128B
+block at 600k). Mechanism: in-flight channel operations on foreign
+VMs hold no refcount; main's teardown at refcount-0 destroys the
+struct (and deinit's its mutex) while a foreign push is entering.
+Fix design: incref the channel at push/take entry, decref at all
+exits (including panic paths); the lock then serializes teardown
+against genuinely in-flight ops. Alternative: route mutex_deinit
+deferred and keep the struct until quiescence.

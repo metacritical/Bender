@@ -616,6 +616,12 @@ static void janet_deinit_block(JanetGCObject *mem) {
                                 janet_wrap_abstract((void *) head->data),
                                 janet_wrap_nil());
             }
+            if (head->gc.flags & JANET_MEMORY_THREADED_ABSTRACT) {
+                /* Single-shot teardown: the home-routed callback may
+                 * have torn it down (or been posted and about to);
+                 * only one path runs the hooks (BUG 2 double-deinit). */
+                if (1 != janet_atomic_inc(&head->teardown_started)) break;
+            }
             if (head->type->gcperthread) {
                 janet_assert(!head->type->gcperthread(head->data, head->size), "per-thread finalizer failed");
             }
