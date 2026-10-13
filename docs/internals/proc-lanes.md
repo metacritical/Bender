@@ -566,3 +566,11 @@ within the suite's documented 3GB headroom).
 RESULT: suite-lanes FULL density 5/5 green (640k procs across 4
 lanes, lanes-stop join, restart round trip) -- first time; proc
 88/88, ev2 green. Battery gate for 2c/2d/dual-target opens.
+
+### Round 12 addendum: confidence batch
+
+Extended runs: 6/7 full passes (~86%, up from 0-20% pre-pinning).
+One residual segfault remains in the density phase -- signature not
+yet captured (batch hit the session time budget). The pinning design
+removed the mass dangle class; the tail head is next round's opening
+ASAN run.
