@@ -1291,8 +1291,8 @@ static void janet_thread_chan_cb(JanetEVGenericMessage msg) {
                      * deadlocks inside its own wakeup write. Schedule
                      * inline instead -- we are the loop. */
                     uint32_t sid = (uint32_t) reader.sched_id;
-                    janet_gcunroot(janet_wrap_fiber(reader.fiber));
                     if (reader.fiber->sched_id == sid) {
+                        janet_gcunroot(janet_wrap_fiber(reader.fiber));
                         if (reader.mode == JANET_CP_MODE_CHOICE_READ) {
                             janet_assert(!janet_chan_unpack(channel, &x, 0),
                                     "packing error");
@@ -1505,8 +1505,8 @@ static int janet_channel_push_with_lock(JanetChannel *channel, Janet x, int mode
                  * thread floods the pipe at fan-in scale and the loop
                  * deadlocks inside its own wakeup write. */
                 uint32_t sid = (uint32_t) reader.sched_id;
-                janet_gcunroot(janet_wrap_fiber(reader.fiber));
                 if (reader.fiber->sched_id == sid) {
+                    janet_gcunroot(janet_wrap_fiber(reader.fiber));
                     if (reader.mode == JANET_CP_MODE_CHOICE_READ) {
                         janet_assert(!janet_chan_unpack(channel, &x, 0),
                                 "bad channel packing");
@@ -1518,7 +1518,16 @@ static int janet_channel_push_with_lock(JanetChannel *channel, Janet x, int mode
                         janet_schedule(reader.fiber, x);
                     }
                 } else {
-                    janet_chan_unpack(channel, &x, 1);
+                    /* Stale reader (resumed via another clause, whose
+                     * path already unrooted): keep the value for the
+                     * next reader -- push-head, then release the
+                     * packed buffer, like the pipe callback's stale
+                     * path. */
+                    if (channel->closed ||
+                            janet_q_push_head(&channel->items, &x,
+                                sizeof(Janet))) {
+                        janet_chan_unpack(channel, &x, 1);
+                    }
                 }
             } else {
                 JanetEVGenericMessage msg;
@@ -1619,9 +1628,9 @@ static int janet_channel_pop_with_lock(JanetChannel *channel, Janet *item, int i
                 /* BUG 1 sibling: same-VM writer pending on a threaded
                  * channel -- schedule inline (see the push-side note). */
                 uint32_t sid = (uint32_t) writer.sched_id;
-                janet_gcunroot(janet_wrap_fiber(writer.fiber));
                 if (writer.fiber->sched_id == sid &&
                         janet_fiber_can_resume(writer.fiber)) {
+                    janet_gcunroot(janet_wrap_fiber(writer.fiber));
                     if (writer.mode == JANET_CP_MODE_CHOICE_WRITE) {
                         janet_schedule(writer.fiber,
                                 make_write_result(channel));
