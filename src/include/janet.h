@@ -1214,6 +1214,10 @@ struct JanetAbstractHead {
      * abstract sweep path (janet_deinit_block) and the home-routed
      * teardown both want to run the gc hook; exactly one wins. */
     int teardown_started;
+    /* Set when the abstract was ever marshaled to another VM (a
+     * foreign lane may hold claim-less values); exported abstracts
+     * pin on their home VM until exit instead of prompt-freeing. */
+    int exported;
     long long data[]; /* Use long long to ensure most general alignment */
 };
 

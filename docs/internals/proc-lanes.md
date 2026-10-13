@@ -574,3 +574,18 @@ One residual segfault remains in the density phase -- signature not
 yet captured (batch hit the session time budget). The pinning design
 removed the mass dangle class; the tail head is next round's opening
 ASAN run.
+
+### Round 13: exported-abstract pinning
+
+Interpreter-side signature captured via lldb: janet_mark_abstract on
+a main-freed threaded abstract reached from worker mark state --
+main-homed channels tear down promptly and dangle for lanes holding
+marshaled values. Fix: JanetAbstractHead.exported is set when an
+abstract is marshaled cross-VM (marsh.c LB_THREADED_ABSTRACT send);
+the home teardown quarantines exported abstracts (pin until exit)
+like lane-homed ones. Same-VM-only abstracts keep prompt teardown
+(suite-ev2 unchanged).
+
+Suites green; density 4/5 this batch (up from ~1/7 at round 12's
+tail). ASAN build fully green end-to-end (600k + 640k + join +
+restart).

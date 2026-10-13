@@ -71,6 +71,7 @@ void *janet_abstract_begin_threaded(const JanetAbstractType *atype, size_t size)
     header->type = atype;
     header->home_vm = (void *) &janet_vm;
     header->teardown_started = 0;
+    header->exported = 0;
     void *abstract = (void *) & (header->data);
     janet_table_put(&janet_vm.threaded_abstracts, janet_wrap_abstract(abstract), janet_wrap_false());
     return abstract;
@@ -246,7 +247,10 @@ void janet_abstract_home_teardown_cb(JanetEVGenericMessage msg) {
      * them; lanes pin instead and janet_clear_memory drains the
      * quarantine at lane stop. Main-VM teardowns keep prompt
      * semantics (suite-ev2's weakref/count tests). */
-    if (janet_vm.is_lane_vm) {
+    if (janet_vm.is_lane_vm || head->exported) {
+        /* Lane-homed: circulating pid values. Exported (ever
+         * marshaled cross-VM): a foreign lane may hold claim-less
+         * values even when homed on main. Both pin until exit. */
         head->gc.data.next = janet_vm.home_quarantine;
         janet_vm.home_quarantine = head;
         return;

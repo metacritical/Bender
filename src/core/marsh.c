@@ -448,6 +448,7 @@ static void marshal_one_abstract(MarshalState *st, Janet x, int flags) {
          * where a message is garbage collected while in transit between two threads - i.e., the sending threads
          * loses the reference and runs a garbage collection before the receiving thread gets the message. */
         janet_abstract_incref(abstract);
+        janet_abstract_head(abstract)->exported = 1;
         pushbyte(st, LB_THREADED_ABSTRACT);
         pushbytes(st, (uint8_t *) &abstract, sizeof(abstract));
         MARK_SEEN();
