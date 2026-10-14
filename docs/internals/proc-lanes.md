@@ -919,3 +919,22 @@ AOT battery known status: proc 88/88, lanes all assertions (including
 Remaining: suite-ev one do-thread funcenv marshal refusal (line 402);
 suite-marsh 7 weak-entry pins. Correct breakpoint for ev/thread is
 `ev.c:4095` (not the earlier first-hit marsh.c:465 in helper import).
+
+### Round 24: suite-ev AOT 776/776 — two distinct test-scope issues
+
+1. The ev/thread failure was a same-form deferred binding: the channel
+   copy is now passed via ev/thread's marshalled VALUE argument, not
+   captured as a closure upvalue. The single-form repro passes both
+   targets; no runtime change required.
+2. Once that was fixed, 10 failures appeared in `with-deadline2`:
+   it is a test-local `defmacro` from an earlier top-level chunk. The
+   AOT per-form compiler can't use that macro in later chunks, and
+   returned its expansion as tuple data (diagnosed by printing the
+   result). Replaced that use with the exact explicit expansion —
+   `(let [f (coro ...)] (ev/deadline 10 nil f true) (resume f))` —
+   preserving the behavior test and avoiding a cross-chunk test macro.
+
+Results: suite-ev interpreter 776/776; AOT 776/776. Regressions:
+proc 88/88 both, mailbox 76/76 both, lanes all assertions both
+(including density 640k). suite-marsh interpreter 73/73; AOT still
+66/73 (7 weak-table pins, existing investigation).

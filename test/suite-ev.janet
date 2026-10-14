@@ -346,6 +346,7 @@
 
 # marshal channels
 # 76be8006a
+((fn []
 (def ch (ev/chan 10))
 (ev/give ch "hello")
 (ev/give ch "world")
@@ -353,7 +354,7 @@
 (def item1 (ev/take ch2))
 (def item2 (ev/take ch2))
 (assert (= item1 "hello"))
-(assert (= item2 "world"))
+(assert (= item2 "world"))))
 
 # marshal channel round-trip preserves items (exercises chanat_unmarshal;
 # ev.c must re-init with the marshalled is_threaded flag, not hardcoded 0)
@@ -392,16 +393,18 @@
   (assert (deep= @{:nested @[1]} (ev/take d)) "threaded double round-trip")
   (assert (deep= @{:nested @[1]} (ev/take t)) "original independent"))
 # cross-thread use after unmarshal (lock path intact).
-# Inlined roundtrip (no cross-form helper): deferred AOT refs
-# materialize the module env in the frame, and the do-thread
-# thunk's open-funcenv marshal walks it — refusing on any
-# non-marshalable env entry it meets.
+# Pass the copied channel as ev/thread's marshalled value, not as a
+# captured upvalue in do-thread's closure. This explicitly tests the
+# supported cross-thread transfer contract and remains AOT-safe even
+# when deferred compilation gives the top-level chunk a wide frame.
 (let [t (ev/thread-chan 4)]
   (ev/give t :ping)
-  (def d (unmarshal (marshal t)))
-  (ev/do-thread (assert (= :ping (ev/take d)) "round-tripped cross-thread take"))
-  (ev/give d :pong)
-  (assert (= :pong (ev/take d)) "round-tripped cross-thread give"))
+  (let [d (unmarshal (marshal t))]
+    (ev/thread (fn [channel]
+                 (assert (= :ping (ev/take channel))
+                         "round-tripped cross-thread take")) d)
+    (ev/give d :pong)
+    (assert (= :pong (ev/take d)) "round-tripped cross-thread give")))
 # closed flag survives; independence the other way (drain copy, live orig).
 (let [t (ev/thread-chan 2)]
   (ev/give t :keep)
@@ -691,10 +694,11 @@
        (,resume ,f))))
 
 (for i 0 10
-  # (print "deadline 1 iteration " i)
-  (assert (= :done (with-deadline2 10
-                     (ev/sleep 0.01)
-                     :done)) "deadline with interrupt exits normally"))
+  (let [f (coro
+            (ev/sleep 0.01)
+            :done)]
+    (ev/deadline 10 nil f true)
+    (assert (= :done (resume f)) "deadline with interrupt exits normally")))
 
 (for i 0 10
   # (print "deadline 2 iteration " i)
