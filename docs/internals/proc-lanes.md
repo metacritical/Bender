@@ -812,3 +812,36 @@ literal constants (buffer/new pinned too). Next: instrument the
 fiber-stack mark extent in gc.c for the chunk fiber. suite-ev CLI
 (-e passthrough) still open. Interpreter battery 8/8 + previously
 green AOT suites re-verified green after all changes.
+
+### Round 22: suite-ev -e parity + the do-thread funcenv forensics
+
+Landed: the generated AOT main now honors `-e CODE` (janet CLI
+parity). Root: the interpreter's os/spawn falls back to argv[0] for
+bare names, so suite-ev's [janet -e ...] subprocess tests exec the
+binary itself — the interpreter's -e prints "hello", the AOT binary
+re-ran its embedded image. With -e parity those tests pass; the
+line-338 do-thread section also fixed by same-form scoping (cross-
+form ch/att refs). Suite sections with inlined roundtrip helpers
+where noted.
+
+REMAINING (forensics recorded for next round): the 397/402 do-thread
+section's thunk marshal still refuses on a <core/process> found in
+its OPEN funcenv (offset=4, length=151, fiber = the chunk fiber).
+Facts pinned by lldb: the thunk def is correct (sourcemap line 398,
+named do-thread); the memset-after-reset runs (emitted C verified);
+the process is (re)written into a frame slot during the let chunk's
+own execution — not env-table contents (probed: no abstracts in
+curenv either backend), not literal constants (buffer/new pinned
+too in the weak bisection), not the profiler (JANET_NO_PROFILE
+identical). Suspect: the deferred cross-form binding fetch
+materializes more than the binding (env/ref structures written into
+frame slots that the open-funcenv marshal then walks). Next probe:
+watchpoint on the slot that holds the process (slot index ~6,
+data[10]) during the let chunk, or print x vs the full slot scan in
+one lldb session (the earlier two-session ASLR mismatch made the
+cross-check inconclusive).
+
+Also open: suite-marsh 66/73 — weak entries pinned by completed
+chunk frames (bisection esK/esL in round 20-21 ledger); the pin
+survives fiber-reuse + stack memset, so the census/retention path
+needs the same watchpoint treatment.

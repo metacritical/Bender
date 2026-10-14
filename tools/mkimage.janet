@@ -334,6 +334,26 @@
       for (int ai = 0; ai < argc; ai++)
           janet_array_push(cliargs, janet_cstringv(argv[ai]));
       janet_table_put(env, janet_ckeywordv("args"), janet_wrap_array(cliargs));
+      /* CLI parity: -e CODE, the way the interpreter binary handles it.
+      ** The interpreter's os/spawn falls back to argv[0] for bare
+      ** program names, so subprocess tests like suite-ev's
+      ** [janet -e "(print ...)"] exec THIS binary — which must eval
+      ** the code, not re-run the embedded image. */
+      for (int ai = 1; ai < argc; ai++) {
+          if (argv[ai][0] == '-' && argv[ai][1] == 'e' &&
+                  argv[ai][2] == '\0') {
+              const char *code = (ai + 1 < argc) ? argv[ai + 1] : "";
+              Janet out;
+              int esig = janet_dostring(env, code, "-e", &out);
+              if (esig != JANET_SIGNAL_OK && esig != JANET_SIGNAL_EVENT) {
+                  janet_eprintf("%v\n", out);
+                  janet_deinit();
+                  return 1;
+              }
+              janet_deinit();
+              return 0;
+          }
+      }
       JanetTable *reg = janet_table((int32_t) janet_aot_names_len);
       for (unsigned long i = 0; i < janet_aot_names_len; i++) {
           Janet v = janet_resolve_core(janet_aot_names[i]);
@@ -405,6 +425,15 @@
               if (ci > 0) {
                   janet_fiber_reset(fiber, fn, 0, NULL);
                   fiber->env = chunk_env;
+                  /* Zero the reused stack: an open funcenv marshal
+                   * (ev/do-thread thunks) reads ALL length slots of
+                   * the enclosing frame, including slots this chunk
+                   * has not written yet — without the zero they hold
+                   * stale values from PREVIOUS chunks (an os/process
+                   * from an earlier test made the marshal refuse).
+                   * Nil-filled slots are safe to walk. */
+                  memset(fiber->data, 0,
+                         sizeof(Janet) * (size_t) fiber->capacity);
               }
               int fstatus = janet_loop_fiber(fiber);
               if (fstatus != JANET_SIGNAL_OK && fstatus != JANET_SIGNAL_EVENT) {

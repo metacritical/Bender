@@ -331,13 +331,18 @@
 
 # threaded channels
 # 868cdb9
+# One form: the do-thread thunk's ch/att captures must be same-form
+# lexicals. Cross-form refs compile as env-table constants under
+# per-chunk AOT (deferred compile), so marshaling the thunk walks
+# every module-env binding and refuses on non-marshalable ones.
+((fn []
 (def ch (ev/thread-chan 2))
 (def att (ev/thread-chan 109))
 (assert att "`att` was nil after creation")
 (ev/give ch att)
 (ev/do-thread
   (assert (ev/take ch)
-          "channel packing bug for threaded abstracts on threaded channels."))
+          "channel packing bug for threaded abstracts on threaded channels."))))
 
 # marshal channels
 # 76be8006a
@@ -387,9 +392,13 @@
   (assert (deep= @{:nested @[1]} (ev/take d)) "threaded double round-trip")
   (assert (deep= @{:nested @[1]} (ev/take t)) "original independent"))
 # cross-thread use after unmarshal (lock path intact).
+# Inlined roundtrip (no cross-form helper): deferred AOT refs
+# materialize the module env in the frame, and the do-thread
+# thunk's open-funcenv marshal walks it — refusing on any
+# non-marshalable env entry it meets.
 (let [t (ev/thread-chan 4)]
   (ev/give t :ping)
-  (def d (chan-roundtrip t))
+  (def d (unmarshal (marshal t)))
   (ev/do-thread (assert (= :ping (ev/take d)) "round-tripped cross-thread take"))
   (ev/give d :pong)
   (assert (= :pong (ev/take d)) "round-tripped cross-thread give"))
