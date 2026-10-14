@@ -845,3 +845,20 @@ Also open: suite-marsh 66/73 — weak entries pinned by completed
 chunk frames (bisection esK/esL in round 20-21 ledger); the pin
 survives fiber-reuse + stack memset, so the census/retention path
 needs the same watchpoint treatment.
+
+### Round 22 addendum: breakpoint correction for the funcenv hunt
+
+The marsh.c:465 breakpoint catches the FIRST refusal in the process —
+which fires inside the FIRST CHUNK (import ./helper at line 22: its
+compiled def sources from line 22, frame offset 4, length 151, with
+12 abstract slots — net sockets/process abstracts from the host-probe
+machinery). That refusal is (evidently) recovered — the suite runs on.
+The REPORTED failure (ev/thread refusing <core/process>, stack: ev.c
+4095 <- thunk line 402) is a LATER hit. Next round: break at ev.c:4095
+(the janet_marshal inside cfun_ev_thread) directly, then dump the
+thunk's funcenv there — the do-thread section forensics so far were
+debugging the wrong refusal.
+
+Note for the same hunt: fiber->frame at the marsh.c:465 hit was 159 —
+40 frames deep, consistent with helper-import machinery mid-flight,
+NOT the 397-let's shallow root frame.
