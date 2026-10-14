@@ -961,13 +961,16 @@ ev2, proc, mailbox, lanes all GREEN; only AOT suite-marsh remains
 AOT at `janet_collect` still has `gc_suspend=2`. New scheduler-path
 lead: `janet_vmregs_load_base()` restores `janet_vm.base_gc_suspend`,
 which is captured by `janet_vmregs_save_base()` at root-fiber resume
-entry. The core-env and image unmarshals each locally restore their
-saved values; thus the persistent 1 likely belongs to the host/base
-register exchange around the first AOT `janet_loop_fiber`, or the
-baseline was already nonzero entering it. Next safe probe: stop at
-`janet_vmregs_save_base` and `janet_vmregs_load_base` in the same AOT
-process, record `gc_suspend` and `base_gc_suspend` before/after the
-first root-fiber chunk; compare with interpreter `janet_continue`.
+entry. A temporary `[BASE SAVE]` trace observed `gc=1` on entry to
+that host-baseline save for the focused AOT weak repro — so the host
+baseline is already nonzero before the AOT main fiber enters the
+scheduler. The core-env and image unmarshals each locally restore
+their saved values; neither explains the incoming 1. A generated-main
+trace probe failed to link because its temporary accessor was not
+present in `libjanet.a`; all diagnostics were removed. Next safe step:
+trace the source that sets the baseline before `janet_loop_fiber`
+(entry to generated main, profile setup, core-env init), using
+existing debugger-visible fields or a correctly linked internal probe.
 Do not alter the scheduler's saved-register discipline without that
 trace.
 
