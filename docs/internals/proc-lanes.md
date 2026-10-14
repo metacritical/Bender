@@ -630,7 +630,7 @@ Implemented per the recorded design:
   message (marshaling it inside the launch tuple crashed the registry
   dedup hash -- channels cross as ctl messages the way pid tuples
   always have).
-- Routed spawn under :steal: when the target ctl depth >= 8
+- Routed spawn under :steal: when the target ctl depth >= 1
   (janet_channel_count), try-push to overflow (never blocks).
 - Dispatcher idle pull: up to K=4 tasks drained before parking on an
   empty ctl (boot.janet lane-worker handle-spawn refactor).
@@ -905,3 +905,17 @@ claim implementation):
 6. Standing hardening: every battery stays green under soak loops
    (density x lanes x AOT), plus a fuzz harness for the marshal/
    teardown lattice.
+
+### Round 23: full AOT suite-lanes pass
+
+Built with `bender --aot test/suite-lanes.janet -o /tmp/suite-lanes-aot`,
+then executed the native image: exit 0, density at 600000, density
+section passed, join after 640k-park stop in 8.0166s, all assertions
+passed. Phase 1 now has the feature-indication lanes suite green on
+both interpreter and AOT.
+
+AOT battery known status: proc 88/88, lanes all assertions (including
+640k density), ev2, mailbox, gc-minor, interrupt, pool, thread green.
+Remaining: suite-ev one do-thread funcenv marshal refusal (line 402);
+suite-marsh 7 weak-entry pins. Correct breakpoint for ev/thread is
+`ev.c:4095` (not the earlier first-hit marsh.c:465 in helper import).
