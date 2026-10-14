@@ -951,6 +951,26 @@ addresses), inspect caller plus current `gc_suspend`, and identify why
 `janet_core_env` returns with one lock held when called from generated
 AOT main. Only then change code.
 
+### Round 27: focused battery and host-baseline finding
+
+Re-ran focused batteries after removing all diagnostics: interpreter
+suite-ev, ev2, proc, mailbox, lanes, marsh all GREEN. AOT suite-ev,
+ev2, proc, mailbox, lanes all GREEN; only AOT suite-marsh remains
+66/73 (the same 7 weak-entry checks).
+
+AOT at `janet_collect` still has `gc_suspend=2`. New scheduler-path
+lead: `janet_vmregs_load_base()` restores `janet_vm.base_gc_suspend`,
+which is captured by `janet_vmregs_save_base()` at root-fiber resume
+entry. The core-env and image unmarshals each locally restore their
+saved values; thus the persistent 1 likely belongs to the host/base
+register exchange around the first AOT `janet_loop_fiber`, or the
+baseline was already nonzero entering it. Next safe probe: stop at
+`janet_vmregs_save_base` and `janet_vmregs_load_base` in the same AOT
+process, record `gc_suspend` and `base_gc_suspend` before/after the
+first root-fiber chunk; compare with interpreter `janet_continue`.
+Do not alter the scheduler's saved-register discipline without that
+trace.
+
 ### Round 23: full AOT suite-lanes pass
 
 Built with `bender --aot test/suite-lanes.janet -o /tmp/suite-lanes-aot`,
