@@ -1117,6 +1117,37 @@ static int janet_slab_obj_old(void *ptr) {
     return page->age >= JANET_SLAB_OLD_AGE;
 }
 
+/* Debug (JANET_TRACE_STRICT): dump a copied entry's funcenvs and the
+ * slab-page ownership of table upvalues — where did the child's
+ * captures land? */
+void janet_strict_debug_envs(JanetFunction *copy) {
+    for (int ei = 0; ei < copy->def->environments_length; ei++) {
+        JanetFuncEnv *fe = copy->envs[ei];
+        janet_eprintf("[copy-env] env#%d len=%d offset=%d",
+                ei, fe->length, fe->offset);
+        if (fe->offset <= 0 && NULL != fe->as.values) {
+            for (int vi = 0; vi < fe->length && vi < 12; vi++) {
+                Janet v = fe->as.values[vi];
+                JanetType vt = janet_type(v);
+                const char *tn = janet_type_names[vt];
+                if (vt == JANET_TABLE) {
+                    JanetSlabPage *tp = janet_slab_page_for(
+                            janet_unwrap_table(v));
+                    JanetTable *tt = janet_unwrap_table(v);
+                    janet_eprintf(" [v%d=table(count=%d proto=%p "
+                            "page(owner=%d isolated=%d))]", vi,
+                            tt->count, (void *) tt->proto,
+                            (NULL != tp) ? (int) tp->owner : -1,
+                            (NULL != tp) ? tp->isolated : -1);
+                } else {
+                    janet_eprintf(" [v%d=%s]", vi, tn);
+                }
+            }
+        }
+        janet_eprintf("\n");
+    }
+}
+
 /* Step 1.3: owning fiber id for sweep filtering (0 = shared: mixed
  * pages, unowned pages, and malloc-large objects all read shared and
  * are spared by per-fiber sweeps). */
@@ -1154,6 +1185,13 @@ static void *janet_slab_alloc(int class_index) {
         if (NULL != page && page->age < JANET_SLAB_OLD_AGE) {
             if (0 != page->owner && page->owner != reqid) page->mixed = 1;
             if (NULL != req) req->gc_nursery_bytes += slot;
+            if (NULL != getenv("JANET_TRACE_STRICT") && NULL != req &&
+                    req->heap_strict) {
+                janet_eprintf("[slab-pop-strict] req_owner=%d "
+                        "class=%d page(owner=%d mixed=%d isolated=%d)\n",
+                        (int) reqid, class_index, (int) page->owner,
+                        page->mixed, page->isolated);
+            }
             /* TEMPORARY 2b-iii bisect: zero recycled slots to test for
              * uninitialized-field reads. */
             memset(slot_obj, 0, slot);
@@ -1799,6 +1837,29 @@ void janet_gc_barrier(void *obj, Janet value) {
         }
         if (NULL != vobj) {
             iso_v = (janet_gc_header(vobj)->flags & JANET_MEM_ISOLATED) ? 1 : 0;
+        }
+        if (NULL != getenv("JANET_TRACE_STRICT")) {
+            JanetSlabPage *tp = janet_slab_page_for(obj);
+            JanetFiber *treq = (NULL != janet_vm.gc_alloc_ctx)
+                ? janet_vm.gc_alloc_ctx : janet_vm.fiber;
+            janet_eprintf("[strict-put] obj=%p iso_o=%d "
+                    "page(owner=%d mixed=%d isolated=%d) ",
+                    obj, iso_o,
+                    (NULL != tp) ? tp->owner : -1,
+                    (NULL != tp) ? tp->mixed : -1,
+                    (NULL != tp) ? tp->isolated : -1);
+            if (t == JANET_TABLE) {
+                JanetTable *ct = (JanetTable *) obj;
+                janet_eprintf("obj-table(count=%d proto=%p) ",
+                        ct->count, (void *) ct->proto);
+            }
+            janet_eprintf("vobj=%p iso_v=%d req=%p req_strict=%d "
+                    "req_owner=%d cur_fiber=%p",
+                    vobj, iso_v, (void *) treq,
+                    (NULL != treq) ? treq->heap_strict : -1,
+                    (NULL != treq) ? (int) treq->gc_owner : -1,
+                    (void *) janet_vm.fiber);
+            fprintf(stderr, " ra0=%p\n", __builtin_return_address(0));
         }
         if (iso_v && !iso_o) {
             janet_panic("strict proc value escaping to a shared container "

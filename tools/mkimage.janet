@@ -368,23 +368,54 @@
       int status = 0;
       int chunks_ok = 1;
       if (janet_checktype(top, JANET_TUPLE)) {
+          /* Chunks run from a rooted ARRAY with each slot cleared as
+           * its chunk is taken (and again after it completes): a
+           * finished chunk's function — and the constants its def
+           * references — must become collectable, the way an
+           * interpreter script's form functions die after their form.
+           * Rooting all chunk functions for the whole run pinned def
+           * constants forever; weak-table tests saw entries that
+           * should have cleared post-gccollect. */
           JanetTuple chunks = janet_unwrap_tuple(top);
-          for (int32_t ci = 0; ci < janet_tuple_length(chunks); ci++) {
-              if (!janet_checktype(chunks[ci], JANET_FUNCTION)) continue;
-              JanetFunction *fn = janet_unwrap_function(chunks[ci]);
-              JanetFiber *fiber = janet_fiber(fn, 64, 0, NULL);
-              fiber->env = chunk_env;
-              janet_gcroot(janet_wrap_fiber(fiber));
+          JanetArray *chunk_arr = janet_array(janet_tuple_length(chunks));
+          for (int32_t ci = 0; ci < janet_tuple_length(chunks); ci++)
+              janet_array_push(chunk_arr, chunks[ci]);
+          janet_gcunroot(top);
+          janet_gcroot(janet_wrap_array(chunk_arr));
+          /* ONE fiber for all chunks, re-primed per chunk — run-context
+           * reuses a single evaluation context for a script's forms;
+           * fresh-fiber-per-chunk left every completed chunk's STACK
+           * live in retained dead fibers, pinning frame values so weak
+           * tables never cleared their entries (K3 in the bisection).
+           * janet_fiber_reset re-primes in place; later chunks
+           * overwrite earlier stacks. */
+          JanetFunction *first_fn =
+              janet_unwrap_function(chunk_arr->data[0]);
+          JanetFiber *fiber = janet_fiber(first_fn, 64, 0, NULL);
+          fiber->env = chunk_env;
+          janet_gcroot(janet_wrap_fiber(fiber));
+          for (int32_t ci = 0; ci < chunk_arr->count; ci++) {
+              if (!janet_checktype(chunk_arr->data[ci], JANET_FUNCTION)) {
+                  chunk_arr->data[ci] = janet_wrap_nil();
+                  continue;
+              }
+              JanetFunction *fn =
+                  janet_unwrap_function(chunk_arr->data[ci]);
+              chunk_arr->data[ci] = janet_wrap_nil();
+              if (ci > 0) {
+                  janet_fiber_reset(fiber, fn, 0, NULL);
+                  fiber->env = chunk_env;
+              }
               int fstatus = janet_loop_fiber(fiber);
               if (fstatus != JANET_SIGNAL_OK && fstatus != JANET_SIGNAL_EVENT) {
                   janet_stacktrace_ext(fiber, fiber->last_value, "");
                   status = 1;
-                  janet_gcunroot(janet_wrap_fiber(fiber));
                   chunks_ok = 0;
                   break;
               }
-              janet_gcunroot(janet_wrap_fiber(fiber));
           }
+          janet_gcunroot(janet_wrap_fiber(fiber));
+          janet_gcunroot(janet_wrap_array(chunk_arr));
       } else if (janet_checktype(top, JANET_FUNCTION)) {
           JanetFunction *fn = janet_unwrap_function(top);
           JanetFiber *fiber = janet_fiber(fn, 64, 0, NULL);
@@ -429,7 +460,11 @@
           }
       }
       janet_gcunroot(janet_wrap_table(chunk_env));
-      janet_gcunroot(top);
+      if (janet_checktype(top, JANET_TUPLE)) {
+          /* already unrooted when the chunks moved into the array */
+      } else {
+          janet_gcunroot(top);
+      }
       janet_deinit();
       return status;
   }

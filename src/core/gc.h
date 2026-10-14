@@ -129,4 +129,8 @@ JanetTable *janet_slab_owner_stats(void);
  * fiber_alloc/unmarshal, swap-remove at sweep-free). */
 void janet_census_add(JanetFiber *f);
 
+/* Debug (JANET_TRACE_STRICT): dump a copied entry's funcenvs and the
+ * slab-page ownership of table upvalues. */
+void janet_strict_debug_envs(JanetFunction *copy);
+
 #endif

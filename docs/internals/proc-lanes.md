@@ -775,3 +775,40 @@ Remaining dual-target blockers unchanged: the 317 marshal refusal
 direction: copy_entry copies only referenced upvalue slots, or
 suite-side per-section function wrapping) and the suite-ev -e CLI
 item.
+
+### Round 20-21: AOT per-form chunks + profiler/strict-proc fixes
+
+Root causes found and fixed for the AOT battery failures:
+
+1. **One-do-form env scoping** (suite-proc "cannot marshal <core/proc>"):
+   mkimage now compiles each top-level form as its own chunk against the
+   shared env — exactly `janet script.janet` semantics (run.c runs
+   scripts form by form). A chunk's closures capture only their own
+   frame, so spawn-isolated entry marshals walk real captures.
+2. **Chunk env proto** (curenv/getproto nil): the generated main gives
+   chunk fibers a fresh env table proto-linked to the module env
+   (run-context shape); a bare core env has no proto.
+3. **Profiler vs strict procs** (the big one): AOT binaries auto-PGO —
+   janet_profile_entry's plain puts tripped the strict-escape barrier
+   from TWO sites: the pt identity-map put, and the e-table "func" put
+   (protect's fresh NON-strict fiber profiling a call to a child-heap
+   function: isolated value into a shared-page entry table). Every
+   strict proc's handler call died with "strict proc value escaping"
+   — the interpreter passed only because it never profiles. All
+   profiler-internal puts now use janet_table_put_raw (the P3.4
+   bookkeeping-put precedent: identity maps, dirty-mark, no barrier).
+4. **Chunk lifecycle**: chunks run from a rooted array with slots
+   cleared after their chunk; ONE fiber re-primed per chunk via
+   janet_fiber_reset (run-context reuses one evaluation context).
+
+State: AOT suite-proc 88/88 GREEN (was env-refusal + hang);
+suite-marsh 66/73 — the remaining 7 are weak-table entries that
+never clear post-gccollect: ANY value touched by a completed top-
+level chunk stays pinned (even runtime-built buffers — bisection
+esK/esL), pointing at stale fiber-stack slots surviving the mark in
+the AOT path; NOT the profiler (JANET_NO_PROFILE identical), NOT
+chunk roots (array-clearing + fiber reuse did not change it), NOT
+literal constants (buffer/new pinned too). Next: instrument the
+fiber-stack mark extent in gc.c for the chunk fiber. suite-ev CLI
+(-e passthrough) still open. Interpreter battery 8/8 + previously
+green AOT suites re-verified green after all changes.

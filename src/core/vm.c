@@ -502,11 +502,21 @@ static JanetTable *janet_profile_entry(JanetFunction *func) {
         janet_gcroot(eroot);
         pa = janet_array(JANET_PROFILE_MAXPARAMS);
         janet_gcroot(janet_wrap_array(pa));
-        janet_table_put(e, janet_ckeywordv("func"), janet_wrap_function(func));
-        janet_table_put(e, janet_ckeywordv("calls"), janet_wrap_integer(0));
+        /* P3.4 bookkeeping puts: the profiler's entry table is
+         * observation bookkeeping, not value-graph ownership — the
+         * same class as pt itself (marshal memo, threaded registry).
+         * The "func" put especially crosses heaps by design: profiling
+         * a call made by a NON-strict fiber (e.g. protect's fresh
+         * fiber inside a strict proc) stores a child-heap (isolated)
+         * function into a caller-heap entry table; the plain put's
+         * barrier panicked there, killing strict procs in AOT
+         * binaries (auto-PGO instruments every call). put_raw keeps
+         * generational-dirty marking and skips the export panic. */
+        janet_table_put_raw(e, janet_ckeywordv("func"), janet_wrap_function(func));
+        janet_table_put_raw(e, janet_ckeywordv("calls"), janet_wrap_integer(0));
         for (i = 0; i < JANET_PROFILE_MAXPARAMS; i++)
             janet_array_push(pa, janet_wrap_integer(0));
-        janet_table_put(e, janet_ckeywordv("params"), janet_wrap_array(pa));
+        janet_table_put_raw(e, janet_ckeywordv("params"), janet_wrap_array(pa));
         {
             /* Parallel element-type masks: for array params, the OR of
              * the first elements' types (heuristic sample, see call
@@ -516,7 +526,7 @@ static JanetTable *janet_profile_entry(JanetFunction *func) {
             janet_gcroot(janet_wrap_array(ea));
             for (i = 0; i < JANET_PROFILE_ELEMSAMPLE; i++)
                 janet_array_push(ea, janet_wrap_integer(0));
-            janet_table_put(e, janet_ckeywordv("elems"), janet_wrap_array(ea));
+            janet_table_put_raw(e, janet_ckeywordv("elems"), janet_wrap_array(ea));
             janet_gcunroot(janet_wrap_array(ea));
         }
         {
@@ -531,13 +541,21 @@ static JanetTable *janet_profile_entry(JanetFunction *func) {
                 janet_array_push(mn, janet_wrap_number(INFINITY));
                 janet_array_push(mx, janet_wrap_number(-INFINITY));
             }
-            janet_table_put(e, janet_ckeywordv("mins"), janet_wrap_array(mn));
-            janet_table_put(e, janet_ckeywordv("maxs"), janet_wrap_array(mx));
+            janet_table_put_raw(e, janet_ckeywordv("mins"), janet_wrap_array(mn));
+            janet_table_put_raw(e, janet_ckeywordv("maxs"), janet_wrap_array(mx));
             janet_gcunroot(janet_wrap_array(mn));
             janet_gcunroot(janet_wrap_array(mx));
         }
-        janet_table_put(e, janet_ckeywordv("rets"), janet_wrap_integer(0));
-        janet_table_put(pt, key, janet_wrap_table(e));
+        janet_table_put_raw(e, janet_ckeywordv("rets"), janet_wrap_integer(0));
+        /* P3.4 bookkeeping put: pt is the profiler's identity map
+         * (function-pointer keyed), the same class as the marshal
+         * memo and threaded registry. Under strict procs the plain
+         * put panicked (a child-allocated entry is isolated, pt is
+         * VM-global shared) — killing every strict proc in AOT
+         * binaries, which auto-PGO instruments. put_raw keeps
+         * generational-dirty marking (minors stay sound) and skips
+         * the barrier/export panic. */
+        janet_table_put_raw(pt, key, janet_wrap_table(e));
         janet_gcunroot(janet_wrap_array(pa));
         janet_gcunroot(eroot);
         janet_profile_cache_fill(pt, func->def, e);

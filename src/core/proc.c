@@ -888,6 +888,9 @@ static Janet cfun_proc_spawn_impl(JanetFunction *func, int32_t cap, int isolated
                  * fresh fiber onto the copy (reuse pattern from thread
                  * workers). */
                 JanetFunction *copy = janet_proc_copy_entry(func);
+                if (NULL != getenv("JANET_TRACE_STRICT")) {
+                    janet_strict_debug_envs(copy);
+                }
                 Janet copy_j = janet_wrap_function(copy);
                 janet_gcroot(copy_j);
                 janet_fiber_reset(fiber, copy, 0, NULL);
