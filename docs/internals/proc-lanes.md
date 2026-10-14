@@ -906,6 +906,28 @@ claim implementation):
    (density x lanes x AOT), plus a fuzz harness for the marshal/
    teardown lattice.
 
+### Round 25: suite-marsh AOT weak-pin root cause narrowed to GC suspension
+
+Confirmed with a minimal weak-array + marshal + major-collect repro:
+interpreter clears the unreferenced entry (`nil? a=true, b=true`), AOT
+retains it (`false, false`). AOT `janet_collect()` reports
+`gc_suspend=2`, so it returns without marking/sweeping. This explains
+all seven suite-marsh weak failures; it is NOT proven to be an AOT
+mark/weak-drop bug yet.
+
+Narrowing so far: every `janet_gclock`/`janet_gcunlock` pair in
+marsh.c and vm.c appears locally balanced. The core env unmarshal
+starts at 0 and ends at 0. The AOT image unmarshal starts at 1 and
+ends at 1; a later source-level unmarshal starts at 1 and ends at 1.
+The collect then sees 2. The extra held lock predates the second
+image unmarshal; the next step is same-process symbolic instrumentation
+of AOT main initialization around `janet_core_env`, image unmarshal,
+and `janet_loop_fiber` (previous cross-process return-address
+symbolization was invalidated by ASLR). Do NOT set `gc_suspend=0`
+blindly: it is a nesting counter protecting in-flight C-side
+marshal/compile structures, and forcing it open may cause use-after-
+free. Find the exact unmatched owner and make its unlock path correct.
+
 ### Round 23: full AOT suite-lanes pass
 
 Built with `bender --aot test/suite-lanes.janet -o /tmp/suite-lanes-aot`,
