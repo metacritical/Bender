@@ -928,6 +928,29 @@ blindly: it is a nesting counter protecting in-flight C-side
 marshal/compile structures, and forcing it open may cause use-after-
 free. Find the exact unmatched owner and make its unlock path correct.
 
+### Round 26: correct the AOT chunk assumption; lock owner still open
+
+Important correction: checked-in `tools/mkimage.janet` currently emits
+ONE whole-file `do` function (lines 172-184). The per-form chunk runner
+was tried and reverted because earlier defs compile as build-time
+constants (nil). Do not interpret current traces as per-form behavior.
+
+Clean focused repro (`test/weak-epoch-probe.janet`, temporary, removed):
+interpreter `nil? a=true, b=true`; AOT `nil? a=false, b=false`.
+LLDB at `janet_collect` confirms `gc_suspend=2` in the AOT image; the
+weak drop is skipped by the intentional guard. Tagged source traces
+show these locally balanced pairs: core-env unmarshal lock 0/restore 0;
+image unmarshal lock 1/restore 1; user marshal lock 0/restore 0; user
+unmarshal lock 1/restore 1. `janet_continue` and both compile locks do
+not appear in this repro. Therefore the extra nesting exists BEFORE
+the image unmarshal and survives to user code; the instrumentation has
+not yet named its owner. Temporary instrumentation/repros were removed;
+no speculative counter reset was kept. Next safe step: break at each
+`janet_gcunlock` in the SAME debug AOT process (not cross-run ASLR
+addresses), inspect caller plus current `gc_suspend`, and identify why
+`janet_core_env` returns with one lock held when called from generated
+AOT main. Only then change code.
+
 ### Round 23: full AOT suite-lanes pass
 
 Built with `bender --aot test/suite-lanes.janet -o /tmp/suite-lanes-aot`,
