@@ -862,3 +862,46 @@ debugging the wrong refusal.
 Note for the same hunt: fiber->frame at the marsh.c:465 hit was 159 —
 40 frames deep, consistent with helper-import machinery mid-flight,
 NOT the 397-let's shallow root frame.
+
+## Erlang-caliber parity roadmap (recorded 2026-10-14)
+
+Assessment from the session's measurements (agents bench: 160-170k
+msg/s interpreted, ~790k AOT at 100k actors; density 640k procs,
+10 consecutive full passes; 2d benchmark proved a CPU-bound tasklet
+occupies its lane's dispatcher). Verdict: semantics largely Erlang-
+shaped; the muscle (preemption, throughput, per-proc GC) incomplete.
+
+Gap -> where it lives in the roadmap:
+
+| Gap | Covered by | Status |
+|---|---|---|
+| True preemption | M4b (aot-plan): SIGURG preemption at interpreter-loop poll points, work-stealing runqueues | RECORDED, multi-session epic |
+| Resident-proc migration (beyond 2c's spawn-dispatch stealing) | M:N scheduler core (Phase 3) — make proc migration explicit in M4b | recorded, needs explicit task |
+| Per-proc GC independence | Phase 2b collector swap (slab/size-classes, string heap, per-worker roots) | NEXT after Phase 1 |
+| Named registry | Phase 3 (aot-plan) | recorded |
+| Supervision trees | Phase 3 (links/monitors enable them; "cooperative supervision" recorded) | primitives DONE (2b), tree library open |
+| Copy-by-default message semantics (mutable aliasing safety for ALL procs, not just strict) | NOT IN PLAN — new task below | NEW |
+| Messaging throughput campaign (hot path toward BEAM-class msg/s) | NOT IN PLAN — new task below | NEW |
+| Distribution (nonzero node ids, cross-node pids) | NOT IN PLAN (only acknowledged as future) | NEW (design doc first) |
+| Hot code loading | NOT IN PLAN | NEW (design doc first) |
+| Battle-hardening (fuzz/stress campaigns, nines-grade soak) | implicit | NEW standing item |
+
+New tasks to fold into the plan (Phase 3.5 / 5 candidates, do NOT
+claim implementation):
+1. Copy-by-default messages: extend P3.2 marshal-copy semantics from
+   spawn-isolated to proc/send payloads by default (opt-out escape
+   hatch for provably-immutable structs — bridges Phase 3's struct-
+   sharing goal without the aliasing hazards).
+2. Messaging throughput campaign: profile the send/recv hot path
+   (mbox push/pull, marshal boundaries, dispatcher hops); target
+   multi-million msg/s AOT. Gates: agents-1vN numbers in this ledger.
+3. Proc migration: upgrade 2c's spawn-dispatch stealing to resident
+   fiber migration atop the M4b scheduler (the agents benchmark's
+   clog experiment is the regression gate).
+4. Distribution design doc: node ids in pid tuples (the :pid node
+   field exists), marshal-over-socket lanes, cross-node registry.
+5. Hot-code-loading design doc: module swap with proc drain (janet
+   image re-link semantics) — sketch before any implementation.
+6. Standing hardening: every battery stays green under soak loops
+   (density x lanes x AOT), plus a fuzz harness for the marshal/
+   teardown lattice.
