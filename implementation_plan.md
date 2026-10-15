@@ -1,9 +1,5 @@
-# Phase 1 Completion, Dual-Target Battery, and Erlang-Caliber Parity
-
-1. Finish the dual-target AOT battery: suite-ev (resume the funcenv hunt at the ev.c:4095 breakpoint inside cfun_ev_thread — the marsh.c:465 first-hit was the helper-import's recovered refusal), suite-marsh (7 weak-entry pins; watchpoint treatment on the census/retention path), suite-lanes (never AOT-run — compile and run it, then triage).
-2. On each battery green, commit atomically; keep the interpreter battery and the six green AOT suites verified as regressions after every change.
-3. Gather whole-objective evidence (all interpreter suites green, all AOT suites green, milestones landed, feature commits present), read the goal, and mark it complete.
-4. Erlang-caliber parity roadmap (documented in proc-lanes.md; implementation is future work, not claimed):
-   - Covered by existing phases: M4b preemption (SIGURG poll-point), Phase 2b collector swap, Phase 3 named registry, supervision primitives, M:N scheduler core.
-   - NEW tasks recorded and now part of the standing plan: copy-by-default message semantics; messaging-throughput campaign (BEAM-class msg/s); resident-proc migration atop M4b; distribution design doc (nonzero nodes); hot-code-loading design doc; standing battle-hardening (soak + fuzz for the marshal/teardown lattice).
-5. Later documented work only, never claimed: AOT Phase 2b collector swap; Phase 3 messaging refinements; Phase 4 native-tier steps 8-13.
+# Resume Janet Phase 1
+1. Preserve the verified interpreter battery and committed dual-target marshal, proc teardown, AOT inference, quantum, profile, and event fixes.
+2. Resolve the remaining Phase 1 AOT failures and intermittent runtime gates with focused diagnosis, narrow dual-target checks, and atomic commits. Keep each original assertion visible; classify any genuine target-specific gate explicitly rather than silently skipping it.
+3. Re-run the required AOT battery with honest build, assertion, and process-exit results, including proc/event liveness and full-density lanes; reconcile unrelated working-tree artifacts without conflating them with fixes.
+4. Mark Phase 1 complete only when every required AOT suite passes. Stop at that milestone and review the completed work with the user before starting Phase 2b, Erlang parity, or any later roadmap item.
