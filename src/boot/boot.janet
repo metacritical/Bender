@@ -5511,8 +5511,9 @@
 ### AOT driver (bender --aot): the compiler driver lives in the binary.
 ### tools/janet-aot.sh is a thin shim over this. Mirrors the shell
 ### grammar 1:1: app.janet [-o app] [-c] [-S] [-E args...] [--native]
-### [--externs F] [--include F]... [-x F] [--ldflags S] [--pgo S]
-### [--pgo-stdin F]. Tools (callgraph/mkimage) run in-process via dofile;
+### [-Oz] [--release] [--upx] [--no-auto-pgo] [--externs F]
+### [--include F]... [-x F] [--ldflags S] [--pgo S] [--pgo-stdin F].
+### Tools (callgraph/mkimage) run in-process via dofile;
 ### only cc and profile/parity workloads spawn subprocesses, like any
 ### cc-style driver.
 ###
@@ -6251,10 +6252,24 @@
                 --update-all (-U)       : Reinstall all installed bundles
                 --prune (-P)            : Uninstall all bundles that are orphaned
                 --list (-L)             : List all installed bundles
-                --aot args...           : AOT-compile a script to a native binary
-                                          (usage: --aot app.janet [-o app] [-c] [-S] [-E args...]
+                --aot args...           : Build an AOT executable (plain VM image or --native hybrid)
+                                          --aot app.janet [-o app] [-c] [-S] [-E args...]
                                           [--native] [--externs F] [--include F] [-x F]
-                                          [--ldflags S] [--pgo ARGS] [--pgo-stdin F])
+                                          [--ldflags S] [--pgo ARGS] [--pgo-stdin F]
+                                          [--no-auto-pgo] [--release] [-Oz] [--upx]
+                                          --pgo requires --native; collect/replay ARGS for parity
+                                          --no-auto-pgo skips cached evidence during this build
+                                          --release requires --native and verified cached evidence;
+                                            final binary omits automatic profiling and native telemetry
+                                          -Oz optimizes/strips a staged binary for size
+                                          --upx requires supported Linux ELF, UPX and parity workload
+                Environment (PGO):     ordinary script runs collect diagnostics by default;
+                                          JANET_NO_PROFILE=1 disables implicit collection
+                                          JANET_PROFILE=1 enables explicit interpreter collection;
+                                          JANET_PROFILE_OUT=path writes the profile dump
+                                          JANET_AUTO_PGO=1 forces AOT-binary diagnostic sidecars
+                                          JANET_AUTO_PGO_MIN_CALLS=N sets auto dump threshold (10000)
+                                          XDG_CACHE_HOME selects the PGO cache root
                 --                      : Stop handling options
              ```)
            (os/exit 0)

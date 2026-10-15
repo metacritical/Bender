@@ -11,6 +11,7 @@ janet \- run the Janet language abstract machine
 [\fB\-c\fR \fIMODULE JIMAGE\fR]
 [\fB\-w\fR \fILEVEL\fR]
 [\fB\-x\fR \fILEVEL\fR]
+[\fB\-\-aot\fR \fIscript.janet\fR \fIbuild options\fR]
 [\fB\-\-\fR]
 .BR script
 .BR args ...
@@ -245,6 +246,31 @@ This linting level should be one of :relaxed, :none, :strict, :normal, or a
 Janet number. Any linting message that is of a greater lint level will cause a compilation error
 and stop compilation.
 .TP
+.BR \-\-aot\ script.janet
+Build an AOT executable. Without \fB\-\-native\fR it embeds a compiled
+Janet image executed by the VM; with \fB\-\-native\fR eligible functions
+are emitted as native kernels; other code remains on the VM. Build options include
+\fB\-o\fR output, \fB\-c\fR (C only), \fB\-S\fR (print C),
+\fB\-E\fR arguments (build and run), \fB\-\-externs\fR file,
+\fB\-\-include\fR file, \fB\-x\fR file, and \fB\-\-ldflags\fR string.
+These options belong after \fB\-\-aot\fR; they are distinct from the
+interpreter options of the same spelling.
+.PP
+\fB\-\-pgo\fR arguments explicitly collects a profile under a replayable
+workload and parity-checks a native candidate; \fB\-\-pgo-stdin\fR file
+captures its stdin. \fB\-\-no-auto-pgo\fR skips applying a cached profile
+while building, but does not disable collection in the produced binary.
+\fB\-\-release\fR requires a native build, compatible cached profile and
+replayable workload, and a passing parity gate; it disables automatic
+collection and native telemetry in the produced binary. It cannot be
+combined with \fB\-\-pgo\fR or \fB\-\-no-auto-pgo\fR.
+\fB\-Oz\fR optimizes for size and strips a staged executable.
+\fB\-\-upx\fR optionally compresses a verified native candidate on a
+supported Linux ELF target with UPX installed; it rejects unsupported
+platforms (including macOS Mach-O) rather than producing an unchecked binary.
+\fB\-\-release\fR, \fB\-Oz\fR and \fB\-\-upx\fR require a real binary build,
+not \fB\-c\fR, \fB\-S\fR or \fB\-E\fR.
+.TP
 .BR \-\-
 Stop parsing command line arguments. All arguments after this one will be considered file names
 and then arguments to the script.
@@ -260,8 +286,60 @@ the default location set at compile time. This should be a colon-separated list 
 
 .B JANET_PROFILE
 .RS
-Path to a profile file that the interpreter will load before entering the REPL. This profile file will
-not run for scripts, though. This behavior can be disabled with the -R option.
+For the REPL, a path to a Janet startup profile loaded before entering it;
+\fB\-R\fR disables that startup-file load. For a script invocation,
+any nonempty value explicitly enables the VM type collector instead of the
+implicit diagnostic dump. Thus \fBJANET_PROFILE=1\fR is a collector switch
+for scripts, not the path to an output dump. The two uses share this variable.
+.RE
+
+.B JANET_PROFILE_OUT
+.RS
+Path for an explicit interpreter type-profile dump. Use with
+\fBJANET_PROFILE=1\fR when collecting a script; it is not the AOT cache key.
+.RE
+
+.B JANET_NO_PROFILE
+.RS
+When set, disables automatic development collection for ordinary interpreter
+scripts and generated AOT executables. It does not remove explicit profiling
+APIs or replace \fB\-\-no-auto-pgo\fR, which controls build-time cache use.
+.RE
+
+.B JANET_AUTO_PGO
+.RS
+When set on a development AOT executable, forces collection of another
+private diagnostic run sidecar instead of replacing the base cache profile.
+These sidecars are not automatically gateable without a replayable workload.
+.RE
+
+.B JANET_AUTO_PGO_MIN_CALLS
+.RS
+Minimum VM calls needed for an automatic AOT dump (default 10000). An
+explicit \fBJANET_PROFILE_OUT\fR dump retains its existing policy.
+.RE
+
+.B XDG_CACHE_HOME
+.RS
+Overrides the cache root; automatic profiles are under
+\fI$XDG_CACHE_HOME/janet/pgo\fR. When unset, use
+\fI$HOME/.cache/janet/pgo\fR where available. Ordinary interpreter runs
+store separate, source-bound diagnostics under the \fIinterpreter\fR
+subdirectory; these cannot seed release builds without explicit replayable
+\fB\-\-pgo\fR collection and parity.
+.RE
+
+.B JANET_TOOLS
+.RS
+Optional directory containing the AOT driver tools (including
+\fIcallgraph.janet\fR and \fImkimage.janet\fR) when they cannot be located
+beside the bender executable.
+.RE
+
+.B JANET_PROFILE_STATS
+.RS
+When set, print VM profile-cache hits and misses on profiler stop/deinit.
+This is a diagnostic switch, not an optimization setting.
 .RE
 
 .B JANET_HASHSEED

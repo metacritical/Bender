@@ -86,7 +86,11 @@ Build `tools/janet-aot` (C, linked against `build/libjanet.a` at first):
 `janet-aot app.janet [-o app] [-c] [-S] [-E args...]`.
 Landed as `bender --aot` (in-binary driver, boot.janet; `tools/janet-aot.sh`
 is a thin shim): same grammar plus `[--native] [--externs F] [--include F]
-[-x F] [--ldflags S] [--pgo ARGS] [--pgo-stdin F]`.
+[-x F] [--ldflags S] [--pgo ARGS] [--pgo-stdin F] [--no-auto-pgo]
+[--release] [-Oz] [--upx]`. `--release` requires a replayable verified
+native profile; `-Oz` stages a stripped size build; `--upx` is an opt-in,
+parity-checked Linux ELF packaging stage. See `aot-notes.md` for the
+collection and cache contract.
 
 1. Parse with `parse.c`, macroexpand with the *host* `janet` semantics
    (macros run in a fiber at compile time, as today — `compile.c`).
