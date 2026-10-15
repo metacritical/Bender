@@ -2440,7 +2440,9 @@ void janet_loop(void) {
 #else
 
 static void janet_ev_setup_selfpipe(void) {
-    if (janet_make_pipe(janet_vm.selfpipe, 1)) {
+    /* Both ends must be nonblocking: cross-VM posts hold the home-lifetime
+     * lock until the write finishes, and a full pipe must not pin shutdown. */
+    if (janet_make_pipe(janet_vm.selfpipe, 0)) {
         JANET_EXIT("failed to initialize self pipe in event loop");
     }
 }
@@ -3084,7 +3086,8 @@ void janet_ev_post_event(JanetVM *vm, JanetCallback cb, JanetEVGenericMessage ms
     event.msg = msg;
     event.cb = cb;
     int fd = vm->selfpipe[1];
-    /* handle a bit of back pressure before giving up. */
+    /* Writes are nonblocking; bounded retries avoid pinning a VM-lifetime
+     * lock indefinitely when another VM is leaving its event loop. */
     int tries = 20;
     while (tries > 0) {
         int status;
