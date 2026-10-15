@@ -34,6 +34,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#if defined(_WIN32)
+#include <windows.h>
+#else
+#include <unistd.h>
+#endif
 
 /* Virtual registers
  *
@@ -2631,9 +2636,23 @@ void janet_deinit(void) {
                     if (len > 8 && !strcmp(pout + len - 8, ".pending")) {
                         char *completed = malloc(len - 8 + sizeof(".jdn"));
                         if (completed) {
-                            memcpy(completed, pout, len - 8);
-                            memcpy(completed + len - 8, ".jdn", sizeof(".jdn"));
-                            rename(pout, completed);
+                            const char *first = strstr(pout, ".jdn.first-");
+                            if (first && first < pout + len - 8) {
+                                size_t base_len = (size_t) (first - pout) + 4;
+                                memcpy(completed, pout, base_len);
+                                completed[base_len] = '\0';
+                            } else {
+                                memcpy(completed, pout, len - 8);
+                                memcpy(completed + len - 8, ".jdn", sizeof(".jdn"));
+                            }
+                            /* No replacement: a parallel first run or builder
+                             * may already have installed the base profile. */
+#if defined(_WIN32)
+                            if (!MoveFileA(pout, completed)) remove(pout);
+#else
+                            (void) link(pout, completed);
+                            unlink(pout);
+#endif
                             free(completed);
                         }
                     }

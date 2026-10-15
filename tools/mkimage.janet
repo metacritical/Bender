@@ -312,13 +312,14 @@
           }
           if (path[0] != '\0' && (force || !JANET_AOT_PROBE(path))) {
               janet_aot_mkdirp(dir);
-              if (force && JANET_AOT_PROBE(path)) {
+              { /* Reserve a private destination for every collector. */
                    char sidecar[4096];
                    unsigned attempt;
                    for (attempt = 0; attempt < 64; attempt++) {
                        int fd;
-                       snprintf(sidecar, sizeof(sidecar), "%s.run-%ld-%u.pending",
-                                path, (long) getpid(), attempt);
+                       snprintf(sidecar, sizeof(sidecar), "%s.%s-%ld-%u.pending",
+                                path, JANET_AOT_PROBE(path) ? "run" : "first",
+                                 (long) getpid(), attempt);
                        fd = open(sidecar, O_WRONLY | O_CREAT | O_EXCL, 0600);
                        if (fd < 0) continue;
                        close(fd);
@@ -329,7 +330,7 @@
                }
                if (path[0] != 0) {
                    janet_profile_start();
-                    janet_profile_auto_output(path);
+                   janet_profile_auto_output(path);
                }
           }
       }

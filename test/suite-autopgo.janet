@@ -60,6 +60,17 @@
 (assert (not (nil? (os/stat (string tmpcache "/janet/pgo/apg-bin.jdn"))))
         "first run collects to cache")
 
+# Parallel first runs publish exactly one base without truncating it.
+(os/execute ["/bin/sh" "-c" (string "rm -f " tmpcache "/janet/pgo/apg-bin.jdn")] :p)
+(assert (= 0 (os/execute ["/bin/sh" "-c"
+  (string mincalls "/tmp/apg-bin >/dev/null 2>&1 & "
+          mincalls "/tmp/apg-bin >/dev/null 2>&1 & wait")] :p))
+  "parallel first runs complete")
+(def concurrent-cache (string tmpcache "/janet/pgo/apg-bin.jdn"))
+(assert (not (nil? (os/stat concurrent-cache))) "parallel runs publish base")
+(assert (> (length (parse (slurp concurrent-cache))) 0)
+        "parallel publication remains parseable")
+
 # 2. second run does not recollect (profile exists)
 (def m1 (get (os/stat (string tmpcache "/janet/pgo/apg-bin.jdn")) :modified))
 (os/execute ["/bin/sh" "-c" "sleep 1"] :p)
