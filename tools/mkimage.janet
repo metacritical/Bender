@@ -202,7 +202,7 @@
                               ", image bytes: " (length image)
                               ", registry names: " (length regnames) " */\n"))
 (buffer/push-string out "#include <janet.h>\n#include <stdio.h>\n#include <stdlib.h>\n#include <string.h>\n")
-(buffer/push-string out "void janet_profile_start(void);\n")
+(buffer/push-string out "void janet_profile_start(void);\nvoid janet_profile_auto_output(const char *path);\n")
 (buffer/push-string out "#ifndef JANET_NO_PGO\n")
 (buffer/push-string out
   ```
@@ -226,15 +226,6 @@
   #define JANET_AOT_MKDIR(d) mkdir(d, 0755)
   #define JANET_AOT_PROBE(p) (access(p, F_OK) == 0)
   #endif
-  static void janet_aot_setenv(const char *k, const char *v) {
-      /* set-if-unset (explicit user env always wins) */
-      if (getenv(k)) return;
-  #if defined(_WIN32)
-      { char buf[8192]; snprintf(buf, sizeof(buf), "%s=%s", k, v); _putenv(buf); }
-  #else
-      setenv(k, v, 0);
-  #endif
-  }
   static void janet_aot_mkdirp(char *d) {
       /* best-effort recursive mkdir; failures are non-fatal */
       char *p = d;
@@ -290,11 +281,8 @@
   int main(int argc, char **argv) {
       janet_init();
 #ifndef JANET_NO_PGO
-      /* Keep auto-PGO's output private until VM teardown: an embedded
-       * program can launch an interpreter that must not inherit a dump
-       * destination without inheriting this VM's active profile table. */
-      char janet_aot_profile_path[4096] = {0};
-      int janet_aot_profile_active = 0;
+      /* The VM owns its auto-PGO output across both normal and os/exit
+       * teardown. No launcher-owned process environment is needed. */
       /* Auto-PGO collects the first qualifying run to the base cache.
        * JANET_AUTO_PGO=1 records further runs in unique sidecars,
        * merged fail-closed at the next native build. Never overwrite
@@ -341,10 +329,7 @@
                }
                if (path[0] != 0) {
                    janet_profile_start();
-                    janet_aot_profile_active = 1;
-                   if (!getenv("JANET_PROFILE_OUT"))
-                       snprintf(janet_aot_profile_path, sizeof(janet_aot_profile_path),
-                                "%s", path);
+                    janet_profile_auto_output(path);
                }
           }
       }
@@ -524,30 +509,7 @@
       } else {
           janet_gcunroot(top);
       }
-#ifndef JANET_NO_PGO
-      /* janet_deinit reads these only after the embedded program and its
-       * subprocesses have finished. Explicit caller-provided env is left
-       * unchanged and retains its existing behavior. */
-      if (janet_aot_profile_active) {
-          if (janet_aot_profile_path[0] != '\0')
-              janet_aot_setenv("JANET_PROFILE_OUT", janet_aot_profile_path);
-          janet_aot_setenv("JANET_AUTO_PGO_ACTIVE", "1");
-      }
-#endif
       janet_deinit();
-#ifndef JANET_NO_PGO
-      /* Only completed dumps become visible to cache readers. */
-      if (janet_aot_profile_path[0] != 0) {
-          size_t len = strlen(janet_aot_profile_path);
-          if (len > 8 && strcmp(janet_aot_profile_path + len - 8, ".pending") == 0) {
-              char completed[4096];
-              snprintf(completed, sizeof(completed), "%.*s.jdn",
-                       (int) (len - 8), janet_aot_profile_path);
-              if (JANET_AOT_PROBE(janet_aot_profile_path))
-                  rename(janet_aot_profile_path, completed);
-          }
-      }
-#endif
       return status;
   }
   ```

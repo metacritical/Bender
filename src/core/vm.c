@@ -31,6 +31,9 @@
 #endif
 
 #include <math.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
 /* Virtual registers
  *
@@ -2586,22 +2589,33 @@ static int64_t janet_profile_total_calls(void) {
     return total;
 }
 
+/* AOT launchers keep their auto-PGO destination in this VM thread rather
+ * than process-wide env, so spawned interpreters cannot inherit it. */
+static JANET_THREAD_LOCAL char *janet_auto_profile_output;
+
+void janet_profile_auto_output(const char *path) {
+    char *copy = NULL;
+    if (path && *path) {
+        size_t len = strlen(path) + 1;
+        copy = malloc(len);
+        if (copy) memcpy(copy, path, len);
+    }
+    free(janet_auto_profile_output);
+    janet_auto_profile_output = copy;
+}
+
 /* Clear all memory associated with the VM */
 void janet_deinit(void) {
-    /* PGO auto-dump: JANET_PROFILE_OUT=path writes the type profile on
-     * every exit path (scripts ending in os/exit included), before any
-     * teardown. Explicit debug/profile-dump covers the rest.
-     * Auto-collected runs (JANET_AUTO_PGO_ACTIVE, set by AOT binaries
-     * on first runs) additionally require a minimum call count:
-     * trivial runs (--help, --version) must not clobber a useful
-     * cached profile with a near-empty one. Explicit dumps always
-     * write. Override the floor with JANET_AUTO_PGO_MIN_CALLS. */
+    /* The private AOT destination or explicit JANET_PROFILE_OUT dumps on
+     * every exit path, including os/exit, before VM teardown. Auto-PGO
+     * applies the minimum-call threshold; explicit output preserves its
+     * existing policy. Override the floor with JANET_AUTO_PGO_MIN_CALLS. */
     if (NULL != janet_vm.profile_table) {
-        const char *pout = getenv("JANET_PROFILE_OUT");
+        const char *pout = janet_auto_profile_output ? janet_auto_profile_output : getenv("JANET_PROFILE_OUT");
         janet_profile_maybe_stats();
         if (NULL != pout && '\0' != *pout) {
             int dump = 1;
-            if (NULL != getenv("JANET_AUTO_PGO_ACTIVE")) {
+            if (janet_auto_profile_output || NULL != getenv("JANET_AUTO_PGO_ACTIVE")) {
                 const char *minenv = getenv("JANET_AUTO_PGO_MIN_CALLS");
                 long mincalls = (NULL == minenv || '\0' == *minenv)
                     ? 10000L : strtol(minenv, NULL, 10);
@@ -2610,10 +2624,25 @@ void janet_deinit(void) {
             }
             if (dump) {
                 janet_profile_dump(pout);
+                /* A forced run first writes to an exclusively reserved
+                 * .pending sidecar. Publish only its completed dump. */
+                if (janet_auto_profile_output) {
+                    size_t len = strlen(pout);
+                    if (len > 8 && !strcmp(pout + len - 8, ".pending")) {
+                        char *completed = malloc(len - 8 + sizeof(".jdn"));
+                        if (completed) {
+                            memcpy(completed, pout, len - 8);
+                            memcpy(completed + len - 8, ".jdn", sizeof(".jdn"));
+                            rename(pout, completed);
+                            free(completed);
+                        }
+                    }
+                }
             }
             janet_vm.profile_table = NULL;
         }
     }
+    janet_profile_auto_output(NULL);
     janet_clear_memory();
     janet_symcache_deinit();
     janet_free(janet_vm.roots);

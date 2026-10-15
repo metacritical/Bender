@@ -331,6 +331,8 @@ extern JANET_THREAD_LOCAL JanetVM janet_vm;
 
 /* PGO type-profile collector (implemented in vm.c). */
 void janet_profile_start(void);
+/* VM-local AOT auto-PGO destination; never exported to child processes. */
+JANET_API void janet_profile_auto_output(const char *path);
 Janet janet_profile_stop(void);
 void janet_profile_reset(void);
 void janet_profile_dump(const char *path);
