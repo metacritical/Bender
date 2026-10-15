@@ -1210,6 +1210,8 @@ struct JanetAbstractHead {
      * them (BUG 2 density: worker T22 read a proc abstract freed by
      * main T0's registry purge). */
     void *home_vm;
+    /* Distinguishes a stopped VM from a later VM reusing its address. */
+    uint64_t home_vm_generation;
     /* Single-shot teardown guard (BUG 2 density double-deinit): the
      * abstract sweep path (janet_deinit_block) and the home-routed
      * teardown both want to run the gc hook; exactly one wins. */

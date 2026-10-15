@@ -353,6 +353,21 @@
   (assert (= :dead (fiber/status holder)) "final-result fiber completed"))
 ))
 
+# A stopped lane's VM must never receive a home-teardown post from a
+# later main-VM sweep. Retain foreign-homed channels across lane stop,
+# then drop them while collecting; repeat to exercise VM address reuse.
+((fn []
+  (repeat 8
+    (let [lane (procx/lane-spawn)
+          reply (ev/thread-chan 1)]
+      (procx/spawn-on lane (fn [] (ev/give reply (ev/thread-chan 1))))
+      (let [foreign (ev/take reply)]
+        (assert foreign "lane-homed channel delivered")
+        (procx/lane-stop lane))
+      (gccollect)
+      (gccollect))))
+ )
+
 # 26. P2.3 cross-lane monitors: remote crash/clean observed on an
 # owner channel; unknown serials answer :noproc.
 ((fn []

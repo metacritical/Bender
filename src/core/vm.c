@@ -2560,6 +2560,7 @@ int janet_init(void) {
 
 #ifdef JANET_EV
     janet_ev_init();
+    janet_abstract_home_register();
 #endif
 #ifdef JANET_NET
     janet_net_init();
@@ -2617,6 +2618,10 @@ void janet_profile_auto_output(const char *path) {
 
 /* Clear all memory associated with the VM */
 void janet_deinit(void) {
+#ifdef JANET_EV
+    /* Publish shutdown before profile flushing or GC can stall the loop. */
+    janet_abstract_home_unregister();
+#endif
     /* The private AOT destination or explicit JANET_PROFILE_OUT dumps on
      * every exit path, including os/exit, before VM teardown. Auto-PGO
      * applies the minimum-call threshold; explicit output preserves its

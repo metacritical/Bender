@@ -239,6 +239,8 @@ struct JanetVM {
     /* Set during janet_clear_memory: threaded teardowns must run
      * inline (posting to the loop would block on a dead self-pipe). */
     int gc_teardown_inline;
+    /* Identity in the process-wide threaded-abstract home-VM registry. */
+    uint64_t abstract_home_generation;
     /* Lane-VM marker (proc.c lane thread body). Lane-homed threaded
      * abstracts are pinned until lane stop instead of refcount-freed:
      * pid values circulate in queues/messages with no claims, and a
@@ -350,6 +352,8 @@ void janet_net_deinit(void);
 #endif
 
 #ifdef JANET_EV
+void janet_abstract_home_register(void);
+void janet_abstract_home_unregister(void);
 void janet_ev_init(void);
 void janet_ev_deinit(void);
 #endif

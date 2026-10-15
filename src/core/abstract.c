@@ -56,7 +56,54 @@ void *janet_abstract(const JanetAbstractType *atype, size_t size) {
 
 /*
  * Threaded abstracts
+ *
+ * The registry lock covers both VM lifetime transitions and posting to a
+ * live home VM. Never inspect a home pointer from an abstract without first
+ * finding its address AND generation in this registry under the lock.
  */
+#ifdef JANET_WINDOWS
+static SRWLOCK abstract_home_lock = SRWLOCK_INIT;
+static void abstract_home_take(void) { AcquireSRWLockExclusive(&abstract_home_lock); }
+static void abstract_home_drop(void) { ReleaseSRWLockExclusive(&abstract_home_lock); }
+#else
+static pthread_mutex_t abstract_home_lock = PTHREAD_MUTEX_INITIALIZER;
+static void abstract_home_take(void) { pthread_mutex_lock(&abstract_home_lock); }
+static void abstract_home_drop(void) { pthread_mutex_unlock(&abstract_home_lock); }
+#endif
+typedef struct JanetAbstractHomeEntry {
+    JanetVM *vm;
+    uint64_t generation;
+    struct JanetAbstractHomeEntry *next;
+} JanetAbstractHomeEntry;
+static JanetAbstractHomeEntry *abstract_homes;
+static uint64_t abstract_home_next_generation;
+
+void janet_abstract_home_register(void) {
+    JanetAbstractHomeEntry *entry = malloc(sizeof(*entry));
+    if (NULL == entry) JANET_OUT_OF_MEMORY;
+    abstract_home_take();
+    janet_vm.abstract_home_generation = ++abstract_home_next_generation;
+    entry->vm = &janet_vm;
+    entry->generation = janet_vm.abstract_home_generation;
+    entry->next = abstract_homes;
+    abstract_homes = entry;
+    abstract_home_drop();
+}
+
+void janet_abstract_home_unregister(void) {
+    JanetAbstractHomeEntry **link;
+    abstract_home_take();
+    for (link = &abstract_homes; *link; link = &(*link)->next) {
+        if ((*link)->vm == &janet_vm &&
+                (*link)->generation == janet_vm.abstract_home_generation) {
+            JanetAbstractHomeEntry *removed = *link;
+            *link = removed->next;
+            free(removed);
+            break;
+        }
+    }
+    abstract_home_drop();
+}
 
 void *janet_abstract_begin_threaded(const JanetAbstractType *atype, size_t size) {
     JanetAbstractHead *header = janet_malloc(sizeof(JanetAbstractHead) + size);
@@ -70,6 +117,7 @@ void *janet_abstract_begin_threaded(const JanetAbstractType *atype, size_t size)
     header->size = size;
     header->type = atype;
     header->home_vm = (void *) &janet_vm;
+    header->home_vm_generation = janet_vm.abstract_home_generation;
     header->teardown_started = 0;
     header->exported = 0;
     /* No complete home major has disproved a Janet-visible hold yet.
@@ -305,7 +353,8 @@ int32_t janet_abstract_decref_maybe_free(void *abst) {
              * until process exit instead. Normal, live-VM claims still
              * route home for prompt finalization. */
             if (janet_vm.gc_teardown_inline &&
-                    NULL != head->home_vm && head->home_vm != (void *) &janet_vm) {
+                    (head->home_vm != (void *) &janet_vm ||
+                     head->home_vm_generation != janet_vm.abstract_home_generation)) {
                 return result;
             }
             if (janet_vm.gc_teardown_inline) {
@@ -323,12 +372,31 @@ int32_t janet_abstract_decref_maybe_free(void *abst) {
                 janet_gc_release((JanetGCObject *) head);
                 return result;
             }
-            JanetVM *target = (NULL != head->home_vm)
-                ? (JanetVM *) head->home_vm : &janet_vm;
+            /* A home may enter teardown (or leave and have its TLS VM
+             * address reused) between this foreign sweep and the post.
+             * Resolve identity under the lifetime lock; hold it through
+             * the write so shutdown cannot close the pipe mid-post. A
+             * stopped home cannot safely finalize foreign-held values:
+             * retain this last block until process exit instead. */
+            abstract_home_take();
+            JanetAbstractHomeEntry *entry = abstract_homes;
+            while (entry && (entry->vm != head->home_vm ||
+                    entry->generation != head->home_vm_generation))
+                entry = entry->next;
+            if (NULL == entry) {
+                abstract_home_drop();
+                return result;
+            }
+            JanetVM *target = entry->vm;
+            if (target->gc_teardown_inline) {
+                abstract_home_drop();
+                return result;
+            }
             JanetEVGenericMessage msg;
             memset(&msg, 0, sizeof(msg));
             msg.argp = abst;
             janet_ev_post_event(target, janet_abstract_home_teardown_cb, msg);
+            abstract_home_drop();
             return result;
         }
         if (head->type->gc) {
