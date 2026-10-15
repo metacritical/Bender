@@ -157,6 +157,46 @@
 (assert (string/find "stale" (string (slurp "/tmp/apg-stale-log.txt")))
         "stale sidecar diagnostic")
 
+# Explicit profiles accumulate only for the identical replayable workload.
+(def trusted-before (string (slurp cache-profile)))
+(assert (= 0 (os/execute ["/bin/sh" "-c"
+  "./build/bender --aot /tmp/apg-demo.janet --native --pgo \"\" -o /tmp/apg-pgo >/tmp/apg-repeat-log.txt 2>&1"] :p))
+  "same-workload explicit collection succeeds")
+(assert (not (= trusted-before (string (slurp cache-profile))))
+        "same-workload evidence accumulates")
+(def repeat-profile (string (slurp cache-profile)))
+(assert (= 0 (os/execute ["/bin/sh" "-c"
+  "./build/bender --aot /tmp/apg-demo.janet --native --pgo \"different\" -o /tmp/apg-pgo >/tmp/apg-different-log.txt 2>&1"] :p))
+  "different-workload explicit collection succeeds")
+(def replaced-profile (string (slurp cache-profile)))
+(assert (not (= repeat-profile replaced-profile)) "different workload starts a new profile")
+(assert (= "different" (string (slurp (string tmpcache "/janet/pgo/apg-pgo.workload"))))
+        "new workload recorded")
+(assert (= "different" (get (parse (slurp (string tmpcache "/janet/pgo/apg-pgo.meta"))) :args))
+        "new workload metadata recorded")
+
+# Stdin is captured before collection and replayed immutably. Changing
+# the caller's file later must not alter the cached oracle.
+(spit "/tmp/apg-input.txt" "alpha\n")
+(spit "/tmp/apg-stdin.janet" "(print (file/read stdin :all))\n")
+(assert (= 0 (os/execute ["/bin/sh" "-c"
+  "./build/bender --aot /tmp/apg-stdin.janet --native --pgo \"\" --pgo-stdin /tmp/apg-input.txt -o /tmp/apg-stdin >/tmp/apg-stdin-build.txt 2>&1"] :p))
+  "stdin PGO build succeeds")
+(def input-cache (string tmpcache "/janet/pgo/apg-stdin.input"))
+(assert (= "alpha\n" (string (slurp input-cache))) "stdin captured in cache")
+(spit "/tmp/apg-input.txt" "beta\n")
+(assert (= 0 (os/execute ["/bin/sh" "-c"
+  "./build/bender --aot /tmp/apg-stdin.janet --native -o /tmp/apg-stdin >/tmp/apg-stdin-auto.txt 2>&1"] :p))
+  "auto rebuild with changed caller stdin succeeds")
+(assert (string/find "parity ok" (string (slurp "/tmp/apg-stdin-auto.txt")))
+        "cached stdin snapshot gates automatically")
+(os/rm input-cache)
+(assert (= 0 (os/execute ["/bin/sh" "-c"
+  "./build/bender --aot /tmp/apg-stdin.janet --native -o /tmp/apg-stdin >/tmp/apg-stdin-missing.txt 2>&1"] :p))
+  "missing snapshot falls back")
+(assert (string/find "no replayable workload" (string (slurp "/tmp/apg-stdin-missing.txt")))
+        "missing snapshot rejects cached profile")
+
 # A held per-key transaction lock cannot authorize stale cached evidence.
 (def lockdir (string tmpcache "/janet/pgo/apg-pgo.lock"))
 (assert (os/mkdir lockdir) "test acquires cache lock")
