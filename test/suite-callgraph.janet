@@ -478,6 +478,8 @@
         "wrapper telemetry reports stable numeric kernel identity")
 (assert (string/find "atexit(native_telemetry_report_all)" telemetry-c)
         "telemetry snapshots through atexit")
+(assert (string/find "if (sizeof(regs)/sizeof(regs[0]) > 1)" telemetry-c)
+        "zero-wrapper native init does not pollute subprocess output")
 (assert (= 0 (os/execute ["cc" "-O2" "-w" "-fwrapv"
   "-DJANET_NATIVE_TELEMETRY=0" "-Isrc/include" "-Isrc/conf"
   "/tmp/cg-ls/native.c" "build/libjanet.a" "-lm" "-lpthread"
