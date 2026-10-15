@@ -654,9 +654,10 @@
 
 # a45509d28
 (def a @[])
-(eachk x [:a :b :c :d]
-  (array/push a x))
-(assert (deep= (range 4) a) "eachk 1")
+((fn [a]
+  (eachk x [:a :b :c :d]
+    (array/push a x))
+  (assert (deep= (range 4) a) "eachk 1")) a)
 
 # issue 609 - 1fcaffe
 (with-dyns [:err @""]
@@ -665,6 +666,7 @@
 
 # Prompts and Labels
 # 59d288c
+((fn []
 (assert (= 10 (label a (for i 0 10 (if (= i 5) (return a 10))))) "label 1")
 
 (defn recur
@@ -692,6 +694,7 @@
     ([err] (return :a err))))
 
 (assert (= 10 (prompt :a (for i 0 10 (inner-loop2 i)))) "prompt 3")
+))
 
 # chr
 # issue 304 - 77343e02e
@@ -764,7 +767,7 @@
         "has-value? corner key (false) 3")
 
 # has-key?
-(do
+((fn []
   (var test-has-key-auto 0)
   (defn test-has-key [col key expected &keys {:name name}]
     ``Test that has-key has the outcome `expected`, and that if
@@ -809,7 +812,7 @@
   (test-has-key @{8 false} 8 true :name
                 "has-key? corner value (false) 2")
   (test-has-key @{8 false} 7 false :name
-                "has-key? corner value (false) 3"))
+                "has-key? corner value (false) 3")))
 
 # Regression
 # issue #463 - 7e7498350
@@ -942,12 +945,13 @@
         "no \\r in doc strings")
 
 # cff718f37
-(var counter 0)
-(def thunk (delay (++ counter)))
-(assert (= (thunk) 1) "delay 1")
-(assert (= counter 1) "delay 2")
-(assert (= (thunk) 1) "delay 3")
-(assert (= counter 1) "delay 4")
+((fn []
+  (var counter 0)
+  (def thunk (delay (++ counter)))
+  (assert (= (thunk) 1) "delay 1")
+  (assert (= counter 1) "delay 2")
+  (assert (= (thunk) 1) "delay 3")
+  (assert (= counter 1) "delay 4")))
 
 # maclintf
 (def env (table/clone (curenv)))
@@ -968,6 +972,7 @@
         "maclintf 2")
 
 # Bad bytecode wrt. using result from break expression
+((fn []
 (defn bytecode-roundtrip
   [f]
   (assert-no-error "bytecode round-trip" (unmarshal (marshal f make-image-dict))))
@@ -992,6 +997,7 @@
   (def foo (fn [one two] one))
   (foo 100 200))
 (bytecode-roundtrip case-5)
+))
 
 # Debug bytecode of these functions
 # (pp (disasm case-1))
