@@ -5579,6 +5579,21 @@
         (string home "/.cache/janet/pgo")
         nil))))
 
+# Interpreter collection is diagnostic unless a build later records an
+# explicit replayable workload. Keep it in a separate namespace from the
+# gateable AOT cache (which is keyed by output basename).
+(defn- development-profile-dir []
+  (when-let [cache (aot-cache-dir)]
+    (string cache "/interpreter")))
+
+(defn- development-profile-path [source]
+  (try
+    (do (def canonical (os/realpath source))
+      (def token (string (hash canonical)))
+      (string (development-profile-dir) "/source-" token
+              ".jdn.run-" (os/getpid) ".jdn"))
+    ([_] nil)))
+
 (defn- aot-cache-key [out]
   # basename sanitized exactly like the binary's janet_aot_key:
   # [A-Za-z0-9._-] kept, rest '_', 63 chars max, never empty.
@@ -6212,15 +6227,24 @@
             (if compile-only
               (flycheck arg :exit exit-on-error :env env)
               (do
-                # PGO type-profile collector (Phase 1): JANET_PROFILE=1
-                # records observed types for the whole run; dump with
-                # JANET_PROFILE_OUT=path (or debug/profile-dump).
-                (when (getenv-alias "JANET_PROFILE")
+                # Implicit interpreter runs are diagnostic, never gateable.
+                # Explicit JANET_PROFILE_OUT keeps its legacy dump point.
+                (def explicit-profile (getenv-alias "JANET_PROFILE"))
+                (def explicit-output (getenv-alias "JANET_PROFILE_OUT"))
+                (var implicit-output nil)
+                (when (and (not (getenv-alias "JANET_NO_PROFILE"))
+                           (not explicit-profile) (not explicit-output))
+                  (set implicit-output (development-profile-path arg))
+                  (when implicit-output (aot-mkdir-p (development-profile-dir)))
+                  (when (and implicit-output (os/stat implicit-output))
+                    (set implicit-output nil)))
+                (when (or explicit-profile implicit-output)
                   (debug/profile-start))
                 (dofile arg :exit exit-on-error :env env)
-                (when-let [pout (getenv-alias "JANET_PROFILE_OUT")]
-                  (debug/profile-dump pout))
-                (run-main env subargs)))))
+                (when explicit-output (debug/profile-dump explicit-output))
+                (run-main env subargs)
+                (when implicit-output
+                  (try (debug/profile-dump implicit-output) ([_] nil)))))))
         (set i lenargs))))
 
   (if (or should-repl no-file)

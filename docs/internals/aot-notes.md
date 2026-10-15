@@ -338,7 +338,16 @@ Manual `--pgo` (collect with workload, widen, gate, install) works
 but needs expert plumbing per build. The automatic loop closes it with no
 manual intervention after a one-time workload:
 
-- **Runs collect on demand.** AOT binaries (generated `main`) collect a
+- **Interpreter development runs collect by default.** `bender app.janet`
+  writes a per-run diagnostic dump under
+  `$XDG_CACHE_HOME/janet/pgo/interpreter/` (or `~/.cache/...`), keyed by
+  canonical source path and PID. `JANET_NO_PROFILE=1` disables implicit
+  collection. Explicit `JANET_PROFILE=1` / `JANET_PROFILE_OUT=path` keep
+  their existing behavior. These dumps are not promoted into the gateable
+  AOT cache: they lack an immutable, replayable workload identity and are
+  not yet merged across interpreter runs. Failed cache writes never change
+  application output.
+- **AOT binary runs collect on demand.** AOT binaries (generated `main`) collect a
   type profile into the standard cache when no profile exists yet;
   `JANET_AUTO_PGO=1` forces additional runs into unique sidecars rather
   than replacing cached evidence. Never when `JANET_NO_PROFILE` is set;
