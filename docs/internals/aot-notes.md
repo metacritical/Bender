@@ -353,14 +353,17 @@ manual intervention after a one-time workload:
   key = sanitized binary basename (same algorithm in C and Janet).
   Forced binary runs claim `<key>.jdn.run-<pid>-<attempt>.pending`
   and publish `.jdn` sidecars only after the dump finishes.
-  The next native build merges these and successful explicit `--pgo`
-  evidence into the cache: calls add, observed types union, ranges widen,
-  and per-type provenance survives. A failed merge retains prior evidence
-  and sidecars; conflicting types never become a PGO-unanimous seed.
-  First runs store the profile alone; explicit `--pgo` also stores workload.
+  Binary sidecars have no replayable workload identity, so remain diagnostic:
+  they are **not** merged into a gateable cache. Successful explicit `--pgo`
+  creates a versioned workload record and immutable stdin snapshot. Repeated
+  explicit runs with identical arguments and stdin bytes accumulate calls,
+  union types, and widen ranges; changed workloads start fresh. Legacy pairs
+  without that record are ineligible for auto-application. The cache transaction
+  is serialized; a busy cache falls back to unoptimized rather than reading
+  partially published evidence.
 - **Plain builds auto-apply.** `bender --aot app --native -o app`
   (no flags) uses a fresh profile (newer than all sources) +
-  recorded workload automatically: fresh oracle run, seeded build,
+  recorded workload and captured stdin automatically: fresh oracle run, seeded build,
   same parity gate. Gate failure falls back to unoptimized with a
   warning (never breaks the build); `--pgo` still dies on mismatch.
   `--no-auto-pgo` opts out; missing/stale pieces print what to do.
