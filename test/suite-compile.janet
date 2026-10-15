@@ -116,12 +116,22 @@
 (defn fnamed5 [&opt _z &named a b c] [a b c])
 (defn g [x &opt y &named z] [x y z])
 
+# Dynamic compilation resolves environment bindings, not the lexical locals
+# of its caller. AOT compiles the unit as one thunk, making the definitions
+# above locals rather than entries in (curenv). Give both targets the same
+# explicit compiler fixtures, including their function metadata for linting.
+(def compile-env (make-env))
+(eachp [name value] @{'fnamed fnamed 'fkeys fkeys 'fnamed2 fnamed2
+                      'fkeys2 fkeys2 'fnamed3 fnamed3 'fnamed4 fnamed4
+                      'fnamed5 fnamed5 'g g}
+  (put compile-env name @{:value value}))
+
 (defn check-good-compile
   [code msg]
   (each opt [0 1 2 3]
     (setdyn *optimize* opt)
     (def lints @[])
-    (def result4 (compile code (curenv) "suite-compile.janet" lints))
+    (def result4 (compile code compile-env "suite-compile.janet" lints))
     (assert (and (function? result4) (empty? lints)) (string msg " optimization " opt))))
 
 (defn check-bad-compile
@@ -129,7 +139,7 @@
   (each opt [0 1 2 3]
     (setdyn *optimize* opt)
     (def lints @[])
-    (def result4 (compile code (curenv) "suite-compile.janet" lints))
+    (def result4 (compile code compile-env "suite-compile.janet" lints))
     (assert (not (and (function? result4) (empty? lints))) (string msg " optimization " opt))))
 
 (defn check-lint-compile
@@ -137,7 +147,7 @@
   (each opt [0 1 2 3]
     (setdyn *optimize* opt)
     (def lints @[])
-    (def result4 (compile code (curenv) "suite-compile.janet" lints))
+    (def result4 (compile code compile-env "suite-compile.janet" lints))
     (assert (and (function? result4) (next lints)) (string msg " optimization " opt))))
 
 (check-good-compile '(fnamed) "named no args")
@@ -166,6 +176,7 @@
 
 # Variable shadowing linting
 (def outer1 "a")
+(put compile-env 'outer1 @{:value outer1})
 (check-lint-compile '(def outer1 "b") "shadow global-to-global")
 (check-lint-compile '(let [outer1 "b"] outer1) "shadow local-to-global")
 (check-lint-compile '(do (def x "b") (def x "c")) "shadow local-to-local")
@@ -174,6 +185,7 @@
 
 # Fuzz issue - odd keys
 (defn f [x &keys ks] [x ks])
+(put compile-env 'f @{:value f})
 (check-lint-compile
   '(f 1
       = = = = = = = = = =
