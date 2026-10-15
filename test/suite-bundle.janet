@@ -82,9 +82,10 @@
 (assert (= 3 (length (bundle/list))) "bundles are listed correctly 3")
 (assert (= 3 (length (bundle/topolist))) "bundles are listed correctly 4")
 
-# Check that we can import the main dependency
-(import mymod)
-(assert (= 288 (mymod/myfn 12)) "using sample-bundle")
+# Load at runtime: this module only exists after the installs above. AOT's
+# import prepass cannot resolve it before the fixture has run.
+(def mymod (require "mymod"))
+(assert (= 288 ((get-in mymod ['myfn :value]) 12)) "using sample-bundle")
 
 # Manual uninstall of dep1 and dep2 shouldn't work either since that would break dependencies
 (assert-error "cannot uninstall sample-dep1, breaks dependent bundles @[\"sample-bundle\"]"
@@ -93,8 +94,9 @@
 # Check bundle file aliases
 (assert-no-error "sample-bundle-aliases install" (bundle/install "./examples/sample-bundle-aliases"))
 (assert (= 4 (length (bundle/list))) "bundles are listed correctly 5")
-(assert-no-error "import aliases" (import aliases-mod))
-(assert (deep= (range 12) (aliases-mod/fun 12)) "using sample-bundle-aliases")
+(var aliases-mod nil)
+(assert-no-error "import aliases" (set aliases-mod (require "aliases-mod")))
+(assert (deep= (range 12) ((get-in aliases-mod ['fun :value]) 12)) "using sample-bundle-aliases")
 (assert-no-error "aliases uninstall" (bundle/uninstall "sample-bundle-aliases"))
 
 # Now re-install sample-bundle as auto-remove
