@@ -1,0 +1,40 @@
+# Release builds require replayable PGO evidence, strict parity, and no
+# automatic collection in the final executable.
+(import ./helper :prefix "" :exit true)
+(start-suite)
+
+(def root "/tmp/janet-release-suite")
+(os/execute ["/bin/rm" "-rf" root] :p)
+(os/mkdir root)
+(def cache (string root "/cache"))
+(def source (string root "/app.janet"))
+(def binary (string root "/app"))
+(spit source "(defn hot [x] (+ x 1))\n(print (hot 41))\n")
+(def env (merge @{} (os/environ) {"XDG_CACHE_HOME" cache
+                                    "JANET_NO_PROFILE" "1"}))
+(defn build [opts]
+  (os/execute ["./build/bender" "--aot" source ;opts "-o" binary] :e env))
+(assert (not= 0 (build ["--release"])) "release needs native build")
+(assert (not= 0 (build ["--native" "--release" "--pgo" ""]))
+        "release refuses simultaneous collection")
+(assert (not= 0 (build ["--native" "--release"]))
+        "release refuses missing replayable evidence")
+(assert (nil? (os/stat binary)) "missing evidence installs no binary")
+(assert (= 0 (build ["--native" "--pgo" ""]))
+        "explicit training build establishes workload")
+(assert (= 0 (build ["--native" "--release"]))
+        "trained release binary passes parity")
+(def prof (string cache "/janet/pgo/app.jdn"))
+(def before (string (slurp prof)))
+(def execenv (merge @{} env {"JANET_NO_PROFILE" ""
+                                "JANET_AUTO_PGO" "1"
+                                "JANET_AUTO_PGO_MIN_CALLS" "0"}))
+(assert (= 0 (os/execute [binary] :e execenv)) "release binary runs")
+(assert (= before (string (slurp prof))) "release run does not mutate cache")
+(def sidecars (filter (fn [name] (string/has-prefix? "app.jdn.run-" name))
+                      (os/dir (string cache "/janet/pgo"))))
+(assert (= 0 (length sidecars)) "release binary has no auto sidecars")
+(spit source "(defn hot [x] (+ x 1))\n(print (hot 42))\n")
+(assert (not= 0 (build ["--native" "--release"]))
+        "source change cannot reuse stale release evidence")
+(end-suite)

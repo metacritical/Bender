@@ -5735,6 +5735,7 @@
   (var ldflags "")
   (var native false)
   (var size-opt false)
+  (var release false)
   (var only-c false)
   (var print-c false)
   (var run-mode false)
@@ -5755,6 +5756,7 @@
                      (while (< i n) (array/push appargs (in aotargs i)) (++ i)))
       (= a "--native") (do (set native true) (++ i))
       (= a "-Oz") (do (set size-opt true) (++ i))
+      (= a "--release") (do (set release true) (++ i))
       (= a "--externs") (do (set externs (aot-next aotargs i "--externs")) (+= i 2))
       (= a "--include") (do (array/push includes (aot-next aotargs i "--include")) (+= i 2))
       (= a "--pgo") (do (set pgo true) (set pgo-args (aot-next aotargs i "--pgo")) (+= i 2))
@@ -5766,9 +5768,13 @@
       (do (when (not (empty? src)) (aot-die "one input only"))
           (set src a) (++ i))))
   (when (empty? src)
-    (aot-die "usage: bender --aot app.janet [-o app] [-c] [-S] [-E args...] [--native] [-Oz] [--externs FILE] [--include FILE] [-x FILE] [--ldflags STR] [--pgo ARGS] [--pgo-stdin FILE] [--no-auto-pgo]"))
+    (aot-die "usage: bender --aot app.janet [-o app] [-c] [-S] [-E args...] [--native] [-Oz] [--release] [--externs FILE] [--include FILE] [-x FILE] [--ldflags STR] [--pgo ARGS] [--pgo-stdin FILE] [--no-auto-pgo]"))
   (when (and size-opt (or only-c print-c run-mode))
     (aot-die "-Oz needs a real binary build (no -c/-S/-E)"))
+  (when release
+    (unless native (aot-die "--release requires --native"))
+    (when (or pgo no-auto-pgo only-c print-c run-mode)
+      (aot-die "--release requires existing verified PGO evidence; incompatible with --pgo/--no-auto-pgo/-c/-S/-E")))
   (when pgo
     (unless native (aot-die "--pgo needs --native (profiling seeds kernel shaping)"))
     (when (or only-c print-c run-mode)
@@ -5804,6 +5810,7 @@
       (unless (= 0 (os/execute ["strip" (if (= (os/which) :macos) "-x" "--strip-debug") path] :p))
         (aot-die (string "could not strip size build " path) 1))
       (eprint "bender --aot: -Oz binary " path " " (os/stat path :size) " bytes")))
+  (def release-flags (if release ["-DJANET_NO_PGO" "-DJANET_NATIVE_TELEMETRY=0"] []))
   (def sizelink (if size-opt (case (os/which)
                                     :macos ["-Wl,-dead_strip"]
                                     :linux ["-Wl,--gc-sections"]
@@ -5943,6 +5950,7 @@
                     (set winfile (file/open cinput :r)))
                   (def wout (file/open expected :w))
                   (def wenv (merge @{} (os/environ)))
+                  (when release (put wenv "JANET_NO_PROFILE" "1"))
                   (when winfile (put wenv :in winfile))
                   (put wenv :out wout)
                   (def wcode (os/execute [exe src ;wpargs]
@@ -5950,6 +5958,7 @@
                   (file/close wout)
                   (when winfile (file/close winfile))
                   (when (not= wcode 0)
+                    (when release (aot-die (string "--release oracle run failed with exit " wcode) 1))
                     (eprint "bender --aot: oracle run failed; building unoptimized")
                     (set expected nil))
                   (when expected
@@ -5958,6 +5967,8 @@
                     (set auto true)
                     (set gate-workload wargs)
                     (set gate-stdin wstdin))))))
+      (when (and release (not gate))
+        (aot-die "--release needs compatible cached PGO evidence and a replayable workload; run --pgo first" 1))
       (aot-run-tool tooldir "callgraph.janet"
                     [src ;inc-args ;profile-args "--emit-native-lib" ndir
                      ;(if externs ["--externs" externs] [])])
@@ -5973,7 +5984,7 @@
           (def libjanet (string root "/build/libjanet.a"))
           (def ccbase [cc optflag ;(if size-opt ["-ffunction-sections" "-fdata-sections"] []) "-fwrapv"
                        "-fno-math-errno" "-fno-trapping-math"
-                       "-w" "-DJANET_AOT_NATIVE_INIT"
+                       "-w" "-DJANET_AOT_NATIVE_INIT" ;release-flags
                        "-I" (string root "/build")
                        "-I" (string root "/src/include")
                        cfile native-c ;extrac libjanet
@@ -5990,6 +6001,7 @@
               (def actual (string ndir "/actual.out"))
               (def aout (file/open actual :w))
               (def aenv (merge @{} (os/environ)))
+              (when release (put aenv "JANET_NO_PROFILE" "1"))
               (var ainfile nil)
               (var runnable true)
               (when (not (empty? gate-stdin))
@@ -6005,16 +6017,16 @@
               (file/close aout)
               (when ainfile (file/close ainfile))
               (cond (not runnable)
-                    (if auto
+                    (if (and auto (not release))
                       (do (set gate-fallback true))
                       (aot-die "gate stdin file is gone" 1))
                     (not= acode 0)
-                    (if auto
+                    (if (and auto (not release))
                       (do (eprint "bender --aot: gated binary exited nonzero; building unoptimized")
                         (set gate-fallback true))
                       (aot-die (string "pgo-built binary exited " acode) 1))
                     (not= (string (slurp expected)) (string (slurp actual)))
-                    (if auto
+                    (if (and auto (not release))
                       (do (eprint "bender --aot: cached-profile gate mismatch (stale workload?); building unoptimized")
                         (set gate-fallback true))
                       (do (eprint "bender --aot: PGO PARITY FAILED (artifacts kept in " ndir ")")
@@ -6025,6 +6037,8 @@
                       # explicit --pgo refreshes the cache (profile +
                       # workload) for future automatic builds.
                       (when pgo (aot-cache-store out ndir gate-workload pgo-stdin [src ;includes ;extrac] captured-stdin))))))
+          (when (and release gate-fallback)
+            (aot-die "--release parity failed; no unoptimized release fallback" 1))
           (unless (and gate (not gate-fallback))
             (do (def target (if size-opt (string out ".size-tmp") out))
               (aot-run-cc [;ccbase target])

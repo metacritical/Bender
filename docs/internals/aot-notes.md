@@ -376,6 +376,18 @@ manual intervention after a one-time workload:
   same parity gate. Gate failure falls back to unoptimized with a
   warning (never breaks the build); `--pgo` still dies on mismatch.
   `--no-auto-pgo` opts out; missing/stale pieces print what to do.
+- **Verified release builds.** First seed with `bender --aot app.janet
+  --native --pgo "args" -o app` (optionally `--pgo-stdin file`). Then
+  `bender --aot app.janet --native --release -o app` demands compatible
+  cached evidence and its replayable workload, reruns the interpreter oracle,
+  and installs only when the native candidate exits successfully with matching
+  stdout. Unlike ordinary automatic builds, absent/stale evidence or failed
+  parity is a hard error, never an unoptimized release fallback. The final
+  binary compiles out launcher auto-profile collection and native telemetry;
+  it does not claim to remove the VM's explicit debugging APIs. `--release`
+  cannot be combined with `--pgo`, `--no-auto-pgo`, `-c`, `-S`, or `-E`.
+  It does not yet establish content-addressed source identity or verify
+  stderr/side effects; treat the parity workload as a deliberately scoped gate.
 - **Size builds.** `bender --aot app.janet -Oz -o app` and
   `bender --aot app.janet --native -Oz -o app` request compiler size
   optimization, function/data sections and platform dead-section removal,
