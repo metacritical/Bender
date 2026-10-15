@@ -202,7 +202,9 @@
 
 # The allocator skips 240-255, making formal #240 the first far slot
 # (256). A capture of that slot must not truncate its operand to slot 0.
-(let [near-params (seq [i :range [0 240]] (symbol (string "boundary-param-" i)))
+# Keep optimization changes local: later forms share this suite's fiber.
+(with-dyns [*optimize* (dyn *optimize*)]
+  (let [near-params (seq [i :range [0 240]] (symbol (string "boundary-param-" i)))
       far-params (seq [i :range [0 241]] (symbol (string "boundary-param-" i)))
       near-form (tuple 'fn (tuple ;near-params)
                        (tuple 'fn [] (get near-params 239)))
@@ -260,7 +262,7 @@
         (assert (and (table? compiled-far) diagnostic
                      (string/find (string "cannot capture parent local " target-name) diagnostic)
                      (string/find "captured upvalue slot 256 exceeds bytecode limit 255" diagnostic))
-                (string "far parent upvalue " case-name " optimization " opt))))))
+                (string "far parent upvalue " case-name " optimization " opt)))))))
 
 # Optimization edge cases
 (check-lint-compile '|(when-with [_ nil] (print $200)) "dead code + upvalues 1")
