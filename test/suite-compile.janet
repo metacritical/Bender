@@ -206,6 +206,8 @@
       far-params (seq [i :range [0 241]] (symbol (string "boundary-param-" i)))
       near-form (tuple 'fn (tuple ;near-params)
                        (tuple 'fn [] (get near-params 239)))
+      near-nested (tuple 'fn (tuple ;near-params)
+                         (tuple 'fn [] (tuple 'fn [] (get near-params 239))))
       near-write (tuple 'fn (tuple ;(take 239 near-params))
                         (tuple 'do (tuple 'var 'near-target 7)
                                    (tuple 'tuple
@@ -215,6 +217,8 @@
                                           (tuple 'fn [] 'near-target))))
       far-read (tuple 'fn (tuple ;far-params)
                       (tuple 'fn [] (get far-params 240)))
+      far-nested (tuple 'fn (tuple ;far-params)
+                        (tuple 'fn [] (tuple 'fn [] (get far-params 240))))
       # The first local after 240 arguments also occupies slot 256. Use
       # a mutable binding to exercise both the write and read paths.
       far-write (tuple 'fn (tuple ;near-params)
@@ -231,6 +235,13 @@
               child (parent ;(range 240))]
           (assert (= 239 (child))
                   (string "near boundary closure reads last parameter " opt)))))
+    (let [compiled-nested (compile near-nested (curenv))]
+      (assert (function? compiled-nested) (string "near nested capture compiles " opt))
+      (when (function? compiled-nested)
+        (let [parent (compiled-nested)
+              child (parent ;(range 240))]
+          (assert (= 239 ((child)))
+                  (string "near nested capture reads last parameter " opt)))))
     (let [compiled-write (compile near-write (curenv))]
       (assert (function? compiled-write) (string "near boundary write compiles " opt))
       (when (function? compiled-write)
@@ -242,6 +253,7 @@
           (assert (= 42 (writer)) (string "near captured write returns value " opt))
           (assert (= 42 (reader)) (string "near captured value after write " opt)))))
     (each [case-name form target-name] [["read" far-read "boundary-param-240"]
+                                        ["nested read" far-nested "boundary-param-240"]
                                         ["write" far-write "far-target"]]
       (let [compiled-far (compile form (curenv))
             diagnostic (get compiled-far :error)]
