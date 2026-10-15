@@ -410,8 +410,12 @@ manual intervention after a one-time workload:
   compares unpacked and packed exit/stdout under that same workload, then
   installs only the verified packed candidate. On Mach-O/macOS (including
   arm64), the flag fails before linking; no packed output is installed.
-  The supported-target success path has not been exercised on this macOS
-  development machine, so do not treat it as independently validated on Linux.
+  The Linux aarch64 ELF path was exercised in an isolated Debian container
+  with GCC and UPX 4.2.4: a verified `--release -Oz --upx` build produced a
+  runnable 462,676-byte packed fixture from a 1,150,096-byte stripped
+  candidate. Injected compression and `upx -t` failures both left the
+  previously installed output unchanged. These results are target/toolchain
+  specific; stderr and external side effects are not parity-gated.
 - **Locked-down targets.** `-DJANET_NO_PGO` (iOS: no JIT/dynamic
   codegen) compiles the binary-side mechanism out entirely; explicit
   profiling APIs keep working.
