@@ -92,8 +92,16 @@
 # Metadata
 # ec2d7bf34
 # Direct dyn checks preserve the top-level metadata parity contract. They pass
-# in the interpreter but expose the known AOT one-thunk lexical-def gap rather
-# than hiding it behind equivalent definitions in an explicit environment.
+# in the interpreter but expose the AOT one-thunk lexical-def gap rather than
+# hiding it behind equivalent definitions in an explicit environment.
+# AOT parity gate: all four direct checks below must pass, without skips or
+# target conditionals. mkimage wraps the file in `do`, so defleaf treats these
+# as locals and never creates their binding descriptors. dyn reads the runtime
+# fiber env, not those locals. Fixing this requires publishing descriptors
+# (including their runtime values) into that env while retaining same-unit
+# lexical references; compiling separate forms before execution folds earlier
+# definitions to nil, and changing ordinary do/def semantics is not equivalent.
+# The explicit-env checks below are independent coverage, not a substitute.
 (def foo-with-tags :a-tag :bar)
 (assert (get (dyn 'foo-with-tags) :a-tag)
         "extra keywords in def are metadata tags")
