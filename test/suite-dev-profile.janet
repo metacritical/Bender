@@ -51,6 +51,28 @@
 (assert (= (* 2 first-calls) second-calls) "compatible run totals accumulate exactly")
 (assert (nil? (os/stat (string cache "/janet/pgo/app.jdn")))
         "cumulative diagnostic never becomes gateable evidence")
+# Incomplete, malformed, and unknown-origin runs never enter the aggregate.
+# A contended aggregate lock leaves all complete runs intact; the next
+# successful pass recomputes from immutable inputs rather than adding twice.
+(spit (string source-dir "/run-orphan-0.jdn.pending") "unfinished")
+(spit (string source-dir "/run-unbound-0.jdn") (slurp (string source-dir "/" (runs 0))))
+(spit (string source-dir "/run-unbound-0.jdn.meta") "{:invalid true}")
+(def lock (string source-dir "/aggregate.lock"))
+(assert (os/mkdir lock) "hold aggregate lock")
+(assert (= 0 (os/execute ["./build/bender" source] :e env))
+        "run succeeds while aggregate lock held")
+(assert (= second-calls (reduce + 0 (map (fn [row] (get (row 1) :calls 0))
+                                       (parse (slurp (string source-dir "/cumulative.jdn"))))))
+        "busy aggregate preserves existing snapshot")
+(os/rmdir lock)
+(assert (= 0 (os/execute ["./build/bender" source] :e env))
+        "later run resumes cumulative publication")
+(def resumed-calls (reduce + 0 (map (fn [row] (get (row 1) :calls 0))
+                                    (parse (slurp (string source-dir "/cumulative.jdn"))))))
+(assert (= (* 4 first-calls) resumed-calls)
+        "recompute includes all four bound runs exactly once")
+(assert (nil? (os/stat (string cache "/janet/pgo/app.jdn")))
+        "unknown run cannot enter gateable cache")
 # If code changes during the run, neither old nor new bytes authenticate
 # the observations. The incomplete dump stays private and cannot aggregate.
 (def old-aggregate (string (slurp (string source-dir "/cumulative.jdn"))))
@@ -62,7 +84,7 @@
         "self-modifying development run completes")
 (assert (= old-aggregate (string (slurp (string source-dir "/cumulative.jdn"))))
         "changed source cannot join previous aggregate")
-(assert (= 2 (length (filter (fn [name] (and (string/has-prefix? "run-" name)
+(assert (= 5 (length (filter (fn [name] (and (string/has-prefix? "run-" name)
                                             (string/has-suffix? ".jdn" name)))
                              (os/dir source-dir))))
         "changed-source run never publishes completed evidence")
