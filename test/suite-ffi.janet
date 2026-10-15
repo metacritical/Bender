@@ -21,28 +21,26 @@
 (import ./helper :prefix "" :exit true)
 (start-suite)
 
-(var has-ffi (dyn 'ffi/native))
-(def has-full-ffi
-  (and has-ffi
-       (when-let [entry (dyn 'ffi/calling-conventions)]
-         (def fficc (entry :value))
-         (> (length (fficc)) 1)))) # all arches support :none
+# compwhen evaluates in the boot environment, not in this source's local scope.
+# Query the boot FFI capabilities directly so one-thunk AOT sees the same gate.
 
 # FFI check
 # d80356158
-(compwhen has-ffi
-  (ffi/context))
+(compwhen (dyn 'ffi/native)
+  (comptime (ffi/context nil :lazy true)))
 
-(compwhen has-ffi
+(compwhen (dyn 'ffi/native)
   (ffi/defbind memcpy :ptr [dest :ptr src :ptr n :size]))
-(compwhen has-full-ffi
+(compwhen (and (dyn 'ffi/native)
+               (when-let [entry (dyn 'ffi/calling-conventions)]
+                 (> (length ((entry :value))) 1))) # all arches support :none
   (def buffer1 @"aaaa")
   (def buffer2 @"bbbb")
   (memcpy buffer1 buffer2 4)
   (assert (= (string buffer1) "bbbb") "ffi 1 - memcpy"))
 
 # cfaae47ce
-(compwhen has-ffi
+(compwhen (dyn 'ffi/native)
   (assert (= 8 (ffi/size [:int :char])) "size unpacked struct 1")
   (assert (= 5 (ffi/size [:pack :int :char])) "size packed struct 1")
   (assert (= 5 (ffi/size [:int :pack-all :char])) "size packed struct 2")
@@ -52,7 +50,7 @@
   (assert (= 26 (ffi/size [:char :pack :int @[:char 21]]))
           "array struct size"))
 
-(compwhen has-ffi
+(compwhen (dyn 'ffi/native)
   (assert-error "bad struct issue #1512" (ffi/struct :void)))
 
 # ffi/defstruct: named C-compatible structs with a full companion kit.
@@ -62,7 +60,7 @@
 (assert (= DsPoint/size 24) "defstruct size")
 (assert (deep= DsPoint/offsets {:x 0 :y 8 :n 16}) "defstruct offsets")
 (assert (deep= (DsPoint/new 1.5 2.5 3) (tuple 1.5 2.5 3)) "defstruct tuple ctor")
-(compwhen has-ffi
+(compwhen (dyn 'ffi/native)
   (def dsp (DsPoint/malloc 1.5 2.5 3))
   (assert (= (DsPoint/x dsp) 1.5) "defstruct read x")
   (assert (= (DsPoint/y dsp) 2.5) "defstruct read y")
@@ -74,7 +72,9 @@
 # native memory primitives: pointer arithmetic, typed poke, calloc,
 # realloc, executable pages (allocation + protection only -- executing
 # hand-written machine code is arch-specific, see docs).
-(compwhen has-full-ffi
+(compwhen (and (dyn 'ffi/native)
+               (when-let [entry (dyn 'ffi/calling-conventions)]
+                 (> (length ((entry :value))) 1))) # all arches support :none
   (def nm-p (unsafe/malloc 64))
   (assert (unsafe/ptr-eq nm-p nm-p) "ptr-eq self")
   (assert (not (unsafe/ptr-eq nm-p nil)) "ptr-eq nil")
@@ -99,7 +99,7 @@
   (assert (not (unsafe/ptr-eq nm-x nil)) "exec-alloc")
   (assert (nil? (unsafe/exec-protect nm-x 100)) "exec-protect"))
 
-(compwhen has-ffi
+(compwhen (dyn 'ffi/native)
   (def buf @"")
   (ffi/write :u8 10 buf)
   (assert (= 1 (length buf)))
