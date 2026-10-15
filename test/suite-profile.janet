@@ -23,9 +23,14 @@
 
 # PGO phase 1: VM type-profile collector. stop returns the live table;
 # dump writes it as Janet data (no truncation past 160 rows).
-# Build observed functions dynamically so --aot --native exercises this same
-# VM collector contract. Native wrappers are cfunctions: their separate
-# telemetry counts calls/guard failures, not JanetFunction type/range rows.
+# Scope: VM collector contract only, including when hosted by an AOT binary.
+# Build observed functions dynamically to prevent native replacement. Passing
+# this suite under --aot --native is NOT native collector parity: native
+# wrappers are cfunctions and do not produce these JanetFunction type/range
+# rows. Their distinct telemetry counts wrapper calls and guard failures;
+# test/suite-callgraph.janet covers its identity, guards, and release switch.
+# Native type/range observation would need a separate identity/API contract,
+# not fabricated VM rows or weakened assertions here.
 
 (def prof-add (eval '(fn prof-add [a b] (+ a b))))
 (def prof-mixed (eval '(fn prof-mixed [x] (if (> x 0) x "neg"))))
