@@ -1,15 +1,22 @@
 /*
- * A raw heap edge can reach a threaded abstract without going through
- * unmarshal's registry transfer. Compile after `make`:
+ * A raw heap edge in a foreign VM can reach a threaded abstract without
+ * going through unmarshal's registry transfer. Compile against a current
+ * build of this checkout (state.h's JanetVM layout must match the archive):
  *   cc -Isrc/include -Isrc/conf -Isrc/core \
  *      test/c/test-threaded-abstract-mark-claim.c build/libjanet.a \
- *      -lm -lpthread -ldl -o build/test-threaded-abstract-mark-claim
+ *      -lm -lpthread -ldl -o /tmp/janet-test-threaded-claim
  */
 #include "janet.h"
 #include "state.h"
+#include <pthread.h>
 #include <stdio.h>
 
 static const JanetAbstractType raw_type = {.name = "test/raw-threaded-abstract"};
+
+typedef struct {
+    void *raw;
+    int failed;
+} ClaimTest;
 
 static int check(int condition, const char *message) {
     if (condition) return 0;
@@ -17,20 +24,23 @@ static int check(int condition, const char *message) {
     return 1;
 }
 
-int main(void) {
-    if (janet_init()) return check(0, "janet_init");
-
-    void *raw = janet_abstract_threaded(&raw_type, 0);
+static void *foreign_vm(void *arg) {
+    ClaimTest *test = arg;
+    void *raw = test->raw;
     Janet key = janet_wrap_abstract(raw);
     JanetAbstractHead *head = janet_abstract_head(raw);
+    int fail = 0;
+
+    if (janet_init()) {
+        test->failed = check(0, "foreign janet_init");
+        return NULL;
+    }
+
+    /* The worker has not unmarshaled or otherwise registered this object.
+     * Its only edge is this rooted heap array, populated with the raw key. */
     JanetArray *holder = janet_array(1);
     janet_array_push(holder, key);
     janet_gcroot(janet_wrap_array(holder));
-    int fail = 0;
-
-    /* Simulate a foreign raw reference: this VM has a heap edge but no
-     * registry entry. The existing ref is held by the abstract's home VM. */
-    janet_table_remove(&janet_vm.threaded_abstracts, key);
     fail |= check(janet_checktype(janet_table_get(&janet_vm.threaded_abstracts, key), JANET_NIL),
                   "foreign registry starts absent");
     fail |= check(head->gc.data.refcount == 1, "home owns initial claim");
@@ -40,28 +50,45 @@ int main(void) {
     fail |= check(head->gc.data.refcount == 2,
                   "first registration acquires foreign claim");
 
-    /* A completed sweep turns TRUE into FALSE. Visiting that existing
-     * slot again must not double-acquire a registry claim. */
+    /* Sweep resets the live slot to false; marking it a second time must
+     * visit the existing claim rather than acquire another one. */
     janet_collect();
     fail |= check(head->gc.data.refcount == 2,
                   "mark of existing false slot does not double incref");
     fail |= check(janet_checktype(janet_table_get(&janet_vm.threaded_abstracts, key), JANET_BOOLEAN),
-                  "live registry entry remains present");
+                  "live foreign registry entry remains present");
 
-    /* Drop the raw edge. A subsequent sweep must release its registry
-     * claim and tombstone the slot, leaving only the simulated home claim. */
+    /* Removing the only worker heap edge lets its next sweep release the
+     * foreign claim; the home VM remains alive and rooted throughout. */
     holder->count = 0;
     janet_collect();
     fail |= check(janet_checktype(janet_table_get(&janet_vm.threaded_abstracts, key), JANET_NIL),
-                  "unvisited registry slot is removed");
+                  "unvisited foreign registry slot is removed");
     fail |= check(head->gc.data.refcount == 1, "unvisited foreign claim released");
     janet_gcunroot(janet_wrap_array(holder));
-    /* This synthetic setup removed the home registry entry without
-     * releasing its original claim. janet_deinit cannot discover that
-     * orphaned claim, so the block is intentionally retained until this
-     * short-lived test process exits; the assertion above tests only the
-     * newly acquired foreign claim's balanced release. */
     janet_deinit();
-    if (!fail) puts("PASS: raw mark owns exactly one claim and purges its slot");
+    test->failed = fail;
+    return NULL;
+}
+
+int main(void) {
+    pthread_t thread;
+    int fail = 0;
+    if (janet_init()) return check(0, "home janet_init");
+
+    void *raw = janet_abstract_threaded(&raw_type, 0);
+    Janet key = janet_wrap_abstract(raw);
+    ClaimTest test = {raw, 0};
+    /* This is the real home registry claim, kept live until worker exit. */
+    janet_gcroot(key);
+    if (pthread_create(&thread, NULL, foreign_vm, &test)) {
+        fail = check(0, "pthread_create");
+    } else {
+        if (pthread_join(thread, NULL)) fail = check(0, "pthread_join");
+        fail |= test.failed;
+    }
+    janet_gcunroot(key);
+    janet_deinit();
+    if (!fail) puts("PASS: foreign raw mark owns exactly one claim and purges its slot");
     return fail != 0;
 }
