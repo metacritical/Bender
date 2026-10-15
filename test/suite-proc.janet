@@ -350,6 +350,16 @@
   (let [ch (((fiber/last-value holder) :answer) 0)]
     (ev/give ch :kept)
     (assert (= :kept (ev/take ch)) "post-pool final result pins nested channel"))
+  # A minor after the complete root verdict must not revoke it, even
+  # when it sees only an unrelated fiber rather than this final result.
+  (let [other (fiber/new (fn [] :other))]
+    (resume other)
+    (debug/collect-fiber other))
+  (ev/sleep 0.01)
+  (gccollect)
+  (let [ch (((fiber/last-value holder) :answer) 0)]
+    (ev/give ch :retained)
+    (assert (= :retained (ev/take ch)) "partial collect preserves final result"))
   (assert (= :dead (fiber/status holder)) "final-result fiber completed"))
 ))
 
