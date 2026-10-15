@@ -5736,6 +5736,7 @@
   (var native false)
   (var size-opt false)
   (var release false)
+  (var pack-upx false)
   (var only-c false)
   (var print-c false)
   (var run-mode false)
@@ -5757,6 +5758,7 @@
       (= a "--native") (do (set native true) (++ i))
       (= a "-Oz") (do (set size-opt true) (++ i))
       (= a "--release") (do (set release true) (++ i))
+      (= a "--upx") (do (set pack-upx true) (++ i))
       (= a "--externs") (do (set externs (aot-next aotargs i "--externs")) (+= i 2))
       (= a "--include") (do (array/push includes (aot-next aotargs i "--include")) (+= i 2))
       (= a "--pgo") (do (set pgo true) (set pgo-args (aot-next aotargs i "--pgo")) (+= i 2))
@@ -5768,9 +5770,19 @@
       (do (when (not (empty? src)) (aot-die "one input only"))
           (set src a) (++ i))))
   (when (empty? src)
-    (aot-die "usage: bender --aot app.janet [-o app] [-c] [-S] [-E args...] [--native] [-Oz] [--release] [--externs FILE] [--include FILE] [-x FILE] [--ldflags STR] [--pgo ARGS] [--pgo-stdin FILE] [--no-auto-pgo]"))
+    (aot-die "usage: bender --aot app.janet [-o app] [-c] [-S] [-E args...] [--native] [-Oz] [--release] [--upx] [--externs FILE] [--include FILE] [-x FILE] [--ldflags STR] [--pgo ARGS] [--pgo-stdin FILE] [--no-auto-pgo]"))
   (when (and size-opt (or only-c print-c run-mode))
     (aot-die "-Oz needs a real binary build (no -c/-S/-E)"))
+  (when pack-upx
+    (when (or only-c print-c run-mode)
+      (aot-die "--upx requires a real binary build (no -c/-S/-E)"))
+    # UPX supports selected ELF targets, not Mach-O or arbitrary formats.
+    (unless (and (= (os/which) :linux) (index-of (os/arch) [:x86_64 :x86 :aarch64]))
+      (aot-die "--upx requires a supported Linux ELF target"))
+    (when (not= 0 (try (os/execute ["upx" "--version"] :p) ([_] -1)))
+      (aot-die "--upx requested but UPX is unavailable")))
+  (when (and pack-upx (not native))
+    (aot-die "--upx requires --native and a replayable PGO workload"))
   (when release
     (unless native (aot-die "--release requires --native"))
     (when (or pgo no-auto-pgo only-c print-c run-mode)
@@ -5803,6 +5815,42 @@
   (def inc-args includes) # callgraph takes extra files bare (no flag)
   (def cfile (string out ".c"))
   (def optflag (if size-opt "-Oz" "-O3"))
+  (defn package-upx [candidate workload stdin-path]
+    (when pack-upx
+      (unless workload
+        (aot-die "--upx requires --pgo or a replayable cached workload for packed parity" 1))
+      # The unpacked candidate remains intact until the packed copy has
+      # passed UPX's integrity check and the identical replay workload.
+      (def packed (string candidate ".upx-tmp"))
+      (try (os/rm packed) ([_] nil))
+      (when (not= 0 (os/execute ["upx" "--best" "-o" packed candidate] :p))
+        (aot-die "UPX compression failed; keeping unpacked candidate" 1))
+      (when (or (not= :file (os/stat packed :mode))
+                (<= (or (os/stat packed :size) 0) 0)
+                (not= 0 (os/execute ["upx" "-t" packed] :p)))
+        (aot-die "UPX output failed integrity validation" 1))
+      (def rawout (string candidate ".unpacked.stdout"))
+      (def packedout (string candidate ".packed.stdout"))
+      (defn run-one [exe dest]
+        (def fout (file/open dest :w))
+        (def renv (merge @{} (os/environ)))
+        (put renv "JANET_NO_PROFILE" "1")
+        (put renv :out fout)
+        (var fin nil)
+        (when (and stdin-path (not (empty? stdin-path)))
+          (unless (os/stat stdin-path) (aot-die "UPX parity stdin is missing" 1))
+          (set fin (file/open stdin-path :r))
+          (put renv :in fin))
+        (def code (os/execute [exe ;(aot-words workload)] :e renv))
+        (file/close fout)
+        (when fin (file/close fin))
+        code)
+      (unless (and (= 0 (run-one candidate rawout))
+                   (= 0 (run-one packed packedout))
+                   (= (string (slurp rawout)) (string (slurp packedout))))
+        (aot-die "UPX packed binary parity failed; keeping unpacked candidate" 1))
+      (os/rename packed candidate)
+      (eprint "bender --aot: UPX verified " candidate " " (os/stat candidate :size) " bytes")))
   (defn size-finish [path]
     (when size-opt
       # Strip the staged binary before installing it. A failure leaves
@@ -5969,6 +6017,8 @@
                     (set gate-stdin wstdin))))))
       (when (and release (not gate))
         (aot-die "--release needs compatible cached PGO evidence and a replayable workload; run --pgo first" 1))
+      (when (and pack-upx (not gate))
+        (aot-die "--upx needs --pgo or compatible cached evidence with a replayable workload" 1))
       (aot-run-tool tooldir "callgraph.janet"
                     [src ;inc-args ;profile-args "--emit-native-lib" ndir
                      ;(if externs ["--externs" externs] [])])
@@ -6032,6 +6082,7 @@
                       (do (eprint "bender --aot: PGO PARITY FAILED (artifacts kept in " ndir ")")
                         (os/exit 1)))
                     (do (size-finish candidate)
+                      (package-upx candidate gate-workload gate-stdin)
                       (os/rename candidate out)
                       (eprint "bender --aot: pgo parity ok, installed " out)
                       # explicit --pgo refreshes the cache (profile +
@@ -6039,6 +6090,8 @@
                       (when pgo (aot-cache-store out ndir gate-workload pgo-stdin [src ;includes ;extrac] captured-stdin))))))
           (when (and release gate-fallback)
             (aot-die "--release parity failed; no unoptimized release fallback" 1))
+          (when (and pack-upx gate-fallback)
+            (aot-die "--upx cannot package an unverified fallback" 1))
           (unless (and gate (not gate-fallback))
             (do (def target (if size-opt (string out ".size-tmp") out))
               (aot-run-cc [;ccbase target])

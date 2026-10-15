@@ -34,4 +34,11 @@
 (assert (not= 0 (os/execute ["./build/bender" "--aot" source "-Oz" "-c"
                               "-o" "/tmp/janet-aot-size-invalid"] :p))
         "size mode rejects source-only build")
+# UPX cannot package Mach-O; do not install an unchecked output.
+(when (= (os/which) :macos)
+  (def packed (string regular ".upx"))
+  (assert (not= 0 (os/execute ["./build/bender" "--aot" source "--upx"
+                              "-o" packed] :p))
+          "UPX rejects unsupported Mach-O target")
+  (assert (nil? (os/stat packed)) "UPX rejection installs no binary"))
 (end-suite)

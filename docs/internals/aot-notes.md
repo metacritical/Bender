@@ -397,6 +397,14 @@ manual intervention after a one-time workload:
   On macOS arm64, a 1,258,312-byte plain fixture became 1,028,464 bytes
   (fixture-specific, not a general compression guarantee). This flag does
   not itself disable runtime profile collection or replace PGO parity.
+- **Opt-in UPX packaging.** `--upx` is restricted to supported Linux ELF
+  native targets with UPX installed and a replayable PGO workload. After
+  the usual parity gate, it compresses a temporary binary, runs `upx -t`,
+  compares unpacked and packed exit/stdout under that same workload, then
+  installs only the verified packed candidate. On Mach-O/macOS (including
+  arm64), the flag fails before linking; no packed output is installed.
+  The supported-target success path has not been exercised on this macOS
+  development machine, so do not treat it as independently validated on Linux.
 - **Locked-down targets.** `-DJANET_NO_PGO` (iOS: no JIT/dynamic
   codegen) compiles the binary-side mechanism out entirely; explicit
   profiling APIs keep working.
