@@ -5586,12 +5586,72 @@
   (when-let [cache (aot-cache-dir)]
     (string cache "/interpreter")))
 
+(defn- development-mkdir-p [dir]
+  (try (do (var cur "")
+           (def abs (string/has-prefix? "/" dir))
+           (each part (string/split "/" dir)
+             (when (not (empty? part))
+               (set cur (if (empty? cur)
+                          (if abs (string "/" part) part)
+                          (string cur "/" part)))
+               (unless (os/stat cur) (os/mkdir cur)))))
+    ([_] nil)))
+
 (defn- development-profile-path [source]
   (try
     (do (def canonical (os/realpath source))
       (def token (string (hash canonical)))
-      (string (development-profile-dir) "/source-" token
-              ".jdn.run-" (os/getpid) ".jdn"))
+      (def dir (string (development-profile-dir) "/source-" token))
+      (development-mkdir-p dir)
+      (var attempt 0)
+      (var path nil)
+      (while (and (< attempt 64) (nil? path))
+        (def candidate (string dir "/run-" (os/getpid) "-" attempt ".jdn"))
+        (unless (or (os/stat candidate) (os/stat (string candidate ".pending"))
+                    (os/stat (string candidate ".meta")))
+          (set path candidate))
+        (++ attempt))
+      path)
+    ([_] nil)))
+
+(defn- development-profile-accumulate [source completed]
+  # Recompute from immutable completed runs under one directory. Replaying
+  # after a crash cannot double-count: no run is deleted on publication.
+  # Identity is exact source path plus bytes; unknown/foreign runs are ignored.
+  (try
+    (do (def parts (string/split "/" completed))
+      (def dir (string/slice completed 0 (- (length completed) (length (last parts)) 1)))
+      (def identity (try @[[ (os/realpath source) (string (slurp source)) ]] ([_] nil)))
+      (unless identity (break nil))
+      (def lock (string dir "/aggregate.lock"))
+      (unless (os/mkdir lock) (break nil))
+      (try
+        (do (def paths @[])
+          (each name (sort (os/dir dir))
+            (when (and (string/has-prefix? "run-" name)
+                       (string/has-suffix? ".jdn" name))
+              (def path (string dir "/" name))
+              (when (and (> (or (os/stat path :size) 0) 0)
+                         (deep= (try (parse (slurp (string path ".meta"))) ([_] nil)) identity))
+                (array/push paths path))))
+          (when (not (empty? paths))
+            (def candidate (string dir "/cumulative-" (os/getpid) ".pending"))
+            (def output (string dir "/cumulative.jdn"))
+            (def exe (dyn *executable* "bender"))
+            (def tooldir (aot-tools-dir))
+            (def argv [exe (string tooldir "/profile-merge.janet")
+                       "--accumulate" "--out" candidate
+                       ;(map (fn [path] (string "run=" path)) paths)])
+            (def env (merge @{} (os/environ) {"JANET_NO_PROFILE" "1"}))
+            (when (and tooldir
+                       (= 0 (os/execute argv (if (string/find "/" exe) :e :ep) env))
+                       (> (or (os/stat candidate :size) 0) 0))
+              # Metadata is written first: a crash never makes a new-source
+              # aggregate appear to have a valid old-source identity.
+              (spit (string output ".meta") (string/format "%j" identity))
+              (os/rename candidate output))))
+        ([_] nil))
+      (try (os/rmdir lock) ([_] nil)))
     ([_] nil)))
 
 (defn- aot-cache-key [out]
@@ -6315,7 +6375,7 @@
                 (when (and (not (getenv-alias "JANET_NO_PROFILE"))
                            (not explicit-profile) (not explicit-output))
                   (set implicit-output (development-profile-path arg))
-                  (when implicit-output (aot-mkdir-p (development-profile-dir)))
+                  (when implicit-output (development-mkdir-p (development-profile-dir)))
                   (when (and implicit-output (os/stat implicit-output))
                     (set implicit-output nil)))
                 (when (or explicit-profile implicit-output)
@@ -6324,7 +6384,14 @@
                 (when explicit-output (debug/profile-dump explicit-output))
                 (run-main env subargs)
                 (when implicit-output
-                  (try (debug/profile-dump implicit-output) ([_] nil)))))))
+                  (try (do (def pending (string implicit-output ".pending"))
+                           (debug/profile-dump pending)
+                           (when (> (or (os/stat pending :size) 0) 0)
+                             (spit (string implicit-output ".meta")
+                                   (string/format "%j" (aot-source-identity [arg])))
+                             (os/rename pending implicit-output)
+                             (development-profile-accumulate arg implicit-output)))
+                    ([_] nil)))))))
         (set i lenargs))))
 
   (if (or should-repl no-file)
