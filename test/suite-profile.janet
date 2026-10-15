@@ -23,9 +23,12 @@
 
 # PGO phase 1: VM type-profile collector. stop returns the live table;
 # dump writes it as Janet data (no truncation past 160 rows).
+# Build observed functions dynamically so --aot --native exercises this same
+# VM collector contract. Native wrappers are cfunctions: their separate
+# telemetry counts calls/guard failures, not JanetFunction type/range rows.
 
-(defn prof-add [a b] (+ a b))
-(defn prof-mixed [x] (if (> x 0) x "neg"))
+(def prof-add (eval '(fn prof-add [a b] (+ a b))))
+(def prof-mixed (eval '(fn prof-mixed [x] (if (> x 0) x "neg"))))
 
 (debug/profile-start)
 (prof-add 1 2)
@@ -33,7 +36,7 @@
 (prof-mixed 5)
 (prof-mixed -1)
 # unions in one slot
-(defn prof-u [x] x)
+(def prof-u (eval '(fn prof-u [x] x)))
 (prof-u 1)
 (prof-u "s")
 (prof-u :k)
@@ -94,7 +97,7 @@
 
 # range evidence: per-slot min/max for number params (PGO nonneg shaping)
 (debug/profile-start)
-(defn prof-mm [a b] (+ a b))
+(def prof-mm (eval '(fn prof-mm [a b] (+ a b))))
 (prof-mm 3 4)
 (prof-mm -1 10)
 (prof-mm 5 0)
@@ -131,7 +134,7 @@
 # aborted every profile re-load with "unknown symbol inf"); NaN stays
 # a nil sentinel. Loaders map the strings back to float infinities.
 (debug/profile-start)
-(defn prof-inf [x] x)
+(def prof-inf (eval '(fn prof-inf [x] x)))
 (prof-inf 1.5)
 (prof-inf math/inf)
 (prof-inf (- math/inf))
@@ -162,7 +165,7 @@
 # identity + calls + param evidence (task roots recorded explicitly:
 # primed fibers bypass JOP_CALL).
 (debug/profile-start)
-(defn prof-wfn [x] (+ x 1))
+(def prof-wfn (eval '(fn prof-wfn [x] (+ x 1))))
 (let [p (pool/spawn 2)]
   (assert (= 42 (pool/call p prof-wfn [41])) "profiled pool call")
   (assert (= 43 (pool/call p prof-wfn [42])) "profiled pool call 2")
@@ -191,7 +194,7 @@
 
 # Phase C: thread harvest mirrors pool harvest.
 (debug/profile-start)
-(defn prof-tfn [x] (* x 2))
+(def prof-tfn (eval '(fn prof-tfn [x] (* x 2))))
 (let [t (thread/new prof-tfn 21)]
   (assert (= 42 (thread/join t)) "profiled thread call")
   (def rows (thread/profile t))
