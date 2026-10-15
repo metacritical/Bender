@@ -91,33 +91,44 @@
 
 # Metadata
 # ec2d7bf34
-# At interpreter top level, dyn reads the metadata of these defs; in an AOT
-# one-thunk script the same defs are lexical and dyn cannot see them. Evaluate
-# equivalent definitions in an explicit runtime environment for both targets.
-(def metadata-env (make-env))
+# Direct dyn checks preserve the top-level metadata parity contract. They pass
+# in the interpreter but expose the known AOT one-thunk lexical-def gap rather
+# than hiding it behind equivalent definitions in an explicit environment.
 (def foo-with-tags :a-tag :bar)
-(eval '(def foo-with-tags :a-tag :bar) metadata-env)
-(assert (get (get metadata-env 'foo-with-tags) :a-tag)
+(assert (get (dyn 'foo-with-tags) :a-tag)
         "extra keywords in def are metadata tags")
 
 (def foo-with-meta {:baz :quux} :bar)
-(eval '(def foo-with-meta {:baz :quux} :bar) metadata-env)
-(assert (= :quux (get (get metadata-env 'foo-with-meta) :baz))
+(assert (= :quux (get (dyn 'foo-with-meta) :baz))
         "extra struct in def is metadata")
 
 (defn foo-fn-with-meta {:baz :quux}
   "This is a function"
   [x]
   (identity x))
+(assert (= :quux (get (dyn 'foo-fn-with-meta) :baz))
+        "extra struct in defn is metadata")
+(assert (= "(foo-fn-with-meta x)\n\nThis is a function"
+           (get (dyn 'foo-fn-with-meta) :doc))
+        "extra string in defn is docstring")
+
+# Independently verify the runtime metadata behavior shared by both targets.
+(def metadata-env (make-env))
+(eval '(def foo-with-tags :a-tag :bar) metadata-env)
+(assert (get (get metadata-env 'foo-with-tags) :a-tag)
+        "runtime env: extra keywords in def are metadata tags")
+(eval '(def foo-with-meta {:baz :quux} :bar) metadata-env)
+(assert (= :quux (get (get metadata-env 'foo-with-meta) :baz))
+        "runtime env: extra struct in def is metadata")
 (eval '(defn foo-fn-with-meta {:baz :quux}
          "This is a function"
          [x]
          (identity x)) metadata-env)
 (assert (= :quux (get (get metadata-env 'foo-fn-with-meta) :baz))
-        "extra struct in defn is metadata")
+        "runtime env: extra struct in defn is metadata")
 (assert (= "(foo-fn-with-meta x)\n\nThis is a function"
            (get (get metadata-env 'foo-fn-with-meta) :doc))
-        "extra string in defn is docstring")
+        "runtime env: extra string in defn is docstring")
 
 # Break
 # 4a111b38b
