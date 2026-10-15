@@ -120,6 +120,9 @@
 # of its caller. AOT compiles the unit as one thunk, making the definitions
 # above locals rather than entries in (curenv). Give both targets the same
 # explicit compiler fixtures, including their function metadata for linting.
+# This does NOT establish top-level curenv reflection parity: the original
+# dynamic-environment contract remains an explicit, currently failing AOT
+# gate in test/fixtures/compile-curenv-contract.janet.
 (def compile-env (make-env))
 (eachp [name value] @{'fnamed fnamed 'fkeys fkeys 'fnamed2 fnamed2
                       'fkeys2 fkeys2 'fnamed3 fnamed3 'fnamed4 fnamed4
