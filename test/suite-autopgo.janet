@@ -103,4 +103,47 @@
 (assert (= expect-out (capture ["/tmp/apg-pgo"]))
         "optimized output correct")
 
+# 6. Forced follow-up binary runs never replace the cached base. The next
+# ordinary build folds sidecars into it before applying the parity gate.
+(def cache-profile (string tmpcache "/janet/pgo/apg-pgo.jdn"))
+(def before (string (slurp cache-profile)))
+(assert (= 0 (os/execute ["/bin/sh" "-c"
+  (string "JANET_AUTO_PGO=1 " mincalls "/tmp/apg-pgo >/dev/null 2>&1")] :p))
+  "forced second run succeeds")
+(assert (= before (string (slurp cache-profile))) "forced run preserves cached evidence")
+(def sidecars (filter (fn [name] (string/has-prefix? "apg-pgo.jdn.run-" name))
+                      (os/dir (string tmpcache "/janet/pgo"))))
+(assert (= 1 (length sidecars)) "forced run creates sidecar")
+(assert (= 0 (os/execute ["/bin/sh" "-c"
+  "./build/bender --aot /tmp/apg-demo.janet --native -o /tmp/apg-pgo >/tmp/apg-merged-out.txt 2>&1"] :p))
+  "plain rebuild merges sidecar")
+(assert (not (= before (string (slurp cache-profile)))) "cache changes after merge")
+(assert (empty? (filter (fn [name] (string/has-prefix? "apg-pgo.jdn.run-" name))
+                        (os/dir (string tmpcache "/janet/pgo"))))
+        "merged sidecar removed")
+(def merged-log (string (slurp "/tmp/apg-merged-out.txt")))
+(assert (string/find "parity ok" merged-log) "merged profile passes gate")
+(assert (= expect-out (capture ["/tmp/apg-pgo"])) "merged binary output correct")
+# Stale cache is never refreshed merely by merging a later sidecar.
+(spit "/tmp/apg-stale-source.janet" "(print :old)\n")
+(assert (= 0 (os/execute ["/bin/sh" "-c"
+  "./build/bender --aot /tmp/apg-stale-source.janet --native -o /tmp/apg-stale >/dev/null 2>&1"] :p))
+  "stale fixture builds")
+(assert (= 0 (os/execute ["/bin/sh" "-c"
+  (string mincalls "/tmp/apg-stale >/dev/null 2>&1")] :p))
+  "old fixture profiles")
+(def stale-cache (string tmpcache "/janet/pgo/apg-stale.jdn"))
+(def stale-before (string (slurp stale-cache)))
+(os/execute ["/bin/sh" "-c" "sleep 1"] :p)
+(spit "/tmp/apg-stale-source.janet" "(print :new)\n")
+(assert (= 0 (os/execute ["/bin/sh" "-c"
+  (string "JANET_AUTO_PGO=1 " mincalls "/tmp/apg-stale >/dev/null 2>&1")] :p))
+  "old binary creates forced sidecar")
+(assert (= 0 (os/execute ["/bin/sh" "-c"
+  "./build/bender --aot /tmp/apg-stale-source.janet --native -o /tmp/apg-stale >/tmp/apg-stale-log.txt 2>&1"] :p))
+  "stale profile falls back without build failure")
+(assert (= stale-before (string (slurp stale-cache))) "stale cache remains unchanged")
+(assert (string/find "stale" (string (slurp "/tmp/apg-stale-log.txt")))
+        "stale sidecar diagnostic")
+
 (end-suite)

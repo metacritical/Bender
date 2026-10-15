@@ -145,4 +145,60 @@
 (assert (string/find "profile-seed wkernel 0 double worker" cg-i-text)
         "inf-bearing evidence still seeds")
 
+# ---- Run-over-run accumulation: union observations, retain type origins,
+# expand ranges, and never seed a conflicting slot. ----
+(spit "/tmp/pmg-acc-a.jdn" (string/format "%j"
+  @[@[@["/tmp/pmg-fix.janet" 1 "wseed"]
+      @{:calls 2 :params @[@[:number]] :mins @[2] :maxs @[9]
+        :elems @[] :rets @[:number] :from :home}]]))
+(spit "/tmp/pmg-acc-b.jdn" (string/format "%j"
+  @[@[@["/tmp/pmg-fix.janet" 1 "wseed"]
+      @{:calls 3 :params @[@[:string]] :mins @[-4] :maxs @["inf"]
+        :elems @[] :rets @[:string] :from :worker}]]))
+(assert (run-ok "./build/bender" "tools/profile-merge.janet" "--accumulate"
+                "--out" "/tmp/pmg-acc-out.jdn"
+                "cached=/tmp/pmg-acc-a.jdn" "run=/tmp/pmg-acc-b.jdn")
+        "accumulation runs")
+(def accumulated (parse (slurp "/tmp/pmg-acc-out.jdn")))
+(def ai ((accumulated 0) 1))
+(assert (= 1 (length accumulated)) "same identity coalesces")
+(assert (= 5 (get ai :calls)) "counts add")
+(assert (deep= @[:number :string] ((get ai :params) 0)) "types union")
+(assert (deep= @[-4] (get ai :mins)) "range min expands")
+(assert (deep= @["inf"] (get ai :maxs)) "range max expands")
+(assert (deep= @[:home :worker] (get ai :from)) "origins union")
+(def [acc-code acc-log] (run-out "./build/bender" "tools/callgraph.janet"
+                                 "/tmp/pmg-fix.janet" "--profile" "/tmp/pmg-acc-out.jdn"))
+(assert (zero? acc-code) "callgraph accepts accumulated profile")
+(assert (string/find "profile-conflict wseed 0 number:home string:worker" acc-log)
+        "conflict reports per-type provenance")
+(assert (nil? (string/find "profile-seed wseed" acc-log)) "conflict never seeds")
+# Re-merge an already accumulated row: origin maps remain per type.
+(assert (run-ok "./build/bender" "tools/profile-merge.janet" "--accumulate"
+                "--out" "/tmp/pmg-acc-twice.jdn"
+                "cached=/tmp/pmg-acc-out.jdn" "run=/tmp/pmg-acc-a.jdn")
+        "reaccumulation runs")
+(def twice (parse (slurp "/tmp/pmg-acc-twice.jdn")))
+(assert (= 7 (get ((twice 0) 1) :calls)) "third-run calls add")
+(assert (deep= @[:home] (get ((get ((twice 0) 1) :type-from) 0) :number))
+        "third-run provenance preserved")
+
+# Missing historical slots stay unknown rather than manufacturing unanimity.
+(spit "/tmp/pmg-missing.jdn" (string/format "%j"
+  @[@[@["/tmp/pmg-fix.janet" 1 "wseed"]
+      @{:calls 1 :params @[] :mins @[] :maxs @[]
+        :elems @[] :rets @[] :from :home}]]))
+(assert (run-ok "./build/bender" "tools/profile-merge.janet" "--accumulate"
+                "--out" "/tmp/pmg-unknown.jdn"
+                "cached=/tmp/pmg-missing.jdn" "home=/tmp/pmg-acc-a.jdn")
+        "missing-slot merge runs")
+(def missing-slot ((get ((parse (slurp "/tmp/pmg-unknown.jdn")) 0) 1) :params))
+(assert (nil? (missing-slot 0)) "missing evidence remains unknown")
+(def [unknown-code unknown-log]
+  (run-out "./build/bender" "tools/callgraph.janet" "/tmp/pmg-fix.janet"
+           "--profile" "/tmp/pmg-unknown.jdn"))
+(assert (zero? unknown-code) "callgraph accepts unknown slot")
+(assert (nil? (string/find "profile-seed wseed" unknown-log))
+        "unknown history never seeds")
+
 (end-suite)

@@ -901,7 +901,8 @@
                           :mins (map prof-bound (get info :mins @[]))
                           :maxs (map prof-bound (get info :maxs @[]))
                           :calls (get info :calls 0)
-                          :from (get info :from :home)})
+                          :from (get info :from :home)
+                          :type-from (get info :type-from @[])})
       (put profile-index nm bucket)))
   (print "profile " (length rows) " rows"))
 

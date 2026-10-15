@@ -5608,7 +5608,16 @@
           (unless (os/stat cur) (os/mkdir cur)))))
     ([_] nil)))
 
-(defn- aot-cache-store [out ndir workload stdin]
+(defn- aot-cache-sidecars [cdir key]
+  (if (os/stat cdir)
+    (sort (filter (fn [name]
+                    (and (string/has-prefix? (string key ".jdn.run-") name)
+                         (string/has-suffix? ".jdn" name)
+                         (> (or (os/stat (string cdir "/" name) :size) 0) 0)))
+                  (os/dir cdir)))
+    @[]))
+
+(defn- aot-cache-store [out ndir workload stdin sources]
   # persist a successful --pgo build's profile + workload for future
   # automatic builds. Best effort, never fails the build.
   (try
@@ -5616,7 +5625,26 @@
       (when cdir
         (aot-mkdir-p cdir)
         (def key (aot-cache-key out))
-        (spit (string cdir "/" key ".jdn") (slurp (string ndir "/profile.jdn")))
+        (def cached (string cdir "/" key ".jdn"))
+        (def fresh (string ndir "/profile.jdn"))
+        (def sidecars (aot-cache-sidecars cdir key))
+        (def valid-cache (aot-cache-fresh? cached sources))
+        (def valid-sidecars (filter (fn [name]
+                                     (aot-cache-fresh? (string cdir "/" name) sources))
+                                   sidecars))
+        (if (or valid-cache (not (empty? valid-sidecars)))
+          (do (def tmp (string cached ".merge-" (os/getpid)))
+            (def exe (dyn *executable* "bender"))
+            (unless (= 0 (os/execute [exe (string (aot-tools-dir) "/profile-merge.janet")
+                                       "--accumulate" "--out" tmp
+                                       ;(if valid-cache [(string "cached=" cached)] [])
+                                       ;(map (fn [name] (string "home=" cdir "/" name)) (sort valid-sidecars))
+                                       (string "home=" fresh)]
+                                      (if (string/find "/" exe) :e :ep)))
+              (error "profile accumulation failed"))
+            (os/rename tmp cached)
+            (each name valid-sidecars (os/rm (string cdir "/" name))))
+          (spit cached (slurp fresh)))
         (spit (string cdir "/" key ".workload") workload)
         (spit (string cdir "/" key ".stdin") stdin)
         (eprint "bender --aot: cached PGO profile for automatic rebuilds")))
@@ -5785,7 +5813,36 @@
           (def cprof (string cdir "/" key ".jdn"))
           (def cwork (string cdir "/" key ".workload"))
           (def cstdin (string cdir "/" key ".stdin"))
-          (cond (nil? (os/stat cprof))
+           # Fold completed forced-run sidecars into a source-fresh cache;
+           # stale or incomplete evidence never makes an old profile fresh.
+           (def pending (aot-cache-sidecars cdir key))
+           (def fresh-pending (filter (fn [name]
+                                        (aot-cache-fresh? (string cdir "/" name)
+                                                          [src ;includes ;extrac])) pending))
+           (var merge-failed false)
+           (when (and (not (empty? fresh-pending))
+                      (= (length pending) (length fresh-pending))
+                      (aot-cache-fresh? cprof [src ;includes ;extrac]))
+             (try
+               (do (def tmp (string cprof ".merge-" (os/getpid)))
+                 (def exe (aot-abs-exe))
+                 (unless (= 0 (os/execute [exe (string tooldir "/profile-merge.janet")
+                                            "--accumulate" "--out" tmp
+                                            ;(if (os/stat cprof) [(string "cached=" cprof)] [])
+                                            ;(map (fn [name] (string "home=" cdir "/" name)) fresh-pending)]
+                                           (if (string/find "/" exe) :e :ep)))
+                   (error "profile accumulation failed"))
+                 (os/rename tmp cprof)
+                 (each name pending (os/rm (string cdir "/" name))))
+               ([_] (set merge-failed true)
+                    (eprint "bender --aot: warning: retained unmerged profile runs"))))
+          (cond (and (not (empty? pending))
+                      (or (not= (length pending) (length fresh-pending))
+                          (not (aot-cache-fresh? cprof [src ;includes ;extrac]))))
+                 (eprint "bender --aot: pending profile runs are stale; building unoptimized")
+                 merge-failed
+                 (eprint "bender --aot: profile merge failed; building unoptimized")
+                 (nil? (os/stat cprof))
                 (eprint "bender --aot: no cached PGO profile yet; the binary profiles its first run automatically")
                 (nil? (os/stat cwork))
                 (eprint "bender --aot: cached profile has no workload; pass --pgo \"args\" once to make it gateable")
@@ -5889,7 +5946,7 @@
                       (eprint "bender --aot: pgo parity ok, installed " out)
                       # explicit --pgo refreshes the cache (profile +
                       # workload) for future automatic builds.
-                      (when pgo (aot-cache-store out ndir gate-workload gate-stdin))))))
+                      (when pgo (aot-cache-store out ndir gate-workload gate-stdin [src ;includes ;extrac]))))))
           (unless (and gate (not gate-fallback))
             (do (aot-run-cc [;ccbase out])
               (unless run-mode (print "built " out))))))))

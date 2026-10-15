@@ -338,21 +338,26 @@ Manual `--pgo` (collect with workload, widen, gate, install) works
 but needs expert plumbing per build. The automatic loop closes it with no
 manual intervention after a one-time workload:
 
-- **First runs collect.** AOT binaries (generated `main`) collect a
-  type profile into the standard cache on first runs only: when no
-  cached profile exists for the binary yet, or `JANET_AUTO_PGO=1`
-  forces it — never when `JANET_NO_PROFILE` is set, never when the
-  cache is unwritable (silently runs clean). Collection costs ~10%
+- **Runs collect on demand.** AOT binaries (generated `main`) collect a
+  type profile into the standard cache when no profile exists yet;
+  `JANET_AUTO_PGO=1` forces additional runs into unique sidecars rather
+  than replacing cached evidence. Never when `JANET_NO_PROFILE` is set;
+  an unwritable cache silently runs clean. Collection costs ~10%
   (16-line direct-mapped entry cache, exact type masks; min/max and
   element evidence sampled 1-in-8 after a 16-call warmup).
 - **Trivial runs don't clobber.** Auto dumps additionally require a
   minimum call count (`JANET_AUTO_PGO_MIN_CALLS`, default 10000), so
   `--help` runs never overwrite a useful profile. Explicit dumps
   always write.
-- **Cache layout.** `$XDG_CACHE_HOME/janet/pgo/<key>.{jdn,workload,stdin}`,
+- **Cache layout and accumulation.** `$XDG_CACHE_HOME/janet/pgo/<key>.{jdn,workload,stdin}`,
   key = sanitized binary basename (same algorithm in C and Janet).
-  `--pgo` success stores profile + workload; first runs store the
-  profile alone.
+  Forced binary runs claim `<key>.jdn.run-<pid>-<attempt>.pending`
+  and publish `.jdn` sidecars only after the dump finishes.
+  The next native build merges these and successful explicit `--pgo`
+  evidence into the cache: calls add, observed types union, ranges widen,
+  and per-type provenance survives. A failed merge retains prior evidence
+  and sidecars; conflicting types never become a PGO-unanimous seed.
+  First runs store the profile alone; explicit `--pgo` also stores workload.
 - **Plain builds auto-apply.** `bender --aot app --native -o app`
   (no flags) uses a fresh profile (newer than all sources) +
   recorded workload automatically: fresh oracle run, seeded build,
