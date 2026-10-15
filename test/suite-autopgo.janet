@@ -157,4 +157,15 @@
 (assert (string/find "stale" (string (slurp "/tmp/apg-stale-log.txt")))
         "stale sidecar diagnostic")
 
+# A held per-key transaction lock cannot authorize stale cached evidence.
+(def lockdir (string tmpcache "/janet/pgo/apg-pgo.lock"))
+(assert (os/mkdir lockdir) "test acquires cache lock")
+(assert (= 0 (os/execute ["/bin/sh" "-c"
+  "./build/bender --aot /tmp/apg-demo.janet --native -o /tmp/apg-pgo >/tmp/apg-busy-log.txt 2>&1"] :p))
+  "busy cache falls back safely")
+(assert (string/find "cache busy" (string (slurp "/tmp/apg-busy-log.txt")))
+        "busy cache announces fallback")
+(os/rmdir lockdir)
+(assert (nil? (os/stat lockdir)) "test releases cache lock")
+
 (end-suite)
