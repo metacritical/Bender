@@ -51,4 +51,19 @@
 (assert (= (* 2 first-calls) second-calls) "compatible run totals accumulate exactly")
 (assert (nil? (os/stat (string cache "/janet/pgo/app.jdn")))
         "cumulative diagnostic never becomes gateable evidence")
+# If code changes during the run, neither old nor new bytes authenticate
+# the observations. The incomplete dump stays private and cannot aggregate.
+(def old-aggregate (string (slurp (string source-dir "/cumulative.jdn"))))
+(spit source (string
+  "(defn hot [x] (+ x 1))\n"
+  "(for i 0 40 (hot i))\n"
+  "(spit \"" source "\" \"(print :changed)\\n\")\n"))
+(assert (= 0 (os/execute ["./build/bender" source] :e env))
+        "self-modifying development run completes")
+(assert (= old-aggregate (string (slurp (string source-dir "/cumulative.jdn"))))
+        "changed source cannot join previous aggregate")
+(assert (= 2 (length (filter (fn [name] (and (string/has-prefix? "run-" name)
+                                            (string/has-suffix? ".jdn" name)))
+                             (os/dir source-dir))))
+        "changed-source run never publishes completed evidence")
 (end-suite)
