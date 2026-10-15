@@ -2589,6 +2589,19 @@
 (defn wrapper-for [nm pt rt telemetry-id]
   (def cn (emit-c-name nm))
   (def tid (string/format "%08X" telemetry-id))
+  (def type-guards
+    (string/join
+      (seq [i :range [0 (length pt)]]
+        (def t (pt i))
+        (def expected (cond
+          (or (get int-hints t) (get float-hints t) (= t :number)) "JANET_NUMBER"
+          (= t :array) "JANET_ARRAY"
+          (= t :tuple) "JANET_TUPLE"
+          (= t :pointer) "JANET_POINTER"
+          nil))
+        (when expected
+          (string "    if (janet_type(argv[" i "]) != " expected ") { " cn "_TELEMETRY_TYPE_GUARD(); janet_panicf(\"native " cn " argument " i " has wrong Janet type\"); }\n")))
+      ""))
   # boundary casts: every int width unboxes/wraps as integer (C
   # implicit conversion narrows/widens to the kernel's exact width),
   # float widths as number, arrays/tuples/pointers pass through
@@ -2611,18 +2624,23 @@
   (string "#ifndef JANET_NATIVE_TELEMETRY\n#define JANET_NATIVE_TELEMETRY 1\n#endif\n"
           "#if JANET_NATIVE_TELEMETRY\n"
           "static JANET_THREAD_LOCAL unsigned long long " cn "_telemetry_calls;\n"
-          "static JANET_THREAD_LOCAL unsigned long long " cn "_telemetry_guard_failures;\n"
-          "#define " cn "_TELEMETRY_HIT() do { if ((++" cn "_telemetry_calls & 1023ULL) == 1ULL) \\\n"
-          "  fprintf(stderr, \"native-telemetry id=" tid " name=" cn " boundary-call sampled_total=%llu\\n\", " cn "_telemetry_calls); } while (0)\n"
-          "#define " cn "_TELEMETRY_GUARD() do { ++" cn "_telemetry_guard_failures; \\\n"
-          "  fprintf(stderr, \"native-telemetry id=" tid " name=" cn " guard-failure total=%llu\\n\", " cn "_telemetry_guard_failures); } while (0)\n"
-          "#else\n#define " cn "_TELEMETRY_HIT() ((void)0)\n#define " cn "_TELEMETRY_GUARD() ((void)0)\n#endif\n"
+          "static JANET_THREAD_LOCAL unsigned long long " cn "_telemetry_arity_failures;\n"
+          "static JANET_THREAD_LOCAL unsigned long long " cn "_telemetry_type_failures;\n"
+          "static void " cn "_telemetry_report(void) {\n"
+          "  if (" cn "_telemetry_calls || " cn "_telemetry_arity_failures || " cn "_telemetry_type_failures)\n"
+          "    fprintf(stderr, \"native-telemetry id=" tid " name=" cn " calls=%llu arity-guard-failures=%llu type-guard-failures=%llu\\n\", " cn "_telemetry_calls, " cn "_telemetry_arity_failures, " cn "_telemetry_type_failures);\n}\n"
+          "#define " cn "_TELEMETRY_HIT() (++" cn "_telemetry_calls)\n"
+          "#define " cn "_TELEMETRY_ARITY_GUARD() (++" cn "_telemetry_arity_failures)\n"
+          "#define " cn "_TELEMETRY_TYPE_GUARD() (++" cn "_telemetry_type_failures)\n"
+          "#else\n#define " cn "_TELEMETRY_HIT() ((void)0)\n#define " cn "_TELEMETRY_ARITY_GUARD() ((void)0)\n#define " cn "_TELEMETRY_TYPE_GUARD() ((void)0)\n"
+          "#define " cn "_telemetry_report() ((void)0)\n#endif\n"
           "static Janet " cn "_wrapper(int32_t argc, Janet *argv) {\n"
-          "    if (argc != " (length pt) ") { " cn "_TELEMETRY_GUARD(); janet_panicf(\"native " cn
+          "    if (argc != " (length pt) ") { " cn "_TELEMETRY_ARITY_GUARD(); janet_panicf(\"native " cn
           " called with %d arguments, expected " (length pt) "\", argc); }\n"
+          type-guards
           "    " cn "_TELEMETRY_HIT();\n"
           "    return " rv "(" cn "(" ps "));\n}\n"
-          "#undef " cn "_TELEMETRY_HIT\n#undef " cn "_TELEMETRY_GUARD\n"))
+          "#undef " cn "_TELEMETRY_HIT\n#undef " cn "_TELEMETRY_ARITY_GUARD\n#undef " cn "_TELEMETRY_TYPE_GUARD\n"))
 
 (when emit-native-dir (emit-native-all emit-native-dir))
 
@@ -2704,7 +2722,11 @@
     (buffer/push-string cout "\n")
     (buffer/push-string cout (k :wrapper))
     (buffer/push-string cout "\n"))
+  (buffer/push-string cout "#if JANET_NATIVE_TELEMETRY\nstatic void native_telemetry_report_all(void) {\n")
+  (each k kernels (buffer/push-string cout (string "    " (emit-c-name (k :name)) "_telemetry_report();\n")))
+  (buffer/push-string cout "}\n#endif\n\n")
   (buffer/push-string cout "void native_init(JanetTable *env) {\n")
+  (buffer/push-string cout "#if JANET_NATIVE_TELEMETRY\n    atexit(native_telemetry_report_all);\n#endif\n")
   (buffer/push-string cout "    static const JanetReg regs[] = {\n")
   (each k kernels
     (buffer/push-string cout

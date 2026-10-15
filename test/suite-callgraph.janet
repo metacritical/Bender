@@ -443,19 +443,41 @@
   "(defn k-ok {:hint {:params [:double] :returns :double}} [x] (+ x 1))\n"
   "(defn k-bad [t] (t :key))\n"
   "(defn call-ok {:hint {:params [:double] :returns :double}} [x] (k-ok x))\n"
-  "(defn main [] (print (call-ok 3) (k-bad @{:key 2})))\n"))
+  "(defn main [] (print (call-ok 3) (k-bad @{:key 2})))\n"
+  "(try (k-ok \"bad\") ([e] nil))\n"))
 (assert (= 0 (os/execute ["/bin/sh" "-c"
   "rm -rf /tmp/cg-ls && ./build/bender tools/callgraph.janet /tmp/cg-libskip.janet --emit-native-lib /tmp/cg-ls > /tmp/cg-ls-out.txt 2>&1"] :p))
   "lib emit run")
 (def telemetry-c (slurp "/tmp/cg-ls/native.c"))
 (assert (string/find "JANET_NATIVE_TELEMETRY" telemetry-c)
         "wrapper telemetry has release compile switch")
-(assert (string/find "boundary-call sampled_total" telemetry-c)
-        "wrapper telemetry samples boundaries")
-(assert (string/find "guard-failure total" telemetry-c)
-        "wrapper telemetry counts boundary guard failures")
+(assert (string/find "_telemetry_report" telemetry-c)
+        "wrapper telemetry snapshots at exit")
+(assert (string/find "type-guard-failures" telemetry-c)
+        "wrapper telemetry distinguishes type guard failures")
+(assert (string/find "janet_type(argv[0]) != JANET_NUMBER" telemetry-c)
+        "wrapper validates actual Janet number type")
+(assert (string/find "arity-guard-failures" telemetry-c)
+        "wrapper telemetry distinguishes arity failures")
+(assert (string/find "janet_type(argv[0]) != JANET_NUMBER" telemetry-c)
+        "native double boundary validates Janet number type")
+# All numeric width hints must use Janet-number guards, not callable case tuples.
+(spit "/tmp/cg-guard-width.janet" (string
+  "(defn half-f32 {:hint {:params [:float] :returns :float}} [x] (* x 0.5))\n"
+  "(defn half-i32 {:hint {:params [:i32] :returns :i32}} [x] (+ x 1))\n"
+  "(defn main [] (print (half-f32 4) (half-i32 4)))\n"))
+(assert (= 0 (os/execute ["/bin/sh" "-c"
+  "rm -rf /tmp/cg-guard-width && ./build/bender tools/callgraph.janet /tmp/cg-guard-width.janet --emit-native-lib /tmp/cg-guard-width >/tmp/cg-guard-width.log 2>&1"] :p))
+  "float and integer native wrappers emit")
+(def guard-width-c (slurp "/tmp/cg-guard-width/native.c"))
+(assert (string/find "half_f32 argument 0 has wrong Janet type" guard-width-c)
+        "float32 wrapper emits number guard")
+(assert (string/find "half_i32 argument 0 has wrong Janet type" guard-width-c)
+        "integer wrapper emits number guard")
 (assert (string/find "native-telemetry id=00000001 name=k_ok" telemetry-c)
         "wrapper telemetry reports stable numeric kernel identity")
+(assert (string/find "atexit(native_telemetry_report_all)" telemetry-c)
+        "telemetry snapshots through atexit")
 (assert (= 0 (os/execute ["cc" "-O2" "-w" "-fwrapv"
   "-DJANET_NATIVE_TELEMETRY=0" "-Isrc/include" "-Isrc/conf"
   "/tmp/cg-ls/native.c" "build/libjanet.a" "-lm" "-lpthread"
@@ -469,8 +491,8 @@
   "-Isrc/include" "-Isrc/conf" "/tmp/cg-ls/native.c"
   "build/libjanet.a" "-lm" "-lpthread" "-o" "/tmp/cg-ls/native-dev"] :p))
   "development macro default compiles")
-(assert (string/find "native-telemetry id=00000001 name=k_ok boundary-call" telemetry-c)
-        "emitted wrapper carries diagnostic telemetry")
+(assert (string/find "_TELEMETRY_HIT() (++k_ok_telemetry_calls)" telemetry-c)
+        "wrapper collects calls without hot-path I/O")
 (assert (= 0 (os/execute ["cc" "-fsyntax-only" "-Isrc/include" "-Isrc/conf"
   "-DJANET_NATIVE_TELEMETRY=0" "/tmp/cg-ls/native.c"] :p))
   "release macro compiles telemetry out")
