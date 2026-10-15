@@ -878,9 +878,74 @@
 # params (never pfixed -- conflicts widen soundly as usual). Matching
 # is by defn name; same-name rows from different sources merge
 # conservatively (a slot seeds only if unanimous across all of them).
+# Never evaluate a profile: it is cache/user-controlled Janet data. Reject
+# trailing forms and malformed evidence before it can participate in seeding.
+(defn- profile-invalid [reason]
+  (error (string "invalid PGO profile: " reason)))
+
+(defn- profile-sequence [value field]
+  (unless (indexed? value) (profile-invalid (string field " must be indexed")))
+  value)
+
+(defn- profile-types [value field]
+  (when value
+    (each kind (profile-sequence value field)
+      (unless (keyword? kind) (profile-invalid (string field " has non-keyword type")))))
+  value)
+
+(defn- profile-origins [value field]
+  (def origins (if (indexed? value) value [value]))
+  (each origin origins
+    (unless (keyword? origin) (profile-invalid (string field " has non-keyword origin"))))
+  value)
+
+(defn- profile-bound [value]
+  (unless (or (nil? value)
+              (and (number? value) (= value value))
+              (= value "inf") (= value "-inf"))
+    (profile-invalid "invalid range bound"))
+  value)
+
+(defn- profile-rows [path]
+  (def text (slurp path))
+  (unless text (profile-invalid "cannot read profile"))
+  (def forms (parse-all text))
+  (unless (= 1 (length forms)) (profile-invalid "expected exactly one data form"))
+  (def rows (forms 0))
+  (profile-sequence rows "rows")
+  (each row rows
+    (unless (and (indexed? row) (= 2 (length row)))
+      (profile-invalid "row must be [identity info]"))
+    (def id (row 0))
+    (def info (row 1))
+    (unless (and (indexed? id) (= 3 (length id))
+                 (or (nil? (id 0)) (string? (id 0)))
+                 (number? (id 1)) (= (id 1) (math/trunc (id 1)))
+                 (or (nil? (id 2)) (string? (id 2)))
+                 (table? info))
+      (profile-invalid "invalid row identity or info"))
+    (def calls (get info :calls))
+    (unless (and (number? calls) (>= calls 0) (= calls (math/trunc calls)))
+      (profile-invalid "invalid call count"))
+    (each field [:params :elems]
+      (def slots (profile-sequence (get info field @[]) field))
+      (each slot slots (profile-types slot field)))
+    (profile-types (get info :rets @[]) :rets)
+    (each field [:mins :maxs]
+      (each value (profile-sequence (get info field @[]) field)
+        (profile-bound value)))
+    (profile-origins (get info :from :home) :from)
+    (def by-slot (profile-sequence (get info :type-from @[]) :type-from))
+    (each mapping by-slot
+      (unless (table? mapping) (profile-invalid "invalid type provenance slot"))
+      (each [kind origins] (pairs mapping)
+        (unless (keyword? kind) (profile-invalid "invalid provenance type"))
+        (profile-origins origins :type-from))))
+  rows)
+
 (var profile-index nil)
 (when profile-file
-  (def rows (eval (parse (slurp profile-file))))
+  (def rows (profile-rows profile-file))
   # Non-finite range bounds arrive as tagged strings ("inf"/"-inf"):
   # the C dumper cannot emit bare inf (parse reads it back as a symbol
   # and aborted every profile re-load). Map them to float infinities;

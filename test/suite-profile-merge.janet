@@ -201,4 +201,38 @@
 (assert (nil? (string/find "profile-seed wseed" unknown-log))
         "unknown history never seeds")
 
+# Cached profiles are data, never code: a hostile form must not execute.
+(spit "/tmp/pmg-hostile.jdn"
+  "(do (spit \"/tmp/pmg-profile-executed\" \"bad\") @[])\n")
+(try (os/rm "/tmp/pmg-profile-executed") ([_] nil))
+(def [evil-code evil-text]
+  (run-out "./build/bender" "tools/callgraph.janet" "/tmp/pmg-wonly.janet"
+           "--profile" "/tmp/pmg-hostile.jdn"))
+(assert (not (zero? evil-code)) "executable profile form rejected")
+(assert (nil? (os/stat "/tmp/pmg-profile-executed")) "profile never executes code")
+(assert (string/find "invalid PGO profile" evil-text) "invalid profile diagnostic")
+(spit "/tmp/pmg-trailing.jdn" "@[] (spit \"/tmp/pmg-profile-executed\" \"bad\")\n")
+(def [trailing-code trailing-text]
+  (run-out "./build/bender" "tools/callgraph.janet" "/tmp/pmg-wonly.janet"
+           "--profile" "/tmp/pmg-trailing.jdn"))
+(assert (not (zero? trailing-code)) "trailing form rejected")
+(assert (nil? (os/stat "/tmp/pmg-profile-executed")) "trailing form never executes")
+(spit "/tmp/pmg-bare.jdn" "[[\"/tmp/pmg-wonly.janet\" 1 \"wkernel\"] {:calls 1}]\n")
+(def [bare-code bare-text]
+  (run-out "./build/bender" "tools/callgraph.janet" "/tmp/pmg-wonly.janet"
+           "--profile" "/tmp/pmg-bare.jdn"))
+(assert (not (zero? bare-code)) "bare tuple profile rejected")
+(assert (string/find "invalid PGO profile" bare-text) "bare tuple diagnostic")
+(spit "/tmp/pmg-malformed.jdn" (string/format "%j"
+  @[@[@["/tmp/pmg-wonly.janet" 1 "wkernel"]
+      @{:calls 1 :params @[@[:double]] :mins @[0]
+        :maxs @[1] :elems @[] :rets @[:double]
+        :type-from @[@{:double "not-origins"}]}]]))
+(def [malformed-code malformed-text]
+  (run-out "./build/bender" "tools/callgraph.janet" "/tmp/pmg-wonly.janet"
+           "--profile" "/tmp/pmg-malformed.jdn"))
+(assert (not (zero? malformed-code)) "malformed provenance rejected")
+(assert (string/find "invalid PGO profile" malformed-text)
+        "malformed provenance diagnostic")
+
 (end-suite)
