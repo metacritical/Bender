@@ -618,10 +618,11 @@
 
 # with-vars
 # 6ceaf9d28
-(var abc 123)
-(assert (= 356 (with-vars [abc 456] (- abc 100))) "with-vars 1")
-(assert-error "with-vars 2" (with-vars [abc 456] (error :oops)))
-(assert (= abc 123) "with-vars 3")
+((fn []
+  (var abc 123)
+  (assert (= 356 (with-vars [abc 456] (- abc 100))) "with-vars 1")
+  (assert-error "with-vars 2" (with-vars [abc 456] (error :oops)))
+  (assert (= abc 123) "with-vars 3")))
 
 # Top level unquote
 # 2487162cc
