@@ -5610,6 +5610,14 @@
   (def cut (if (> (length clean) 63) (string/slice clean 0 63) clean))
   (if (empty? cut) "janet-app" cut))
 
+# Bind gateable evidence to the exact source bytes, not filesystem mtime:
+# two edits in one timestamp tick must never reuse old observations.
+(defn- aot-source-identity [paths]
+  (try (do (def evidence (map (fn [path] [(os/realpath path) (string (slurp path))]) paths))
+           # `map` is eager; a missing or unreadable source rejects reuse.
+           evidence)
+    ([_] nil)))
+
 (defn- aot-cache-fresh? [prof paths]
   # profile newer than every source (and existing at all)
   (def pst (os/stat prof))
@@ -5670,8 +5678,10 @@
         (def meta (string cdir "/" key ".meta"))
         (def snapshot (string cdir "/" key ".input"))
         (def current-input captured-input)
-        (def identity {:version 1 :args workload :has-stdin (not (empty? stdin))
-                       :stdin-bytes (if current-input (string current-input) nil)})
+        (def identity {:version 2 :args workload :has-stdin (not (empty? stdin))
+                       :stdin-bytes (if current-input (string current-input) nil)
+                       :sources (aot-source-identity sources)})
+        (unless (get identity :sources) (error "missing PGO source identity"))
         # Legacy and differently replayed runs cannot contribute to this gate.
         (def same-workload
           (and (os/stat meta) (= :file (os/stat cached :mode))
@@ -5961,10 +5971,13 @@
                    (and (os/stat cmeta) (os/stat cwork) (os/stat cstdin)
                      (= :file (os/stat cprof :mode))
                      (def recorded (try (parse (slurp cmeta)) ([_] nil)))
+                     (def current-sources (aot-source-identity [src ;includes ;extrac]))
+                     current-sources
                      (deep= recorded
-                       {:version 1 :args (string (slurp cwork))
+                       {:version 2 :args (string (slurp cwork))
                         :has-stdin (not (empty? (string (slurp cstdin))))
-                        :stdin-bytes (if (os/stat cinput) (string (slurp cinput)) nil)})
+                        :stdin-bytes (if (os/stat cinput) (string (slurp cinput)) nil)
+                        :sources current-sources})
                      (if (get recorded :has-stdin)
                        (os/stat cinput)
                        (nil? (os/stat cinput)))))

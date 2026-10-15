@@ -367,7 +367,10 @@ manual intervention after a one-time workload:
   creates a versioned workload record and immutable stdin snapshot. Repeated
   explicit runs with identical arguments and stdin bytes accumulate calls,
   union types, and widen ranges; changed workloads start fresh. Legacy pairs
-  without that record are ineligible for auto-application. The cache transaction
+  without that record are ineligible for auto-application. Version 2 metadata
+  also binds the exact source paths and bytes, rejecting rapid same-timestamp
+  edits and missing sources; older metadata is intentionally ineligible.
+  The cache transaction
   is serialized; a busy cache falls back to unoptimized rather than reading
   partially published evidence.
 - **Plain builds auto-apply.** `bender --aot app --native -o app`
