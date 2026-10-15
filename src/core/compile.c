@@ -425,6 +425,15 @@ found:
         return ret;
     }
 
+    /* Upvalue instructions encode the parent's slot in one byte. Reject a
+     * far slot before recording the capture, rather than truncating it and
+     * reading or writing an unrelated parent local at runtime. */
+    if (ret.index > 0xFF) {
+        janetc_error(c, janet_formatc("cannot capture parent local %q: captured upvalue slot %d exceeds bytecode limit 255",
+                                      janet_wrap_symbol(sym), ret.index));
+        return janetc_cslot(janet_wrap_nil());
+    }
+
     /* non-local scope needs to expose its environment */
     JanetScope *original_scope = scope;
     pair->keep = 1;

@@ -200,6 +200,56 @@
 (check-good-compile '(do (def [] [1]) nil) "def with empty tuple binding 1")
 (check-good-compile '(do (def x (def [] [1])) x) "def with empty tuple binding 2")
 
+# The allocator skips 240-255, making formal #240 the first far slot
+# (256). A capture of that slot must not truncate its operand to slot 0.
+(let [near-params (seq [i :range [0 240]] (symbol (string "boundary-param-" i)))
+      far-params (seq [i :range [0 241]] (symbol (string "boundary-param-" i)))
+      near-form (tuple 'fn (tuple ;near-params)
+                       (tuple 'fn [] (get near-params 239)))
+      near-write (tuple 'fn (tuple ;(take 239 near-params))
+                        (tuple 'do (tuple 'var 'near-target 7)
+                                   (tuple 'tuple
+                                          (tuple 'fn [] (tuple 'do
+                                                                 (tuple 'set 'near-target 42)
+                                                                 'near-target))
+                                          (tuple 'fn [] 'near-target))))
+      far-read (tuple 'fn (tuple ;far-params)
+                      (tuple 'fn [] (get far-params 240)))
+      # The first local after 240 arguments also occupies slot 256. Use
+      # a mutable binding to exercise both the write and read paths.
+      far-write (tuple 'fn (tuple ;near-params)
+                       (tuple 'do (tuple 'var 'far-target 7)
+                                  (tuple 'fn [] (tuple 'do
+                                                         (tuple 'set 'far-target 42)
+                                                         'far-target))))]
+  (each opt [0 1 2 3]
+    (setdyn *optimize* opt)
+    (let [compiled-near (compile near-form (curenv))]
+      (assert (function? compiled-near) (string "near boundary compiles " opt))
+      (when (function? compiled-near)
+        (let [parent (compiled-near)
+              child (parent ;(range 240))]
+          (assert (= 239 (child))
+                  (string "near boundary closure reads last parameter " opt)))))
+    (let [compiled-write (compile near-write (curenv))]
+      (assert (function? compiled-write) (string "near boundary write compiles " opt))
+      (when (function? compiled-write)
+        (let [parent (compiled-write)
+              children (parent ;(range 239))
+              writer (children 0)
+              reader (children 1)]
+          (assert (= 7 (reader)) (string "near captured value before write " opt))
+          (assert (= 42 (writer)) (string "near captured write returns value " opt))
+          (assert (= 42 (reader)) (string "near captured value after write " opt)))))
+    (each [case-name form target-name] [["read" far-read "boundary-param-240"]
+                                        ["write" far-write "far-target"]]
+      (let [compiled-far (compile form (curenv))
+            diagnostic (get compiled-far :error)]
+        (assert (and (table? compiled-far) diagnostic
+                     (string/find (string "cannot capture parent local " target-name) diagnostic)
+                     (string/find "captured upvalue slot 256 exceeds bytecode limit 255" diagnostic))
+                (string "far parent upvalue " case-name " optimization " opt))))))
+
 # Optimization edge cases
 (check-lint-compile '|(when-with [_ nil] (print $200)) "dead code + upvalues 1")
 (check-lint-compile '|(when-with [_ nil] (print $255)) "dead code + upvalues 2")

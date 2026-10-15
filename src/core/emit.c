@@ -125,6 +125,14 @@ static void janetc_movenear(JanetCompiler *c,
                         JOP_GET_INDEX);
         }
     } else if (src.envindex >= 0) {
+        if (src.index > 0xFF) {
+            janetc_cerror(c, "captured upvalue slot exceeds bytecode limit 255");
+            return;
+        }
+        if (src.envindex > 0xFF) {
+            janetc_cerror(c, "upvalue environment index exceeds bytecode limit 255");
+            return;
+        }
         janetc_emit(c,
                     ((uint32_t)(src.index) << 24) |
                     ((uint32_t)(src.envindex) << 16) |
@@ -152,6 +160,14 @@ static void janetc_moveback(JanetCompiler *c,
                     JOP_PUT_INDEX);
         janetc_regalloc_freetemp(&c->scope->ra, refreg, JANETC_REGTEMP_5);
     } else if (dest.envindex >= 0) {
+        if (dest.index > 0xFF) {
+            janetc_cerror(c, "captured upvalue slot exceeds bytecode limit 255");
+            return;
+        }
+        if (dest.envindex > 0xFF) {
+            janetc_cerror(c, "upvalue environment index exceeds bytecode limit 255");
+            return;
+        }
         /* Convert src to near reg */
         if (src > 255) {
             int32_t newsrc = JANETC_REGTEMP_5 + 0xF0;
