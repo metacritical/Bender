@@ -60,13 +60,16 @@
 # concrete widths widens to :number; non-numeric involvement gives up
 (defn narrow [cur new]
   (cond
+    # Unlike :unknown (no evidence yet), a conflicting call-site union
+    # must remain boxed across later calls and fixpoint rounds.
+    (or (= cur :any) (= new :any)) :any
     (= cur new) cur
     (= cur :unknown) new
     (= new :unknown) cur
-    (= cur :number) (if (get numeric-types new) new :unknown)
-    (= new :number) (if (get numeric-types cur) cur :unknown)
+    (= cur :number) (if (get numeric-types new) new :any)
+    (= new :number) (if (get numeric-types cur) cur :any)
     (and (get numeric-types cur) (get numeric-types new)) :number
-    :unknown))
+    :any))
 
 (def arith-ops
   @{'add true 'sub true 'mul true 'divf true
@@ -107,14 +110,15 @@
     'neq true 'neqim true 'ltu true 'gtu true 'cmp true 'next true})
 
 (defn const-num-type [d cidx]
-  # :long/:double for numeric constants, :unknown otherwise
+  # Preserve concrete nonnumeric evidence: :unknown means unseen, not
+  # a boxed value that may be ignored while specializing a callee.
   (def consts (or (get d :constants) @[]))
   (if (>= cidx (length consts))
     :unknown
     (do (def c (consts cidx))
       (if (= :number (type c))
         (if (= c (math/trunc c)) :long :double)
-        :unknown))))
+        (type c)))))
 
 (defn analyze [defs call-map &opt profile coremap]
   # defs: array of @{:d disasm :hint ...}; call-map: id -> {pc -> tid};
