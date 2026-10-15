@@ -56,8 +56,11 @@ int main(void) {
                   "unvisited registry slot is removed");
     fail |= check(head->gc.data.refcount == 1, "unvisited foreign claim released");
     janet_gcunroot(janet_wrap_array(holder));
-    /* The home claim is deliberately left to janet_deinit's owning VM
-     * teardown; no cross-VM zero-ref callback is needed in this test. */
+    /* This synthetic setup removed the home registry entry without
+     * releasing its original claim. janet_deinit cannot discover that
+     * orphaned claim, so the block is intentionally retained until this
+     * short-lived test process exits; the assertion above tests only the
+     * newly acquired foreign claim's balanced release. */
     janet_deinit();
     if (!fail) puts("PASS: raw mark owns exactly one claim and purges its slot");
     return fail != 0;
