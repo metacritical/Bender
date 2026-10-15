@@ -193,7 +193,14 @@ static void janet_mark_abstract(void *adata) {
          * collectable at any GC boundary, surviving only while a
          * sender-side reference happened to keep them alive. */
         Janet kv = janet_wrap_abstract(adata);
-        if (!janet_truthy(janet_table_get(&janet_vm.threaded_abstracts, kv))) {
+        Janet registered = janet_table_get(&janet_vm.threaded_abstracts, kv);
+        if (!janet_truthy(registered)) {
+            /* A foreign raw heap edge can reach this abstract without
+             * unmarshaling it first. Its first registry insertion must own
+             * a claim, just like a transferred channel-buffer reference.
+             * An existing false slot already owns one. */
+            if (janet_checktype(registered, JANET_NIL))
+                janet_abstract_incref(adata);
             janet_table_put(&janet_vm.threaded_abstracts, kv, janet_wrap_true());
             /* Stale heap references can outlive the abstract: freed heads
              * are poisoned (type == NULL), nothing left to mark, and
