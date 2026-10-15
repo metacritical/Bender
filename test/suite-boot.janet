@@ -638,18 +638,19 @@
 (assert-error "comptime issue" (eval '(comptime (error "oops"))))
 
 # 962cd7e5f
-(var counter 0)
-(when-with [x nil |$]
-           (++ counter))
-(when-with [x 10 |$]
-           (+= counter 10))
+((fn []
+  (var counter 0)
+  (when-with [x nil |$]
+             (++ counter))
+  (when-with [x 10 |$]
+             (+= counter 10))
 
-(assert (= 10 counter) "when-with 1")
+  (assert (= 10 counter) "when-with 1")
 
-(if-with [x nil |$] (++ counter) (+= counter 10))
-(if-with [x true |$] (+= counter 20) (+= counter 30))
+  (if-with [x nil |$] (++ counter) (+= counter 10))
+  (if-with [x true |$] (+= counter 20) (+= counter 30))
 
-(assert (= 40 counter) "if-with 1")
+  (assert (= 40 counter) "if-with 1")))
 
 # a45509d28
 (def a @[])
