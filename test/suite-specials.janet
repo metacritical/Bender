@@ -91,8 +91,9 @@
 
 # Metadata
 # ec2d7bf34
-# Script-level defs are lexical in a single AOT thunk, so exercise their
-# runtime metadata explicitly in an environment in both execution modes.
+# At interpreter top level, dyn reads the metadata of these defs; in an AOT
+# one-thunk script the same defs are lexical and dyn cannot see them. Evaluate
+# equivalent definitions in an explicit runtime environment for both targets.
 (def metadata-env (make-env))
 (def foo-with-tags :a-tag :bar)
 (eval '(def foo-with-tags :a-tag :bar) metadata-env)
