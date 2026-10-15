@@ -442,10 +442,38 @@
 (spit "/tmp/cg-libskip.janet" (string
   "(defn k-ok {:hint {:params [:double] :returns :double}} [x] (+ x 1))\n"
   "(defn k-bad [t] (t :key))\n"
-  "(defn main [] (print (k-ok 1) (k-bad @{:key 2})))\n"))
+  "(defn call-ok {:hint {:params [:double] :returns :double}} [x] (k-ok x))\n"
+  "(defn main [] (print (call-ok 3) (k-bad @{:key 2})))\n"))
 (assert (= 0 (os/execute ["/bin/sh" "-c"
   "rm -rf /tmp/cg-ls && ./build/bender tools/callgraph.janet /tmp/cg-libskip.janet --emit-native-lib /tmp/cg-ls > /tmp/cg-ls-out.txt 2>&1"] :p))
   "lib emit run")
+(def telemetry-c (slurp "/tmp/cg-ls/native.c"))
+(assert (string/find "JANET_NATIVE_TELEMETRY" telemetry-c)
+        "wrapper telemetry has release compile switch")
+(assert (string/find "boundary-call sampled_total" telemetry-c)
+        "wrapper telemetry samples boundaries")
+(assert (string/find "guard-failure total" telemetry-c)
+        "wrapper telemetry counts boundary guard failures")
+(assert (string/find "native-telemetry id=00000001 name=k_ok" telemetry-c)
+        "wrapper telemetry reports stable numeric kernel identity")
+(assert (= 0 (os/execute ["cc" "-O2" "-w" "-fwrapv"
+  "-DJANET_NATIVE_TELEMETRY=0" "-Isrc/include" "-Isrc/conf"
+  "/tmp/cg-ls/native.c" "build/libjanet.a" "-lm" "-lpthread"
+  "-o" "/tmp/cg-ls/native-release"] :p))
+  "release macro compiles telemetry out")
+(assert (= 0 (os/execute ["/tmp/cg-ls/native-release"] :e
+  {:out (file/open "/tmp/cg-ls-release.out" :w)
+   :err (file/open "/tmp/cg-ls-release.err" :w)}))
+  "macro-disabled wrapper runs")
+(assert (= 0 (os/execute ["cc" "-O2" "-w" "-fwrapv"
+  "-Isrc/include" "-Isrc/conf" "/tmp/cg-ls/native.c"
+  "build/libjanet.a" "-lm" "-lpthread" "-o" "/tmp/cg-ls/native-dev"] :p))
+  "development macro default compiles")
+(assert (string/find "native-telemetry id=00000001 name=k_ok boundary-call" telemetry-c)
+        "emitted wrapper carries diagnostic telemetry")
+(assert (= 0 (os/execute ["cc" "-fsyntax-only" "-Isrc/include" "-Isrc/conf"
+  "-DJANET_NATIVE_TELEMETRY=0" "/tmp/cg-ls/native.c"] :p))
+  "release macro compiles telemetry out")
 (def lsout (slurp "/tmp/cg-ls-out.txt"))
 (assert (not (nil? (string/find "native-skip" lsout))) "lib path prints skips")
 (assert (not (nil? (string/find "k-bad" lsout))) "lib skip names the refused def")

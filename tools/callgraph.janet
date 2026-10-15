@@ -2586,8 +2586,9 @@
   (spit (string outdir "/expected.txt") (string (string/join expected "\n") "\n"))
   (print "native " (length emitted) " fns " (length calls) " samples " outdir))
 
-(defn wrapper-for [nm pt rt]
+(defn wrapper-for [nm pt rt telemetry-id]
   (def cn (emit-c-name nm))
+  (def tid (string/format "%08X" telemetry-id))
   # boundary casts: every int width unboxes/wraps as integer (C
   # implicit conversion narrows/widens to the kernel's exact width),
   # float widths as number, arrays/tuples/pointers pass through
@@ -2607,10 +2608,21 @@
                 (and (get int-hints rt) (not= int-policy :promote))
                 "janet_wrap_integer"
                 "janet_wrap_number"))
-  (string "static Janet " cn "_wrapper(int32_t argc, Janet *argv) {\n"
-          "    if (argc != " (length pt) ") janet_panicf(\"native " cn
-          " called with %d arguments, expected " (length pt) "\", argc);\n"
-          "    return " rv "(" cn "(" ps "));\n}\n"))
+  (string "#ifndef JANET_NATIVE_TELEMETRY\n#define JANET_NATIVE_TELEMETRY 1\n#endif\n"
+          "#if JANET_NATIVE_TELEMETRY\n"
+          "static JANET_THREAD_LOCAL unsigned long long " cn "_telemetry_calls;\n"
+          "static JANET_THREAD_LOCAL unsigned long long " cn "_telemetry_guard_failures;\n"
+          "#define " cn "_TELEMETRY_HIT() do { if ((++" cn "_telemetry_calls & 1023ULL) == 1ULL) \\\n"
+          "  fprintf(stderr, \"native-telemetry id=" tid " name=" cn " boundary-call sampled_total=%llu\\n\", " cn "_telemetry_calls); } while (0)\n"
+          "#define " cn "_TELEMETRY_GUARD() do { ++" cn "_telemetry_guard_failures; \\\n"
+          "  fprintf(stderr, \"native-telemetry id=" tid " name=" cn " guard-failure total=%llu\\n\", " cn "_telemetry_guard_failures); } while (0)\n"
+          "#else\n#define " cn "_TELEMETRY_HIT() ((void)0)\n#define " cn "_TELEMETRY_GUARD() ((void)0)\n#endif\n"
+          "static Janet " cn "_wrapper(int32_t argc, Janet *argv) {\n"
+          "    if (argc != " (length pt) ") { " cn "_TELEMETRY_GUARD(); janet_panicf(\"native " cn
+          " called with %d arguments, expected " (length pt) "\", argc); }\n"
+          "    " cn "_TELEMETRY_HIT();\n"
+          "    return " rv "(" cn "(" ps "));\n}\n"
+          "#undef " cn "_TELEMETRY_HIT\n#undef " cn "_TELEMETRY_GUARD\n"))
 
 (when emit-native-dir (emit-native-all emit-native-dir))
 
@@ -2666,7 +2678,7 @@
             (put emitted-names id nm)
             (array/push kernels {:name nm :code (res :code)
                                  :externs (res :externs)
-                                 :wrapper (wrapper-for nm (get pts id) (rts id))})
+                                 :wrapper (wrapper-for nm (get pts id) (rts id) id)})
             (set changed true))
           (put lib-skip-reason id reason)))))
   (each id (filter (fn [k] (number? k)) (sort (keys cand)))
