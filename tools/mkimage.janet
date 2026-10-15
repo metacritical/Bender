@@ -209,12 +209,20 @@
   #if defined(_WIN32)
   #include <direct.h>
   #include <io.h>
+  #include <fcntl.h>
+  #define getpid _getpid
+  #define open _open
+  #define close _close
+  #define O_WRONLY _O_WRONLY
+  #define O_CREAT _O_CREAT
+  #define O_EXCL _O_EXCL
   #define JANET_AOT_MKDIR(d) _mkdir(d)
   #define JANET_AOT_PROBE(p) (_access(p, 0) == 0)
   #else
   #include <sys/stat.h>
   #include <sys/types.h>
   #include <unistd.h>
+  #include <fcntl.h>
   #define JANET_AOT_MKDIR(d) mkdir(d, 0755)
   #define JANET_AOT_PROBE(p) (access(p, F_OK) == 0)
   #endif
@@ -287,13 +295,11 @@
        * destination without inheriting this VM's active profile table. */
       char janet_aot_profile_path[4096] = {0};
       int janet_aot_profile_active = 0;
-      /* Auto-PGO, first runs only (on demand, never always-on): when
-       * no cached profile exists for this binary yet — or
-       * JANET_AUTO_PGO=1 forces it — collect this run into the
-       * standard cache. The next plain `bender --aot --native` build
-       * widens from it and recompiles automatically; the binary after
-       * that runs clean. Never when JANET_NO_PROFILE is set. Never
-       * breaks the run: every failure here silently runs clean.
+      /* Auto-PGO collects the first qualifying run to the base cache.
+       * JANET_AUTO_PGO=1 records further runs in unique sidecars,
+       * merged fail-closed at the next native build. Never overwrite
+       * existing evidence. JANET_NO_PROFILE disables collection;
+       * failures here silently run clean.
        * Locked-down targets (iOS: no JIT/dynamic codegen) compile
        * the whole mechanism out with -DJANET_NO_PGO. */
       {
@@ -318,11 +324,28 @@
           }
           if (path[0] != '\0' && (force || !JANET_AOT_PROBE(path))) {
               janet_aot_mkdirp(dir);
-              janet_profile_start();
-              janet_aot_profile_active = 1;
-              if (!getenv("JANET_PROFILE_OUT"))
-                  snprintf(janet_aot_profile_path, sizeof(janet_aot_profile_path),
-                           "%s", path);
+              if (force && JANET_AOT_PROBE(path)) {
+                   char sidecar[4096];
+                   unsigned attempt;
+                   for (attempt = 0; attempt < 64; attempt++) {
+                       int fd;
+                       snprintf(sidecar, sizeof(sidecar), "%s.run-%ld-%u.pending",
+                                path, (long) getpid(), attempt);
+                       fd = open(sidecar, O_WRONLY | O_CREAT | O_EXCL, 0600);
+                       if (fd < 0) continue;
+                       close(fd);
+                       snprintf(path, sizeof(path), "%s", sidecar);
+                       break;
+                   }
+                   if (attempt == 64) path[0] = 0;
+               }
+               if (path[0] != 0) {
+                   janet_profile_start();
+                    janet_aot_profile_active = 1;
+                   if (!getenv("JANET_PROFILE_OUT"))
+                       snprintf(janet_aot_profile_path, sizeof(janet_aot_profile_path),
+                                "%s", path);
+               }
           }
       }
 #endif
@@ -512,6 +535,19 @@
       }
 #endif
       janet_deinit();
+#ifndef JANET_NO_PGO
+      /* Only completed dumps become visible to cache readers. */
+      if (janet_aot_profile_path[0] != 0) {
+          size_t len = strlen(janet_aot_profile_path);
+          if (len > 8 && strcmp(janet_aot_profile_path + len - 8, ".pending") == 0) {
+              char completed[4096];
+              snprintf(completed, sizeof(completed), "%.*s.jdn",
+                       (int) (len - 8), janet_aot_profile_path);
+              if (JANET_AOT_PROBE(janet_aot_profile_path))
+                  rename(janet_aot_profile_path, completed);
+          }
+      }
+#endif
       return status;
   }
   ```
