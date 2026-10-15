@@ -367,6 +367,15 @@ manual intervention after a one-time workload:
   same parity gate. Gate failure falls back to unoptimized with a
   warning (never breaks the build); `--pgo` still dies on mismatch.
   `--no-auto-pgo` opts out; missing/stale pieces print what to do.
+- **Size builds.** `bender --aot app.janet -Oz -o app` and
+  `bender --aot app.janet --native -Oz -o app` request compiler size
+  optimization, function/data sections and platform dead-section removal,
+  then strip debug symbols from a staged binary before installation. `-Oz`
+  requires a binary build (not `-c`, `-S`, or `-E`); unsupported compiler
+  flags or targets fail instead of silently producing a normal build.
+  On macOS arm64, a 1,258,312-byte plain fixture became 1,028,464 bytes
+  (fixture-specific, not a general compression guarantee). This flag does
+  not itself disable runtime profile collection or replace PGO parity.
 - **Locked-down targets.** `-DJANET_NO_PGO` (iOS: no JIT/dynamic
   codegen) compiles the binary-side mechanism out entirely; explicit
   profiling APIs keep working.

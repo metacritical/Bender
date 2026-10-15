@@ -5719,6 +5719,7 @@
   (var extrac @[])
   (var ldflags "")
   (var native false)
+  (var size-opt false)
   (var only-c false)
   (var print-c false)
   (var run-mode false)
@@ -5738,6 +5739,7 @@
       (= a "-E") (do (set run-mode true) (++ i)
                      (while (< i n) (array/push appargs (in aotargs i)) (++ i)))
       (= a "--native") (do (set native true) (++ i))
+      (= a "-Oz") (do (set size-opt true) (++ i))
       (= a "--externs") (do (set externs (aot-next aotargs i "--externs")) (+= i 2))
       (= a "--include") (do (array/push includes (aot-next aotargs i "--include")) (+= i 2))
       (= a "--pgo") (do (set pgo true) (set pgo-args (aot-next aotargs i "--pgo")) (+= i 2))
@@ -5749,7 +5751,9 @@
       (do (when (not (empty? src)) (aot-die "one input only"))
           (set src a) (++ i))))
   (when (empty? src)
-    (aot-die "usage: bender --aot app.janet [-o app] [-c] [-S] [-E args...] [--native] [--externs FILE] [--include FILE] [-x FILE] [--ldflags STR] [--pgo ARGS] [--pgo-stdin FILE] [--no-auto-pgo]"))
+    (aot-die "usage: bender --aot app.janet [-o app] [-c] [-S] [-E args...] [--native] [-Oz] [--externs FILE] [--include FILE] [-x FILE] [--ldflags STR] [--pgo ARGS] [--pgo-stdin FILE] [--no-auto-pgo]"))
+  (when (and size-opt (or only-c print-c run-mode))
+    (aot-die "-Oz needs a real binary build (no -c/-S/-E)"))
   (when pgo
     (unless native (aot-die "--pgo needs --native (profiling seeds kernel shaping)"))
     (when (or only-c print-c run-mode)
@@ -5777,6 +5781,22 @@
   (def cc (os/getenv "CC" "cc"))
   (def inc-args includes) # callgraph takes extra files bare (no flag)
   (def cfile (string out ".c"))
+  (def optflag (if size-opt "-Oz" "-O3"))
+  (defn size-finish [path]
+    (when size-opt
+      # Strip the staged binary before installing it. A failure leaves
+      # the existing output intact rather than shipping an unstripped file.
+      (unless (= 0 (os/execute ["strip" (if (= (os/which) :macos) "-x" "--strip-debug") path] :p))
+        (aot-die (string "could not strip size build " path) 1))
+      (eprint "bender --aot: -Oz binary " path " " (os/stat path :size) " bytes")))
+  (def sizelink (if size-opt (case (os/which)
+                                    :macos ["-Wl,-dead_strip"]
+                                    :linux ["-Wl,--gc-sections"]
+                                    (aot-die "-Oz unsupported on this target")) []))
+  (when size-opt
+    (unless (= 0 (os/execute [cc optflag "-ffunction-sections" "-fdata-sections"
+                                     "-x" "c" "-c" "-o" "/dev/null" "/dev/null"] :p))
+      (aot-die "C compiler does not support -Oz section flags")))
   (if (not native)
     # plain image build (also serves -E below)
     (do (aot-run-tool tooldir "mkimage.janet" [src cfile])
@@ -5790,12 +5810,15 @@
           # -fno-math-errno/-fno-trapping-math: safe fast-math subset,
           # lets LLVM hoist/simplify double code without reassociation
           # (oracle-identical, unlike -ffast-math).
-          (aot-run-cc [cc "-O3" "-fwrapv"
+          (def target (if size-opt (string out ".size-tmp") out))
+          (aot-run-cc [cc optflag ;(if size-opt ["-ffunction-sections" "-fdata-sections"] []) "-fwrapv"
                        "-fno-math-errno" "-fno-trapping-math"
                        "-I" (string root "/build")
                        "-I" (string root "/src/include")
                        cfile (string root "/build/libjanet.a")
-                       "-lm" "-lpthread" "-o" out])
+                       ;sizelink "-lm" "-lpthread" "-o" target])
+          (size-finish target)
+          (when size-opt (os/rename target out))
           (unless run-mode (print "built " out)))))
     # native (hybrid) build
     (do (def ndir (string out "-native"))
@@ -5933,13 +5956,13 @@
         (unless only-c
           (def native-c (string ndir "/native.c"))
           (def libjanet (string root "/build/libjanet.a"))
-          (def ccbase [cc "-O3" "-fwrapv"
+          (def ccbase [cc optflag ;(if size-opt ["-ffunction-sections" "-fdata-sections"] []) "-fwrapv"
                        "-fno-math-errno" "-fno-trapping-math"
                        "-w" "-DJANET_AOT_NATIVE_INIT"
                        "-I" (string root "/build")
                        "-I" (string root "/src/include")
                        cfile native-c ;extrac libjanet
-                       ;(aot-words ldflags) "-lm" "-lpthread" "-o"])
+                       ;(aot-words ldflags) ;sizelink "-lm" "-lpthread" "-o"])
           (var gate-fallback false)
           (when gate
             # phase 1+2 (seeded build, parity gate): binary goes to a
@@ -5981,13 +6004,17 @@
                         (set gate-fallback true))
                       (do (eprint "bender --aot: PGO PARITY FAILED (artifacts kept in " ndir ")")
                         (os/exit 1)))
-                    (do (os/rename candidate out)
+                    (do (size-finish candidate)
+                      (os/rename candidate out)
                       (eprint "bender --aot: pgo parity ok, installed " out)
                       # explicit --pgo refreshes the cache (profile +
                       # workload) for future automatic builds.
                       (when pgo (aot-cache-store out ndir gate-workload pgo-stdin [src ;includes ;extrac] captured-stdin))))))
           (unless (and gate (not gate-fallback))
-            (do (aot-run-cc [;ccbase out])
+            (do (def target (if size-opt (string out ".size-tmp") out))
+              (aot-run-cc [;ccbase target])
+              (size-finish target)
+              (when size-opt (os/rename target out))
               (unless run-mode (print "built " out))))))))
   (when run-mode
     # -E: run the staged app with the remaining args, clean up, and
