@@ -2456,8 +2456,8 @@ recur:
     if (status > 0) {
         if (NULL != response.cb) {
             response.cb(response.msg);
-            janet_ev_dec_refcount();
         }
+        janet_ev_dec_refcount();
         goto recur;
     }
 }
