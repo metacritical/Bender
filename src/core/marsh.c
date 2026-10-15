@@ -707,7 +707,14 @@ void janet_marshal(
      * vectors) lives in C/struct scratch the collector cannot see; a
      * collection mid-operation could sweep the in-progress image or the
      * input's shared structure. The lock is released on all paths; a
-     * panic inside re-raises after unlocking (same signal as without). */
+     * panic inside re-raises after unlocking (same signal as without).
+     *
+     * Ordering: janet_restore(&tstate) re-applies the try-time
+     * gc_suspend (captured AFTER the lock), so the unlock must run
+     * AFTER the final restore — placing it before re-leaked +1 per
+     * call, permanently suspending collection in AOT runs (one fiber
+     * for the whole script, so the leak was live at gccollect; the
+     * interpreter wiped it at each form's janet_continue exit). */
     int lock = janet_gclock();
     JanetTryState tstate;
     JanetSignal sig = janet_try(&tstate);
@@ -716,11 +723,11 @@ void janet_marshal(
         marshal_one(&st, x, flags);
         janet_table_deinit(&st.seen);
     }
-    janet_gcunlock(lock);
     janet_v_free(st.seen_envs);
     janet_v_free(st.seen_defs);
     if (sig) {
         janet_restore(&tstate);
+        janet_gcunlock(lock);
         if (sig == JANET_SIGNAL_ERROR) {
             janet_panicv(tstate.payload);
         } else {
@@ -728,6 +735,7 @@ void janet_marshal(
         }
     }
     janet_restore(&tstate);
+    janet_gcunlock(lock);
 }
 
 typedef struct {
@@ -1753,12 +1761,16 @@ Janet janet_unmarshal(
     if (!usig) {
         nextbytes = unmarshal_one(&st, bytes, &out, flags);
     }
-    janet_gcunlock(ulock);
     janet_v_free(st.lookup_defs);
     janet_v_free(st.lookup_envs);
     janet_v_free(st.lookup);
+    /* Same ordering discipline as janet_marshal: unlock AFTER the
+     * final restore (the restore re-applies the try-time gc_suspend,
+     * which was captured after the lock), and before the re-raise on
+     * the signal path. Unlock-then-restore leaked +1 per call. */
     if (usig) {
         janet_restore(&ustate);
+        janet_gcunlock(ulock);
         if (usig == JANET_SIGNAL_ERROR) {
             janet_panicv(ustate.payload);
         } else {
@@ -1766,6 +1778,7 @@ Janet janet_unmarshal(
         }
     }
     janet_restore(&ustate);
+    janet_gcunlock(ulock);
     if (next) *next = nextbytes;
     return out;
 }
