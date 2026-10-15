@@ -5629,8 +5629,9 @@
                   (os/dir cdir)))
     @[]))
 
-# An exclusive directory serializes read/merge/replace/delete across build
-# processes. Contention is fail-closed: never merge from a stale snapshot.
+# An exclusive directory serializes cache profile/workload reads and writes
+# across build processes. Contention fails closed rather than reading a
+# partially published profile/metadata pair.
 (defn- aot-cache-transaction [cdir key action]
   (def lock (string cdir "/" key ".lock"))
   (unless (os/mkdir lock)
@@ -5640,7 +5641,7 @@
   (os/rmdir lock)
   result)
 
-(defn- aot-cache-store [out ndir workload stdin sources]
+(defn- aot-cache-store [out ndir workload stdin sources captured-input]
   # persist a successful --pgo build's profile + workload for future
   # automatic builds. Best effort, never fails the build.
   (try
@@ -5653,12 +5654,16 @@
         (def fresh (string ndir "/profile.jdn"))
         (def meta (string cdir "/" key ".meta"))
         (def snapshot (string cdir "/" key ".input"))
-        (def current-input (if (empty? stdin) nil (slurp stdin)))
+        (def current-input captured-input)
         (def identity {:version 1 :args workload :has-stdin (not (empty? stdin))
                        :stdin-bytes (if current-input (string current-input) nil)})
         # Legacy and differently replayed runs cannot contribute to this gate.
         (def same-workload
-          (and (os/stat meta) (os/stat cached)
+          (and (os/stat meta) (= :file (os/stat cached :mode))
+               (os/stat (string cdir "/" key ".workload"))
+               (= (string (slurp (string cdir "/" key ".workload"))) workload)
+               (os/stat (string cdir "/" key ".stdin"))
+               (= (string (slurp (string cdir "/" key ".stdin"))) stdin)
                (deep= (try (parse (slurp meta)) ([_] nil)) identity)
                (if current-input
                  (and (os/stat snapshot) (= (string (slurp snapshot)) (string current-input)))
@@ -5835,7 +5840,7 @@
         (set profile-args ["--profile" prof])
         (set gate true)
         (set gate-workload pgo-args)
-        (set gate-stdin pgo-stdin))
+        (set gate-stdin (if captured-stdin (string ndir "/stdin.capture") "")))
       # auto-PGO: no flags needed. A fresh cached profile (collected by
       # first binary runs or earlier --pgo builds, newer than sources,
       # with a recorded workload) applies automatically through the
@@ -5861,6 +5866,7 @@
                (aot-cache-transaction cdir key (fn []
                  (set workload-ok
                    (and (os/stat cmeta) (os/stat cwork) (os/stat cstdin)
+                     (= :file (os/stat cprof :mode))
                      (def recorded (try (parse (slurp cmeta)) ([_] nil)))
                      (deep= recorded
                        {:version 1 :args (string (slurp cwork))
@@ -5979,7 +5985,7 @@
                       (eprint "bender --aot: pgo parity ok, installed " out)
                       # explicit --pgo refreshes the cache (profile +
                       # workload) for future automatic builds.
-                      (when pgo (aot-cache-store out ndir gate-workload gate-stdin [src ;includes ;extrac]))))))
+                      (when pgo (aot-cache-store out ndir gate-workload pgo-stdin [src ;includes ;extrac] captured-stdin))))))
           (unless (and gate (not gate-fallback))
             (do (aot-run-cc [;ccbase out])
               (unless run-mode (print "built " out))))))))

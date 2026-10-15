@@ -114,8 +114,8 @@
 (assert (= expect-out (capture ["/tmp/apg-pgo"]))
         "optimized output correct")
 
-# 6. Forced follow-up binary runs never replace the cached base. The next
-# ordinary build folds sidecars into it before applying the parity gate.
+# 6. Forced binary runs have no replayable workload identity; keep their
+# sidecars diagnostic and never fold them into a gateable profile.
 (def cache-profile (string tmpcache "/janet/pgo/apg-pgo.jdn"))
 (def before (string (slurp cache-profile)))
 (assert (= 0 (os/execute ["/bin/sh" "-c"
@@ -128,10 +128,10 @@
 (assert (= 0 (os/execute ["/bin/sh" "-c"
   "./build/bender --aot /tmp/apg-demo.janet --native -o /tmp/apg-pgo >/tmp/apg-merged-out.txt 2>&1"] :p))
   "plain rebuild merges sidecar")
-(assert (not (= before (string (slurp cache-profile)))) "cache changes after merge")
-(assert (empty? (filter (fn [name] (string/has-prefix? "apg-pgo.jdn.run-" name))
-                        (os/dir (string tmpcache "/janet/pgo"))))
-        "merged sidecar removed")
+(assert (= before (string (slurp cache-profile))) "ungated sidecar never changes cache")
+(assert (= 1 (length (filter (fn [name] (string/has-prefix? "apg-pgo.jdn.run-" name))
+                             (os/dir (string tmpcache "/janet/pgo")))))
+        "ungated sidecar retained for diagnostics")
 (def merged-log (string (slurp "/tmp/apg-merged-out.txt")))
 (assert (string/find "parity ok" merged-log) "merged profile passes gate")
 (assert (= expect-out (capture ["/tmp/apg-pgo"])) "merged binary output correct")
