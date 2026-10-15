@@ -297,12 +297,18 @@ int32_t janet_abstract_decref_maybe_free(void *abst) {
          * flag_chanpend_node/janet_chan_deinit_q UAF at density.)
          * Non-threaded abstracts are single-VM: teardown inline. */
         if (head->gc.flags & JANET_MEMORY_THREADED_ABSTRACT) {
-            /* A foreign VM may be shutting down while the abstract's
-             * home loop is still alive. Its registry claim must be routed
-             * home, not finalized on this worker with surviving home
-             * Janet values pointing into the malloc-backed block. */
+            /* Shutdown cannot wait for a foreign home to drain its event
+             * pipe: the home may be busy collecting its own fibers (or
+             * already stopped), and a full pipe blocks this VM's teardown
+             * indefinitely. Nor may we finalize here: home values can
+             * still point into this block. Leave this last claim allocated
+             * until process exit instead. Normal, live-VM claims still
+             * route home for prompt finalization. */
             if (janet_vm.gc_teardown_inline &&
-                    (NULL == head->home_vm || head->home_vm == (void *) &janet_vm)) {
+                    NULL != head->home_vm && head->home_vm != (void *) &janet_vm) {
+                return result;
+            }
+            if (janet_vm.gc_teardown_inline) {
                 /* Home shutdown: the loop is gone. Inline teardown under
                  * the single-shot guard (skip the reachability
                  * deferral -- GC state is being destroyed anyway). */
