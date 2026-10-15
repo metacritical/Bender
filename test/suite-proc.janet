@@ -337,6 +337,22 @@
   (procx/pool-stop pool))
 ))
 
+# Regression: pool teardown interleaves home callbacks with major GC.
+# A completed fiber retains a channel nested in its public final result
+# even after unrelated pool channels lose their registry claims.
+((fn []
+(let [pool (procx/pool-spawn 2)
+      holder (fiber/new (fn [] @{:answer @[(ev/thread-chan 1)]}))]
+  (resume holder)
+  (procx/pool-stop pool)
+  (gccollect)
+  (gccollect)
+  (let [ch (((fiber/last-value holder) :answer) 0)]
+    (ev/give ch :kept)
+    (assert (= :kept (ev/take ch)) "post-pool final result pins nested channel"))
+  (assert (= :dead (fiber/status holder)) "final-result fiber completed"))
+))
+
 # 26. P2.3 cross-lane monitors: remote crash/clean observed on an
 # owner channel; unknown serials answer :noproc.
 ((fn []

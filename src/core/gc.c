@@ -91,14 +91,6 @@ static JANET_THREAD_LOCAL int32_t janet_gc_epoch = 0;
     (((janet_gc_header(m)->flags & JANET_MEM_EPOCH_MASK) >> JANET_MEM_EPOCH_SHIFT) \
      == janet_gc_epoch)
 
-/* BUG 2 density: reachable-in-last-collect probe for the threaded
- * teardown deferral (a GC-visible hold -- a channel queue item, a
- * parked fiber payload, the serials table -- must postpone teardown
- * even after the refcount hits zero). */
-int janet_gc_object_reachable(void *mem) {
-    return janet_gc_reachable((JanetGCObject *) mem);
-}
-
 static void janet_gc_epoch_next(void) {
     janet_gc_epoch = (janet_gc_epoch % 15) + 1;
 }
@@ -185,6 +177,13 @@ static void janet_mark_abstract(void *adata) {
     /* Check if abstract type is a threaded abstract type. If it is, marking means
      * updating the threaded_abstract table. */
     if ((janet_abstract_head(adata)->gc.flags & JANET_MEM_TYPEBITS) == JANET_MEMORY_THREADED_ABSTRACT) {
+        /* A home major mark authorizes teardown deferral; only an
+         * unvisited entry at the end of a complete home major revokes it.
+         * Foreign, minor, and scoped traversals cannot change the grant.
+         * The four-bit GC epoch is not a durable lifetime verdict. */
+        if (janet_vm.gc_mark_phase && !janet_vm.gc_minor_phase &&
+                janet_abstract_head(adata)->home_vm == (void *) &janet_vm)
+            janet_abstract_head(adata)->home_gc_authorized = 1;
         /* Visit-flag semantics: the table's value is this cycle's
          * "already visited" marker (the sweep resets every entry to
          * false). First visit this cycle: flip it and run gcmark so
@@ -433,11 +432,27 @@ recur:
     if (NULL != fiber->proc) {
         janet_mark(janet_wrap_abstract(fiber->proc));
     }
+#ifdef JANET_ASAN_UAF_TRACE
+    {
+        Janet vals[4] = {fiber->last_value, fiber->in_value,
+                         fiber->out_payload, fiber->interrupt_value};
+        const char *names[4] = {"last", "in", "out", "interrupt"};
+        for (int k = 0; k < 4; k++) {
+            if (janet_checktype(vals[k], JANET_ABSTRACT)) {
+                void *ad = janet_unwrap_abstract(vals[k]);
+                if (NULL == janet_abstract_head(ad)->type)
+                    fprintf(stderr, "[fiber-stale-field] fiber=%p field=%s adata=%p status=%d\n",
+                            (void *) fiber, names[k], ad, (int) janet_fiber_status(fiber));
+            }
+        }
+    }
+#endif
     janet_mark(fiber->last_value);
     /* Values in flight across a context switch. The resume argument and
      * the last result live in the fiber struct (not in fiber->data), so
      * they must be marked explicitly or a collection between suspend and
-     * resume could free them. */
+     * resume could free them. The VM clears consumed input when parking
+     * or completing, rather than hiding a potentially live root here. */
     janet_mark(fiber->in_value);
     janet_mark(fiber->out_payload);
 #ifdef JANET_EV
@@ -865,6 +880,13 @@ void janet_sweep(void) {
             if (!janet_truthy(items[i].value)) {
                 void *abst = janet_unwrap_abstract(items[i].key);
                 JanetAbstractHead *head = janet_abstract_head(abst);
+                /* This unvisited entry is the home VM's completed major
+                 * verdict, not a minor/scoped or foreign VM traversal.
+                 * Revoke before dropping the registry claim so a queued
+                 * zero-ref callback cannot rearm an unreachable object. */
+                if (head->home_vm == (void *) &janet_vm) {
+                    head->home_gc_authorized = 0;
+                }
                 if (head->type->gcperthread) {
                     janet_assert(!head->type->gcperthread(head->data, head->size), "per-thread finalizer failed");
                 }

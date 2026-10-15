@@ -2128,6 +2128,9 @@ static void janet_suspend_swap(JanetFiber *fiber, JanetSignal sig, Janet payload
     fiber->out_signal = sig;
     fiber->last_value = payload;
     janet_fiber_set_status(fiber, sig);
+    /* The previous resume argument has been consumed. A parked fiber
+     * receives a fresh input before its C frames run again. */
+    fiber->in_value = janet_wrap_nil();
     fiber->suspend_mode = 1;
     janet_vmregs_save(fiber);
     JanetFiber *resumer = fiber->resume_fiber;
@@ -2199,6 +2202,9 @@ void janet_fiber_trampoline(void) {
         fiber->out_payload = tstate.payload;
         fiber->out_signal = sig;
         fiber->last_value = tstate.payload;
+        /* run_vm consumed the previous input; the next resume installs
+         * its own value. Do not retain the old input while parked. */
+        fiber->in_value = janet_wrap_nil();
         /* The fiber returned to the trampoline (no frozen C stack above
          * this point): resume re-enters run_vm, and any stale swap-suspend
          * mode from an earlier nested suspension is over. */

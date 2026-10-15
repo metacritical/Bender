@@ -72,6 +72,10 @@ void *janet_abstract_begin_threaded(const JanetAbstractType *atype, size_t size)
     header->home_vm = (void *) &janet_vm;
     header->teardown_started = 0;
     header->exported = 0;
+    /* No complete home major has disproved a Janet-visible hold yet.
+     * Partial collections must not authorize destruction of a newly
+     * created abstract whose nested roots have not been traced. */
+    header->home_gc_authorized = 1;
     void *abstract = (void *) & (header->data);
     janet_table_put(&janet_vm.threaded_abstracts, janet_wrap_abstract(abstract), janet_wrap_false());
     return abstract;
@@ -218,8 +222,6 @@ static void janet_abstract_release_cb(JanetEVGenericMessage msg) {
  * executed on the abstract's HOME VM. In-flight operations on the
  * home VM run between loop iterations, never mid-fiber, so a fiber
  * hashing or comparing the abstract never sees the poison. */
-extern int janet_gc_object_reachable(void *mem);
-
 void janet_abstract_home_teardown_cb(JanetEVGenericMessage msg) {
     void *abst = msg.argp;
     JanetAbstractHead *head = janet_abstract_head(abst);
@@ -228,13 +230,12 @@ void janet_abstract_home_teardown_cb(JanetEVGenericMessage msg) {
     if (1 != janet_atomic_inc(&head->teardown_started)) return;
     /* GC-visible hold deferral (BUG 2 density): a value can sit in a
      * same-VM channel queue / parked payload / table with no
-     * registry claim backing it. If the last collect marked the
-     * abstract, such a hold exists -- re-arm a GC-watch claim
-     * (count 0->1, registry entry false) and let the next purge
-     * re-route here when the hold dies. janet_table_put below can
-     * allocate, but this runs between loop iterations with nothing
-     * mid-teardown, so a collection here is ordinary. */
-    if (janet_gc_object_reachable(head)) {
+     * registry claim backing it. Authorization starts conservative and
+     * only a completed unvisited home major revokes it. Re-arm a single
+     * registry watch claim: its value is false, so without another home
+     * major mark the next sweep revokes authorization and drops the claim
+     * rather than keeping the object alive indefinitely. */
+    if (head->home_gc_authorized) {
         janet_atomic_inc(&head->gc.data.refcount);
         janet_table_put(&janet_vm.threaded_abstracts,
                 janet_wrap_abstract(abst), janet_wrap_false());
@@ -296,8 +297,13 @@ int32_t janet_abstract_decref_maybe_free(void *abst) {
          * flag_chanpend_node/janet_chan_deinit_q UAF at density.)
          * Non-threaded abstracts are single-VM: teardown inline. */
         if (head->gc.flags & JANET_MEMORY_THREADED_ABSTRACT) {
-            if (janet_vm.gc_teardown_inline) {
-                /* Shutdown: the loop is gone. Inline teardown under
+            /* A foreign VM may be shutting down while the abstract's
+             * home loop is still alive. Its registry claim must be routed
+             * home, not finalized on this worker with surviving home
+             * Janet values pointing into the malloc-backed block. */
+            if (janet_vm.gc_teardown_inline &&
+                    (NULL == head->home_vm || head->home_vm == (void *) &janet_vm)) {
+                /* Home shutdown: the loop is gone. Inline teardown under
                  * the single-shot guard (skip the reachability
                  * deferral -- GC state is being destroyed anyway). */
                 if (1 != janet_atomic_inc(&head->teardown_started)) {

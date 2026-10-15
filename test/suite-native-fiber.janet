@@ -191,4 +191,30 @@
   (gccollect)
   (assert (= "payload-k!k-payload-k!k" (resume gf)) "completed through C"))
 
+# 17. A terminal fiber retains its result, not its last resume argument.
+# Keeping a completed fiber alive must not pin a value passed only as input;
+# completion minors can otherwise revisit stale threaded-channel references.
+(let [terminal-fiber (fiber/new (fn [] (yield :ready) :done))
+      inputs (table/weak-keys 1)]
+  (assert (= :ready (resume terminal-fiber)) "park before final input")
+  ((fn []
+     (let [input @[:only-resume-argument]]
+       (put inputs input true)
+       (assert (= :done (resume terminal-fiber input)) "terminal result"))))
+  (gccollect)
+  (assert (= :dead (fiber/status terminal-fiber)) "fiber completed")
+  (assert (= :done (fiber/last-value terminal-fiber)) "terminal result retained")
+  (assert (= 0 (length inputs)) "terminal fiber releases resume input"))
+
+# 18. A completed fiber's public final result remains a live GC root,
+# including nested threaded channels after all other owners disappear.
+(when (dyn :ev)
+  (let [holder (fiber/new (fn [] @{:answer @[(ev/thread-chan 1)]}))]
+    (resume holder)
+    (gccollect)
+    (gccollect)
+    (let [ch (((fiber/last-value holder) :answer) 0)]
+      (ev/give ch :kept)
+      (assert (= :kept (ev/take ch)) "terminal result pins nested channel"))))
+
 (end-suite)

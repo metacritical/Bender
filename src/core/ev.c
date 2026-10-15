@@ -224,13 +224,15 @@ void janet_ev_chanpends_deinit(JanetFiber *f) {
  * own pin on parked fibers (mark_fq). Without this, a scoped or
  * global sweep could free a channel out from under a parked fiber's
  * pending entry (observed: proc-scoped collection freeing an
- * attributed mailbox). Dead-flagged nodes reference freed fibers
- * (skip) and chan_dead nodes reference freed channels (skip); every
- * other node's channel is alive, so the dereference is safe. */
+ * attributed mailbox). Only entries still linked into a channel queue
+ * own that reverse edge: claimed/dequeued nodes remain on the fiber's
+ * list until its next park, but their channel can already be freed.
+ * Dead-flagged nodes reference freed fibers (skip), and chan_dead
+ * nodes reference freed channels (skip). */
 void janet_ev_chanpends_mark(JanetFiber *f) {
     JanetChanPendReg *reg = (JanetChanPendReg *) f->chan_pends;
     while (NULL != reg) {
-        if (!reg->chan_dead && !reg->dead) {
+        if (reg->in_queue && !reg->chan_dead && !reg->dead) {
             janet_mark(janet_wrap_abstract(reg->chan));
         }
         reg = reg->next;

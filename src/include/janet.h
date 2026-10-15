@@ -1218,6 +1218,10 @@ struct JanetAbstractHead {
      * foreign lane may hold claim-less values); exported abstracts
      * pin on their home VM until exit instead of prompt-freeing. */
     int exported;
+    /* Conservative at creation; a home major's marked visit maintains
+     * authorization and only its completed unvisited registry sweep
+     * revokes it. Minor and foreign VM traversals cannot change it. */
+    int home_gc_authorized;
     long long data[]; /* Use long long to ensure most general alignment */
 };
 
