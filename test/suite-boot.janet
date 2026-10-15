@@ -18,6 +18,21 @@
 # FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
 # IN THE SOFTWARE.
 
+# AOT parity gates (keep the original assertions below):
+# This suite relies on the loader's ordered top-level compile/execute cycle.
+# tools/mkimage.janet's single lexical do is not an equivalent loader:
+# - #1191: upcnt must expand even in an untaken branch, incrementing cnt
+#   during compilation. A lexical runtime function cannot replace this macro.
+# - with-vars: the whole-file frame puts abc at captured slot 257. The
+#   compiler intentionally rejects captures above 255; these assertions test
+#   temporary binding/restoration, not successful out-of-range captures.
+# - debug/eval: eval defines an environment function a after an earlier a
+#   binding. Subsequent forms must compile after eval, not retain the old a.
+# Precompiling separate chunks before execution leaves def/macro values
+# uninitialized. Executing them while building runs tests at build time;
+# deferring compilation until runtime is a hybrid, not all-AOT parity.
+# Moving only with-vars into runtime compile would not fix the other gates.
+# A generated capture above 255 must test rejection, not hide this failure.
 (import ./helper :prefix "" :exit true)
 (start-suite)
 
