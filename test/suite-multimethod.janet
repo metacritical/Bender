@@ -36,6 +36,10 @@
 (assert (function? (get-method encounter :orc)) "get-method finds")
 (assert (function? (get-method encounter :nope)) "get-method falls back")
 (assert (= 3 (length (methods encounter))) "three methods (incl default)")
+# The macro expansions must register in the runtime core table, not in a
+# marshalled copy baked into an AOT image (dispatch alone would still work).
+(assert (= (get (methods encounter) :orc) (get-method encounter :orc))
+        "macro-installed method is visible to core introspection")
 (remove-method encounter :orc)
 (assert (= "ignore grom" (encounter {:type :orc :name "grom"})) "removed falls back")
 (try (do (remove-method encounter :default)
@@ -43,9 +47,12 @@
          (assert false "unreachable"))
      ([e] (assert (not (nil? (string/find "no method" e))) "missing method errors")))
 
-# defmethod on a non-multimethod binding fails loud.
+# defmethod on a non-multimethod binding fails loud. Evaluate the macro
+# against an explicit environment: AOT top-level bindings are thunk-local.
 (def notmulti 42)
-(try (eval '(defmethod notmulti :x [a] a))
+(def invalid-multi-env (make-env))
+(put invalid-multi-env 'notmulti @{:value 42})
+(try (eval '(defmethod notmulti :x [a] a) invalid-multi-env)
      ([e] (assert (not (nil? (string/find "not a multimethod" e))) "unknown multi errors")))
 
 # Custom default + non-keyword dispatch values.

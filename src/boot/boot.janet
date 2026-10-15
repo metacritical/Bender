@@ -2284,9 +2284,23 @@
 
 (var *multimethods*
   "Registry of multimethod functions to method tables (internal;
-  public so macro expansions can reference it — prefer `methods`,
-  `get-method`, `defmethod` over touching it directly)."
+  prefer `methods`, `get-method`, `defmethod` over touching it directly)."
   @{})
+
+# AOT images clone constants, including this mutable core table and helpers.
+# Look up the runtime core var's ref instead of capturing its table at compile
+# time; the registry must be the same one for macro expansions and core APIs.
+(defn- multi-registry []
+  (get (get (dyn '*multimethods*) :ref) 0))
+
+(defn- multi-register [f t]
+  (put (multi-registry) f t)
+  f)
+
+(defn- multi-install [m name v method]
+  (def t (in (multi-registry) m))
+  (if (nil? t) (error (string "not a multimethod: " name)))
+  (put (get t :methods) v method))
 
 (defn- multi-invoke [t args]
   (def dv (apply (get t :dispatch) args))
@@ -2303,7 +2317,7 @@
   to function). Add and remove entries with `defmethod` and
   `remove-method`.``
   [m]
-  (def t (in *multimethods* m))
+  (def t (in (multi-registry) m))
   (if (nil? t) (error (string "not a multimethod: " (describe m))))
   (get t :methods))
 
@@ -2311,7 +2325,7 @@
   ``The method `m` would invoke for dispatch value `v` (with
   `:default` fallback), or nil.``
   [m v]
-  (def t (in *multimethods* m))
+  (def t (in (multi-registry) m))
   (if (nil? t) (error (string "not a multimethod: " (describe m))))
   (if (nil? v)
     (in (get t :methods) (get t :default))
@@ -2334,9 +2348,9 @@
   single top-level `def` (a `do`-wrapped `def` would scope it
   invisibly — `do` opens a scope).``
   [name dispatch-fn &opt opts]
-  (let [inv multi-invoke]
+  (let [inv multi-invoke register multi-register]
     ~(def ,name
-       ((fn [t] (def f (fn [& args] (,inv t args))) (put *multimethods* f t) f)
+       ((fn [t] (,register (fn [& args] (,inv t args)) t))
         {:dispatch ,dispatch-fn
          :methods @{}
          :default ,(if opts (get opts :default) :default)}))))
@@ -2347,11 +2361,9 @@
   scoping reason as `defmulti`). Errors loudly on an unknown
   multimethod.``
   [name dispatch-val & fntail]
-  ~((fn [t v]
-      (if (nil? t) (error (string "not a multimethod: " ',name)))
-      (put (get t :methods) v
-           (fn ,(first fntail) ,;(tuple/slice fntail 1))))
-    (in *multimethods* ,name) ,dispatch-val))
+  (let [install multi-install]
+    ~(,install ,name ',name ,dispatch-val
+               (fn ,(first fntail) ,;(tuple/slice fntail 1)))))
 
 ###
 ###
