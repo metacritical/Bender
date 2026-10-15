@@ -282,6 +282,11 @@
   int main(int argc, char **argv) {
       janet_init();
 #ifndef JANET_NO_PGO
+      /* Keep auto-PGO's output private until VM teardown: an embedded
+       * program can launch an interpreter that must not inherit a dump
+       * destination without inheriting this VM's active profile table. */
+      char janet_aot_profile_path[4096] = {0};
+      int janet_aot_profile_active = 0;
       /* Auto-PGO, first runs only (on demand, never always-on): when
        * no cached profile exists for this binary yet — or
        * JANET_AUTO_PGO=1 forces it — collect this run into the
@@ -314,8 +319,10 @@
           if (path[0] != '\0' && (force || !JANET_AOT_PROBE(path))) {
               janet_aot_mkdirp(dir);
               janet_profile_start();
-              janet_aot_setenv("JANET_PROFILE_OUT", path);
-              janet_aot_setenv("JANET_AUTO_PGO_ACTIVE", "1");
+              janet_aot_profile_active = 1;
+              if (!getenv("JANET_PROFILE_OUT"))
+                  snprintf(janet_aot_profile_path, sizeof(janet_aot_profile_path),
+                           "%s", path);
           }
       }
 #endif
@@ -494,6 +501,16 @@
       } else {
           janet_gcunroot(top);
       }
+#ifndef JANET_NO_PGO
+      /* janet_deinit reads these only after the embedded program and its
+       * subprocesses have finished. Explicit caller-provided env is left
+       * unchanged and retains its existing behavior. */
+      if (janet_aot_profile_active) {
+          if (janet_aot_profile_path[0] != '\0')
+              janet_aot_setenv("JANET_PROFILE_OUT", janet_aot_profile_path);
+          janet_aot_setenv("JANET_AUTO_PGO_ACTIVE", "1");
+      }
+#endif
       janet_deinit();
       return status;
   }
