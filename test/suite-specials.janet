@@ -91,22 +91,31 @@
 
 # Metadata
 # ec2d7bf34
+# Script-level defs are lexical in a single AOT thunk, so exercise their
+# runtime metadata explicitly in an environment in both execution modes.
+(def metadata-env (make-env))
 (def foo-with-tags :a-tag :bar)
-(assert (get (dyn 'foo-with-tags) :a-tag)
+(eval '(def foo-with-tags :a-tag :bar) metadata-env)
+(assert (get (get metadata-env 'foo-with-tags) :a-tag)
         "extra keywords in def are metadata tags")
 
 (def foo-with-meta {:baz :quux} :bar)
-(assert (= :quux (get (dyn 'foo-with-meta) :baz))
+(eval '(def foo-with-meta {:baz :quux} :bar) metadata-env)
+(assert (= :quux (get (get metadata-env 'foo-with-meta) :baz))
         "extra struct in def is metadata")
 
 (defn foo-fn-with-meta {:baz :quux}
   "This is a function"
   [x]
   (identity x))
-(assert (= :quux (get (dyn 'foo-fn-with-meta) :baz))
+(eval '(defn foo-fn-with-meta {:baz :quux}
+         "This is a function"
+         [x]
+         (identity x)) metadata-env)
+(assert (= :quux (get (get metadata-env 'foo-fn-with-meta) :baz))
         "extra struct in defn is metadata")
 (assert (= "(foo-fn-with-meta x)\n\nThis is a function"
-           (get (dyn 'foo-fn-with-meta) :doc))
+           (get (get metadata-env 'foo-fn-with-meta) :doc))
         "extra string in defn is docstring")
 
 # Break
