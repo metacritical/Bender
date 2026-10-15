@@ -5651,26 +5651,35 @@
         (aot-cache-transaction cdir key (fn []
         (def cached (string cdir "/" key ".jdn"))
         (def fresh (string ndir "/profile.jdn"))
-        (def sidecars (aot-cache-sidecars cdir key))
-        (def valid-cache (aot-cache-fresh? cached sources))
-        (def valid-sidecars (filter (fn [name]
-                                     (aot-cache-fresh? (string cdir "/" name) sources))
-                                   sidecars))
-        (if (or valid-cache (not (empty? valid-sidecars)))
+        (def meta (string cdir "/" key ".meta"))
+        (def snapshot (string cdir "/" key ".input"))
+        (def current-input (if (empty? stdin) nil (slurp stdin)))
+        (def identity {:version 1 :args workload :has-stdin (not (empty? stdin))
+                       :stdin-bytes (if current-input (string current-input) nil)})
+        # Legacy and differently replayed runs cannot contribute to this gate.
+        (def same-workload
+          (and (os/stat meta) (os/stat cached)
+               (deep= (try (parse (slurp meta)) ([_] nil)) identity)
+               (if current-input
+                 (and (os/stat snapshot) (= (string (slurp snapshot)) (string current-input)))
+                 (nil? (os/stat snapshot)))))
+        (def valid-cache (and same-workload (aot-cache-fresh? cached sources)))
+        (if valid-cache
           (do (def tmp (string cached ".merge-" (os/getpid)))
             (def exe (dyn *executable* "bender"))
             (unless (= 0 (os/execute [exe (string (aot-tools-dir) "/profile-merge.janet")
                                        "--accumulate" "--out" tmp
-                                       ;(if valid-cache [(string "cached=" cached)] [])
-                                       ;(map (fn [name] (string "home=" cdir "/" name)) (sort valid-sidecars))
+                                       (string "cached=" cached)
                                        (string "home=" fresh)]
                                       (if (string/find "/" exe) :e :ep)))
               (error "profile accumulation failed"))
-            (os/rename tmp cached)
-            (each name valid-sidecars (os/rm (string cdir "/" name))))
+            (os/rename tmp cached))
           (spit cached (slurp fresh)))
         (spit (string cdir "/" key ".workload") workload)
         (spit (string cdir "/" key ".stdin") stdin)
+        (when current-input (spit snapshot current-input))
+        (when (and (nil? current-input) (os/stat snapshot)) (os/rm snapshot))
+        (spit meta (string/format "%j" identity))
         (eprint "bender --aot: cached PGO profile for automatic rebuilds")))))
     ([_] (eprint "bender --aot: warning: could not write PGO cache"))))
 
@@ -5792,6 +5801,7 @@
       (var gate false)
       (var gate-workload "")
       (var gate-stdin "")
+      (var captured-stdin nil)
       (when pgo
         # phase 0 (collect): interpreter under the type collector;
         # stdout doubles as the parity oracle. Runs in the caller's
@@ -5806,7 +5816,10 @@
         (def pargs (aot-words pgo-args))
         (var infile nil)
         (when (not (empty? pgo-stdin))
-          (set infile (file/open pgo-stdin :r))
+          (set captured-stdin (string (slurp pgo-stdin)))
+          (def capture-path (string ndir "/stdin.capture"))
+          (spit capture-path captured-stdin)
+          (set infile (file/open capture-path :r))
           (put penv :in infile))
         (def pout (file/open expected :w))
         (put penv :out pout)
@@ -5837,37 +5850,32 @@
           (def cprof (string cdir "/" key ".jdn"))
           (def cwork (string cdir "/" key ".workload"))
           (def cstdin (string cdir "/" key ".stdin"))
-           # Fold completed forced-run sidecars into a source-fresh cache;
-           # stale or incomplete evidence never makes an old profile fresh.
-           (var pending @[])
-           (var fresh-pending @[])
+           (def cmeta (string cdir "/" key ".meta"))
+           (def cinput (string cdir "/" key ".input"))
+           (var workload-ok false)
+           # Only explicit PGO establishes a replayable workload; binary
+           # sidecars remain diagnostic and never enter a gateable cache.
            (var merge-failed false)
            (when (os/stat cdir)
              (try
                (aot-cache-transaction cdir key (fn []
-                 (set pending (aot-cache-sidecars cdir key))
-                 (set fresh-pending (filter (fn [name]
-                   (aot-cache-fresh? (string cdir "/" name) [src ;includes ;extrac])) pending))
-                 (when (and (not (empty? fresh-pending))
-                            (= (length pending) (length fresh-pending))
-                            (aot-cache-fresh? cprof [src ;includes ;extrac]))
-                   (def tmp (string cprof ".merge-" (os/getpid)))
-                   (def exe (aot-abs-exe))
-                   (unless (= 0 (os/execute [exe (string tooldir "/profile-merge.janet")
-                     "--accumulate" "--out" tmp (string "cached=" cprof)
-                     ;(map (fn [name] (string "home=" cdir "/" name)) fresh-pending)]
-                     (if (string/find "/" exe) :e :ep)))
-                     (error "profile accumulation failed"))
-                   (os/rename tmp cprof)
-                   (each name fresh-pending (os/rm (string cdir "/" name))))))
+                 (set workload-ok
+                   (and (os/stat cmeta) (os/stat cwork) (os/stat cstdin)
+                     (def recorded (try (parse (slurp cmeta)) ([_] nil)))
+                     (deep= recorded
+                       {:version 1 :args (string (slurp cwork))
+                        :has-stdin (not (empty? (string (slurp cstdin))))
+                        :stdin-bytes (if (os/stat cinput) (string (slurp cinput)) nil)})
+                     (if (get recorded :has-stdin)
+                       (os/stat cinput)
+                       (nil? (os/stat cinput)))))
+                 workload-ok))
                ([_] (set merge-failed true)
                     (eprint "bender --aot: PGO cache busy or merge failed; building unoptimized"))))
           (cond merge-failed
                  (eprint "bender --aot: profile merge failed; building unoptimized")
-                 (and (not (empty? pending))
-                      (or (not= (length pending) (length fresh-pending))
-                          (not (aot-cache-fresh? cprof [src ;includes ;extrac]))))
-                 (eprint "bender --aot: pending profile runs are stale; building unoptimized")
+                 (not workload-ok)
+                 (eprint "bender --aot: cached profile has no replayable workload; pass --pgo once")
                  (nil? (os/stat cprof))
                 (eprint "bender --aot: no cached PGO profile yet; the binary profiles its first run automatically")
                 (nil? (os/stat cwork))
@@ -5886,10 +5894,9 @@
                   (def wpargs (aot-words wargs))
                   (var winfile nil)
                   (var wstdin "")
-                  (when (os/stat cstdin)
-                    (set wstdin (string (slurp cstdin)))
-                    (when (os/stat wstdin)
-                      (set winfile (file/open wstdin :r))))
+                  (when (get (parse (slurp cmeta)) :has-stdin)
+                    (set wstdin cinput)
+                    (set winfile (file/open cinput :r)))
                   (def wout (file/open expected :w))
                   (def wenv (merge @{} (os/environ)))
                   (when winfile (put wenv :in winfile))
