@@ -2673,10 +2673,23 @@
     # :array returns are the (in-place) array itself
     (each t pt (unless (or (get infer/numeric-types t) (= t :array) (= t :tuple) (= t :pointer)) (set concrete false)))
     (unless (or (get infer/numeric-types rt) (= rt :array)) (set concrete false))
-    (when concrete (put cand id true))
-    (unless concrete
+    # Hybrid wrappers replace the bytecode definition entirely. A C loop
+    # cannot yield a VM quantum and later resume its native stack/locals.
+    # Keep loops boxed until native continuations exist; callers also stay
+    # boxed through the normal non-emitted-callee dependency check below.
+    # Include self-edges, which can otherwise spin without advancing pc.
+    (def loops (some (fn [ins]
+                      (def op (ins 0))
+                      (or (and (= op 'jmp) (<= (ins 1) 0))
+                          (and (get emit-cond-jumps op) (<= (ins 2) 0))))
+                    (or (d :bytecode) @[])))
+    (if loops
       (array/push lib-skips [id (string (or (d :name) "?"))
-                             (string "types not proven: " (describe-types-lib pt rt))])))
+                             "loop requires resumable VM quantum polls"])
+      (if concrete
+        (put cand id true)
+        (array/push lib-skips [id (string (or (d :name) "?"))
+                               (string "types not proven: " (describe-types-lib pt rt))]))))
   (def emitted-names @{})
   (def kernels @[])
   (def lib-skip-reason @{})
