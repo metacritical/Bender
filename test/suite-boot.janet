@@ -33,6 +33,21 @@
 # deferring compilation until runtime is a hybrid, not all-AOT parity.
 # Moving only with-vars into runtime compile would not fix the other gates.
 # A generated capture above 255 must test rejection, not hide this failure.
+# Verified slot-overflow closure (HEAD 9d84ec5f): the whole-file AOT image
+# builds clean — no unencodable capture remains after the fixture-frame
+# isolation series, and suite-compile covers the >255 rejection itself, so
+# no IIFE batching is applied here. The remaining single-file AOT deltas
+# below are loader-semantic consequences of zero-execution whole-unit
+# compilation, verified with minimal repros, not slot pressure:
+# - #1191 (line 164): cnt reads 1 under the loader, 0 in the image. The
+#   untaken-branch macro call invokes the macro function at compile time,
+#   evaluating (++ cnt) with ++ as a function; the image never executes
+#   build-time state, so the increment lands nowhere.
+# - debug/eval repeated a (line ~1021): the image call resolves the slot
+#   known at image-build time (the earlier array binding); only the
+#   loader's compile-after-eval ordering re-resolves it to the function.
+# - macro sourcemaps (lines 847-848): image builds do not preserve macro
+#   expansion source maps (open mkimage-side improvement, separate owner).
 (import ./helper :prefix "" :exit true)
 (start-suite)
 
