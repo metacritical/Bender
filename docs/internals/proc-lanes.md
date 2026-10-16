@@ -1211,3 +1211,73 @@ core-semantics work requiring its own dual-target battery (at minimum
 proc/thread/ev/mailbox/pool, since dynamic-binding inheritance is exercised
 across all of them) and should be scoped as its own session, not folded into
 this documentation-and-stopgap commit.
+
+## CORRECTION: (c) as implemented does NOT fix the demonstrated O(n^2) hang
+
+(c) was implemented and committed (`29c65339`), dual-target verified across
+proc/thread/ev/marsh/mailbox/pool (all green). Re-running the regression
+benchmark after that fix: **N=20000 still times out identically (exit 124 at
+25s, zero output)** -- no improvement whatsoever. This is a wrong-diagnosis
+correction, found by going past `sample`'s ambiguous/inlined call graph to
+real `lldb breakpoint + bt` backtraces on `janet_procat_mark`, which is the
+only way to get an exact, unambiguous call chain.
+
+**The real mechanism** (confirmed via `lldb`, three separate live backtraces,
+`bench/agents.janet 8000 4` / `4000 2`):
+
+```
+janet_collect_fiber_minor(f=<actor's fiber>)
+  -> janet_mark_fiber(f)                          # the actor, as expected
+    -> ... (several frames of the actor's own closure/env marking)
+      -> janet_mark_funcenv / janet_mark_function   # the actor closure's
+                                                      # UPVALUE environment
+        -> janet_mark_fiber(fiber=<ROOT/DRIVER fiber>)   # !! marks the
+                                                           # whole live
+                                                           # top-level fiber
+          -> janet_mark_many(values=..., n=12)      # the ROOT fiber's OWN
+                                                      # live stack frame
+            -> janet_mark_fiber(<another fiber>)
+              -> ... -> janet_mark_funcdef -> janet_mark_many(n=8000)
+                -> janet_mark_array                 # the `procs` array,
+                                                      # ALL 8000 elements
+                  -> janet_procat_mark (x8000)       # every sibling proc
+```
+
+`actor` captures `ticks` (`(def ticks ...)` at top level) as an upvalue. Since
+`bench/agents.janet` executes as ONE long-running top-level script, the root/
+driver fiber that evaluates each top-level form is STILL ON-STACK/alive for
+the whole run -- it never returns until the script finishes. `actor`'s
+upvalue for `ticks` is therefore an OPEN reference into that still-live root
+fiber's stack, not a closed/copied value. Marking an open upvalue requires
+marking the fiber it points into (to protect the whole frame, not just one
+slot), and marking that live root fiber marks its ENTIRE current stack -- at
+the time of the tick loop, that includes `procs` as a live local, dragging in
+every sibling proc handle. **This has nothing to do with `fiber->env->proto`**
+(the mechanism (c) narrowed); (c)'s change is still valid, harmless hardening
+(verified dual-target, no regression) but does not touch the actual hazard
+and is retracted as "the fix" for this benchmark's hang.
+
+This reframes the hazard: it is not specific to procs, proto-chains, or any
+proc-spawn code path at all. It is a general consequence of closures capturing
+upvalues from a long-running top-level script's still-open stack frame --
+the SAME class of hazard Lua and other languages with open upvalues have
+(a closure over an outer function's local keeps that whole frame alive until
+the outer function returns and the upvalue closes). `actor` would exhibit the
+identical blowup with ANY concurrency primitive (ev/thread, raw fibers, not
+just procs) as long as it captures a top-level local while the script is
+still running and some other top-level local holds a large live collection.
+
+### Not yet done
+No real fix implemented for this corrected root cause. Candidate directions
+(none evaluated in depth yet):
+- Benchmark-side: avoid capturing any top-level local from a long-running
+  driver script in the spawned thunk (e.g. wrap the benchmark setup in an
+  inner function that returns, closing its upvalues, before any procs are
+  spawned) -- works around it without touching the VM, but doesn't fix the
+  general hazard for other programs with the same shape.
+- VM-side: investigate whether Janet's compiler/VM could close upvalues
+  eagerly once a stack region can no longer gain new closures over it (deep
+  bytecode/funcenv semantics work, not scoped or attempted here).
+- Re-measure with `ticks` and `actor`'s body rewritten to take NO top-level
+  upvalues at all (pass everything as explicit spawn arguments) to confirm
+  this diagnosis predicts the fix, before any core change.
