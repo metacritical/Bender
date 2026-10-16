@@ -1066,3 +1066,61 @@ baseline strongly enough that it should be treated as a real regression candidat
 not just "slower than hoped." Root cause not yet identified -- needs profiling
 (perf/dtrace sampling during the N=20000 hang) in a dedicated session; not
 attempted here. Do not guess at a fix without that profile.
+
+### Messaging throughput: root cause found via `sample` profiling (macOS)
+
+Followed through on the open next step: profiled a live N=20000 hang with
+`sample` (macOS; `perf`/`dtrace` equivalent) instead of guessing further after
+two hypotheses (Phase 2b visited-marker reset; persistent `janet_gcroot` of
+proc handles) were checked directly against the source and falsified (both
+pre-step-2 AND pre-Phase-2b builds (`8509c0e5`, `e816546a`) reproduce the exact
+same N=20000/90s hang, ruling out this session's changes; `proc/spawn` roots
+`proc_j` only across its own construction window and unroots it before
+returning, `proc.c:850,928`, so live procs are NOT held in `janet_vm.roots`).
+
+**Confirmed mechanism (call-graph from the live profile, not inferred):**
+
+```
+janet_collect_fiber_minor (gc.c:2404)
+  -> janet_mark_fiber (gc.c:540)
+    -> janet_mark_table (gc.c:286)          # f->env
+      -> janet_mark (gc.c:118/229)           # walks env->proto chain
+        -> janet_mark_table (gc.c:286)       # the TOP-LEVEL driver env
+          -> janet_procat_mark (proc.c:753)  # marks every proc IN that env
+            -> janet_mark (gc.c:138)         # proc->fiber
+              -> janet_mark_fiber (gc.c:540) # RECURSES into another actor
+```
+
+`proc.c:912` sets `fiber->env->proto = janet_vm.fiber->env` at spawn time --
+every spawned actor's env lexically chains to the SPAWNING fiber's env. In
+`bench/agents.janet`, all N actors are spawned from the same top-level driver
+script, whose env holds `(def procs @[])` -- the array the driver fills with
+all N proc handles so it can join on them later. Marking ANY ONE actor's env
+chain therefore reaches that shared top-level env, which pulls in the `procs`
+array, which marks every other proc handle in it, each of which
+(`janet_procat_mark`) marks ITS fiber, recursing into `janet_mark_fiber` for
+every other actor. `janet_collect_fiber_minor` fires per-actor as each one
+allocates during its own tick processing, so every actor's own minor collection
+walks all N siblings: O(N) work triggered by N independent minors = O(N^2)
+total, exactly matching the observed superlinear wall (fine at N=2000-5000,
+unfinished at N=20000/100000).
+
+**This is not a GC bug and not a Phase 2b regression.** It is a
+correctness-preserving consequence of Janet's lexical env-proto reachability
+model: an actor's closure could legitimately read a lexically-enclosing
+binding, so the mark pass is right to consider it reachable. It collides with
+the extremely natural "keep spawned handles in an array so the driver can join
+on them" pattern. Erlang has no equivalent hazard: BEAM processes have no
+lexical-scope reachability chain linking sibling processes' heaps together --
+message passing and the process registry are the only inter-process references,
+and neither creates this kind of transitive fan-out.
+
+**Not attempted this session (design decision, not a quick patch):** any fix
+requires either (a) changing how fiber-minor's root-fiber walk treats the
+spawning-env proto chain (risky -- could unsoundly skip real reachability), or
+(b) a documented idiom/warning that spawn-heavy workloads must NOT keep a
+flat live-handle array reachable from the spawning scope (store handles
+elsewhere, e.g. a C-side-only registry, or drop references once joined), or
+(c) architecturally decoupling a proc's env proto chain from its "spawner's
+full env" in favor of a narrower explicit capture set. This is a genuine
+multi-session design question, not something to patch blind.
