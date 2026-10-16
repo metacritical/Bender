@@ -1786,3 +1786,27 @@ outcome. If it did not finish even with a long timeout, that is the
 single highest-priority item for whoever picks this back up --
 everything above is offered as the most probable explanation and the
 most promising next measurement, not a confirmed root cause.
+
+## Multi-thread scaling observation (user-directed, post-blocked-goal)
+
+Confirmed via `bench/agents-multithread.janet` (`79a0135c`): real OS-thread
+parallelism (via `thread/new`, share-nothing isolated VMs, true multi-core)
+shows genuine throughput scaling that the single-VM numbers don't capture:
+
+| threads | procs/thread | total actors | aggregate msgs/s |
+|---|---|---|---|
+| 20 | 50 | 1,000 | 73,421 |
+| 20 | 100 | 2,000 | 138,884 |
+| 50 | 50 | 2,500 | 133,249 |
+| 50 | 100 | 5,000 | 280,178 |
+
+User hypothesis: "the secret to high performance is threads" -- i.e. rather
+than (or in addition to) further single-VM GC tuning, spreading load across
+many isolated-VM OS threads may be the more direct path to Erlang-class
+aggregate throughput, since each thread's VM stays at a small, cheap N
+(matching this session's verified-fast small-N regime) while wall-clock
+parallelism does the rest. Escalating thread x procs/thread combinations are
+being tested next (500 threads is 10x this measurement's largest point) to
+see whether aggregate throughput keeps scaling or hits a different wall
+(OS thread limits, scheduler contention, thread/new's own per-thread VM
+startup cost multiplied by 100-500).
