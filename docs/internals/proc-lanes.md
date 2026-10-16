@@ -1810,3 +1810,44 @@ being tested next (500 threads is 10x this measurement's largest point) to
 see whether aggregate throughput keeps scaling or hits a different wall
 (OS thread limits, scheduler contention, thread/new's own per-thread VM
 startup cost multiplied by 100-500).
+
+## Multi-thread scaling: escalation to 500 threads (user-directed)
+
+Three escalating combinations tested per explicit user request, all via
+`bench/agents-multithread.janet`:
+
+| threads | procs/thread | total actors | wall time | aggregate msgs/s | per-thread avg msgs/s |
+|---|---|---|---|---|---|
+| 50 | 100 | 5,000 | 0.10s | 209,237 | 660,000 |
+| 500 | 100 | 50,000 | 0.96s | 221,056 | 623 |
+| 500 | 1000 | 500,000 | 33.4s | 60,098 | 249 |
+
+All three **PASS** (correct exact-once message accounting, no hangs, no
+crashes). Aggregate throughput stays roughly flat (~210-220k msgs/s) going
+from 50->500 threads at the same 100-procs/thread load, then **drops**
+substantially (221k -> 60k) when procs/thread increases 10x (100->1000) at
+the same 500-thread count -- i.e. the bottleneck is NOT thread count alone,
+it reappears once per-thread actor count grows, consistent with this
+session's single-VM findings (the N=20000->100000 residual superlinear
+cost documented in the HANDOFF section above) showing up independently
+inside EACH of the 500 per-thread VMs once that VM's own N crosses into the
+same range already flagged as not-fully-linear.
+
+The 500x1000 run's `sys` time (2m31s) dwarfing its `user` time (12s) points
+at OS-level contention (likely `thread/new`'s 500 concurrent OS thread
+creations/teardowns, or memory-mapping pressure from 500 separate isolated
+VMs) as an ADDITIONAL cost layer on top of the already-documented per-VM
+residual term -- not yet decomposed into "how much is thread-creation
+overhead vs. how much is the per-VM N=1000 actor-burst cost repeated 500
+times."
+
+**Conclusion so far**: thread-level parallelism does help (50->500 threads
+at fixed 100 procs/thread held throughput flat rather than degrading), but
+it does not bypass the per-VM scaling characteristics already documented --
+each thread's own VM still carries whatever residual cost exists at its own
+local N. This refines rather than replaces the existing HANDOFF: the
+sweep_pending-tail-walk hypothesis (and the other listed candidates) remain
+the right next things to check, now additionally motivated by the fact that
+even inside a many-thread deployment, each thread's own per-VM N still
+matters and is worth fixing directly rather than working around with more
+threads alone.
