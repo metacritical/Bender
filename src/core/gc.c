@@ -856,6 +856,30 @@ static void janet_quarantine_maybe_drain(void) {
     }
 }
 
+#ifdef JANET_EV
+/* Phase 2b-iii: a minor's mark phase can flip a threaded abstract's
+ * registry "visited this cycle" marker true (gc.c first-visit gcmark
+ * dispatch), but janet_collect_minor calls janet_sweep_heaps directly,
+ * never janet_sweep -- so only a full janet_sweep's reset loop (below)
+ * ever clears that marker back to false. Left alone, the stale true
+ * marker survives every subsequent minor AND the mark phase of the
+ * next major, which then sees "already visited" and skips re-running
+ * gcmark on that abstract's internals for the whole cycle: exactly the
+ * mechanism the Phase 1 janet_mark_table crash chain pointed at
+ * (profile_rows reached via janet_thread_handle_mark). Reset ONLY the
+ * per-cycle visited marker after every minor's mark phase -- never the
+ * refcount, home_gc_authorized, or any teardown decision, which must
+ * stay major-only (a minor still cannot decide liveness/teardown). */
+static void janet_reset_threaded_visited_minor(void) {
+    JanetKV *items = janet_vm.threaded_abstracts.data;
+    for (int32_t i = 0; i < janet_vm.threaded_abstracts.capacity; i++) {
+        if (janet_checktype(items[i].key, JANET_ABSTRACT)) {
+            items[i].value = janet_wrap_false();
+        }
+    }
+}
+#endif
+
 void janet_sweep(void) {
     janet_sweep_weak_drop();
     janet_sweep_heaps(1);
@@ -2412,6 +2436,9 @@ void janet_collect_fiber_minor(JanetFiber *f) {
                 janet_mark(ss->xfb[xi]);
     }
     janet_vm.gc_mark_phase = 0;
+#ifdef JANET_EV
+    janet_reset_threaded_visited_minor();
+#endif
     janet_sweep_heaps_owned(f);
     if (getenv("JANET_ROOT_TRACE")) {
         static long cfmi = 0;
@@ -2605,6 +2632,9 @@ void janet_collect_process(JanetProcess *proc) {
     if (NULL != proc->monitors) janet_mark(janet_wrap_array(proc->monitors));
     janet_mark(proc->exit_reason);
     janet_vm.gc_mark_phase = 0;
+#ifdef JANET_EV
+    janet_reset_threaded_visited_minor();
+#endif
     if (NULL != getenv("JANET_PROC_VERIFY")) {
         /* Gather P-owned young unmarked candidates (bounded sample).
          * P3.5b Slice A: candidates live in per-fiber lists too. */
@@ -2672,6 +2702,9 @@ void janet_collect_minor(void) {
     janet_vm.gc_minor_phase = 1;
     janet_mark_roots();
     janet_vm.gc_mark_phase = 0;
+#ifdef JANET_EV
+    janet_reset_threaded_visited_minor();
+#endif
     if (getenv("JANET_GC_VERIFY")) {
         if (janet_gc_verify_minor()) {
             fprintf(stderr, "gc-verify: minor mark incomplete, aborting\n");
