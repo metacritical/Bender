@@ -1240,3 +1240,62 @@ next step before any new preemption/scheduler work: a race or resource
 exhaustion at higher lane counts would undermine any M:N design built on
 top of the current lanes implementation, so it should be isolated and
 fixed (or at least understood) before investing further in that direction.
+
+## lanes=8 crash: root cause narrowed to a shared high-contention channel, not yet fully isolated
+
+Continued investigation (this round) of the intermittent `lanes=8` SIGTRAP
+found last round. Tooling notes first, for whoever continues this:
+
+- **AddressSanitizer is NOT directly usable on this codebase's fiber
+  model**: a plain `-fsanitize=address` rebuild produces false-positive
+  `stack-buffer-overflow` reports on ordinary, correct code (confirmed on
+  `test/suite-proc.janet`, which has no threading at all) -- ASan's shadow-
+  stack tracking is confused by Janet's user-space fiber stack switching,
+  a well-known class of incompatibility for green-thread runtimes. Do not
+  use plain ASan here without first adding fiber-stack ASan annotations
+  (`__sanitizer_start_switch_fiber`/`__sanitizer_finish_switch_fiber`) --
+  that is its own separate piece of work, not attempted here.
+- An ASan rebuild (profiling left on) separately caught a REAL but
+  UNRELATED pre-existing bug: heap-use-after-free in `janet_profile_call`
+  (`vm.c:607`), via a `realloc`'d buffer, during ordinary single-threaded
+  PGO auto-profiling (triggered just by running `tools/patch-header.janet`
+  during a normal build with profiling left on). Filed here for the record
+  but NOT the lanes bug and not investigated further -- re-run any future
+  ASan attempt with `JANET_NO_PROFILE=1` to avoid conflating the two.
+- Guard Malloc (`DYLD_INSERT_LIBRARIES=/usr/lib/libgmalloc.dylib`) works
+  without the fiber-stack false-positive problem, but is far too slow
+  per-allocation to reach the N/lane-count combination that triggers this
+  bug in reasonable time (confirmed clean 4/4 at N=2000/lanes=8; the
+  crash needs something closer to N=20000 based on plain-lldb reproduction
+  rates, and Guard Malloc at that N did not complete within a workable
+  timeout).
+
+**Real finding, via repeated plain-`lldb` capture with `bt all` (not
+guessed):** at the moment of the crash (thread holding the lock, inside
+`janet_chan_pack` -> `janet_malloc`, `ev.c:1001`), THREE OTHER lane-worker
+threads were simultaneously blocked waiting on `janet_chan_lock` for the
+EXACT SAME channel object. The lock itself is being respected correctly
+(waiters parked properly, not barging in) -- this rules out a simple
+missing-lock race on that channel's own push path. The channel in
+question is therefore a high-contention, many-senders-one-channel
+structure, consistent with it being the shared lane-control/routing
+channel documented in `proc/send`'s own docstring ("remote nodes forward
+[:proc-fwd serial msg] over the carried lane-control channel"). Since the
+lock correctly serializes access yet the GLOBAL malloc heap ends up
+corrupted (the crash is malloc's own freelist-corruption detector tripping
+on an UNRELATED allocation, the classic signature of an earlier buffer
+overrun elsewhere, not a simple null-deref), the real bug is most likely a
+write past the bounds of some buffer associated with this channel's
+pack/queue path -- NOT a lock-ordering problem.
+
+**Not yet isolated**: which specific write overruns, and whether it is in
+`janet_chan_pack`'s own buffer growth path, the channel's internal pending-
+queue array growth, or something in the lane-control forwarding logic
+upstream of the generic channel push. This needs either (a) fiber-aware
+ASan annotations added first (real investment, but then ASan would likely
+pinpoint the exact overrun directly), or (b) a targeted manual review of
+every buffer-growth/realloc site reachable from a `proc/send` through a
+threaded channel, cross-checked against which ones are NOT inside that
+channel's own lock. Flagged as the next concrete step; not attempted
+further this round given the depth already reached without a confirmed
+single root cause.
