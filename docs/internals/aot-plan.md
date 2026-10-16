@@ -1320,3 +1320,52 @@ investigation step considerably -- whoever picks this up should look at
 `proc.c`'s lane-routing code (`janet_lane_ctls`, the overflow-channel
 path, `proc/lanes-start`) specifically, not the generic `ev.c` channel
 push path, which this round's test shows is NOT where the bug lives.
+
+## lanes=8 crash: sharpest lead yet -- pid-tuple-embedded ctl channel reference, unchecked refcount across forwarding hops
+
+Followed the narrowed lead (lanes-specific, not generic channel contention)
+into `proc.c`'s lane-routing code directly. Found a concrete candidate
+mechanism, building on last session's established threaded-abstract
+refcounting model (the `janet_vm.threaded_abstracts` visited-marker /
+incref-on-first-registration protocol fixed in Phase 2b):
+
+`janet_proc_spawn_routed` (`proc.c`, both the `:steal`-policy and normal
+paths) builds the returned pid tuple as
+`[:pid lane serial (janet_wrap_abstract ctl)]` -- embedding a direct
+reference to the TARGET LANE's control channel (`ctl`, a threaded
+abstract) directly in a Janet value, with NO explicit
+`janet_abstract_incref` call at this construction site. This is
+presumably fine for the common case (normal GC marking on the SAME VM
+that holds this tuple keeps `ctl` alive via the already-established
+threaded-abstract visited-marker mechanism) -- but this exact tuple is
+documented (in `proc/send`'s own docstring) to travel CROSS-LANE via
+`[:proc-fwd serial msg]` forwarding, which means it gets MARSHALED and
+UNMARSHALED at each hop. If that marshal/unmarshal path's handling of the
+embedded `ctl` reference does not correctly incref on arrival / decref on
+departure at every hop (the exact invariant Phase 2b's fixes were built
+around for OTHER threaded-abstract paths, e.g. `janet_thread_new_complete`
+and mailbox channels), a refcount underflow would free `ctl` while a
+pid tuple referencing it is still reachable elsewhere -- premature free,
+then a LATER, unrelated allocation (observed: `janet_chan_pack`'s
+`janet_malloc`) coincidentally lands in the corrupted/reused memory and
+trips malloc's freelist-corruption detector. This matches every observed
+symptom: intermittent (depends on exact hop timing/count), scales with
+lane count and contention (more lanes = more concurrent forward hops =
+more chances to hit the underflow window), and manifests at an unrelated
+allocation site rather than at the actual bad decref.
+
+**Not fixed this round.** This is a hypothesis built on strong, specific,
+documented prior session knowledge (not guessed), but it has NOT been
+confirmed by tracing the actual marshal/unmarshal code path for this
+specific pid-tuple-embedded-ctl case, nor by adding a targeted refcount
+assertion/print to catch the underflow directly. Given this touches the
+same delicate threaded-abstract refcounting invariant that took multiple
+careful, fully-verified iterations to get right in Phase 2b, this should
+be confirmed with the same rigor (trace the exact incref/decref call
+count across a controlled repro, or add a debug counter) before any fix
+is attempted -- not patched blind. Next concrete step for whoever
+continues: instrument `janet_abstract_incref`/`decref` (or read the
+existing marshal-abstract special-case code in `marsh.c` for threaded
+abstracts) specifically for the `ctl` channel object across a traced
+`:proc-fwd` forwarding sequence, and confirm whether the increment/
+decrement counts actually balance.
