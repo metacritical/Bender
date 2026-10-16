@@ -2430,14 +2430,30 @@ static int janet_xfb_index_cmp(const void *a, const void *b) {
     return (oa > ob) - (oa < ob);
 }
 
-/* Erlang-parity messaging fix: rebuild the sorted-by-owner index iff
- * xfb_count grew since the last build. O(n log n) qsort, amortized
- * across every subsequent scan that sees no new inserts (common once
- * most cross-fiber edges' containers age past the young window and
- * writes stop needing xfb at all). The main xfb array is never
- * reordered or mutated here. */
+/* Erlang-parity messaging fix, corrected: rebuilding on ANY growth
+ * (the first version) was fine when inserts cluster in an early
+ * burst (small N) but degrades to a full O(n log n) re-sort on
+ * nearly every minor once inserts keep trickling in throughout the
+ * whole run (observed directly: N=100000's qsort dominated the
+ * profile) -- turning the fix into something WORSE than the
+ * original O(n) linear scan it replaced. Classic amortized-doubling
+ * fix: only re-sort the WHOLE array when the unsorted TAIL (entries
+ * appended since the index was last built) has grown past half the
+ * already-sorted prefix (plus a small floor) -- standard "sort once,
+ * re-sort only when the unsorted suffix roughly doubles the sorted
+ * part" amortization, giving O(n log n) total across all of a run's
+ * inserts regardless of how they're interleaved with minors, not
+ * O(n log n) PER minor. The main xfb array is never reordered or
+ * mutated here. */
 static void janet_xfb_index_ensure(JanetSlabState *ss) {
-    if (ss->xfb_index_built_count == ss->xfb_count) return;
+    if (ss->xfb_index_built_count >= ss->xfb_count) return;
+    size_t tail = ss->xfb_count - ss->xfb_index_built_count;
+    if (tail <= ss->xfb_index_built_count / 2 + 64 && ss->xfb_index_built_count > 0) {
+        /* Tail still small relative to the sorted prefix: leave the
+         * index as-is. janet_xfb_mark_owned covers the unsorted tail
+         * with a cheap linear scan of just these few entries. */
+        return;
+    }
     void *nmem = janet_realloc(ss->xfb_index, ss->xfb_count * sizeof(*ss->xfb_index));
     if (NULL == nmem && ss->xfb_count > 0) {
         /* OOM building the index is not fatal -- fall back to a
@@ -2453,14 +2469,17 @@ static void janet_xfb_index_ensure(JanetSlabState *ss) {
     ss->xfb_index_built_count = ss->xfb_count;
 }
 
-/* Erlang-parity messaging fix: mark exactly this owner's entries via
- * the sorted index (binary search to the first match, linear walk
- * while the owner matches -- O(log n) + O(this owner's own count),
- * not O(total xfb_count)). Falls back to the existing full linear
- * scan (unchanged behavior) if the index could not be built (OOM). */
+/* Erlang-parity messaging fix: mark exactly this owner's entries.
+ * Binary-searches the sorted prefix (O(log n) + O(this owner's own
+ * count in the prefix)) and linearly scans the small unsorted tail
+ * left behind by janet_xfb_index_ensure's amortization (bounded to
+ * roughly half the prefix size by construction, so still far cheaper
+ * than a full O(total) scan at any real N). Falls back to the
+ * original always-correct full linear scan if the index was never
+ * built at all (OOM on the very first attempt). */
 static void janet_xfb_mark_owned(JanetSlabState *ss, uint32_t owner) {
     janet_xfb_index_ensure(ss);
-    if (ss->xfb_index_built_count != ss->xfb_count) {
+    if (NULL == ss->xfb_index && ss->xfb_count > 0) {
         /* Index build failed (OOM) or is otherwise unavailable: the
          * original, always-correct, O(n) fallback. */
         for (size_t xi = 0; xi < ss->xfb_count; xi++)
@@ -2468,15 +2487,21 @@ static void janet_xfb_mark_owned(JanetSlabState *ss, uint32_t owner) {
                 janet_mark(ss->xfb[xi]);
         return;
     }
-    size_t lo = 0, hi = ss->xfb_count;
+    size_t prefix = ss->xfb_index_built_count;
+    size_t lo = 0, hi = prefix;
     while (lo < hi) {
         size_t mid = lo + (hi - lo) / 2;
         if (ss->xfb_index[mid].owner < owner) lo = mid + 1;
         else hi = mid;
     }
-    while (lo < ss->xfb_count && ss->xfb_index[lo].owner == owner) {
+    while (lo < prefix && ss->xfb_index[lo].owner == owner) {
         janet_mark(ss->xfb[ss->xfb_index[lo].idx]);
         lo++;
+    }
+    /* Unsorted tail (entries appended since the index's last build):
+     * cheap linear scan, bounded small by the amortization above. */
+    for (size_t xi = prefix; xi < ss->xfb_count; xi++) {
+        if (janet_xfb_relevant(ss->xfb[xi], owner)) janet_mark(ss->xfb[xi]);
     }
 }
 

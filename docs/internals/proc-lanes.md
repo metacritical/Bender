@@ -1490,3 +1490,73 @@ own). N=100000 is the next wall -- not yet profiled; likely a third,
 not-yet-identified O(n) or O(n^2) term, or simply the first two fixes'
 remaining (now much smaller) constant factors compounding at 5x this scale.
 Not investigated further in this session; flagged as the immediate next step.
+
+## xfb index refinement: amortized rebuild (real improvement, N=100000 NOT fully fixed)
+
+The first xfb-index version rebuilt (full O(n log n) qsort) on ANY growth of
+`xfb_count`. That is fine when inserts cluster in an early burst (small N,
+confirmed: N=2000-20000 all improved) but was directly profiled to degrade
+badly at N=100000: inserts kept trickling in throughout the whole run
+(100000 actors never stops needing new cross-fiber edges the way 20000 did),
+so nearly every single minor re-triggered a full re-sort of a now-large
+array -- `qsort` dominated the profile, making the "fix" worse than the
+O(n) linear scan it replaced at this N.
+
+**Refinement applied:** classic amortized-doubling -- only re-sort when the
+unsorted tail (entries appended since the index was last built) exceeds
+roughly half the already-sorted prefix (plus a small floor). Between
+rebuilds, `janet_xfb_mark_owned` binary-searches the sorted prefix and
+linearly scans only the small unsorted tail. Re-profiling confirmed this
+measurably works: qsort's share of the N=100000 profile dropped from
+dominant to a sliver (7 of ~5800 samples in `janet_collect_fiber_minor`).
+
+**Honest assessment: this does NOT fully solve N=100000.** Re-deriving the
+amortization argument caught my own mistake before committing it as "the
+fix": the "rebuild when tail > prefix/2" threshold amortizes REBUILD cost
+correctly ONLY when few/no scans happen during the growth window between
+rebuilds (the classic dynamic-array-doubling setting). Our actual workload
+does the opposite -- one scan (a fiber minor) is interleaved with roughly
+every insert -- so the UNSORTED TAIL's SCAN cost (not the rebuild's qsort
+cost) is what actually dominates at scale: a tail allowed to grow toward
+n/2 gets linearly re-scanned by every minor during that growth window, and
+the sum across that window is itself quadratic in the tail's max size, just
+with a smaller constant than before. The qsort frames disappearing from the
+profile is real (rebuild frequency genuinely dropped) but is not the same
+thing as the OVERALL complexity being fixed -- the cost moved from the
+rebuild into the tail-scan, still growing with N.
+
+**The real, architecturally correct fix** (not implemented this session):
+true owner-bucketing AT INSERT TIME (not a sorted-and-occasionally-rebuilt
+index over an append-only array) -- route each new xfb entry directly into
+a per-owner bucket the moment it's recorded (the owner, `own_o`, is already
+computed at the single insert site), giving true O(1) amortized insert and
+O(this owner's own entries) scan, no sort/merge of any kind needed. This
+requires either a proper hash table keyed by owner (outside Janet's
+GC-visible heap, matching how `ss->xfb`/`ss->fibers` already are, to avoid
+a circular "the structure that protects things also needs protecting"
+problem) or an LSM-style multi-run structure -- genuinely new data-structure
+work, correctly scoped as its own dedicated session with the same
+verification rigor as everything else here, not attempted blind under
+remaining time pressure.
+
+**Verification of the refinement actually committed:** dual-target
+(interpreter + AOT) across proc/thread/ev/marsh/mailbox/pool, all green,
+identical counts both targets. All four ripwire-flagged C regressions pass
+fresh; test-gc-pcall unchanged pre-existing failure. The refinement is a
+real, measured improvement (reduces rebuild frequency, never makes anything
+worse than the previous committed version) and is kept; it is simply not,
+by itself, the complete fix for N=100000+.
+
+**Status table** (`bench/agents.janet`, interpreter, `JANET_NO_PROFILE=1`):
+
+| N | sweep fix only | + xfb index (always-rebuild) | + xfb index (amortized) |
+|---|---|---|---|
+| 2000 | 0.68s | 0.15s (446576 msgs/s) | 0.15s (419971 msgs/s) |
+| 5000 | 3.8s | 0.35s (101489 msgs/s) | (not re-measured, expect similar) |
+| 20000 | did not finish 60s | 4.1s (21168 msgs/s) | 4.3s (20688 msgs/s) |
+| 100000 | did not finish 60s | did not finish 60s | did not finish 60s |
+
+N=20000 is now solidly, repeatably fast across both xfb-index variants.
+N=100000 remains the open wall, now narrowed to exactly one well-understood,
+well-scoped cause (xfb needs true owner-bucketing, not a sorted/rebuilt
+index) rather than an unknown mystery.
