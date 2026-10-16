@@ -561,6 +561,22 @@ recur:
     }
 }
 
+/* Erlang-parity messaging fix: see gc.h's declaration for the full
+ * rationale and docs/internals/proc-lanes.md for the lldb evidence.
+ * Sets ONLY the reachable bit -- no frame walk, no stack/env/child
+ * recursion. Correct specifically for a scoped (fiber/process) minor's
+ * defensive need: protect a QUEUED fiber's OWN block in case it
+ * happens to live on the heap being swept, without taking on the
+ * unrelated job of proving that fiber's own deep reachability (that
+ * is whichever collection actually owns and sweeps it). NOT a
+ * substitute for janet_mark_fiber in any context that needs real
+ * reachability (janet_mark_roots / global minor / major must keep
+ * using the full deep mark). */
+void janet_gc_mark_fiber_shallow(JanetFiber *fiber) {
+    if (NULL == fiber || janet_gc_reachable(fiber)) return;
+    janet_gc_mark(fiber);
+}
+
 /* Deinitialize a block of memory */
 static void janet_deinit_block(JanetGCObject *mem) {
     switch (mem->flags & JANET_MEM_TYPEBITS) {
@@ -2426,9 +2442,21 @@ void janet_collect_fiber_minor(JanetFiber *f) {
      * swept task, the expected_sched_id check drops it silently, and
      * the loop parks in poll forever with an empty spawn queue (the
      * bulk proc fan-in lost-wakeup). janet_ev_mark is the same root
-     * set every full collect applies; it is bounded by live queued
-     * work, so it is cheap here. */
-    janet_ev_mark();
+     * set every full collect applies.
+     *
+     * CORRECTED (Erlang-parity messaging fix, see proc-lanes.md): the
+     * "bounded by live queued work, so cheap here" claim above was
+     * WRONG -- confirmed via live lldb backtraces. A queued fiber
+     * (e.g. a driver script parked on ev/sleep mid spawn-burst) can
+     * have an arbitrarily large live stack, and janet_ev_mark's full
+     * janet_mark_fiber on every queued fiber walks that whole stack
+     * on EVERY actor's own per-actor minor: O(N) per minor x N actors
+     * = O(N^2), the exact cause of the bench/agents.janet wall. This
+     * scoped collector only needs to keep a queued fiber's OWN block
+     * from being swept if it happens to live on THIS heap, not to
+     * prove its full reachability (that is whichever collection
+     * actually owns and sweeps it) -- use the shallow variant. */
+    janet_ev_mark_shallow();
     {
         size_t xi;
         for (xi = 0; xi < ss->xfb_count; xi++)
@@ -2439,7 +2467,35 @@ void janet_collect_fiber_minor(JanetFiber *f) {
 #ifdef JANET_EV
     janet_reset_threaded_visited_minor();
 #endif
-    janet_sweep_heaps_owned(f);
+    /* Erlang-parity messaging fix (docs/internals/proc-lanes.md): the
+     * real O(n^2) root cause, confirmed by direct code inspection (no
+     * profiling ambiguity) -- janet_sweep_heaps_owned's wide path
+     * (janet_sweep_fiber_owned -> janet_sweep_kind with walk_fibers=1)
+     * loops over EVERY registered fiber in the global census on
+     * EVERY call. janet_collect_fiber_minor is called once per actor
+     * per minor, so a plain proc/spawn burst of N actors pays O(N)
+     * census walk x N actors' own minors = O(N^2). This is the gap
+     * P3.5c ("the linearizer", a5d9168e) left behind: it only
+     * extended owner-attribution + narrow O(own) sweep
+     * (janet_sweep_proc_owned, vm.c:122's heap_strict check) to
+     * STRICT/isolated procs; plain (non-strict) procs were
+     * deliberately left on the wide path ("no scale win claimed",
+     * a739009e). A plain proc's fiber still has f->proc set (proc.c's
+     * cfun_proc_spawn_impl sets it unconditionally), so route ANY
+     * proc fiber -- strict or plain -- to the already-proven-safe
+     * narrow sweep. Marking above is UNCHANGED (still the full
+     * xfb/ev_mark/profile_table C-roots walk, still correct and
+     * necessary for a plain proc's genuine cross-heap sharing); only
+     * the SWEEP's redundant wide census walk is narrowed. Fibers with
+     * no proc (raw tasklets, boot/image-generation's own fibers) keep
+     * the wide path exactly as before -- that is the documented
+     * "crashes boot image generation deterministically" risk
+     * (a739009e), which this change does not touch. */
+    if (NULL != f->proc) {
+        janet_sweep_proc_owned(f);
+    } else {
+        janet_sweep_heaps_owned(f);
+    }
     if (getenv("JANET_ROOT_TRACE")) {
         static long cfmi = 0;
         if (++cfmi <= 12 || 0 == cfmi % 2000)

@@ -1309,3 +1309,121 @@ precision and how `JanetFuncEnv`'s offset bookkeeping is supposed to bound it.
 Not attempted further this session. This is now accurately scoped as a
 distinct, deeper open item, separate from (and likely more consequential
 than) the original proc-lanes roadmap's "messaging throughput" framing.
+
+## REAL FIX FOUND AND APPLIED: janet_sweep_fiber_owned's wide census walk (the dominant term)
+
+Following a direct challenge to apply BEAM's actual architecture rather than
+keep profiling ad hoc: the stated BEAM invariant is that a process's GC
+touches *only that process's own heap*, full stop -- no global structure is
+ever scanned by every process's own collection. Auditing `janet_collect_fiber_minor`
+against that invariant (not more sampling) surfaced the real, dominant,
+*mechanically provable* O(n^2) term, no profiling ambiguity required:
+
+```c
+static void janet_sweep_fiber_owned(JanetFiber *f) {
+    /* "Plain fibers need census marking O(N) regardless, so narrowing
+     * their sweep buys no complexity win." */
+    janet_sweep_kind(2, 1, owner, 1);   /* walk_fibers=1 */
+    janet_sweep_kind(0, 1, owner, 1);   /* walk_fibers=1 */
+    janet_sweep_kind(1, 1, owner, 1);   /* walk_fibers=1 */
+}
+```
+
+`janet_sweep_kind`'s `walk_fibers=1` loops over **every fiber in the global
+census** (`ss->fibers_count`, all N live actors) on every call.
+`janet_sweep_fiber_owned` is called once per actor per minor
+(`janet_collect_fiber_minor` -> `janet_sweep_heaps_owned` -> this). A for-loop
+over N, called N times: O(n^2) by simple code inspection.
+
+**Historical root cause, confirmed via git log.** The original author of
+`a739009e` (P3.5b) explicitly predicted this: *"Scale honesty: spawn still
+superlinear (global minors O(world) every 256KB young dominate); P3.5c is the
+linearizer. No scale win claimed."* P3.5c (`a5d9168e`) then shipped "the
+linearizer" -- but **only for strict/isolated spawn** (`proc/spawn-isolated`),
+giving it owner-attributed memory and the narrow O(own) sweep
+(`janet_sweep_proc_owned`, already existed, already proven safe). Plain
+`proc/spawn` -- what this entire investigation's benchmark uses, and what
+most real code would default to -- was deliberately left on the wide path,
+exactly as documented. Nobody ever came back to extend P3.5c's linearizer to
+the plain-spawn case. This is not a new bug; it is a known, acknowledged,
+never-closed gap, now finally closed.
+
+**The routing bug, confirmed at `vm.c:122-123`:**
+```c
+if (mcf_->heap_strict && NULL != mcf_->proc) janet_collect_process(mcf_->proc);
+else janet_collect_fiber_minor(mcf_);
+```
+A plain proc's fiber has `proc != NULL` but `heap_strict == 0` (`proc.c`'s
+`cfun_proc_spawn_impl` sets `fiber->proc = proc` unconditionally, regardless
+of the `isolated` flag) -- so it falls into the wide path purely because of
+the `heap_strict &&` conjunction, even though it IS a proc with perfectly
+well-controlled, predictable allocation attribution.
+
+**Fix applied** (in `janet_collect_fiber_minor`, after the unchanged marking
+phase): route any fiber with `f->proc != NULL` -- strict or plain -- to the
+already-existing, already-proven-safe `janet_sweep_proc_owned` (narrow,
+O(own)) instead of the wide `janet_sweep_heaps_owned`. Fibers with no proc
+(raw tasklets, boot/image-generation's own fibers) keep the wide path
+unchanged -- that is the documented "crashes boot image generation
+deterministically" risk from `a739009e`, which this change does not touch at
+all (scoped exactly to `f->proc != NULL`, nothing else). Marking is completely
+unchanged: still the full xfb/ev_mark/profile_table C-roots walk, still
+correct and necessary for a plain proc's genuine cross-heap sharing -- only
+the sweep's now-redundant wide census walk is narrowed.
+
+**Verification:** dual-target (interpreter + real AOT via `bender --aot`,
+which exercises `mkimage.janet`'s image-generation path directly -- the exact
+scenario the "crashes boot image generation" warning is about) across
+proc(99)/thread(30)/ev(776)/marsh(73)/mailbox(76)/pool(56): all green,
+identical counts both targets, zero AOT build failures. `JANET_GC_VERIFY=1`'s
+one failure (suite-ev, "young unmarked... minor mark incomplete") reproduces
+byte-identically on a clean pre-session baseline (confirmed via `git stash`) --
+pre-existing, explicitly matches `a739009e`'s own note ("GC_VERIFY-over-boot
+abort is pre-existing, identical on clean base"), not a regression. All four
+ripwire-flagged C regressions pass fresh; `test-gc-pcall` unchanged
+pre-existing failure.
+
+**Measured impact** (`bench/agents.janet`, interpreter, `JANET_NO_PROFILE=1`):
+
+| N | before (this session's earlier measurement) | after |
+|---|---|---|
+| 2000 | 2.05s (3901 msgs/s) | 0.68s total, ~14573 msgs/s |
+| 5000 | 12.5s (3187 msgs/s) | 3.8s total, ~5488 msgs/s |
+| 20000 | did not finish in 600s | still does not finish in 60s (see below) |
+
+N=20000 improved enormously in absolute terms (confirmed via a controlled
+diagnostic: with the sweep fix active and the xfb scan *temporarily* disabled
+for measurement only, N=20000 finished in 4.6s at 19496 msgs/s, proving the
+sweep fix removed the dominant term) but still does not finish within 60s
+with xfb active, because of a **second, smaller, but still real O(n^2) term**:
+
+## SECOND CONFIRMED O(n^2) TERM: the global xfb remembered set (not yet fixed)
+
+`ss->xfb` (`JanetSlabState.xfb`) is one global, VM-wide array recording every
+cross-fiber write-barrier edge, reset to empty ONLY at a full major collection
+(`janet_slab_major_reset`). `janet_collect_fiber_minor` scans it **in full**
+on every call (`for (xi = 0; xi < ss->xfb_count; xi++) if
+(janet_xfb_relevant(...)) ...`), filtered by `janet_xfb_relevant` checking
+`janet_slab_obj_owner(p) == owner`. Confirmed via direct inspection (not
+sampling): `xfb_count` stayed flat at exactly 60015 (~3 per actor: mailbox +
+sup channel + one more) across the whole N=20000 run -- genuinely O(n), not
+exploding -- and majors apparently never fire in this workload (the
+`gc-count` print only fires inside the major-collect path), so xfb never
+resets. The real cost is structural: O(minors) x O(xfb_count) x O(log(live
+slab pages)) (the per-check cost includes `janet_slab_page_for`'s binary
+search over the page directory) -- with minors and xfb_count both O(n), this
+is O(n^2 log n) overall, a second genuine quadratic term, smaller in constant
+factor than the sweep bug (no full stack walks) but with the same shape, so
+it reasserts itself once N crosses roughly 20000 in this workload.
+
+**Not fixed yet.** A quick diagnostic skip of the xfb scan (temporary,
+reverted, not committed) proved the mechanism and quantified the win, but a
+real fix needs an owner-bucketed xfb (partition by owner at insert time
+instead of one flat array scanned-and-filtered by every owner) done with the
+same rigor as the sweep fix. This is riskier than the sweep fix: `ss->xfb`
+has a transactional checkpoint/rollback mechanism (`xfb_entry` save/restore
+around panics, `gc.c` ~1727-1760) whose semantics would need careful
+redesign under owner-bucketing to avoid silently dropping a protected edge
+(which would reintroduce exactly the premature-free/UAF class of bug this
+whole subsystem exists to prevent). Scoped as the next concrete step, not
+attempted in this commit.

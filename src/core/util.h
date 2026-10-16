@@ -290,6 +290,11 @@ extern const JanetAbstractType janet_address_type;
 void janet_lib_ev(JanetTable *env);
 void janet_lib_proc(JanetTable *env);
 void janet_ev_mark(void);
+/* Erlang-parity messaging fix: scoped-minor-only variant of
+ * janet_ev_mark that shallow-marks queued fibers (reachable bit only,
+ * no stack walk) instead of fully marking them. See gc.h's
+ * janet_gc_mark_fiber_shallow and docs/internals/proc-lanes.md. */
+void janet_ev_mark_shallow(void);
 void janet_async_start_fiber(JanetFiber *fiber, JanetStream *stream, JanetAsyncMode mode, JanetEVCallback callback, void *state);
 int janet_make_pipe(JanetHandle handles[2], int mode);
 #ifdef JANET_FILEWATCH

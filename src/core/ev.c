@@ -757,6 +757,52 @@ void janet_ev_mark(void) {
     }
 }
 
+/* Erlang-parity messaging fix (docs/internals/proc-lanes.md): a scoped
+ * fiber/process minor's narrow defensive need is only to keep a QUEUED
+ * fiber's OWN block from being swept if it happens to live on the
+ * heap being collected -- NOT to prove that fiber's full reachability
+ * (that is whichever collection actually owns and sweeps it). The
+ * original janet_ev_mark deep-marks every queued fiber (janet_mark ->
+ * janet_mark_fiber, full frame walk), which — confirmed via live lldb
+ * backtraces — made every actor's own per-actor minor walk the ENTIRE
+ * stack of whatever fiber the event loop has queued (e.g. a driver
+ * script parked on ev/sleep mid spawn-burst, with a large live handle
+ * array on its stack): O(N) per minor x N actors = O(N^2). This
+ * variant shallow-marks every queued FIBER (reachable bit only, no
+ * frame walk) while still fully marking every queued VALUE (the
+ * wakeup payload the original comment's "lost-wakeup" concern is
+ * actually about) exactly as before. Use ONLY from a scoped minor
+ * (janet_collect_fiber_minor); janet_mark_roots (global minor/major)
+ * must keep calling the full janet_ev_mark. */
+void janet_ev_mark_shallow(void) {
+
+    /* Pending tasks */
+    JanetTask *tasks = janet_vm.spawn.data;
+    if (janet_vm.spawn.head <= janet_vm.spawn.tail) {
+        for (int32_t i = janet_vm.spawn.head; i < janet_vm.spawn.tail; i++) {
+            janet_gc_mark_fiber_shallow(tasks[i].fiber);
+            janet_mark(tasks[i].value);
+        }
+    } else {
+        for (int32_t i = janet_vm.spawn.head; i < janet_vm.spawn.capacity; i++) {
+            janet_gc_mark_fiber_shallow(tasks[i].fiber);
+            janet_mark(tasks[i].value);
+        }
+        for (int32_t i = 0; i < janet_vm.spawn.tail; i++) {
+            janet_gc_mark_fiber_shallow(tasks[i].fiber);
+            janet_mark(tasks[i].value);
+        }
+    }
+
+    /* Pending timeouts */
+    for (size_t i = 0; i < janet_vm.tq_count; i++) {
+        janet_gc_mark_fiber_shallow(janet_vm.tq[i].fiber);
+        if (janet_vm.tq[i].curr_fiber != NULL) {
+            janet_gc_mark_fiber_shallow(janet_vm.tq[i].curr_fiber);
+        }
+    }
+}
+
 /* Push/pop bodies live here; proc.c shares them via ev.h (Step P1). */
 int janet_channel_push(JanetChannel *channel, Janet x, int mode);
 int janet_channel_pop(JanetChannel *channel, Janet *item, int is_choice);

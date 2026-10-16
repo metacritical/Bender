@@ -133,4 +133,18 @@ void janet_census_add(JanetFiber *f);
  * slab-page ownership of table upvalues. */
 void janet_strict_debug_envs(JanetFunction *copy);
 
+/* Erlang-parity messaging fix: protect a QUEUED (not-yet-resumed) task
+ * fiber's own GC block from a narrow, unrelated scoped collection's
+ * sweep, WITHOUT deep-walking its stack. A scoped fiber/process minor
+ * only sweeps its OWN heap; a foreign queued fiber's stack contents are
+ * that fiber's own collection's responsibility, not this one's. Deep-
+ * marking it (the full janet_mark_fiber recursion) was confirmed via
+ * live lldb backtraces to make every actor's own per-actor minor walk
+ * the ENTIRE stack of whatever fiber the event loop has queued (e.g. a
+ * driver script parked on ev/sleep mid spawn-burst, with a large live
+ * handle array on its stack) -- O(N) per minor x N actors = O(N^2). See
+ * docs/internals/proc-lanes.md. Only sets the reachable bit; does not
+ * recurse into the fiber's frames/stack/env. */
+void janet_gc_mark_fiber_shallow(JanetFiber *fiber);
+
 #endif
