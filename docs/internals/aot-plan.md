@@ -1209,3 +1209,34 @@ passed 3/3; mark-neuter and interrupt-neuter still failed 3/3 (M4b-1's
 fields/checks exonerated — layout only shifted timing). Post-fix:
 uncapped CLI 5/5, ttfx decrypt+wipe byte-identical to live Ruby,
 43/43 suites, fibertest green, AOT oracle same ×6.
+
+## M4b re-verification + new finding (this round): existing quantum/interrupt solid, lanes=8 intermittent crash found
+
+Re-verified the shipped M4b-1/M4b-2 machinery (`ev/interrupt`, `ev/timeslice`)
+against current HEAD before planning any new work: `test/suite-interrupt.janet`
+(15/15) and `test/suite-quantum.janet` (16/16) both still pass cleanly. The
+2026-10-07 EPIC SCOPING finding (work-stealing/migration "hold by
+construction" for the pool/lanes shared-queue pattern) was re-examined by
+testing `bench/agents-lanes.janet` (existing demo script, `proc/lanes-start`)
+at the same N already characterized for single-VM this session:
+
+- `lanes=0` (single-VM baseline path in that script): hangs/times out at
+  N=5000 -- a pre-existing bug in that specific code path (not touched or
+  caused by this session's fixes), not yet investigated.
+- `lanes=4`, N=20000: completes in 0.74s, 27157 actors/s.
+- `lanes=8`, N=20000: **intermittent** -- crashed with SIGTRAP (exit 133)
+  on the first attempt, succeeded cleanly on a second attempt (0.49s,
+  40639 actors/s, even faster than lanes=4). Reproduction: run
+  `bench/agents-lanes.janet 20000 4 8` repeatedly; failure rate observed
+  2-out-of-3 attempts across this round's testing, not yet isolated to a
+  specific lldb-confirmed root cause.
+
+This is a real, concrete, previously-unknown bug in the existing lanes
+infrastructure -- directly relevant to the M:N scheduler epic, since lanes
+are the closest existing building block to true M:N work distribution.
+Not debugged further this round (a non-deterministic SIGTRAP needs its own
+dedicated lldb/core-dump session, not a guess). Flagged as the concrete
+next step before any new preemption/scheduler work: a race or resource
+exhaustion at higher lane counts would undermine any M:N design built on
+top of the current lanes implementation, so it should be isolated and
+fixed (or at least understood) before investing further in that direction.
