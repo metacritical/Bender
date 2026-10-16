@@ -1006,3 +1006,36 @@ Results: suite-ev interpreter 776/776; AOT 776/776. Regressions:
 proc 88/88 both, mailbox 76/76 both, lanes all assertions both
 (including density 640k). suite-marsh interpreter 73/73; AOT still
 66/73 (7 weak-table pins, existing investigation).
+
+## Erlang-parity session (started 2026 continuation): gap re-verification
+
+Re-checked the "New tasks to fold into the plan" gap table (2026-10-14 roadmap)
+against current HEAD (`678ea4cd`):
+
+**Gap 1, copy-by-default message semantics — ALREADY SATISFIED, no implementation
+needed.** `proc/send`'s mailbox is always a threaded channel
+(`janet_channel_make_threaded_c`, `proc.c:877`), and `janet_chan_needs_pack`
+(`ev.c:947-949`) returns true for `is_threaded || isolated` — so `janet_chan_pack`/
+`janet_chan_unpack` (`ev.c:951-1004`) already marshal-copy every non-immediate
+`proc/send` payload (mutable table/array/buffer/struct/function), regardless of
+whether the sending or receiving proc is `strict`/isolated. Verified empirically:
+spawn a plain (non-isolated) proc, `proc/send` it a mutable table, mutate the
+table after sending — the proc observes the pre-mutation snapshot, not the
+mutated table (`/tmp/test-copy-send.janet`, informal, not checked in). The
+2026-10-14 roadmap note predates recognizing that mailboxes are unconditionally
+threaded channels; the gap row should be read as CLOSED, not open. No code
+change required for this item.
+
+**Gap 2, messaging throughput campaign — baseline measurement taken, full
+optimization pass not started.** `bench/agents.janet 5000 8` (interpreter,
+this session): spawn 98537 spawns/s, but **tick/message throughput only
+~3187 msgs/s** — far below the roadmap's recorded "160-170k msg/s interpreted"
+figure from the 100k-actor/8-tick run. This specific small-N (5000) run is not
+directly comparable to the recorded 100k baseline (different N changes
+driver-loop overhead ratios) and must not be treated as a regression without
+a same-N comparison against a known-good historical binary. Flagging as the
+open next step rather than drawing a conclusion from one under-scaled sample.
+
+Remaining roadmap items (preemption M4b, proc migration, per-proc GC collector
+swap, named registry, supervision tree library, distribution, hot-code-loading,
+battle-hardening) are unchanged multi-session epics, not touched this session.
