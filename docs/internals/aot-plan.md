@@ -1597,3 +1597,72 @@ fixing eventually, but:
   minor/major collection sweeping something it believes it owns
   exclusively, or lane-stop/teardown logic, rather than the mark function
   itself).
+
+## M4b re-scoped by measurement: Janet-level preemption ALREADY WORKS and is ON BY DEFAULT
+
+Moved to the "True preemption (M4b)" backlog item after the lanes=8 crash was
+parked. Before designing or writing any SIGURG/signal-handler code, measured
+what the current tree actually does -- and the epic turns out to be much
+narrower than its roadmap text implies.
+
+### Finding 1: the hard C primitive already exists AND is already public
+`janet_loop1_interrupt(JanetVM *vm)` (`ev.c` ~2461, declared in
+`src/include/janet.h` ~1621) already does BOTH halves of what the epic
+scoped as missing: it cross-thread-interrupts a TARGET VM by handle
+(`janet_interpreter_interrupt`, an atomic inc on that VM's `auto_suspend`,
+`state.c:63`) AND breaks that VM out of a blocking event-loop wait by
+posting an empty event to its self-pipe. `janet.h`'s own documentation
+block explicitly states it is designed to be called "in library code, **a
+signal handler, or another thread**", and ships a documented usage pattern
+for handling the returned interrupted fiber. The timeout path already uses
+it in production (`ev.c:966`). So "waking threads parked in blocking
+syscalls" -- listed in the epic as genuinely missing -- is already built,
+already public, already used.
+
+### Finding 2 (measured, A/B controlled): Janet-level CPU-hog preemption already works
+`ev/timeslice`'s own docstring states "Quanta are **ON by default** (Step 2
+preemptive reductions; `JANET_TIMESLICE=0` starts a process with them
+off)". Verified empirically rather than trusting the docstring -- a probe
+with one CPU-bound fiber (80M-iteration tight arithmetic loop, zero yields,
+zero ev ops) racing one light fiber (5 x `ev/sleep 0.01`):
+
+| config | light-done | hog-done | verdict |
+|---|---|---|---|
+| `JANET_TIMESLICE=0` (quanta OFF) | 1.278s | 1.224s | STARVED -- light only completed AFTER the hog |
+| default (quanta ON) | **0.049s** | 1.276s | PREEMPTED -- light completed in its own sleep total |
+
+The off-case reproducing starvation exactly is what makes this conclusive:
+the effect measured IS the quantum mechanism, not a test artifact. A
+compute-bound Janet actor **cannot** starve sleepers/takers on the current
+default-configured tree.
+
+### What therefore ACTUALLY remains in M4b (genuinely narrower than scoped)
+Per `ev/timeslice`'s docstring, quanta "never land inside C calls or pcall
+regions (poll points are Janet ops only)". So the real remaining gap is
+exactly:
+1. **Non-cooperating C code**: a long-running FFI call or a C function that
+   blocks without going through the ev loop cannot be preempted by quanta
+   (poll points are Janet-op-only by design). THIS is where SIGURG-style
+   async preemption would genuinely add something -- and `janet_loop1_interrupt`
+   is already the primitive to build it on (it is signal-handler-safe by
+   its own documented contract), so the work is a signal handler + policy,
+   NOT new core scheduler plumbing.
+2. **Running-task migration** (moving a mid-execution suspended stack plus
+   its VM-local waits -- channels, timeouts, supervisors -- to another
+   lane). Unchanged from the 2026-10-07 scoping: the semantics surface is
+   the work, and no current workload needs it.
+
+The epic's own earlier note ("No current workload needs either; both stay
+tracked until a workload demands them") still holds, and is now backed by
+measurement rather than assumption: for the MMORPG-style workload discussed
+this session (many lightweight actors, per-player logic), Janet-level
+quanta already prevent the starvation scenario that motivated the concern.
+A workload that genuinely needs (1) would have to be doing long CPU-bound
+work *inside C*, not inside Janet.
+
+**Recommendation**: M4b should NOT be treated as a prerequisite for the
+MMORPG/actor use case. The remaining two items are real but narrow, and
+neither is on the critical path for Janet-level actor workloads. Higher-value
+next items from the standing backlog: the named registry + supervision trees
+(Phase 3), which the WhatsApp-style reliability model actually depends on
+and which genuinely do not exist yet.
