@@ -4254,8 +4254,22 @@ static void janet_thread_new_complete(JanetEVGenericMessage msg) {
     JanetThreadCompletion *c = (JanetThreadCompletion *) msg.argp;
     JanetThreadHandle *h = c->handle;
     Janet result = janet_wrap_nil();
+    int result_rooted = 0;
     if (c->bytes != NULL && c->len > 0) {
         result = janet_unmarshal(c->bytes, c->len, JANET_MARSHAL_UNSAFE, NULL, NULL);
+        /* result is freshly unmarshaled and lives only as a C local until
+         * the barrier-protected store onto h below; root it explicitly for
+         * this window rather than relying on h's own mark state to cover a
+         * value it does not point to yet (closes the Phase 2b-i fiber-
+         * rooting-chronology gap with the existing explicit-root API).
+         * Skip immediates (nil included) to avoid needless roots-array
+         * churn, matching janet_gc_barrier's own immediate-skip policy;
+         * result_rooted records exactly what was rooted so the unroot
+         * below stays symmetric regardless of what result later is. */
+        if (!janet_checktype(result, JANET_NIL)) {
+            janet_gcroot(result);
+            result_rooted = 1;
+        }
         janet_free(c->bytes);
     } else if (c->bytes != NULL) {
         janet_free(c->bytes);
@@ -4273,6 +4287,9 @@ static void janet_thread_new_complete(JanetEVGenericMessage msg) {
     janet_free(c);
     h->result = result;
     janet_gc_barrier(h, h->result);
+    if (result_rooted) {
+        janet_gcunroot(result);
+    }
     h->is_error = is_error;
     h->done = 1;
     /* A suspended join roots (handle, waiter) as a pair; unroot exactly.
