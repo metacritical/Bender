@@ -1039,3 +1039,30 @@ open next step rather than drawing a conclusion from one under-scaled sample.
 Remaining roadmap items (preemption M4b, proc migration, per-proc GC collector
 swap, named registry, supervision tree library, distribution, hot-code-loading,
 battle-hardening) are unchanged multi-session epics, not touched this session.
+
+### Messaging throughput: scaling probe reveals superlinear degradation (not just low)
+
+Follow-up to the N=5000 baseline: scaled `bench/agents.janet` across N with ticks
+held small, interpreter target, this machine:
+
+| N (actors) | ticks | total msgs | result |
+|---|---|---|---|
+| 2000 | 4 | 8000 | 2.05s (3901 msgs/s) |
+| 5000 | 8 | 40000 | 12.5s (3187 msgs/s) |
+| 20000 | 4 | 80000 | DID NOT FINISH in 60s |
+| 100000 | 8 | 800000 | DID NOT FINISH in 600s; `sys` time 5m57s vs. `user` 1m11s |
+
+If per-message cost were flat (~3500 msgs/s), N=20000/T=4 (80000 msgs) should take
+~23s and N=100000/T=8 (800000 msgs) should take ~230s. Neither finished within
+2-5x that budget, and the 100k run's wall-clock time was dominated by `sys` (kernel/
+syscall), not `user` (compute) -- 5x more kernel time than compute time. This points
+at superlinear (likely O(N) or worse per send, not O(1)) overhead somewhere in the
+scheduler/mailbox/dispatch path as actor count grows, NOT a flat low per-message
+rate. The driver loop itself (`bench/agents.janet:50-57`) is a plain O(N) per-round
+scan -- not the suspect; the blowup is inside `proc/send`/scheduling.
+
+This contradicts the roadmap's recorded "100k actors, 160-170k msg/s interpreted"
+baseline strongly enough that it should be treated as a real regression candidate,
+not just "slower than hoped." Root cause not yet identified -- needs profiling
+(perf/dtrace sampling during the N=20000 hang) in a dedicated session; not
+attempted here. Do not guess at a fix without that profile.
