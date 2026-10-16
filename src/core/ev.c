@@ -2445,6 +2445,23 @@ static void janet_ev_setup_selfpipe(void) {
     if (janet_make_pipe(janet_vm.selfpipe, 0)) {
         JANET_EXIT("failed to initialize self pipe in event loop");
     }
+#if defined(__linux__) && defined(F_SETPIPE_SZ)
+    /* Phase 2b step 4 (backpressure, not a correctness fix): the default
+     * pipe capacity (typically 64KiB) divided by sizeof(JanetSelfPipeEvent)
+     * bounds how many concurrent posts (signal handlers, threaded-call
+     * completions, pool/proc exits) can be in flight before
+     * janet_ev_post_event's bounded retry loop aborts via "failed to
+     * write event to self-pipe". That abort is the deliberate, signal-
+     * safe fallback (test-ev-selfpipe-saturation asserts it is bounded,
+     * not that it never happens) and must stay exactly as-is: a signal
+     * handler cannot block, lock, or allocate, so no real backpressure
+     * is possible from that context. Growing the buffer only widens the
+     * margin before that fallback is needed; it changes no control flow
+     * and is a best-effort Linux-only call (unprivileged processes are
+     * typically capped around 1MiB by pipe-max-size, so failure here is
+     * expected and harmless -- fall back to the kernel default). */
+    fcntl(janet_vm.selfpipe[1], F_SETPIPE_SZ, 1 << 20);
+#endif
 }
 
 /* Handle events from the self pipe inside the event loop */
