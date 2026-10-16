@@ -1,0 +1,476 @@
+# Erlang Parity — Complete Task Ledger & Session Handoff
+
+**Purpose**: single-file, self-contained handoff of ALL Erlang-parity work.
+Written to be revived in a fresh session with no prior context. Every claim
+here is backed by a commit, a measurement, or an explicit "not verified" label.
+
+**Repo**: `/Users/pankajdoharey/Development/Projects/janet`
+**Session date**: 2026-10-16
+**HEAD at handoff**: `9961fc12`
+**Branch**: `master` (277+ commits ahead of `origin/master`)
+
+---
+
+## 0. TL;DR for whoever picks this up
+
+- **Messaging/spawn scaling: FIXED.** Four real O(n²) mechanisms found and
+  fixed. `bench/agents.janet` went from hanging at N=20000 to completing
+  through N=1,000,000. All dual-target verified.
+- **Erlang gap quantified honestly**: Erlang still beats us 9x–200x. Root
+  cause is architectural (M:N scheduler), **not** GC — proven by same-machine
+  measurement, see §3.
+- **One real bug UNSOLVED and PARKED**: intermittent `lanes=8` crash (§5.1).
+  Root-caused via ASAN, two fix attempts failed verification, both reverted.
+- **M4b "true preemption" was re-scoped by measurement** (§4.2): Janet-level
+  preemption already works and is ON by default. Only narrow C-code-preemption
+  and task-migration remain. **Not** a prerequisite for actor workloads.
+- **Recommended next item**: named registry + supervision trees (Phase 3).
+  Genuinely missing, and what a WhatsApp-style reliability model depends on.
+
+---
+
+## 1. FINISHED — Messaging throughput: four O(n²) mechanisms fixed
+
+All four were verified with the full discipline described in §7.
+
+### 1.1 `29c65339` — plain `proc/spawn` env decoupling
+- **Status**: SHIPPED, verified. **But see the CORRECTION below.**
+- **File**: `src/core/proc.c` (+59/-20)
+- **What**: plain `proc/spawn`'s child env no longer inherits the spawner's
+  full proto chain. Child gets only `:proc-self` (plus `:out`/`:err` when
+  set); opt-in `(setdyn :proc-inherit-env true)` in the spawner restores the
+  old behavior. Relevant symbols: `:proc-self`, `:proc-inherit-env`
+  (`proc.c` ~901–971).
+- **CORRECTION (`6c6ea9c0`, `5750acd2`)**: this was shipped believing it
+  fixed the O(n²) hang. **It did not** — re-benchmarking showed N=20000 still
+  hung identically. The env-proto-chain diagnosis was wrong. The change is
+  still valid, harmless hardening (dual-target verified, zero regressions)
+  and is kept, but it is **not** the fix for the scaling wall. Documented
+  honestly rather than left as a false claim.
+
+### 1.2 `a7bcedcc` — THE dominant fix: narrow sweep routing for proc fibers
+- **Status**: SHIPPED, verified. This was the big one.
+- **Files**: `src/core/gc.c` (+64), `src/core/gc.h` (+14),
+  `src/core/ev.c` (+46), `src/core/util.h` (+5), `docs/internals/proc-lanes.md`
+- **Root cause**: `janet_sweep_fiber_owned` (`gc.c` ~1740) called
+  `janet_sweep_kind(..., walk_fibers=1)`, which loops over **every fiber in
+  the global census** on every call. `janet_collect_fiber_minor` calls it once
+  per actor per minor → a loop over N called N times → **O(n²) by direct code
+  inspection**, no profiling ambiguity.
+- **Historical context (found via `git log`)**: commit `a739009e` (P3.5b)
+  explicitly predicted this ("spawn still superlinear… P3.5c is the
+  linearizer. No scale win claimed"). `a5d9168e` (P3.5c) then shipped the
+  linearizer **only for strict/isolated spawn**, via `vm.c`'s routing check
+  `heap_strict && proc`. Plain `proc/spawn` fibers have `proc != NULL` but
+  `heap_strict == 0`, so they fell into the wide path purely from that
+  conjunction. A known, acknowledged, never-closed gap — not a new bug.
+- **Fix**: route any `f->proc != NULL` fiber (strict or plain) to the
+  already-existing, already-proven `janet_sweep_proc_owned` (narrow, O(own)).
+- **Also in this commit**: `janet_gc_mark_fiber_shallow` (`gc.c:576`, declared
+  `gc.h:148`) and `janet_ev_mark_shallow` (`ev.c:777`, declared `util.h:297`).
+  A scoped fiber-minor only needs to protect a queued fiber's own block from
+  being swept, not deep-walk its entire stack. `janet_mark_roots` (global
+  minor/major) unchanged — still fully deep.
+
+### 1.3 `69e40dc9` → `a03f07bd` → `2e0e4a45` — the `xfb` remembered set (3 iterations)
+- **Status**: SHIPPED, verified. Took three attempts to land correctly.
+- **File**: `src/core/gc.c`
+- **Root cause**: `ss->xfb` is **one global, VM-wide array** of cross-fiber
+  write-barrier edges, reset only at a full major (which this workload never
+  triggers). Both scoped collectors scanned it **in full** on every call —
+  O(minors) × O(xfb_count), both O(n). A pre-existing comment already
+  recorded measuring "185k live xfb entries dominated every minor" at 100k
+  agents.
+- **Iteration 1 (`69e40dc9`)**: lazily-rebuilt sorted-by-owner index, rebuild
+  on any growth. Helped small N.
+- **Iteration 2 (`a03f07bd`)**: amortized-doubling rebuild threshold.
+  **DO NOT RESURRECT THIS APPROACH** — profiled degrading at N=100000 because
+  this workload interleaves a scan with nearly every insert, defeating the
+  amortization; the unsorted-tail scan cost stayed quadratic.
+- **Iteration 3 (`2e0e4a45`) — the committed form**: **true owner-bucketing at
+  insert time.** Fixed 4096-slot chained hash table keyed by owner, populated
+  at the same single insert site (owner already computed there).
+  - Symbols: `JANET_XFB_NBUCKETS` (`gc.c:1013`), `struct JanetXfbBucketNode`
+    (`gc.c:1014`), `ss->xfb_buckets` (`gc.c:1107`),
+    `janet_xfb_bucket_append` (`gc.c:1124`), `janet_xfb_buckets_free`
+    (`gc.c:1126`), `janet_xfb_mark_owned`.
+  - O(1) amortized insert, O(1) hash lookup + O(own entries) scan, no sort.
+  - Verified via lldb: chain length ~25 (4096 slots / ~100k owners), per-owner
+    entries ~2 — performing exactly as designed.
+  - Safety argument: `page->owner` has exactly ONE write site (fresh page
+    allocation) and is never reassigned; the only transition is
+    `owner=K → mixed/0`, and a mixed-page object is already immune to any
+    single-owner scoped sweep (traced `janet_sweep_list`'s own filter). So a
+    stale cached owner can never cause a premature free.
+  - The main `ss->xfb` array, its insertion order, and
+    `janet_slab_owner_stats`' rollback truncation are **untouched** — buckets
+    are a parallel additive dual-write, freed (not rolled back) at
+    major-reset and VM clear.
+
+### 1.4 `4d18a636` — universal narrow sweep (fixed N=100000)
+- **Status**: SHIPPED, verified.
+- **File**: `src/core/gc.c` (+38)
+- **Root cause**: a `dofile`/run-context wrapper fiber executing the top-level
+  send loop is **not a proc** (`f->proc == NULL`) and not `root_fiber`, so
+  `a7bcedcc`'s proc-scoped fix didn't cover it. It still took the wide census
+  path on every one of its own (frequent) minors.
+- **Critical prerequisite checked, not assumed**: the P3.5b-era warning
+  ("full narrowing crashes boot image generation deterministically") was
+  **re-tested against the exact historical scenario** — `build/janet_boot`'s
+  actual bootstrap image generation, 3/3 runs, producing **byte-identical**
+  `janet.c` each time. Plus all 60 `test/suite-*.janet` files individually,
+  and `suite-lanes`' 640k-density join (8.02s, matching historical baseline).
+  Zero behavioral difference. Whatever caused the historical crash was fixed
+  by other work in the interim.
+- **Fix**: `janet_sweep_proc_owned` is now the universal default for **every**
+  fiber. The wide path is kept as dead code behind `#if 0` in
+  `janet_sweep_fiber_owned` (`gc.c` ~1740) **for bisection** if the historical
+  failure mode ever resurfaces.
+
+### 1.5 Measured outcome (`bench/agents.janet`, interpreter, `JANET_NO_PROFILE=1`)
+
+| N | before | after |
+|---|---|---|
+| 2,000 | 2.05s (3,901 msgs/s) | 0.15s (424,111 msgs/s) |
+| 5,000 | 12.5s (3,187 msgs/s) | 0.34s (103,477 msgs/s) |
+| 20,000 | **did not finish in 600s** | 4.0s (22,575 msgs/s) |
+| 100,000 | did not finish | 98s (4,445 msgs/s) |
+| 1,000,000 | did not finish | see §2 (via multi-thread topology) |
+
+---
+
+## 2. FINISHED — Multi-thread scaling validation
+
+### 2.1 `79a0135c` — new benchmark: `bench/agents-multithread.janet`
+- **Status**: SHIPPED, verified (interpreter + AOT).
+- **File**: `bench/agents-multithread.janet` (new, 86 lines)
+- **What**: spawns N independent `thread/new` workers (share-nothing isolated
+  VMs, true multi-core), each running its own self-contained copy of the
+  `bench/agents.janet` actor-burst kernel, then `thread/join` aggregates.
+  Distinct from `bench/agents-lanes.janet`, which splits ONE workload across
+  lane workers via `proc/spawn` routing.
+- **Usage**: `bender bench/agents-multithread.janet [N] [T] [THREADS]`
+  (N = actors **per thread**, default 100/4/20)
+
+### 2.2 Escalation series (`72fb07a4`, `4e0662f7`, `8fdb873d`) — all PASS
+
+| threads | procs/thread | total actors | wall | aggregate msgs/s | sys/user |
+|---|---|---|---|---|---|
+| 20 | 100 | 2,000 | 0.06s | 138,884 | ~1.5x |
+| 50 | 100 | 5,000 | 0.10s | 209,237 | ~3x |
+| 500 | 100 | 50,000 | 0.96s | 221,056 | ~5.6x |
+| 500 | 1000 | 500,000 | 33.4s | 60,098 | ~12.6x |
+| 1000 | 1000 | **1,000,000** | 72.8s | 55,157 | ~19.7x |
+
+- All PASS — correct exact-once message accounting at every scale.
+- Throughput stays flat 50→500 threads at fixed per-thread load, then drops
+  when per-thread N grows 10x — i.e. **each thread's own VM still carries the
+  per-VM scaling characteristics**; threads parallelize across VMs but don't
+  fix what happens inside one.
+- Rising sys/user ratio (1.5x→19.7x) = real OS thread/VM-creation contention
+  as a separate, growing cost layer.
+- Also verified: `bench/agents.janet` at N=50/100 and
+  `test/scale-proc-chain.janet` at N=50/100 all PASS; `bench/concurrency.janet`
+  all 9 micro-benches complete.
+
+---
+
+## 3. FINISHED — Direct same-machine Erlang comparison (`ac9b75ab`)
+
+- **Files**: `bench/agents_erl.erl` (new, 72 lines), `docs/internals/proc-lanes.md`
+- **Build/run**: `cd bench && erlc agents_erl.erl && erl -noshell -run agents_erl main N T -s init stop`
+- **Erlang/OTP 29** (`/opt/homebrew/bin/erl`), same machine, same actor kernel shape.
+
+| N | Janet (single VM) | Erlang (one node) | Erlang advantage |
+|---|---|---|---|
+| 2,000 | 14,573 msgs/s | 1,000,000 msgs/s | ~69x |
+| 5,000 | 103,477 msgs/s | 952,380 msgs/s | ~9.2x |
+| 20,000 | 22,575 msgs/s | 963,855 msgs/s | ~43x |
+| 100,000 | 4,445 msgs/s (98s) | 896,860 msgs/s (0.79s) | **~200x** |
+| 1,000,000 | needed 1000 manual threads, 72.8s | 12.4s, 377,287 msgs/s | — |
+
+- **Root cause of the gap, confirmed by direct process inspection**: `erl`'s
+  default invocation on this 12-core machine runs **40 OS threads** (verified
+  `top -pid <beam.smp> -stats th`), matching `erlang:system_info/1`:
+  `schedulers=12` + `dirty_cpu_schedulers=12` + `dirty_io_schedulers=10` +
+  `thread_pool_size=1` (=35) + ~5 housekeeping. That's BEAM's **M:N
+  scheduler** — millions of processes transparently mapped onto a small fixed
+  preemptive thread pool, **zero application orchestration**.
+- **Conclusion**: the gap is architectural (M:N scheduler + true preemption +
+  30 years of per-process GC tuning), **not** GC bugs. This session's GC fixes
+  were necessary to make the current cooperative one-VM-per-thread model
+  functionally correct at scale; they were never going to close a 200x gap.
+
+---
+
+## 4. FINISHED — M4b investigation (re-scoped, not implemented)
+
+### 4.1 `0d90e346` — re-verified already-shipped preemption machinery
+- `test/suite-interrupt.janet` 15/15 PASS, `test/suite-quantum.janet` 16/16 PASS
+  on current HEAD. The shipped `ev/interrupt` + `ev/timeslice` mechanisms
+  (M4b-1, M4b-2 per `aot-plan.md`) are solid.
+
+### 4.2 `9961fc12` — **M4b re-scoped by measurement** (important)
+- **Finding 1**: the "missing" hard C primitive **already exists and is
+  already public**. `janet_loop1_interrupt(JanetVM *vm)` (`ev.c` ~2461,
+  declared `src/include/janet.h` ~1621) already cross-thread-interrupts a
+  target VM by handle (`janet_interpreter_interrupt`, atomic inc on
+  `vm->auto_suspend`, `state.c:63`) **and** breaks it out of a blocking
+  event-loop wait via self-pipe post. `janet.h` explicitly documents it as
+  callable from "library code, **a signal handler, or another thread**", with
+  a documented usage pattern. The timeout path already uses it in production
+  (`ev.c:966`).
+- **Finding 2 (A/B measured, not assumed)**: Janet-level CPU-hog preemption
+  **already works and is ON by default**. Probe: one 80M-iteration zero-yield
+  CPU-bound fiber racing one light fiber (5× `ev/sleep 0.01`):
+
+  | config | light-done | hog-done | verdict |
+  |---|---|---|---|
+  | `JANET_TIMESLICE=0` (quanta OFF) | 1.278s | 1.224s | **STARVED** |
+  | default (quanta ON) | **0.049s** | 1.276s | **PREEMPTED** |
+
+  The off-case reproducing starvation exactly is what makes this conclusive.
+- **What actually remains in M4b** (per `ev/timeslice`'s docstring, quanta
+  "never land inside C calls or pcall regions — poll points are Janet ops
+  only"):
+  1. Async preemption of **non-cooperating C code** (FFI/blocking C calls).
+     `janet_loop1_interrupt` is already the signal-safe primitive — the work
+     is a signal handler + policy, **not** new core scheduler plumbing.
+  2. **Running-task migration** (suspended stack + VM-local waits: channels,
+     timeouts, supervisors — the semantics surface is the work).
+- **Recommendation**: M4b is **NOT** a prerequisite for MMORPG/actor
+  workloads. Quanta already prevent the motivating starvation scenario.
+
+---
+
+## 5. ⚠️ UNFINISHED / UNSOLVED — must be revived
+
+### 5.1 ⚠️ **UNSOLVED: intermittent `lanes=8` SIGTRAP crash** (highest-value open bug)
+
+**Status**: root-caused, two fix attempts FAILED verification, both REVERTED.
+`src/core/ev.c` is confirmed back to its unmodified committed state.
+
+- **Repro (fast)**: `JANET_NO_PROFILE=1 ./build/bender bench/agents-lanes.janet 5000 4 8`
+  — crashes ~75–100% of attempts, ~0.06–0.1s per non-crashing run. (N=20000
+  crashes at the same rate but is much slower; use N=5000.)
+- **Crash signature**: always `janet_chan_pack` → `janet_malloc` (`ev.c:1001`),
+  reached via `cfun_proc_send` → `janet_channel_push` →
+  `janet_channel_push_with_lock`. macOS malloc freelist-corruption detector
+  (`EXC_BREAKPOINT` in `_xzm_xzone_malloc_freelist_outlined`), i.e. the
+  classic signature of an **earlier** heap overrun discovered later.
+- **ASAN-confirmed real bug** (2/2 identical reproductions):
+  heap-use-after-free at `janet_chanat_mark` (`ev.c:1325/1330`, the channel
+  abstract's `gcmark` callback) → `janet_mark` → `janet_mark_tuple`/
+  `janet_mark_array`. A 32-byte region **allocated by one lane thread, freed
+  by another, read by a third**.
+- **Confirmed defect by code reading**: `janet_chanat_mark` **never calls
+  `janet_chan_lock`**, while every other access to the same
+  `read_pending`/`write_pending`/`items` queues does.
+- **Fix attempt 1 — lock held across the whole mark**: 20/20 clean at N=5000,
+  **but** N=20000 showed a NEW failure mode absent from baseline — severe
+  workload-dependent slowdown (39–56s user time, not crashes), consistent
+  with a lock-ordering risk (marking while locked can recurse into marking
+  other threaded abstracts needing other locks). REVERTED.
+- **Fix attempt 2 — snapshot under lock, release, then mark from the copy**:
+  did **not** fix the crash (15/15 crashed at N=5000), and the crash moved to
+  the snapshot code's **own new allocation**, meaning the heap was already
+  corrupted before `janet_chanat_mark` ran in that instance. This undermines
+  confidence that the missing lock is the sole (or real) cause. REVERTED.
+- **Baseline re-confirmed**: unmodified code crashes 8/8 at N=20000, always
+  within 0–1s, **never hangs** — so attempt 1's hang was genuinely new.
+- 🔑 **BEST RESUME LEAD**: **every single ASAN capture across both
+  investigation rounds shows the FREEING thread is always T0 (the main
+  thread)**, while allocating and reading threads vary. Investigate what runs
+  on T0 that frees small objects — its own minor/major collection sweeping
+  something it believes it owns exclusively, or lane-stop/teardown logic —
+  rather than continuing to focus on the mark function.
+- **Verification requirement for any future fix**: must be verified at
+  **N=5000 AND N=20000 AND ideally N=50000+**. N=5000-only verification is
+  demonstrably insufficient (attempt 1 passed it and still regressed).
+- **Full writeup**: `docs/internals/aot-plan.md`, commits `0d90e346`,
+  `d5a1a421`, `14b426fb`, `f62eabf3`, `f5fd36a6`, `9ac90672`, `925fd117`.
+
+### 5.2 ⚠️ UNSOLVED: `lanes=0` baseline-path hang
+- `bench/agents-lanes.janet 5000 4 0` hangs/times out (exit 124), while
+  `lanes=4`/`lanes=8` work. Pre-existing bug in that script's single-VM
+  baseline path. **Not investigated at all.** Lower priority.
+
+### 5.3 ⚠️ FILED NOT FIXED: `janet_profile_call` use-after-free
+- ASAN: `READ of size 8` at `vm.c:607`, inside `janet_profile_call`
+  (function starts `vm.c:576`), during ordinary **single-threaded** PGO
+  auto-profiling — triggered just by running `tools/patch-header.janet`
+  during a normal build with profiling left on.
+- Freed region was 1072 bytes, freed by `realloc` on the SAME thread (T0)
+  that later reads it. The loop at `vm.c:605-610` reads `argv[i]` (:607) and
+  `pa->data[i]` (:608) — so the actionable hypothesis is that **`pa`
+  (the profile param array obtained before the loop) is a stale pointer
+  after something inside the profiling path `realloc`'d its backing store**,
+  i.e. `pa`/`pa->data` needs re-fetching after any growth, or the growth
+  needs to happen before `pa` is captured. Not confirmed — but the fix
+  location is narrow and the read/write sites are only 5 lines apart.
+- Found incidentally under ASAN. Unrelated to lanes. Not investigated further.
+- **Workaround when debugging other things**: `JANET_NO_PROFILE=1`.
+
+### 5.4 ⚠️ FILED NOT FIXED: teardown-order use-after-free
+- `janet_clear_memory` (`gc.c:3131`) → `janet_deinit_block` (`gc.c:687`) →
+  `janet_table_put`/`janet_table_remove` (`table.c:114/211`) → `janet_equals`
+  (`value.c:244`) reads freed memory, after
+  `janet_abstract_decref_maybe_free` freed it earlier in the SAME
+  `janet_clear_memory` call (`gc.c:3093`). During
+  `janet_thread_new_run`'s `janet_try_init`/`janet_deinit` (thread shutdown).
+- Found under ASAN on `test/suite-proc.janet`. Not investigated.
+
+### 5.5 ⚠️ NOT STARTED: residual O(n)-per-minor cost
+- N=20000 → N=100000 is 4.0s → 98s; per-minor cost ~0.2ms → ~0.9ms (a ~4.5x
+  per-call increase for 5x N) → something still scales ~O(n) per minor call.
+  Minor count confirmed ≈ N (one per actor), nurseries correctly tiny.
+- **Strongest untested candidate**: `janet_sweep_drain_pending` (`gc.c:1702`),
+  called on every minor now that narrowing is universal. It walks a **global**
+  `janet_vm.sweep_pending[0..2]` list to find its TAIL before splicing; dying
+  fibers PREPEND their whole `heap_lists[]` onto that same global list
+  (`gc.c` ~618–630). If deaths outpace drains, the tail-walk cost grows with N.
+  - A diagnostic instrumentation attempt compiled but produced no output and
+    was abandoned (per direction to stop chasing performance). **Debug that
+    first** (check the `dpt_calls` gating / env detection), or measure
+    `sweep_pending[k]` lengths directly via lldb at increasing points in an
+    N=100000 vs N=20000 run.
+  - If confirmed, the fix is almost certainly: track the list's own tail
+    pointer incrementally (O(1) append) instead of re-walking.
+- Secondary unruled-out candidates: `janet_slab_page_for`'s binary search over
+  `ss->dir` (O(log pages), probably not dominant); per-minor fixed overhead
+  including an **unconditional `getenv("JANET_ROOT_TRACE")` on every single
+  minor** (visible in `sample` output — cheap but on the hot path).
+
+### 5.6 ⚠️ NOT STARTED: constant-factor spawn-cost gaps
+Identified against Erlang's ~1µs/spawn budget (external analysis, plausible
+but unverified in this tree):
+1. Two channels per proc (mailbox cap 16 + supervisor cap 8) allocated
+   eagerly whether or not anyone monitors → lazy-allocate both.
+2. Entry marshal-copy in `spawn-isolated` (Erlang passes `{M,F,A}`, no copy).
+3. Env table + proto chain + `:proc-self` binding (partly addressed by
+   `29c65339`).
+4. Per-spawn GC bookkeeping: census insert, handle rooting, owner-id
+   assignment, nursery accounting → "registration-free liveness".
+5. Scheduler enqueue + supervisor wiring.
+
+### 5.7 ⚠️ NOT STARTED: remaining M4b items
+See §4.2 — async preemption of non-cooperating C code; running-task migration.
+Both low priority, neither on the critical path.
+
+### 5.8 ⚠️ NOT STARTED: larger epics
+- **Per-proc GC independence** (full collector swap)
+- **Named registry + supervision trees (Phase 3)** ← **RECOMMENDED NEXT**.
+  Genuinely missing; what a WhatsApp-style reliability model depends on
+  ("a process crashes, its supervisor restarts it, nothing else notices").
+  Primitives (links/monitors) exist; no supervision-tree library, no named
+  registry.
+- **Distribution design doc** (cross-node pids) — not built.
+- **Hot code loading design doc** — not built.
+- **Battle-hardening** (fuzz/stress/soak campaigns) — not done.
+
+---
+
+## 6. Documents index
+
+| Document | Contains |
+|---|---|
+| `docs/internals/erlang-parity-handoff.md` | **this file** — complete task ledger |
+| `docs/internals/proc-lanes.md` | messaging O(n²) investigation; all four fixes; corrections; multi-thread escalation tables; Erlang comparison; "HANDOFF: optimization tricks tried" section (what was tried / what did NOT help / untested candidates) |
+| `docs/internals/aot-plan.md` | M4b epic scoping + re-scoping by measurement; the entire `lanes=8` crash investigation (6 rounds); **working ASAN recipe** (§7); both failed fix attempts; T0 resume lead |
+| `implementation_plan.md` | standing plan — currently records lanes=8 as PARKED |
+
+---
+
+## 7. 🔧 Tooling recipes (hard-won — reuse these)
+
+### Working ASAN recipe (CRITICAL — plain ASAN does NOT work on this codebase)
+Plain `-fsanitize=address` produces **false-positive `stack-buffer-overflow`**
+reports on ordinary, correct, single-threaded code (confirmed on
+`test/suite-proc.janet`) — Janet's user-space fiber stack switching confuses
+ASan's shadow-stack tracking. Adding `-mllvm -asan-stack=0` disables ONLY the
+stack instrumentation, keeps heap/global instrumentation fully active, and
+eliminates the false positive while still catching real heap bugs:
+
+```sh
+make clean
+JANET_NO_PROFILE=1 make \
+  CFLAGS="-O1 -g -fsanitize=address -fno-omit-frame-pointer -mllvm -asan-stack=0" \
+  LDFLAGS="-fsanitize=address" -j4
+JANET_NO_PROFILE=1 ./build/bender <script>
+```
+(`JANET_NO_PROFILE=1` avoids conflating with §5.3's profiling UAF. `-O1`, not
+`-O0`: readable traces without the slowdown.)
+
+**This single discovery unblocks ASAN-based debugging for this codebase
+generally.** Remember to `make clean && JANET_NO_PROFILE=1 make -j4` afterward
+to restore a normal build.
+
+### Other tools used
+- **Guard Malloc**: `DYLD_INSERT_LIBRARIES=/usr/lib/libgmalloc.dylib` — works
+  without the fiber/ASan conflict, but far too slow per-allocation to reach
+  the N that triggers the lanes bug.
+- **lldb repeated-run capture** for intermittent crashes:
+  ```sh
+  cat > /tmp/l.txt <<'EOF'
+  run bench/agents-lanes.janet 5000 4 8
+  bt all
+  quit
+  EOF
+  for i in 1 2 3; do timeout 15 lldb -b -s /tmp/l.txt ./build/bender 2>&1 | grep -A8 "stop reason"; done
+  ```
+- **Built-in instrumentation**: `JANET_ROOT_TRACE=1` (prints `[CFM2]` per
+  fiber-minor: count, fiber, owner, nursery, xfb size), `JANET_GC_VERIFY=1`,
+  `JANET_HEAP_VERIFY=1`, `JANET_PROC_VERIFY=1`, `JANET_GC_COUNT` (compile-time).
+- **`sample`** (macOS) for profiles — but note its inlined call graphs are
+  ambiguous at `-O2`; lldb `bt` is authoritative. Several wrong turns this
+  session came from over-reading `sample` output.
+
+---
+
+## 8. Verification discipline used (apply to any future fix here)
+
+Every shipped commit in §1–§3 passed ALL of:
+1. **Interpreter suites**: `proc`(99) `thread`(30) `ev`(776) `marsh`(73)
+   `mailbox`(76) `pool`(56) — all green.
+2. **AOT dual-target**: `./build/bender --aot test/suite-X.janet -o build/aot/suite-X-aot`
+   then run the binary. Identical counts both targets. This also exercises
+   `tools/mkimage.janet`'s image-generation path.
+3. **Instrumented runs**: `JANET_GC_VERIFY`, `JANET_HEAP_VERIFY`,
+   `JANET_PROC_VERIFY`.
+4. **Baseline comparison for every anomaly**: any flagged failure was checked
+   against a clean `git stash` baseline before being accepted as pre-existing.
+   Several were (and are genuinely pre-existing — see below).
+5. **C regressions**: `test/c/test-threaded-abstract-mark-claim.c`,
+   `test-ev-selfpipe-interrupt.c`, `test-ev-selfpipe-saturation.c`,
+   `test-gc-pcall.c` — compiled fresh against `build/janet.o` and run.
+6. **Re-benchmarked** `bench/agents.janet` at multiple N after each fix.
+
+### Known pre-existing failures (NOT regressions — confirmed on clean baseline)
+- `test/c/test-gc-pcall.c` — fails on clean baseline too.
+- `JANET_GC_VERIFY=1` + `test/suite-ev.janet` — "young unmarked … minor mark
+  incomplete" aborts; byte-identical on clean pre-session baseline. Matches
+  commit `a739009e`'s own note ("GC_VERIFY-over-boot abort is pre-existing").
+- `JANET_PROC_VERIFY=1` + `test/suite-proc.janet` — "foreign fiber field holds
+  swept candidate"; reproduces identically on baseline.
+- `test/suite-lanes.janet` needs >30s (passes fully at 120s: "640k-park stop
+  in 8.02s").
+- `test/suite-shared.janet` SKIPs without `JANET_SHARED_STACKS=1`.
+- `test/scale-proc-chain.janet 100000` does not finish in 140s — also on the
+  clean pre-session baseline (historical "19-24s" claim is stale).
+- Transient `"failed to write event to self-pipe"` aborts under heavy parallel
+  system load — non-deterministic, not a regression.
+
+---
+
+## 9. Suggested revival order
+
+1. **Named registry + supervision trees (Phase 3)** — §5.8. Highest real
+   value, genuinely missing, unblocks the reliability model. Not blocked by
+   anything above.
+2. **`lanes=8` crash** — §5.1. Real bug, well-characterized, has a specific
+   untested lead (T0 freeing thread). Blocks trusting the lanes/M:N path.
+3. **Residual O(n)-per-minor cost** — §5.5. Specific untested candidate
+   (`sweep_pending` tail-walk) with a likely-simple fix (incremental tail
+   pointer).
+4. **Constant-factor spawn costs** — §5.6. Mechanical, independent, low risk.
+5. Everything else in §5.7/§5.8 as needed.
