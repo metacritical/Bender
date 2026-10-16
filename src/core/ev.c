@@ -4264,6 +4264,7 @@ static void janet_thread_new_complete(JanetEVGenericMessage msg) {
      * nothing). Stored on the handle for thread/profile. */
     if (c->pbytes != NULL && c->plen > 0) {
         h->profile_rows = janet_unmarshal(c->pbytes, c->plen, JANET_MARSHAL_UNSAFE, NULL, NULL);
+        janet_gc_barrier(h, h->profile_rows);
         janet_free(c->pbytes);
     } else if (c->pbytes != NULL) {
         janet_free(c->pbytes);
@@ -4271,6 +4272,7 @@ static void janet_thread_new_complete(JanetEVGenericMessage msg) {
     int is_error = c->is_error;
     janet_free(c);
     h->result = result;
+    janet_gc_barrier(h, h->result);
     h->is_error = is_error;
     h->done = 1;
     /* A suspended join roots (handle, waiter) as a pair; unroot exactly.
