@@ -300,6 +300,13 @@
         (= op 'pusha) (set spread true)
         (= op 'call)
         (do (def tid (get cmap pc))
+          # Unresolved call (callee is an opaque struct/table/function
+          # slot, or a spread call): the VM always writes dst, and the
+          # result type is unknowable -- seed dst :unknown so the slot's
+          # pre-call type (notably the :keyword constant of a call-shaped
+          # struct access `ldc :k; push; call`) cannot leak through as a
+          # phantom type. Matched rules below overwrite this default.
+          (put st (ins 1) :unknown)
           (when (and tid (number? tid))
             # call-site widening: bind each pushed arg into the callee's
             # param slot (annotation-seeded params are never touched)
