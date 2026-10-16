@@ -1851,3 +1851,38 @@ the right next things to check, now additionally motivated by the fact that
 even inside a many-thread deployment, each thread's own per-VM N still
 matters and is worth fixing directly rather than working around with more
 threads alone.
+
+## Multi-thread scaling: 1000 threads x 1000 procs/thread = 1,000,000 total actors
+
+The full escalation series, all via `bench/agents-multithread.janet`:
+
+| threads | procs/thread | total actors | wall time | aggregate msgs/s | sys/user ratio |
+|---|---|---|---|---|---|
+| 20 | 100 | 2,000 | 0.06s | 138,884 | ~1.5x |
+| 50 | 100 | 5,000 | 0.10s | 209,237 | ~3x |
+| 500 | 100 | 50,000 | 0.96s | 221,056 | ~5.6x |
+| 500 | 1000 | 500,000 | 33.4s | 60,098 | ~12.6x |
+| **1000** | **1000** | **1,000,000** | **72.8s** | **55,157** | **~19.7x** |
+
+**All five points PASS** -- correct exact-once message accounting at every
+scale, no hangs, no crashes, including the full 1,000,000-actor point. The
+`sys`/`user` time ratio climbs steadily with thread count (1.5x at 20
+threads to 19.7x at 1000 threads) -- confirms the earlier hypothesis that
+OS-level thread/VM-creation contention is a real, growing cost layered on
+top of the per-VM messaging cost, independent of and in addition to the
+already-documented per-VM residual term. Aggregate throughput at
+1,000,000 actors (55,157 msgs/s) is in the same range as the 500,000-actor
+point (60,098 msgs/s) -- roughly flat, not collapsing further, suggesting
+the two cost layers (per-VM N-scaling, OS thread contention) are not
+compounding multiplicatively at this range, just both present.
+
+**This closes out the user-directed multi-thread exploration for this
+session**: functional correctness is confirmed through 1,000,000 actors
+distributed across 1000 OS threads, matching the single-VM functional-
+completion bar already established (N=100000 in one VM) but now also
+proven to hold when that scale is reached via many concurrent VMs instead
+of one. Optimization (closing the per-VM residual gap, and/or reducing
+thread-creation contention at high thread counts) remains deferred to the
+future phase per the standing HANDOFF section above -- nothing in this
+multi-thread series changes that scoping, it only adds confirming evidence
+for where the two real cost layers are.
