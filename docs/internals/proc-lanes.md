@@ -1281,3 +1281,31 @@ No real fix implemented for this corrected root cause. Candidate directions
 - Re-measure with `ticks` and `actor`'s body rewritten to take NO top-level
   upvalues at all (pass everything as explicit spawn arguments) to confirm
   this diagnosis predicts the fix, before any core change.
+
+### Follow-up: scoping the benchmark differently does not help (as predicted once reframed correctly)
+
+Tested the obvious workaround -- wrap the whole spawn+send loop in a function
+(`run-bench`) so its locals aren't top-level script locals. **Still hangs
+identically at N=20000.** This is NOT a contradiction of the lldb finding; it
+sharpens it. Whatever fiber is CURRENTLY EXECUTING the send loop is, by
+definition, a GC root -- marking it (and therefore its live locals, including
+`procs`) during any collection that interrupts it is correct, unavoidable GC
+behavior, not a bug. Moving `procs` into a function's local frame instead of
+the top-level script's frame changes nothing: it's still the live stack of
+whatever fiber is currently running.
+
+**The real narrow defect**: marking `actor`'s closure environment (its
+funcenv, holding the open upvalue for `ticks`) apparently marks the ENTIRE
+live stack of the fiber that upvalue points into, not just the one captured
+slot. That conservative over-marking is what turns "protect one captured
+local" into "mark everything else alive on that frame too," including
+`procs`. This is a VM/closure stack-marking GRANULARITY question (does
+`janet_mark_fiber` support marking only the slots an open funcenv actually
+references, vs. the whole frame?) -- genuinely deep core-VM semantics, not a
+proc-spawn or GC-collector-phase issue at all, and not something to patch
+without a dedicated investigation into `janet_mark_fiber`'s stack-marking
+precision and how `JanetFuncEnv`'s offset bookkeeping is supposed to bound it.
+
+Not attempted further this session. This is now accurately scoped as a
+distinct, deeper open item, separate from (and likely more consequential
+than) the original proc-lanes roadmap's "messaging throughput" framing.
