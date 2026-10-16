@@ -1427,3 +1427,66 @@ redesign under owner-bucketing to avoid silently dropping a protected edge
 (which would reintroduce exactly the premature-free/UAF class of bug this
 whole subsystem exists to prevent). Scoped as the next concrete step, not
 attempted in this commit.
+
+## SECOND O(n^2) TERM FIXED: owner-sorted xfb index
+
+Implemented the owner-bucketing fix designed above, verified safe via direct
+code inspection: `janet_slab_obj_owner`'s only possible transition is
+`owner=K -> mixed/0` (confirmed `page->owner` has exactly one write site,
+page allocation, never reassigned), and a mixed-page object is already
+immune to any single-owner's scoped sweep regardless of marking (traced
+`janet_sweep_list`'s own filter: `0 == only_owner || obj_owner == only_owner`
+-- a mixed object with `obj_owner==0` matches neither branch for any
+non-zero scoped owner, so it floats to the next major either way). A stale
+cached owner can therefore never cause a premature free.
+
+**Implementation** (additive only -- the main `ss->xfb` array, its insertion
+order, rollback truncation in `janet_slab_owner_stats`, and major-reset are
+completely untouched):
+- `JanetXfbIndexEntry {owner, idx}` + `JanetSlabState.xfb_index`/
+  `xfb_index_built_count`: a lazily-rebuilt, qsort-sorted-by-owner auxiliary
+  index over the existing array.
+- `janet_xfb_index_ensure`: rebuilds (O(n log n)) only when `xfb_count` has
+  grown since the last build; a no-op when stable (the common case once most
+  cross-fiber containers age past the young window and stop needing new
+  xfb entries).
+- `janet_xfb_mark_owned`: binary-searches to this owner's contiguous sorted
+  run and marks only those entries (O(log n) + O(this owner's own count))
+  instead of a full linear scan. Falls back to the original, always-correct
+  `janet_xfb_relevant` linear scan if the index failed to build (OOM) --
+  never less correct than before, only sometimes not faster.
+- Wired into both scoped collectors that had the O(n) scan:
+  `janet_collect_fiber_minor` (the dominant case, plain procs) and
+  `janet_mark_proc_shared` (isolated procs' narrow path, same risk at scale,
+  fixed for consistency even though not the originally measured case).
+- `janet_slab_major_reset` additionally invalidates `xfb_index_built_count`
+  (the main reset already zeroed `xfb_count`; the index must not be trusted
+  against stale indices past the new, smaller count).
+
+**Verification:** dual-target (interpreter + AOT) across
+proc(99)/thread(30)/ev(776)/marsh(73)/mailbox(76)/pool(56), all green,
+identical counts both targets. `JANET_HEAP_VERIFY=1`, `JANET_GC_VERIFY=1`
+(proc/thread/mailbox; suite-ev's one failure reproduces on the
+already-committed `a7bcedcc` baseline, confirmed via `git stash`, unrelated
+to this change) clean. `JANET_PROC_VERIFY=1`'s one report ("foreign fiber
+field holds swept candidate") reproduces byte-identically on the `a7bcedcc`
+baseline before this change (confirmed via `git stash`) -- pre-existing, not
+a regression. All four ripwire-flagged C regressions pass fresh; `test-gc-pcall`
+unchanged pre-existing failure.
+
+**Measured impact** (`bench/agents.janet`, interpreter, `JANET_NO_PROFILE=1`,
+with the sweep fix from the previous commit also active):
+
+| N | before this fix (sweep fix only) | after (sweep + xfb index) |
+|---|---|---|
+| 2000 | 0.68s total | 0.15s total, 446576 msgs/s |
+| 5000 | 3.8s total | 0.35s total, 101489 msgs/s |
+| 20000 | did not finish in 60s | 4.1s total, 21168 msgs/s |
+| 100000 | did not finish in 60s | **still does not finish in 60s** |
+
+N=20000 now genuinely scales (previously needed a diagnostic skip to
+artificially prove the sweep fix's size; now the real fix gets there on its
+own). N=100000 is the next wall -- not yet profiled; likely a third,
+not-yet-identified O(n) or O(n^2) term, or simply the first two fixes'
+remaining (now much smaller) constant factors compounding at 5x this scale.
+Not investigated further in this session; flagged as the immediate next step.
