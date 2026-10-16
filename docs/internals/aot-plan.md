@@ -1299,3 +1299,24 @@ threaded channel, cross-checked against which ones are NOT inside that
 channel's own lock. Flagged as the next concrete step; not attempted
 further this round given the depth already reached without a confirmed
 single root cause.
+
+## lanes=8 crash: ruled out generic channel contention (negative result, narrows scope)
+
+Tested whether the crash is really about lanes specifically, or just
+generic high-contention threaded-channel push/pop: 8 OS threads
+(`thread/new`, no procs, no lanes at all) pushing 20000 messages each to
+ONE shared `ev/thread-chan`, concurrently drained by a receiver so senders
+never block. **5/5 clean runs, zero crashes, 160000 messages correctly
+received every time.**
+
+This is a real, useful negative result: it rules out "many threads
+pushing one shared threaded channel" as the cause by itself. The bug is
+NOT in the generic channel push/pack contention path under load -- it is
+specific to something about the LANES machinery itself: `proc/spawn`'s
+lane-routing logic, the specific `[:proc-fwd serial msg]` forwarding
+tuple shape used for cross-lane sends, or lane setup/teardown
+(`proc/lanes-start`'s channel/thread creation). Narrows the next
+investigation step considerably -- whoever picks this up should look at
+`proc.c`'s lane-routing code (`janet_lane_ctls`, the overflow-channel
+path, `proc/lanes-start`) specifically, not the generic `ev.c` channel
+push path, which this round's test shows is NOT where the bug lives.
