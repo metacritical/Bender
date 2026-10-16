@@ -1124,3 +1124,90 @@ elsewhere, e.g. a C-side-only registry, or drop references once joined), or
 (c) architecturally decoupling a proc's env proto chain from its "spawner's
 full env" in favor of a narrower explicit capture set. This is a genuine
 multi-session design question, not something to patch blind.
+
+## Erlang-parity fix direction, decided: (c) with (b) stopgap (user decision, this session)
+
+Candidate (a) (carve exceptions into what a minor may skip) rejected: the
+env-proto chain is a soundness mechanism; exceptions there risk a silent
+premature-free months later, for savings not worth that risk. Candidate (b)
+alone rejected as a permanent answer: "keep spawned handles in an array to
+join on them" is not an exotic pattern, it is THE pattern; documenting "don't
+do the natural thing" guarantees rediscovery of this cliff. **Decision: ship
+(b) now as a stopgap (done this session, see the warning comment at
+`proc.c`'s `fiber->env->proto` assignment and the updated `proc/spawn`/
+`proc/spawn-isolated` docstrings), then do (c) as the real fix** -- decouple
+the child's env-proto chain from the spawner's full env in favor of explicit
+captures, matching Erlang's actual semantic (spawn takes explicit arguments;
+no implicit inheritance of the caller's workspace).
+
+### Scoping (c): this is narrower and more tractable than it first looks
+
+The observed hazard is NOT about Janet's closure/upvalue capture mechanism
+(that is resolved separately at compile time, baked into the function object,
+and is unaffected by any of this). `bench/agents.janet`'s `actor` function
+never references `procs` as an upvalue -- it is reached ONLY via
+`fiber->env->proto`, the RUNTIME dynamic-bindings env table (used for
+`(dyn :key)` lookups and fiber-local flags like `*out*`/`*err*`), which
+`proc.c:912` (and `ev.c:3932`, `fiber.c:1142` for ev/go and raw fiber spawn)
+points at the SPAWNER'S FULL fiber env. For a top-level script, that env table
+is also where every top-level `(def ...)` lands, which is why `procs` ends up
+reachable. **Fixing this does not require touching Janet's closure semantics
+at all** -- only how much of the spawner's dynamic env a spawned proc's own
+env proto-chains into.
+
+### Design: narrow, explicit, allowlisted inheritance
+
+Replace the blanket `fiber->env->proto = janet_vm.fiber->env` with a small
+fixed set of ambient dynamic bindings copied BY VALUE into the child's env at
+spawn time (no proto-chain at all) -- the same bounded, no-chain shape
+`janet_proc_copy_entry` already uses for marshal-copying a strict entry
+function. Candidates for the ambient allowlist: `*out*`, `*err*`,
+`*module-cache*`, anything else `boot.janet` already treats as inheritable
+VM-wide state. Everything else a spawner wants the child to see must travel
+either as an explicit argument to the spawned thunk (today's `(fn [] ...)` is
+required to take 0 args for `proc/spawn`; a future `(proc/spawn-with fn args)`
+or similar could pass them) or through the mailbox as a message payload
+(already marshal-copied, see the closed "copy-by-default" gap). Legacy
+close-over-everything behavior stays available only via an explicit opt-in
+(e.g. a `:inherit-env` keyword argument on `proc/spawn` that restores today's
+full proto-chain for code that is proven to depend on it) -- default changes,
+nothing silently breaks for code willing to opt back in.
+
+### Answering the open question: loud error, or silent nil, for code that reads spawner locals implicitly today?
+
+**Loud error for the migration path itself (a release-note/CHANGELOG-visible
+breaking-change call-out and a version bump), not a new runtime error
+mechanism inside `dyn`.** Concretely:
+- `(dyn :key)`'s existing nil-on-miss contract is untouched. That contract is
+  relied on by the entire language (every `dyn` caller everywhere, not just
+  proc spawns), so changing ITS semantics to throw on miss is a far larger,
+  separate, far riskier breaking change than this fix and is explicitly out of
+  scope here.
+- The actual behavior change -- a spawned proc's `(dyn :key)` no longer
+  finding a key that was only reachable via the old full-env proto-chain --
+  is REAL and WILL look like "silent nil" at the call site, exactly the cliff
+  flagged in the question. The mitigation is making the CHANGE loud, not
+  making every miss loud: ship it as a documented breaking change (version
+  note, CHANGELOG entry, docstring update), and add a one-time opt-in
+  diagnostic (`JANET_PROC_ENV_TRACE=1` env var, mirroring the existing
+  `JANET_TRACE_STRICT`/`JANET_ROOT_TRACE` pattern already in this file) that
+  logs when a spawned proc's `(dyn :key)` call would have resolved under the
+  OLD full-proto-chain but misses under the new narrow one -- a migration aid,
+  not a permanent error path.
+- This mirrors exactly how `isolated_heap`/`heap_strict` was rolled out
+  (P3.2/P3.3): a real semantic narrowing, opt-outable via an explicit flag,
+  with trace instrumentation for migration, not a blanket throw.
+
+### Not implemented this session
+
+(c) itself requires changes to `proc.c:912`, `ev.c:3932`, and `fiber.c:1142`
+(at minimum the proc.c site; ev/go and raw fiber spawn share the pattern but
+were not proven to have the same acute O(n^2) severity -- they are short-lived
+single-shot spawns, not N independently-re-marking long-lived actors -- so
+fixing proc.c first and re-measuring before touching the other two sites is
+the right order), a new ambient-allowlist mechanism, the `:inherit-env`
+opt-in, and the `JANET_PROC_ENV_TRACE` migration diagnostic. This is real
+core-semantics work requiring its own dual-target battery (at minimum
+proc/thread/ev/mailbox/pool, since dynamic-binding inheritance is exercised
+across all of them) and should be scoped as its own session, not folded into
+this documentation-and-stopgap commit.

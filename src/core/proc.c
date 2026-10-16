@@ -908,6 +908,25 @@ static Janet cfun_proc_spawn_impl(JanetFunction *func, int32_t cap, int isolated
                 JANET_FIBER_MASK_USER2 |
                 JANET_FIBER_MASK_USER3 |
                 JANET_FIBER_MASK_USER4;
+            /* STOPGAP WARNING (Erlang-parity messaging throughput, phase (b)
+             * ahead of the (c) redesign in docs/internals/proc-lanes.md):
+             * this proto-chains the ENTIRE spawner env, not just the handful
+             * of dynamic bindings (*out* / *err* / etc.) this exists for. Any
+             * top-level `def` the spawner can see -- including a flat array
+             * of every sibling proc handle, the single most natural pattern
+             * for joining on a spawn burst -- becomes reachable from this
+             * child's env and gets walked by every one of ITS OWN per-actor
+             * minor collections. With N such actors each independently
+             * triggering minors, that is an O(N) walk x N minors = O(N^2)
+             * wall (confirmed via live `sample` profiling, not guessed; see
+             * proc-lanes.md's "root cause found" section). Do NOT keep a
+             * flat handle array (or any other large collection) reachable
+             * from the scope that spawns a large burst of procs until (c)
+             * lands; prefer a C-side-only registry or drop references once
+             * joined. This full-env proto-chain pattern is NOT proc-specific
+             * (ev.c:3932, fiber.c:1142 do the same) but procs are the acute
+             * case: they persist and re-mark independently for their whole
+             * lifetime, unlike a short-lived ev/go tasklet. */
             fiber->env = janet_table(0);
             fiber->env->proto = (NULL != janet_vm.fiber) ? janet_vm.fiber->env : NULL;
             janet_table_put(fiber->env, janet_ckeywordv("proc-self"), proc_j);
@@ -936,7 +955,14 @@ JANET_CORE_FN(cfun_proc_spawn,
               "mailbox (capacity `capacity`, default 16). The process "
               "reads its own mailbox with proc/recv and learns itself "
               "via proc/self. Returns the proc (a core/proc distinct "
-              "type; refuses marshal — same-VM only for now).") {
+              "type; refuses marshal — same-VM only for now). WARNING: "
+              "do not keep a flat array (or any other large collection) "
+              "of every spawned proc's handle reachable from the scope "
+              "that spawns them -- e.g. a top-level `(def procs @[])` "
+              "filled across a spawn burst -- until the env-proto-chain "
+              "redesign in docs/internals/proc-lanes.md lands. It makes "
+              "every spawned proc's own minor collection re-mark every "
+              "sibling in that array, which is O(n^2) for n procs.") {
     janet_arity(argc, 1, 2);
     JanetFunction *func = janet_getfunction(argv, 0);
     if (func->def->min_arity > 0) {
