@@ -1369,3 +1369,56 @@ existing marshal-abstract special-case code in `marsh.c` for threaded
 abstracts) specifically for the `ctl` channel object across a traced
 `:proc-fwd` forwarding sequence, and confirm whether the increment/
 decrement counts actually balance.
+
+## lanes=8 crash: marshal refcount audit (clean), much faster repro found (N=5000)
+
+**Marshal/unmarshal refcount audit**: traced `marshal_one_abstract` (`marsh.c`
+~440-456) and the `LB_THREADED_ABSTRACT` unmarshal case (~1700-1733) against
+the sharpest-lead hypothesis from last round (unchecked `ctl` refcount
+across `:proc-fwd` hops). Both sides look correct by design: marshal
+unconditionally increfs any threaded abstract found during a walk
+(generic, not special-cased per call site, so a `ctl` nested inside a pid
+tuple IS correctly increfed when that tuple is marshaled); unmarshal's
+"already registered on this VM -> immediate decref" logic is a sound
+one-claim-per-VM model (first arrival keeps the incref as the VM's single
+claim, every subsequent arrival's incref/decref pair nets to zero). No
+obvious imbalance found by static reading.
+
+**Tested the hypothesis directly**: a hand-built repro that sends 100,000
+messages to the SAME pid (forcing the SAME embedded `ctl` through repeated
+cross-lane marshal/unmarshal from a single sender) ran clean 3/3, no
+crash. This means repeated sequential forwarding of one reference is NOT
+sufficient to trigger it -- the bug needs genuine CONCURRENT access from
+multiple threads (matching the original repro's shape: many different
+actors, spawned round-robin across lanes, sending/receiving concurrently),
+not just high repetition from one thread. Does not confirm or refute the
+refcount hypothesis -- it narrows that if there IS a refcount race, it
+requires true concurrency to manifest, consistent with it being a race at
+all.
+
+**Useful practical finding: N=5000 reproduces at the same ~75% crash rate
+as N=20000** (3/4 and 3/4 in back-to-back trials), and a non-crashing
+N=5000 run completes in ~0.06-0.1s versus N=20000's multi-second runs.
+`bench/agents-lanes.janet 5000 4 8` is now the recommended fast repro for
+continued investigation instead of N=20000 -- roughly the same failure
+rate, far less wall-clock time per iteration.
+
+**New observation**: one capture this round crashed on the MAIN thread
+itself (not a lane worker), the first time the crash has been seen there
+rather than in a lane-worker thread. This is consistent with (does not
+prove) the "earlier buffer overrun corrupts the shared process-wide malloc
+heap state, discovered later by whichever thread happens to allocate
+next" theory -- the corruption is not confined to lane-worker threads
+specifically, any thread's next allocation can be the one that trips the
+detector.
+
+Every capture across both rounds of investigation shows the IDENTICAL
+crash site: `janet_chan_pack` -> `janet_malloc` (`ev.c:1001`), reached via
+`cfun_proc_send` -> `janet_channel_push` -> `janet_channel_push_with_lock`.
+This consistency is itself useful: whatever corrupts the heap, it reliably
+surfaces at this exact allocation point, suggesting the corrupted memory
+region is reliably reused by minor/moderate-sized allocations here headed
+through `janet_chan_pack`'s `JanetBuffer` allocation specifically -- not
+a uniformly-random "whatever allocates next" pattern. Worth checking
+whether the corrupted block and the `JanetBuffer`-sized allocation share a
+malloc size class.
