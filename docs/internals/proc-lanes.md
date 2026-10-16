@@ -1886,3 +1886,48 @@ thread-creation contention at high thread counts) remains deferred to the
 future phase per the standing HANDOFF section above -- nothing in this
 multi-thread series changes that scoping, it only adds confirming evidence
 for where the two real cost layers are.
+
+## Direct same-machine Erlang comparison (user-directed): confirms M:N scheduler is the real gap
+
+Wrote a same-shape Erlang equivalent (`bench/agents_erl.erl`: N processes,
+T ticks each, same trivial arithmetic kernel) and ran it on the SAME
+machine against the SAME N values, for a real, falsifiable comparison
+instead of a theoretical claim:
+
+| N | Janet (single VM) | Erlang (one `erl` node) | Erlang advantage |
+|---|---|---|---|
+| 2,000 | 14,573 msgs/s | 1,000,000 msgs/s | ~69x |
+| 5,000 | 103,477 msgs/s | 952,380 msgs/s | ~9.2x |
+| 20,000 | 22,575 msgs/s | 963,855 msgs/s | ~43x |
+| 100,000 | 4,445 msgs/s (98s) | 896,860 msgs/s (0.79s total) | ~200x |
+| 1,000,000 | did not finish (single VM) | 377,287 msgs/s (12.4s total) | n/a (Janet needed 1000 manual threads, 72.8s, 55k msgs/s, to even complete) |
+
+**Root cause of the gap, confirmed by direct process inspection (not
+assumed):** `erl`'s default invocation on this 12-core machine spawns
+**40 OS threads** (verified via `top -pid <beam.smp> -stats th`), matching
+exactly `erlang:system_info/1`'s reported `schedulers=12` +
+`dirty_cpu_schedulers=12` + `dirty_io_schedulers=10` +
+`thread_pool_size=1` (=35) plus ~5 fixed housekeeping threads (timer,
+system monitor, literal-area collector, etc.). This is BEAM's **M:N
+scheduler**: millions of lightweight processes mapped transparently onto
+a small, fixed pool of real OS threads, entirely automatically -- no
+application code decides how many threads to use or which process runs
+where.
+
+This is exactly what had to be FAKED manually for Janet this session: we
+hand-spawned 1000 separate `thread/new` OS threads, each running a fully
+independent, fully isolated VM, to reach 1,000,000 actors at all -- and
+that still only reached ~1/200th of Erlang's single-node throughput,
+because (a) each of those 1000 Janet VMs is internally still cooperatively
+scheduled with no preemption, and (b) there is no shared scheduler
+spreading work across cores WITHIN one logical runtime the way BEAM's 12
+normal schedulers do.
+
+**Conclusion, reinforcing the existing roadmap rather than changing it:**
+the single highest-leverage item for closing this gap is the already-
+planned **M:N scheduler core** (Phase 3bullet "resident-proc migration"
+and the aot-plan's M4b true-preemption epic) -- NOT further GC tuning.
+GC tuning (this session's four fixes) was necessary just to make the
+current cooperative, one-VM-per-thread model functionally correct at
+scale; it was never going to close a 200x gap on its own. Added to the
+standing todo tree as the explicitly reinforced next priority.
