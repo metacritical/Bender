@@ -13,6 +13,7 @@
 
 #ifndef JANET_AMALG
 #include "features.h"
+#include <stdio.h>
 #include <janet.h>
 #include "util.h"
 #include "gc.h"
@@ -908,27 +909,65 @@ static Janet cfun_proc_spawn_impl(JanetFunction *func, int32_t cap, int isolated
                 JANET_FIBER_MASK_USER2 |
                 JANET_FIBER_MASK_USER3 |
                 JANET_FIBER_MASK_USER4;
-            /* STOPGAP WARNING (Erlang-parity messaging throughput, phase (b)
-             * ahead of the (c) redesign in docs/internals/proc-lanes.md):
-             * this proto-chains the ENTIRE spawner env, not just the handful
-             * of dynamic bindings (*out* / *err* / etc.) this exists for. Any
-             * top-level `def` the spawner can see -- including a flat array
-             * of every sibling proc handle, the single most natural pattern
-             * for joining on a spawn burst -- becomes reachable from this
-             * child's env and gets walked by every one of ITS OWN per-actor
-             * minor collections. With N such actors each independently
-             * triggering minors, that is an O(N) walk x N minors = O(N^2)
-             * wall (confirmed via live `sample` profiling, not guessed; see
-             * proc-lanes.md's "root cause found" section). Do NOT keep a
-             * flat handle array (or any other large collection) reachable
-             * from the scope that spawns a large burst of procs until (c)
-             * lands; prefer a C-side-only registry or drop references once
-             * joined. This full-env proto-chain pattern is NOT proc-specific
-             * (ev.c:3932, fiber.c:1142 do the same) but procs are the acute
-             * case: they persist and re-mark independently for their whole
-             * lifetime, unlike a short-lived ev/go tasklet. */
+            /* Erlang-parity fix (c), docs/internals/proc-lanes.md: do NOT
+             * proto-chain the child's env to the spawner's FULL env. That
+             * chain used to make every top-level `def` the spawner can see
+             * -- including a flat array of every sibling proc handle, the
+             * natural pattern for joining on a spawn burst -- reachable
+             * from this child, which every one of ITS OWN per-actor minor
+             * collections then walked: O(N) work x N actors = O(N^2),
+             * confirmed via live `sample` profiling (proc-lanes.md's "root
+             * cause found" section). Instead: copy forward only the small
+             * fixed ambient-binding allowlist (*out* / *err*) BY VALUE (a
+             * single bounded proto walk here, not a live chain kept open),
+             * matching Erlang's explicit-arguments-only spawn semantic.
+             * Legacy full-chain behavior is still available opt-in via
+             * (setdyn :proc-inherit-env true) in the SPAWNER before
+             * spawning, for code proven to depend on seeing the spawner's
+             * other dynamic bindings or top-level defs. JANET_PROC_ENV_TRACE
+             * logs every narrow-env spawn as a migration aid (this is a
+             * breaking change to what a spawned proc's (dyn :key) can see;
+             * dyn's own nil-on-miss contract is deliberately NOT touched --
+             * see proc-lanes.md's loud-error-vs-silent-nil answer). */
             fiber->env = janet_table(0);
-            fiber->env->proto = (NULL != janet_vm.fiber) ? janet_vm.fiber->env : NULL;
+            {
+                JanetTable *spawner_env = janet_vm.fiber ? janet_vm.fiber->env : NULL;
+                /* P3.3 export-rule carve-out: proc/spawn-isolated's strict
+                 * heap discipline (janet_strict_debug_envs, the
+                 * "shared-store, never captured" escape panic exercised by
+                 * suite-proc's P3.3 test) depends on the full proto chain
+                 * reaching the real shared parent env so a write through it
+                 * is detectably a cross-heap escape, not a copy. Isolated
+                 * procs are also not the demonstrated O(n^2) shape (they
+                 * already pay marshal-copy per spawn); narrow only the
+                 * plain (non-isolated) path here. */
+                int inherit_full = isolated || (NULL != spawner_env &&
+                    janet_truthy(janet_table_get(spawner_env, janet_ckeywordv("proc-inherit-env"))));
+                if (inherit_full) {
+                    fiber->env->proto = spawner_env;
+                } else {
+                    fiber->env->proto = NULL;
+                    if (NULL != spawner_env) {
+                        Janet v_out = janet_table_get(spawner_env, janet_ckeywordv("out"));
+                        if (!janet_checktype(v_out, JANET_NIL)) {
+                            janet_table_put(fiber->env, janet_ckeywordv("out"), v_out);
+                        }
+                        Janet v_err = janet_table_get(spawner_env, janet_ckeywordv("err"));
+                        if (!janet_checktype(v_err, JANET_NIL)) {
+                            janet_table_put(fiber->env, janet_ckeywordv("err"), v_err);
+                        }
+                    }
+                    if (NULL != getenv("JANET_PROC_ENV_TRACE")) {
+                        fprintf(stderr, "[JANET_PROC_ENV_TRACE] proc/spawn: narrow "
+                                "env (out/err only, no proto-chain to spawner). "
+                                "(dyn :key) for any other spawner binding now "
+                                "returns nil where it used to resolve. Opt into "
+                                "legacy full-chain inheritance with "
+                                "(setdyn :proc-inherit-env true) before spawning "
+                                "if this proc depends on it.\n");
+                    }
+                }
+            }
             janet_table_put(fiber->env, janet_ckeywordv("proc-self"), proc_j);
             proc->fiber = fiber;
             /* P3.5: back-pointer for auto-trigger routing. */
