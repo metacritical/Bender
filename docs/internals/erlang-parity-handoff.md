@@ -24,8 +24,12 @@ here is backed by a commit, a measurement, or an explicit "not verified" label.
 - **M4b "true preemption" was re-scoped by measurement** (§4.2): Janet-level
   preemption already works and is ON by default. Only narrow C-code-preemption
   and task-migration remain. **Not** a prerequisite for actor workloads.
-- **Recommended next item**: named registry + supervision trees (Phase 3).
-  Genuinely missing, and what a WhatsApp-style reliability model depends on.
+- **Recommended next item**: ⚠️ **finish Phase 2b first — it is NOT complete.**
+  2b-iii's generational/sweep policy is still open, and "per-proc GC
+  independence" (the collector-swap goal, and the roadmap's own "NEXT after
+  Phase 1" item) has not been started. **Do not jump to Phase 3** — an
+  earlier draft of this file wrongly recommended that; see §9.1 for the
+  retraction and §9.3 for the corrected, dependency-respecting order.
 
 ---
 
@@ -358,12 +362,16 @@ See §4.2 — async preemption of non-cooperating C code; running-task migration
 Both low priority, neither on the critical path.
 
 ### 5.8 ⚠️ NOT STARTED: larger epics
-- **Per-proc GC independence** (full collector swap)
-- **Named registry + supervision trees (Phase 3)** ← **RECOMMENDED NEXT**.
-  Genuinely missing; what a WhatsApp-style reliability model depends on
-  ("a process crashes, its supervisor restarts it, nothing else notices").
-  Primitives (links/monitors) exist; no supervision-tree library, no named
-  registry.
+- **Per-proc GC independence** (full collector swap) ← **this is PHASE 2b
+  work and is the correct next item** (roadmap's own "NEXT after Phase 1";
+  see §9.2/§9.3). Phase 2b's 2b-iii generational/sweep **policy** is also
+  still open on top of this.
+- **Named registry + supervision trees (Phase 3)**. Genuinely missing; what
+  a WhatsApp-style reliability model depends on ("a process crashes, its
+  supervisor restarts it, nothing else notices"). Primitives (links/monitors)
+  exist; no supervision-tree library, no named registry. ⚠️ **Do NOT start
+  before Phase 2b is finished** — see §9.1's retraction. Full Phase 3 scope
+  in §9.4.
 - **Distribution design doc** (cross-node pids) — not built.
 - **Hot code loading design doc** — not built.
 - **Battle-hardening** (fuzz/stress/soak campaigns) — not done.
@@ -462,15 +470,76 @@ Every shipped commit in §1–§3 passed ALL of:
 
 ---
 
-## 9. Suggested revival order
+## 9. Phase structure, and the CORRECTED revival order
 
-1. **Named registry + supervision trees (Phase 3)** — §5.8. Highest real
-   value, genuinely missing, unblocks the reliability model. Not blocked by
-   anything above.
-2. **`lanes=8` crash** — §5.1. Real bug, well-characterized, has a specific
-   untested lead (T0 freeing thread). Blocks trusting the lanes/M:N path.
-3. **Residual O(n)-per-minor cost** — §5.5. Specific untested candidate
-   (`sweep_pending` tail-walk) with a likely-simple fix (incremental tail
-   pointer).
-4. **Constant-factor spawn costs** — §5.6. Mechanical, independent, low risk.
-5. Everything else in §5.7/§5.8 as needed.
+### 9.1 ⚠️ CORRECTION to an earlier version of this file
+An earlier draft of §9 recommended starting with **Phase 3** (named registry
++ supervision trees). **That was wrong and is retracted** — it skipped
+unfinished **Phase 2b** work. Phase 2b is *not* complete, and the roadmap's
+own gap table assigns "per-proc GC independence" to it explicitly:
+
+> `Per-proc GC independence | Phase 2b collector swap | NEXT after Phase 1`
+> — `docs/internals/proc-lanes.md` ~line 880
+
+Do not jump phases. The corrected order is §9.3.
+
+### 9.2 Where each phase actually stands (verified against the docs, not recalled)
+
+| Phase | Scope | Status |
+|---|---|---|
+| **Phase 1** | Revival + completion on muse-spark-1.3 | **DONE** |
+| **Phase 2b — collector swap** (`aot-plan.md` §"Phase 2b", line 184: *"NEXT; not started"* header is itself now stale — slices landed individually) | three ordered slices, see below | ⚠️ **INCOMPLETE** |
+| ↳ 2b-i | scoped roots for generated/C code (`janet_gcshadow_push/mark/pop_to`) | **DONE** |
+| ↳ 2b-ii | immutable-string heap split (`JanetVM.string_blocks`) | **DONE** |
+| ↳ 2b-iii | slab/size-class allocator + generations | ⚠️ **"Storage done, policy open"** — storage landed (16 KiB pages, 8 size classes 32–512B); **generational/sweep policy still open** |
+| ↳ "GC hardening" steps 1–5 | separate hardening pass (not the collector swap) | **DONE** |
+| ↳ **per-proc GC independence** | the full collector swap goal | ⚠️ **NOT STARTED** (handoff §5.8) |
+| **Phase 3** | named registry; supervision-tree library; M:N scheduler core / resident-proc migration | ⚠️ **NOT STARTED** (see §9.4) |
+| Phase 3.5 / 5 candidates | copy-by-default messages; messaging-throughput campaign; proc migration | copy-by-default **DONE**; throughput campaign **DONE this session** (§1); migration open |
+| M4b (milestone, not a numbered phase) | true preemption | re-scoped by measurement, §4.2 — mostly already shipped |
+
+### 9.3 CORRECTED revival order (respects phase dependencies)
+
+1. **Finish Phase 2b first.**
+   a. **2b-iii policy work** — the generational/sweep policy left open after
+      storage landed. Note this session's four messaging fixes (§1) all live
+      in exactly this machinery (`janet_sweep_proc_owned`, the `xfb`
+      buckets, `janet_gc_mark_fiber_shallow`), so the area is freshly
+      understood — good time to close it.
+   b. **Per-proc GC independence** (§5.8) — the actual Phase 2b collector-swap
+      goal, and the gap table's own "NEXT after Phase 1" item.
+   c. **Residual O(n)-per-minor cost** (§5.5) — belongs here too: it IS
+      per-minor collector policy, with a specific untested candidate
+      (`janet_sweep_drain_pending`'s global tail-walk, `gc.c:1702`) and a
+      likely-simple fix (incremental tail pointer).
+2. **`lanes=8` crash** (§5.1) — blocks trusting the lanes/M:N path, which
+   Phase 3's M:N-scheduler-core item builds on. Fix before depending on lanes.
+   Also `lanes=0` (§5.2) in the same area.
+3. **Constant-factor spawn costs** (§5.6) — mechanical, independent, low risk;
+   can be done in parallel with the above by a second worker.
+4. **Then Phase 3**: named registry → supervision-tree library → resident-proc
+   migration. See §9.4 for its scope.
+5. Remaining: M4b leftovers (§5.7), distribution + hot-code-loading design
+   docs, battle-hardening (§5.8).
+6. Two filed-not-fixed ASAN UAFs (§5.3, §5.4) — independent of all phases,
+   pick up opportunistically; §5.3 has a narrowed, actionable hypothesis.
+
+### 9.4 Phase 3 scope (for when it is actually reached)
+
+Per the gap table (`proc-lanes.md` ~879-882) and `aot-plan.md`:
+
+- **Named registry** — register/lookup procs by name. Status: *recorded,
+  not started*. No design doc yet.
+- **Supervision trees** — *"primitives DONE (2b), tree library open"*. The
+  links/monitors primitives already exist; what is missing is the
+  supervision-tree library on top (restart strategies, child specs,
+  restart intensity/period, supervisor hierarchies). This is what a
+  WhatsApp-style reliability model actually depends on ("a process crashes,
+  its supervisor restarts it, nothing else notices").
+- **M:N scheduler core / resident-proc migration** — *"recorded, needs
+  explicit task"*; make proc migration explicit in M4b. ⚠️ **Gated on
+  §5.1** (the lanes crash) being fixed first, since it builds on the lanes
+  machinery.
+- Related Phase 3 goal referenced elsewhere: struct-sharing (the
+  copy-by-default work in §1/3.5 was explicitly designed to "bridge Phase
+  3's struct-sharing goal without the aliasing hazards").
