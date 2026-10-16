@@ -1676,3 +1676,113 @@ substantial, verified milestone. The msgs/s rate drops meaningfully from
 N=20000 to N=100000 (22575 -> 4445, roughly 5x fewer for 5x more actors),
 indicating some residual superlinear cost remains at this scale, not yet
 investigated. N=1000000 not yet attempted.
+
+## HANDOFF: optimization tricks tried this session, for the NEXT phase
+
+Per explicit user direction: this session's mandate was CORRECTNESS/
+COMPLETION (make N up to 1,000,000 actually finish, however slowly --
+"a few thousand msgs/sec is fine, just finish") -- NOT further performance
+tuning. That is deliberately deferred to a dedicated optimization phase.
+This section exists so that phase does not re-discover (or re-waste time
+disproving) what was already tried here.
+
+### What was tried, confirmed working, and is now committed (don't re-litigate)
+1. **`a7bcedcc`**: route `f->proc != NULL` fibers to narrow O(own) sweep
+   instead of the wide fiber-census walk. Real, dominant fix.
+2. **`69e40dc9` -> `a03f07bd` -> `2e0e4a45`**: xfb remembered-set scan.
+   Went through three forms -- **do not re-attempt the middle one**:
+   - (i) full O(n) linear scan with owner filter: correct but O(n^2) overall.
+   - (ii) lazily-rebuilt SORTED INDEX, amortized-doubling rebuild threshold:
+     **tried, measured, and explicitly REJECTED** -- works for small/clustered-
+     insert N, degrades badly when scans are interleaved with inserts on
+     almost every operation (our actual workload shape). Do not resurrect
+     this approach without first checking insert/scan interleaving ratio.
+   - (iii) **true owner-bucketing at insert time** (fixed 4096-slot hash,
+     chained): the form that's actually committed. O(1) amortized insert,
+     O(1) hash lookup + O(own entries) scan. This is the right general
+     shape; if it ever needs to scale further, the fix is MORE buckets or
+     a resizable hash table, not a different algorithm class.
+3. **`4d18a636`**: made narrow sweep UNIVERSAL (every fiber, not just
+   procs) after discovering a `dofile`/run-context wrapper fiber (not a
+   proc, not root) was still hitting the wide path. Re-verified the
+   historical "crashes boot image generation" warning no longer
+   reproduces (byte-identical actual bootstrap output, 3/3 runs, plus 60
+   suites individually) before doing this -- if a future regression
+   resurfaces that historical crash, the dead `#if 0` wide-path code in
+   `janet_sweep_fiber_owned` is the bisection target.
+
+### Tried and did NOT help (don't re-try these specific things)
+- **Lowering `JANET_FIBER_MINOR_CAP`** from 16MB to 1MB (`vm.c`): tested,
+  reverted. Increased minor frequency for the one heavily-allocating
+  fiber but did nothing for the N^2 shape -- the real issue was the wide
+  sweep (fixed separately in `4d18a636`), not the trigger threshold. The
+  16MB cap and its `block_count`-scaling formula (`vm.c`'s `maybe_collect()`
+  macro, `JANET_FIBER_MINOR_SCALE`/`JANET_FIBER_MINOR_CAP`) were NOT
+  touched in the final committed fix and remain exactly as upstream. If
+  revisited, remember: this formula scales a PER-FIBER threshold by the
+  GLOBAL block count, which is architecturally the wrong granularity for
+  workloads with many small fibers + one heavy allocator, but changing it
+  is a separate, not-yet-justified risk (no evidence it still matters
+  once the wide-sweep fix landed).
+
+### NOT YET INVESTIGATED: a residual O(n)-per-minor-call cost, N=20000 to N=100000
+Timing math: N=20000 takes 4.0s (22575 msgs/s); N=100000 takes 98s (4445
+msgs/s). Per-minor average cost: ~0.2ms at N=20000, ~0.9ms at N=100000 --
+roughly a 4.5x increase in PER-CALL cost for a 5x increase in N, meaning
+something still scales ~O(n) per minor call even after all four mechanisms
+above were fixed. Total minors were confirmed to equal N almost exactly
+(one per actor, via `JANET_ROOT_TRACE`), and each has a tiny, correct
+`nurs=320`-ish nursery (not the earlier 16MB pathology) -- so this is NOT
+a repeat of any previous mechanism; it is smaller in magnitude but still
+real. Candidate found but NOT YET CONFIRMED (ran out of session time
+budget investigating it; a quick env-gated instrumentation attempt
+produced no output and was not debugged further):
+
+- **`janet_sweep_drain_pending`** (`gc.c`, called from `janet_sweep_proc_owned`
+  on every single minor now that narrowing is universal): walks a GLOBAL
+  `janet_vm.sweep_pending[0..2]` linked-list to find its TAIL before
+  splicing onto `janet_vm.blocks`/`string_blocks`/`weak_blocks`. Dying
+  fibers (`JANET_MEMORY_FIBER` deinit case, `gc.c` ~618-630) PREPEND their
+  entire remaining `heap_lists[]` onto this SAME global list. IF fiber
+  deaths at scale outpace how often `janet_sweep_drain_pending` actually
+  drains them (plausible if many actors finish their ticks and die in a
+  tight burst), `sweep_pending[k]`'s length -- and therefore the tail-walk
+  cost paid by literally every subsequent minor, for every fiber, until
+  it's finally drained -- could grow with N. This is a real, structurally
+  plausible O(n)-per-call mechanism matching the measured shape, but it
+  was NOT measured directly before this session's time ran out (a
+  diagnostic instrumentation attempt via `JANET_DIAG_PENDING_TRACE`
+  compiled but produced zero output on a test run and was abandoned
+  rather than debugged, per explicit user direction to stop chasing
+  performance and prioritize finishing functional correctness first).
+  **Next step for the optimization phase**: get the trace actually
+  working (check whether the DPT build's dpt_calls counter condition or
+  env var detection was the bug) or use `sample`/lldb to directly measure
+  `janet_vm.sweep_pending[0..2]` list lengths at increasing points through
+  an N=100000 and an N=20000 run, and see if length grows with N/time
+  mid-run. If confirmed, the fix is almost certainly: track the list's
+  own tail pointer incrementally (O(1) append) instead of re-walking to
+  find it on every drain, mirroring how the main `xfb`/`fibers` arrays
+  already avoid exactly this class of walk.
+
+### Other NOT YET RULED OUT candidates for the same residual cost (not measured)
+- `janet_slab_page_for`'s binary search over `ss->dir` (sorted page
+  directory): O(log total_pages), grows with total live pages. Sublinear,
+  probably NOT the dominant term, but called from several hot paths
+  (`janet_slab_obj_owner`, `janet_xfb_owner_of` call sites) and not ruled
+  out definitively.
+- Per-minor fixed overhead (`janet_gc_epoch_next()`, `janet_heap_verify`
+  no-op check, `getenv("JANET_ROOT_TRACE")` called unconditionally on
+  every minor even when unset -- a `getenv` syscall-ish lookup on the HOT
+  path of every single minor, seen literally in the `sample` profile
+  output this session as non-trivial sample share). Cheap individually,
+  but worth auditing if the above doesn't fully explain the residual.
+
+### N=1000000: functional completion, not performance, is the target for this phase
+Per user direction, the explicit bar for this phase is: does it FINISH,
+not how fast. A generous-timeout run was in progress when this handoff
+was written; see the session's final status update for the actual
+outcome. If it did not finish even with a long timeout, that is the
+single highest-priority item for whoever picks this back up --
+everything above is offered as the most probable explanation and the
+most promising next measurement, not a confirmed root cause.
