@@ -1560,3 +1560,60 @@ N=20000 is now solidly, repeatably fast across both xfb-index variants.
 N=100000 remains the open wall, now narrowed to exactly one well-understood,
 well-scoped cause (xfb needs true owner-bucketing, not a sorted/rebuilt
 index) rather than an unknown mystery.
+
+## xfb final form: true owner-bucketing at insert time (replaces the sorted index)
+
+Replaced the amortized sorted-index approach entirely with true owner-
+bucketing: a fixed 4096-slot hash table (chained on collision) keyed by
+owner, populated at the SAME single insert site (the owner, `own_o`, was
+already computed there -- free to reuse). `janet_xfb_bucket_append` is O(1)
+amortized (same doubling-array growth as the main xfb array itself, per
+bucket). `janet_xfb_mark_owned` is O(1) hash lookup + O(this owner's own
+entry count) -- no sort, no rebuild, no unsorted-tail scan of any kind. The
+old `janet_xfb_relevant`/sorted-index machinery is removed entirely (dead
+code once both scoped collectors route through buckets). The main `ss->xfb`
+array, its insertion order, and `janet_slab_owner_stats`' rollback are
+STILL completely untouched -- the bucket table is a parallel, additive
+dual-write at the same insert site, freed (not rolled back) at major-reset
+and VM clear, same hygiene as the main array.
+
+Verified dual-target (interpreter + AOT) across
+proc/thread/ev/marsh/mailbox/pool: all green, identical counts both
+targets. All four ripwire-flagged C regressions pass fresh; test-gc-pcall
+unchanged pre-existing failure.
+
+**N=20000 confirmed solid again** (4.4s, matches previous fixes) -- this
+part of the fix is genuinely done. Measured directly via lldb: bucket chain
+length ~25 (4096 slots / ~100000 distinct owners, as expected) and per-owner
+entry count ~2 (small, as expected) -- the bucket structure itself is
+performing exactly as designed, cheap and O(1)-ish per minor.
+
+## N=100000: a DIFFERENT mechanism, not a scan-cost problem at all
+
+Re-profiling N=100000 after the true-bucketing fix still shows it not
+finishing in 60s -- but the profile and a direct `JANET_ROOT_TRACE` call
+count now point at something qualitatively different from everything found
+so far. In a 15-second window, only **3** total `janet_collect_fiber_minor`
+calls fired, and all three were for the **same single fiber** (`owner=10`),
+whose nursery had ballooned to ~16MB (64x the normal 256KB minor-trigger
+threshold, `JANET_MINOR_THRESHOLD`) before each of those 3 minors finally
+ran. Nothing else in the entire program progressed during that window --
+no other actor's minor fired at all.
+
+This is NOT a scan-cost problem (the bucket/scan machinery verified cheap
+above) -- it is a **minor-triggering delay** for one specific fiber, or
+possibly a scheduling starvation issue where one fiber (likely an early-
+spawned actor, owner=10 is low/early in the sequential id sequence) is
+somehow not yielding, or not getting its pressure threshold checked
+promptly, letting its nursery grow 64x past the intended trigger point
+before a minor is finally forced -- and apparently blocking all other
+progress while this happens. Not investigated further this session (new
+mechanism, deserves fresh root-causing with the same lldb rigor as
+everything above, not guessed at).
+
+**Status, honestly:** N=2000/5000/20000 are solidly, repeatably fixed (all
+three confirmed O(n^2) messaging mechanisms -- the wide sweep, the xfb scan
+in both its sorted-index and final bucketed forms -- are closed). N=100000
+hits a FOURTH, structurally different mechanism (minor-triggering/scheduling,
+not a scan-cost issue) that is now narrowly scoped (one specific fiber,
+16MB nursery delay) but not yet root-caused. This is the clear next step.

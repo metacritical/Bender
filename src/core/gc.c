@@ -1003,12 +1003,20 @@ static const size_t janet_slab_classes[JANET_SLAB_NCLASSES] =
 _Static_assert(JANET_SLAB_NCLASSES == 8,
     "nursery_cur literal in JanetFiber must match class count");
 
-/* Erlang-parity messaging fix: one entry in the lazily-rebuilt
- * sorted-by-owner xfb index (see JanetSlabState.xfb_index). */
-typedef struct {
+/* Erlang-parity messaging fix: one per-owner bucket in the xfb
+ * owner-bucketing side-structure (see JanetSlabState.xfb_buckets).
+ * Chained on hash collision (owner % JANET_XFB_NBUCKETS); a
+ * fixed-size table is adequate here (lookup is O(chain length), and
+ * with JANET_XFB_NBUCKETS this large, chains stay short even at
+ * hundreds of thousands of live owners). */
+#define JANET_XFB_NBUCKETS 4096
+struct JanetXfbBucketNode {
     uint32_t owner;
-    uint32_t idx;
-} JanetXfbIndexEntry;
+    Janet *data;
+    size_t count;
+    size_t cap;
+    struct JanetXfbBucketNode *next;
+};
 
 typedef struct JanetSlabPage {
     struct JanetSlabPage *next;
@@ -1072,26 +1080,30 @@ typedef struct {
     size_t xfb_count;
     size_t xfb_cap;
     int xfb_stuck;
-    /* Erlang-parity messaging fix (docs/internals/proc-lanes.md): a
-     * lazily-rebuilt, SORTED-BY-OWNER index over xfb -- the main xfb
-     * array and its insertion-order/rollback semantics (janet_slab_
-     * owner_stats' xfb_entry truncation) are completely untouched;
-     * this is a read-only auxiliary built from it. Confirmed safe to
-     * cache an entry's owner (janet_slab_obj_owner is derived from
-     * page->owner, which is set exactly once at page allocation and
-     * never reassigned -- the only possible transition is owner=K ->
-     * mixed/0, and a mixed-page object is already immune to any
-     * single-owner's scoped sweep regardless of marking, so a stale
-     * cached owner can never cause a premature free). Rebuilt
-     * (O(n log n), qsort) only when xfb_count has grown since the
-     * last build; a scoped minor then binary-searches its own
-     * owner's contiguous run (O(log n)) instead of linearly scanning
-     * every entry (O(n)) -- the second confirmed O(n^2) term (every
-     * actor's minor scanning the full global xfb set) becomes
-     * amortized O(n log n) total across a workload where inserts
-     * cluster early and most minors see a stable count. */
-    JanetXfbIndexEntry *xfb_index;
-    size_t xfb_index_built_count;
+    /* Erlang-parity messaging fix, final form (docs/internals/
+     * proc-lanes.md): true owner-bucketing at INSERT time, replacing
+     * an earlier sorted-index attempt that only amortized correctly
+     * when scans were rare between rebuilds -- our workload scans
+     * (one fiber minor) on almost every insert, so that approach's
+     * unsorted-tail scan cost stayed quadratic in practice. This is
+     * a PARALLEL, additive side-structure: the main xfb array above,
+     * its insertion order, and janet_slab_owner_stats' rollback
+     * truncation are completely untouched. Every bucket append
+     * happens at the SAME single insert site as the main array (the
+     * owner, own_o, is already computed there -- free to reuse, no
+     * extra lookup). Confirmed safe to key by owner at insert time:
+     * janet_slab_obj_owner only ever transitions owner=K -> mixed/0,
+     * and a mixed-page object is already immune to any single-
+     * owner's scoped sweep regardless of marking (traced
+     * janet_sweep_list's own filter), so a stale bucket entry after
+     * that transition is harmless -- same as any other "floats until
+     * major" over-conservative case already standard in this file.
+     * No rollback is implemented for buckets (janet_slab_owner_stats'
+     * self-edges may leave a few harmless stray entries pointing at
+     * real, live objects -- over-marking, never a premature free);
+     * buckets ARE cleared at major-reset and VM clear, same as xfb
+     * itself, for long-run hygiene. */
+    struct JanetXfbBucketNode **xfb_buckets;
     /* Step 1.3 live-fiber census (all fibers with live memory,
      * reachable or not): per-fiber minors mark every census fiber so
      * no unreaped referrer can dangle (an unreached foreign-old fiber
@@ -1102,6 +1114,28 @@ typedef struct {
     size_t fibers_count;
     size_t fibers_cap;
 } JanetSlabState;
+
+/* Erlang-parity messaging fix: free every chain node + its data array
+ * in the owner-bucket table, then the table itself. Used at both VM
+ * clear and major-reset (buckets carry no rollback semantics of
+ * their own, see the JanetSlabState.xfb_buckets comment -- safe to
+ * drop entirely at either point, same as xfb_count=0 is). */
+static void janet_xfb_bucket_append(JanetSlabState *ss, uint32_t owner, Janet cobj);
+
+static void janet_xfb_buckets_free(JanetSlabState *ss) {
+    if (NULL == ss->xfb_buckets) return;
+    for (size_t b = 0; b < JANET_XFB_NBUCKETS; b++) {
+        struct JanetXfbBucketNode *node = ss->xfb_buckets[b];
+        while (NULL != node) {
+            struct JanetXfbBucketNode *next = node->next;
+            janet_free(node->data);
+            janet_free(node);
+            node = next;
+        }
+    }
+    janet_free(ss->xfb_buckets);
+    ss->xfb_buckets = NULL;
+}
 
 static JanetSlabState *janet_slab_state(void) {
     JanetSlabState *ss = (JanetSlabState *) janet_vm.slab_state;
@@ -1408,9 +1442,7 @@ static void janet_slab_free_pages(void) {
     ss->xfb_count = 0;
     ss->xfb_cap = 0;
     ss->xfb_stuck = 0;
-    janet_free(ss->xfb_index);
-    ss->xfb_index = NULL;
-    ss->xfb_index_built_count = 0;
+    janet_xfb_buckets_free(ss);
     /* Step 1.3: census resets with the pages (fibers are gone too). */
     janet_free(ss->fibers);
     ss->fibers = NULL;
@@ -1458,10 +1490,9 @@ static void janet_slab_major_reset(void) {
      * collection younger than the last major sees complete edges. */
     ss->xfb_count = 0;
     ss->xfb_stuck = 0;
-    /* The sorted index is now stale (indices past the new count=0
-     * are meaningless); mark it unbuilt so the next scan rebuilds
-     * from the fresh, empty set rather than binary-searching garbage. */
-    ss->xfb_index_built_count = 0;
+    /* Buckets reset with the main set -- a major saw every edge, so
+     * both restart empty (see janet_xfb_buckets_free's comment). */
+    janet_xfb_buckets_free(ss);
 }
 void janet_sweep_weak_drop(void) {
     /* Weak-ref dropping runs at majors only. In minors the mark is
@@ -2058,6 +2089,11 @@ void janet_gc_barrier(void *obj, Janet value) {
         ss->xfb_cap = ncap;
     }
     ss->xfb[ss->xfb_count++] = cobj;
+    /* Erlang-parity messaging fix: dual-write into the owner-bucket
+     * side-structure at the SAME insert site (own_o already computed
+     * above, no extra lookup). The main array above is unaffected;
+     * this is purely additive. */
+    janet_xfb_bucket_append(ss, own_o, cobj);
 }
 
 void *janet_gcalloc(enum JanetMemoryType type, size_t size) {
@@ -2385,148 +2421,57 @@ static int janet_gc_verify_minor(void) {
  * remembered set degrades to a full minor (missing edges would be
  * unsound to ignore). */
 
-/* Phase 1 density: remembered-set ownership filter. An xfb entry is
- * only relevant to a fiber minor if its target block lives on the
- * minor-ing fiber's OWN lists — foreign targets are kept alive by
- * their owners and cost a pointer compare to skip, versus a full
- * mark chain (proc -> fiber -> channels) per entry otherwise. The
- * 100k-agent profile: 185k live xfb entries dominated every minor.
- * Returns 1 when the entry must be marked. Non-GC values and
- * malloc-large blocks (no owning page) mark conservatively. */
-static int janet_xfb_relevant(Janet x, uint32_t owner);
-
-/* Erlang-parity messaging fix: extract the owner an xfb entry would be
- * bucketed under (same pointer-extraction as janet_xfb_relevant, kept
- * in exact sync with it -- every xfb entry is an array or table, the
- * only two cobj types the single insert site ever produces). Returns
- * 0 for a mixed/unowned page, matching janet_slab_obj_owner. */
-static uint32_t janet_xfb_owner_of(Janet x) {
-    void *p;
-    switch (janet_type(x)) {
-        default:
-            return 0;
-        case JANET_ABSTRACT:
-            p = janet_unwrap_abstract(x);
-            break;
-        case JANET_ARRAY:
-            p = janet_unwrap_array(x);
-            break;
-        case JANET_TABLE:
-            p = janet_unwrap_table(x);
-            break;
-        case JANET_FIBER:
-            p = janet_unwrap_fiber(x);
-            break;
+/* Erlang-parity messaging fix, final form: true owner-bucketing at
+ * insert time. Two attempts preceded this (a) full linear scan with
+ * an owner filter -- O(n) per minor, O(n^2) overall; (b) a lazily
+ * rebuilt sorted-by-owner index -- amortizes correctly only when
+ * scans are rare between rebuilds, but this workload scans on almost
+ * every insert, so its unsorted-tail scan cost stayed quadratic in
+ * practice (directly profiled and self-corrected, see proc-lanes.md).
+ * This append is O(1) amortized (same doubling-array pattern as the
+ * main xfb array itself) and needs no sort of any kind. */
+static void janet_xfb_bucket_append(JanetSlabState *ss, uint32_t owner, Janet cobj) {
+    if (NULL == ss->xfb_buckets) {
+        ss->xfb_buckets = janet_malloc(JANET_XFB_NBUCKETS * sizeof(struct JanetXfbBucketNode *));
+        if (NULL == ss->xfb_buckets) return;
+        memset(ss->xfb_buckets, 0, JANET_XFB_NBUCKETS * sizeof(struct JanetXfbBucketNode *));
     }
-    if (NULL == p) return 0;
-    JanetSlabPage *page = janet_slab_page_for(p);
-    if (NULL == page) return 0;
-    return janet_slab_obj_owner(p);
+    size_t slot = owner % JANET_XFB_NBUCKETS;
+    struct JanetXfbBucketNode *node = ss->xfb_buckets[slot];
+    while (NULL != node && node->owner != owner) node = node->next;
+    if (NULL == node) {
+        node = janet_malloc(sizeof(struct JanetXfbBucketNode));
+        if (NULL == node) return;
+        node->owner = owner;
+        node->data = NULL;
+        node->count = 0;
+        node->cap = 0;
+        node->next = ss->xfb_buckets[slot];
+        ss->xfb_buckets[slot] = node;
+    }
+    if (node->count == node->cap) {
+        size_t ncap = node->cap ? node->cap * 2 : 8;
+        Janet *ndata = janet_realloc(node->data, ncap * sizeof(Janet));
+        if (NULL == ndata) return;
+        node->data = ndata;
+        node->cap = ncap;
+    }
+    node->data[node->count++] = cobj;
 }
 
-static int janet_xfb_index_cmp(const void *a, const void *b) {
-    uint32_t oa = ((const JanetXfbIndexEntry *) a)->owner;
-    uint32_t ob = ((const JanetXfbIndexEntry *) b)->owner;
-    return (oa > ob) - (oa < ob);
-}
-
-/* Erlang-parity messaging fix, corrected: rebuilding on ANY growth
- * (the first version) was fine when inserts cluster in an early
- * burst (small N) but degrades to a full O(n log n) re-sort on
- * nearly every minor once inserts keep trickling in throughout the
- * whole run (observed directly: N=100000's qsort dominated the
- * profile) -- turning the fix into something WORSE than the
- * original O(n) linear scan it replaced. Classic amortized-doubling
- * fix: only re-sort the WHOLE array when the unsorted TAIL (entries
- * appended since the index was last built) has grown past half the
- * already-sorted prefix (plus a small floor) -- standard "sort once,
- * re-sort only when the unsorted suffix roughly doubles the sorted
- * part" amortization, giving O(n log n) total across all of a run's
- * inserts regardless of how they're interleaved with minors, not
- * O(n log n) PER minor. The main xfb array is never reordered or
- * mutated here. */
-static void janet_xfb_index_ensure(JanetSlabState *ss) {
-    if (ss->xfb_index_built_count >= ss->xfb_count) return;
-    size_t tail = ss->xfb_count - ss->xfb_index_built_count;
-    if (tail <= ss->xfb_index_built_count / 2 + 64 && ss->xfb_index_built_count > 0) {
-        /* Tail still small relative to the sorted prefix: leave the
-         * index as-is. janet_xfb_mark_owned covers the unsorted tail
-         * with a cheap linear scan of just these few entries. */
-        return;
-    }
-    void *nmem = janet_realloc(ss->xfb_index, ss->xfb_count * sizeof(*ss->xfb_index));
-    if (NULL == nmem && ss->xfb_count > 0) {
-        /* OOM building the index is not fatal -- fall back to a
-         * linear scan this cycle (caller checks built_count). */
-        return;
-    }
-    ss->xfb_index = nmem;
-    for (size_t i = 0; i < ss->xfb_count; i++) {
-        ss->xfb_index[i].owner = janet_xfb_owner_of(ss->xfb[i]);
-        ss->xfb_index[i].idx = (uint32_t) i;
-    }
-    qsort(ss->xfb_index, ss->xfb_count, sizeof(*ss->xfb_index), janet_xfb_index_cmp);
-    ss->xfb_index_built_count = ss->xfb_count;
-}
-
-/* Erlang-parity messaging fix: mark exactly this owner's entries.
- * Binary-searches the sorted prefix (O(log n) + O(this owner's own
- * count in the prefix)) and linearly scans the small unsorted tail
- * left behind by janet_xfb_index_ensure's amortization (bounded to
- * roughly half the prefix size by construction, so still far cheaper
- * than a full O(total) scan at any real N). Falls back to the
- * original always-correct full linear scan if the index was never
- * built at all (OOM on the very first attempt). */
+/* Erlang-parity messaging fix: mark exactly this owner's bucket --
+ * O(1) hash lookup (chain length bounded by JANET_XFB_NBUCKETS'
+ * size relative to live owner count) + O(this owner's own entries).
+ * No scan of any other owner's data at all; no sort, no rebuild. */
 static void janet_xfb_mark_owned(JanetSlabState *ss, uint32_t owner) {
-    janet_xfb_index_ensure(ss);
-    if (NULL == ss->xfb_index && ss->xfb_count > 0) {
-        /* Index build failed (OOM) or is otherwise unavailable: the
-         * original, always-correct, O(n) fallback. */
-        for (size_t xi = 0; xi < ss->xfb_count; xi++)
-            if (janet_xfb_relevant(ss->xfb[xi], owner))
-                janet_mark(ss->xfb[xi]);
-        return;
+    if (NULL == ss->xfb_buckets) return;
+    size_t slot = owner % JANET_XFB_NBUCKETS;
+    struct JanetXfbBucketNode *node = ss->xfb_buckets[slot];
+    while (NULL != node && node->owner != owner) node = node->next;
+    if (NULL == node) return;
+    for (size_t i = 0; i < node->count; i++) {
+        janet_mark(node->data[i]);
     }
-    size_t prefix = ss->xfb_index_built_count;
-    size_t lo = 0, hi = prefix;
-    while (lo < hi) {
-        size_t mid = lo + (hi - lo) / 2;
-        if (ss->xfb_index[mid].owner < owner) lo = mid + 1;
-        else hi = mid;
-    }
-    while (lo < prefix && ss->xfb_index[lo].owner == owner) {
-        janet_mark(ss->xfb[ss->xfb_index[lo].idx]);
-        lo++;
-    }
-    /* Unsorted tail (entries appended since the index's last build):
-     * cheap linear scan, bounded small by the amortization above. */
-    for (size_t xi = prefix; xi < ss->xfb_count; xi++) {
-        if (janet_xfb_relevant(ss->xfb[xi], owner)) janet_mark(ss->xfb[xi]);
-    }
-}
-
-static int janet_xfb_relevant(Janet x, uint32_t owner) {
-    void *p;
-    switch (janet_type(x)) {
-        default:
-            return 1;
-        case JANET_ABSTRACT:
-            p = janet_unwrap_abstract(x);
-            break;
-        case JANET_ARRAY:
-            p = janet_unwrap_array(x);
-            break;
-        case JANET_TABLE:
-            p = janet_unwrap_table(x);
-            break;
-        case JANET_FIBER:
-            p = janet_unwrap_fiber(x);
-            break;
-    }
-    if (NULL == p) return 1;
-    JanetSlabPage *page = janet_slab_page_for(p);
-    if (NULL == page) return 1;
-    return janet_slab_obj_owner((JanetGCObject *) p) == owner;
 }
 
 void janet_collect_fiber_minor(JanetFiber *f) {
@@ -2602,17 +2547,15 @@ void janet_collect_fiber_minor(JanetFiber *f) {
      * prove its full reachability (that is whichever collection
      * actually owns and sweeps it) -- use the shallow variant. */
     janet_ev_mark_shallow();
-    /* Erlang-parity messaging fix, part 3: the second confirmed
-     * O(n^2) term. janet_xfb_mark_owned uses a lazily-rebuilt sorted
-     * index to mark only this owner's entries (O(log n) + O(this
-     * owner's own count)) instead of linearly scanning every xfb
-     * entry on every single actor's own minor (O(total xfb_count)).
-     * See docs/internals/proc-lanes.md for the safety argument (an
-     * entry's cached owner can only ever degrade to mixed/0, which
-     * makes it immune to any single-owner's scoped sweep regardless
-     * of marking, so a stale index entry can never cause a premature
-     * free) and janet_xfb_relevant below for the always-correct O(n)
-     * fallback this uses automatically if the index can't be built. */
+    /* Erlang-parity messaging fix, part 3 (final form: true owner-
+     * bucketing, see docs/internals/proc-lanes.md): janet_xfb_mark_owned
+     * marks only this owner's bucket (O(1) hash lookup + O(this
+     * owner's own entries)) instead of linearly scanning every xfb
+     * entry on every single actor's own minor. Safety argument: an
+     * entry's owner (fixed at insert time) can only ever degrade to
+     * mixed/0, which makes it immune to any single-owner's scoped
+     * sweep regardless of marking, so there is no premature-free
+     * risk from bucketing by it. */
     janet_xfb_mark_owned(ss, f->gc_owner);
     janet_vm.gc_mark_phase = 0;
 #ifdef JANET_EV
