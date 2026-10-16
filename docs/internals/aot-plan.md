@@ -1422,3 +1422,92 @@ through `janet_chan_pack`'s `JanetBuffer` allocation specifically -- not
 a uniformly-random "whatever allocates next" pattern. Worth checking
 whether the corrupted block and the `JanetBuffer`-sized allocation share a
 malloc size class.
+
+## BREAKTHROUGH: working ASAN recipe found, real cross-thread UAF confirmed (not a guess anymore)
+
+**Critical reusable discovery**: plain `-fsanitize=address` is unusable on this
+codebase (false-positive stack-buffer-overflow from fiber stack switching,
+documented last round) -- but adding `-mllvm -asan-stack=0` (disables ASan's
+STACK redzone instrumentation only, keeps HEAP/global instrumentation fully
+active) eliminates the false positive entirely while still catching real
+heap bugs. Working build recipe:
+
+```
+make clean
+JANET_NO_PROFILE=1 make CFLAGS="-O1 -g -fsanitize=address -fno-omit-frame-pointer -mllvm -asan-stack=0" LDFLAGS="-fsanitize=address" -j4
+JANET_NO_PROFILE=1 ./build/bender <script>
+```
+
+(`JANET_NO_PROFILE=1` avoids conflating this with the separate, unrelated,
+pre-existing `janet_profile_call` UAF already filed. `-O1` not `-O2`: kept
+some inlining down for more readable traces without the slowdown of `-O0`.)
+
+**This is the single most valuable finding of this investigation**: it
+unblocks real ASAN-based debugging for this codebase generally, not just
+this one bug.
+
+### Real bug #1 found (unrelated to lanes, filed separately): teardown-order UAF
+Running `test/suite-proc.janet` under this build caught a genuine
+heap-use-after-free during VM teardown: `janet_clear_memory` (`gc.c:3131`)
+-> `janet_deinit_block` -> `janet_table_put`/`janet_table_remove` ->
+`janet_equals` reads freed memory, immediately after
+`janet_abstract_decref_maybe_free` freed something earlier in the SAME
+`janet_clear_memory` call (`gc.c:3093`). Happens during
+`janet_thread_new_run`'s `janet_try_init`/`janet_deinit` path (thread
+shutdown). This is a real, separate, newly-found bug -- filed here, not
+investigated further, not the lanes=8 target.
+
+### Real bug #2 found: the actual lanes=8 target, confirmed via ASAN (2/2 reproduced with identical signature)
+
+```
+AddressSanitizer: heap-use-after-free on address 0x... thread T5
+READ of size 4 at 0x... thread T5
+    #0 janet_mark_tuple (or janet_mark_array) gc.c:148/134
+    #1 janet_mark gc.c:125/116
+    #2 janet_chanat_mark ev.c:1325/1330     <-- marking a channel's buffered item
+    #3 janet_mark_array gc.c:134
+    #4 janet_mark gc.c:116
+    #5 janet_mark_buffer gc.c:230
+    #6 janet_mark gc.c:128
+    #7 janet_mark_fiber gc.c:458
+    #8 janet_collect_fiber_minor gc.c:2530
+    #9 janet_loop1 ev.c:2380
+    #10 janet_go_thread_subr ev.c:2470
+    #11 janet_lane_thread_body proc.c:112
+
+freed by thread T0; previously allocated by thread T6 (a THIRD, different thread)
+```
+
+**Confirmed, not hypothesized**: `janet_chanat_mark` (`ev.c:1325`, the
+channel abstract type's `gcmark` callback) calls `janet_mark(data[i])` on
+an item sitting in `chan->items` (a channel's internal buffered-message
+queue) -- and that item is DIRECTLY a raw tuple or array (`janet_mark_tuple`/
+`janet_mark_array` are called immediately, which only happens for those
+Janet types, not a `JANET_BUFFER`). This means: for at least one channel
+reachable from a cross-lane fiber's minor collection, **packing was
+skipped and a raw, live value ended up stored in a threaded channel's
+item queue** -- exactly the "aliasing across VM boundaries" class of bug
+`janet_chan_pack`/`janet_chan_needs_pack` exist to prevent. The item's
+backing memory was allocated by one thread (T6) and freed by another
+(T0) while a third thread (T5) still held a live reference to it via the
+channel buffer -- classic cross-thread dangling pointer.
+
+All lane-control channels were checked and confirmed created via
+`janet_channel_make_threaded_c` (`janet_lane_ctls[i]`, `janet_lane0_ctl`,
+`janet_lane_overflow` -- `proc.c` ~434, 503, 522), and every push site
+onto them goes through the generic `janet_channel_push` (which calls
+`janet_chan_pack` when `is_threaded`/`isolated`), so packing SHOULD apply
+uniformly. The exact gap -- which specific push, or which specific nested
+value inside a forwarded message, escapes packing -- is NOT yet
+pinpointed; the trace's exact inlining (`janet_mark_buffer` apparently
+calling into `janet_mark_array` immediately before reaching
+`janet_chanat_mark`) is ambiguous at `-O1` and should not be over-read.
+
+**Next concrete step**: add a targeted assertion inside `janet_chanat_mark`
+itself -- for a channel where `janet_chan_needs_pack(chan)` is true, every
+item in `chan->items` must be an immediate type or `JANET_BUFFER`, never a
+raw tuple/array/table/fiber. Panic with the channel's identity and the
+violating item's type the first time this is violated. That will pinpoint
+the exact channel and construction path responsible without further ASAN
+archaeology, and is cheap/safe to add and remove (pure diagnostic, no
+behavior change).
