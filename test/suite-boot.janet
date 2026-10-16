@@ -46,8 +46,9 @@
 # - debug/eval repeated a (line ~1021): the image call resolves the slot
 #   known at image-build time (the earlier array binding); only the
 #   loader's compile-after-eval ordering re-resolves it to the function.
-# - macro sourcemaps (lines 847-848): image builds do not preserve macro
-#   expansion source maps (open mkimage-side improvement, separate owner).
+# - macro sourcemaps (lines 847-848): fixed by serializing tuple
+#   sm_line/sm_column in the marshal tuple payload; image constants now
+#   retain their maps at runtime.
 (import ./helper :prefix "" :exit true)
 (start-suite)
 

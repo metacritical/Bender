@@ -598,6 +598,11 @@ static void marshal_one(MarshalState *st, Janet x, int flags) {
             pushbyte(st, LB_TUPLE);
             pushint(st, count);
             pushint(st, flag);
+            /* Tuple source maps ride the payload: images marshal parsed
+             * constants, and dropping sm_line/sm_column here is what left
+             * every image constant reading [-1 -1] at runtime. */
+            pushint(st, janet_tuple_head(tup)->sm_line);
+            pushint(st, janet_tuple_head(tup)->sm_column);
             for (i = 0; i < count; i++)
                 marshal_one(st, tup[i], flags + 1);
             /* Mark as seen AFTER marshaling */
@@ -1575,6 +1580,8 @@ static const uint8_t *unmarshal_one(
                 Janet *tup = janet_tuple_begin(len);
                 int32_t flag = readint(st, &data);
                 janet_tuple_flag(tup) |= (int32_t)(((uint32_t) flag) << 16);  /* Avoid left shift of negative value */
+                janet_tuple_head(tup)->sm_line = readint(st, &data);
+                janet_tuple_head(tup)->sm_column = readint(st, &data);
                 for (int32_t i = 0; i < len; i++) {
                     data = unmarshal_one(st, data, tup + i, flags + 1);
                 }
