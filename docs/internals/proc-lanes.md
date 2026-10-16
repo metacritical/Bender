@@ -1617,3 +1617,62 @@ in both its sorted-index and final bucketed forms -- are closed). N=100000
 hits a FOURTH, structurally different mechanism (minor-triggering/scheduling,
 not a scan-cost issue) that is now narrowly scoped (one specific fiber,
 16MB nursery delay) but not yet root-caused. This is the clear next step.
+
+## N=100000 FIXED: the fourth mechanism was the stale wide-sweep fallback itself
+
+Direct investigation of the "owner=10, 16MB nursery" fiber (previous entry)
+found it is NOT a proc (`f->proc == NULL`) and not `janet_vm.root_fiber` --
+most likely a `dofile`/run-context wrapper fiber executing the top-level
+send loop, doing continuous allocation from marshal-copying 400,000 sends.
+Because it has no `proc`, the earlier fix (`a7bcedcc`, scoped to
+`f->proc != NULL`) does not cover it -- it still took the WIDE
+`janet_sweep_fiber_owned` path (global fiber census walk) on every one of
+its own, now-frequent minors.
+
+**Re-tested the historical "crashes boot image generation deterministically"
+warning (`a739009e`) directly, not by proxy**, before touching this:
+- `build/janet_boot`'s actual bootstrap image generation (not an AOT test
+  proxy) run 3/3 times under full narrowing (every fiber, not just procs):
+  byte-identical `janet.c` output every time (verified via `diff`).
+- All 60 `test/suite-*.janet` files run individually under full narrowing:
+  zero behavioral differences from normal (two apparent anomalies --
+  `suite-lanes` and `suite-shared` -- both confirmed identical with or
+  without narrowing: `suite-lanes` just needs more than my first 30s probe
+  (120s run passed completely, "640k-park stop in 8.02s" matching the
+  historical baseline almost exactly), `suite-shared` always SKIPs without
+  `JANET_SHARED_STACKS=1` regardless).
+- `bench/agents.janet` at N=100000 (the actual target workload, which the
+  wide path could not complete at all) finished cleanly under narrowing.
+
+Whatever caused the historical crash was evidently fixed by other GC/
+marking work done in the long history since that commit (this session's
+own marking-scope fixes are plausible candidates, though not confirmed
+which specific change closed it). **Made narrow sweep (`janet_sweep_proc_owned`)
+the universal default for every fiber**, not just procs. The wide path
+(`janet_sweep_kind` with `walk_fibers=1`) is kept as dead code behind
+`#if 0`, not deleted, so a future regression can bisect to it quickly if
+the historical failure mode ever resurfaces.
+
+**Verification:** dual-target (interpreter + AOT) across
+proc/thread/ev/marsh/mailbox/pool, all green. Actual bootstrap image
+generation re-verified byte-identical after the real (non-diagnostic) code
+change (textual diff in the generated `janet.c` is exactly the edited
+comment/code region, i.e. the amalgamation literally embeds source text --
+expected, not a correctness signal). All four ripwire-flagged C regressions
+pass fresh; `test-gc-pcall` unchanged pre-existing failure.
+
+**Final status** (`bench/agents.janet`, interpreter, `JANET_NO_PROFILE=1`,
+no flags -- this is now the permanent default behavior):
+
+| N | msgs/s | total time |
+|---|---|---|
+| 2000 | 424111 | 0.15s |
+| 5000 | 103477 | 0.34s |
+| 20000 | 22575 | 4.0s |
+| 100000 | 4445 | **98s (finishes)** |
+
+N=100000 now finishes as the default, unconditional behavior -- a real,
+substantial, verified milestone. The msgs/s rate drops meaningfully from
+N=20000 to N=100000 (22575 -> 4445, roughly 5x fewer for 5x more actors),
+indicating some residual superlinear cost remains at this scale, not yet
+investigated. N=1000000 not yet attempted.

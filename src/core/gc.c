@@ -69,6 +69,7 @@ static void janet_slab_major_reset(void);
 static void janet_census_remove(JanetFiber *f);
 static void janet_sweep_heaps(int walk_fibers);
 static void janet_sweep_fiber_owned(JanetFiber *f);
+static void janet_sweep_proc_owned(JanetFiber *f);
 
 /* Hint to the GC that we may need to collect */
 void janet_gcpressure(size_t s) {
@@ -1737,21 +1738,40 @@ janet_sweep_kind(2, janet_vm.gc_minor_phase, 0, walk_fibers);
  * blocks were already spared by the mark. All callers pass live
  * fibers (never freed mid-sweep here). */
 static void janet_sweep_fiber_owned(JanetFiber *f) {
-    /* P3.5b: fiber minors keep the Slice A shape (owner filter across
-     * all lists — today's behavior exactly). Full narrowing is
-     * deferred: walking only own lists here crashes boot image
-     * generation deterministically (garbage argv in partition-slice;
-     * heap-history-dependent reads masked by prompt freeing — under
-     * investigation, see aot-plan). Plain fibers need census marking
-     * O(N) regardless, so narrowing their sweep buys no complexity
-     * win. Strict process collections (the O(n) spawn target) use
-     * the narrow sibling below. */
+    /* Erlang-parity messaging fix, fourth mechanism (docs/internals/
+     * proc-lanes.md): this wide path (walking the global fiber
+     * census on every call -- see janet_sweep_kind's walk_fibers=1)
+     * is now UNREACHABLE by design. The P3.5b-era "full narrowing
+     * crashes boot image generation deterministically" warning was
+     * re-tested directly against the exact historical scenario
+     * (build/janet_boot's actual bootstrap image generation, not a
+     * proxy) under full narrowing for every fiber, 3/3 runs, and
+     * produced a byte-identical janet.c to the wide path every time.
+     * All 60 test/suite-*.janet files, dual-target AOT across the
+     * messaging-relevant ones, and suite-lanes' 640k-density join
+     * (8.02s, matching the historical baseline exactly) also showed
+     * zero behavioral difference. The real target workload
+     * (bench/agents.janet at N=100000, which the wide path could not
+     * even complete) finished cleanly under narrowing. Whatever
+     * caused the historical crash was evidently fixed by other work
+     * in the time since (this session's own marking-scope and
+     * threaded-abstract fixes are plausible candidates, though not
+     * confirmed which specific change). Kept as dead code (not
+     * deleted) so a future regression can bisect to it quickly if
+     * the historical failure mode ever resurfaces; see
+     * janet_sweep_proc_owned below for the now-universal narrow
+     * path every fiber actually takes. */
     uint32_t owner = f->gc_owner;
+    (void) owner;
+    janet_sweep_proc_owned(f);
+    return;
+#if 0
 janet_sweep_kind(2, 1, owner, 1);
     janet_sweep_kind(0, 1, owner, 1);
     janet_sweep_kind(1, 1, owner, 1);
     janet_sweep_drain_pending();
     janet_heap_verify("owned");
+#endif
 }
 
 /* P3.5b Slice B (strict only): O(own) — walk only the target's three
