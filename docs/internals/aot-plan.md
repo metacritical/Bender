@@ -1511,3 +1511,89 @@ violating item's type the first time this is violated. That will pinpoint
 the exact channel and construction path responsible without further ASAN
 archaeology, and is cheap/safe to add and remove (pure diagnostic, no
 behavior change).
+
+## lanes=8 crash: two fix attempts, both failed verification -- reverted, not shipped
+
+Picked up the flagged next step (add a targeted assertion to pinpoint the
+exact violating channel) and went further: found and attempted a real fix,
+confirmed via ASAN that `janet_chanat_mark` (the channel abstract's
+`gcmark` callback) never takes `chan`'s lock while reading
+`read_pending`/`write_pending`/`items`, unlike every other access path to
+those same queues. This is a genuine, confirmed-by-code-reading gap. Two
+fix attempts were tried and BOTH failed verification -- documented in full
+so neither is re-attempted blindly, and so the next session has the real
+data instead of assuming "add the lock" is sufficient.
+
+### Attempt 1: hold chan's lock across the whole mark (read + janet_mark calls)
+Simplest fix: wrap the existing function body in `janet_chan_lock`/
+`janet_chan_unlock`. **Result: 20/20 clean at N=5000** (previously ~75%
+crash rate) -- looked like a confirmed fix. But N=20000 under the SAME
+build showed a NEW failure mode never seen on unmodified code: several
+runs (not crashes) burned 40-60s of wall-clock time with high CPU
+(39-56s user time), far beyond baseline's crash-or-finish-fast behavior.
+Hypothesis: `janet_mark()` called while still holding `chan`'s lock can
+recurse into marking OTHER threaded abstracts reachable from an item
+(e.g. a fiber's own `supervisor_channel`, or another channel embedded in a
+message) -- a lock-ordering risk. Two threads marking two different
+channels, each needing the OTHER channel's lock to finish its own mark,
+is a classic contention/potential-deadlock shape. Not confirmed as an
+actual deadlock (process did eventually make progress in the one case
+let run past 40s), but severe, workload-dependent slowdown absent from
+baseline is disqualifying on its own.
+
+### Attempt 2: snapshot under the lock, release, then mark from the copy
+Refined to avoid the lock-ordering risk: take `chan`'s lock only long
+enough to copy fiber pointers (from the pending queues) and Janet values
+(from `items`) into freshly `janet_malloc`'d scratch arrays, release the
+lock, then call `janet_mark()` on the copies with no lock held at all.
+This should have avoided Attempt 1's recursive-mark-while-locked risk
+entirely. **Result: WORSE than baseline** -- 15/15 crashed at N=5000 (vs
+baseline's ~75-100%, so not clearly worse in raw rate, but clearly not
+fixed either), and when it did crash, it now crashed in a NEW place: the
+snapshot code's OWN `janet_malloc` call inside `janet_chanat_mark` itself
+(`ev.c:1401` in that build), via the same malloc-freelist-corruption
+detector. This means the heap was ALREADY corrupted before
+`janet_chanat_mark` even ran, for this crash -- i.e. this particular
+crash instance is NOT caused by `janet_chanat_mark`'s own unlocked read
+at all. Either the snapshot implementation has its own bug (plausible --
+written and tested once, not re-verified independently), or -- more
+importantly -- **the missing lock in `janet_chanat_mark` may not be the
+sole cause, or not the cause at all, of the crashes seen at N=20000/
+lanes=8**, and Attempt 1's apparent 20/20 success at N=5000 may have been
+a timing/heisenbug artifact (added lock latency incidentally shifting
+timing away from a DIFFERENT race's trigger window) rather than a genuine
+fix of the actual mechanism.
+
+### Baseline re-confirmed (unmodified code, for comparison)
+8/8 crashes at N=20000/lanes=8, ALL within 0-1 seconds wall-clock -- no
+hangs, no slow runs, just fast, consistent SIGTRAP/SIGABRT. This rules
+out "the hang in Attempt 1 was already there" -- it is a genuine
+consequence of that specific change, not a pre-existing characteristic
+masked before.
+
+### Honest conclusion for this round
+Neither fix is verified safe to ship. Attempt 1 trades a crash for a
+workload-dependent severe slowdown with lock-ordering risk; Attempt 2
+does not fix the crash and may indicate the missing-lock theory is
+incomplete. Reverted both; `src/core/ev.c` is back to its unmodified,
+committed state (confirmed via `git status`, `git checkout --`, and a
+clean rebuild + `suite-proc` 99/99 sanity pass). The missing lock in
+`janet_chanat_mark` remains a REAL, confirmed-by-reading defect worth
+fixing eventually, but:
+- Any fix must be verified at BOTH N=5000 AND N=20000 (and ideally
+  N=50000+) before being trusted -- N=5000-only verification is not
+  sufficient, as this round's Attempt 1 demonstrates.
+- The exact mechanism may be more subtle than "add the lock" -- Attempt
+  2's crash-inside-its-own-new-allocation suggests genuine, independent
+  heap corruption may be happening via a DIFFERENT path entirely, with
+  `janet_chanat_mark` only ever being the unlucky function that discovers
+  it (consistent across ALL captures this round and last: EVERY single
+  ASAN "freed by" trace shows thread T0 -- the MAIN thread -- as the
+  freeing thread, while the allocating and reading threads vary. This
+  T0-specific pattern was not pursued further this round and is the
+  most promising concrete next lead: why does freeing a lane-worker-
+  allocated 32-byte object always happen on the MAIN thread specifically?
+  Check whatever runs on T0 that frees small objects -- possibly T0's own
+  minor/major collection sweeping something it believes it owns
+  exclusively, or lane-stop/teardown logic, rather than the mark function
+  itself).
