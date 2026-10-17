@@ -176,7 +176,50 @@
     # Phase 1 (type-generator plan): a function proven to ALWAYS
     # return nil (every 'ret/'retn site) is a legitimate void kernel --
     # no boxed value is ever produced, so there is nothing to unbox.
-    :nil "void"})
+    :nil "void"
+    # Phase 2: JanetString is already `typedef const uint8_t *` with a
+    # length-prefixed JanetStringHead immediately before the pointer
+    # (janet.h:497,585) -- already a flat C value, no transformation
+    # needed, only this type-map entry plus the kernel ops below.
+    :string "JanetString"})
+
+# Phase 2: string literal constants used inside a kernel body (e.g. a
+# `case`/`=` dispatch against "linear"/"in_sine"/...) cannot be
+# emitted as a C string literal cast directly to JanetString -- a
+# JanetString must carry a real JanetStringHead (length + hash)
+# immediately before its bytes, which only `janet_string()` builds
+# correctly. Each distinct literal gets ONE static JanetString slot,
+# materialized once in native_init (before any wrapper can be called),
+# and every 'ldc of that same literal across every kernel in this
+# build references the same slot -- deduplicated by content, reset
+# per build (this var is module-global state across one compile run,
+# the same pattern already used by kernel-intrinsics/unit-import-files
+# elsewhere in this file).
+(var string-const-ids @{})
+(var string-const-order @[])
+(defn string-const-name [bytes]
+  (or (get string-const-ids bytes)
+      (do (def nm (string "k_str_" (length string-const-order)))
+        (put string-const-ids bytes nm)
+        (array/push string-const-order bytes)
+        nm)))
+(defn emit-c-string-literal [bytes]
+  # C string literal body only -- caller supplies the surrounding
+  # quotes. Escapes everything outside printable, non-quote, non-
+  # backslash ASCII as \xHH so arbitrary (including multi-byte UTF-8
+  # and non-UTF-8) Janet string bytes survive verbatim; \xHH is always
+  # followed by a literal "" "" string-literal break so a subsequent
+  # hex digit in the source bytes can never extend the escape (C's
+  # \x consumes as many hex digits as follow it).
+  (string/join
+    (map (fn [b]
+           (cond
+             (= b 34) "\\\""
+             (= b 92) "\\\\"
+             (and (>= b 32) (< b 127)) (string/from-bytes b)
+             (string "\\x" (string/format "%02x" b) "\"\"")))
+         bytes)
+    ""))
 # alias spellings fold to the canonical width keyword
 (defn canon-hint [k] (get hint-canonical k k))
 (defn hint-of [id]
@@ -1833,7 +1876,15 @@
             (set slotbad (string "slot s" slot " mixes signed/unsigned 64-bit"))
             (and (> (length kinds) 1)
                  (some (fn [t] (or (= t :array) (= t :tuple) (= t :struct)
-                                   (= t :nil))) kinds))
+                                   (= t :nil) (= t :string))) kinds))
+            # Phase 2: a slot reused by the register allocator for both
+            # a string value and anything else (e.g. a comparison's
+            # bool result reusing the same temp a later branch no
+            # longer needs as a string) must refuse, not silently fall
+            # through decl-kind's unconditional :bool default -- that
+            # would declare the slot `int` and then try to assign a
+            # JanetString pointer into it (a real miscompile, caught
+            # only by the C compiler's own type error, not by us).
             (set slotbad (string "slot s" slot " mixes "
                                  (string/join (map string kinds) "/")))
             dk
@@ -1932,12 +1983,19 @@
             (array/push lines (string "    s" (ins 1) " = " (ins 2) ";"))
             (= op 'ldc)
             (do (def cval ((or (d :constants) @[]) (ins 2)))
-              (if (= :cfunction (type cval))
+              (cond
+                (= :cfunction (type cval))
                 # dead callee load (math/floor etc.): the call arms
                 # resolve by core name; any live use of the loaded value
                 # carries :unknown through flow, refusing at the use site
                 # (same discipline as the ldu skip below).
                 nil
+                # Phase 2: a string constant references its deduplicated
+                # static JanetString slot (materialized once in
+                # native_init -- see string-const-name/emit-c-string-literal).
+                (= :string (type cval))
+                (array/push lines (string "    s" (ins 1) " = "
+                                          (string-const-name cval) ";"))
                 (do (unless (and cval (= :number (type cval)))
                       (set bad "ldc non-number")
                       (break))
@@ -1991,7 +2049,27 @@
                 (array/push lines (string "    if (" (emit-slot (ins 1) arity) ") goto L" (+ pc (ins 2)) ";"))
                 (array/push lines (string "    if (!" (emit-slot (ins 1) arity) ") goto L" (+ pc (ins 2)) ";"))))
             (get emit-cmp-c op)
-            (if (get emit-cmp-im op)
+            (cond
+              # Phase 2: string (in)equality is a BYTE-CONTENT compare,
+              # not a pointer compare -- raw C `==`/`!=` on two
+              # JanetString values would compare the pointers, which is
+              # wrong whenever two distinct string objects hold equal
+              # bytes (the overwhelmingly common case: no one strings
+              # are interned). Only (eq/neq) have two real operand
+              # slots to inspect this way; (eqim/neqim) compare against
+              # a small-int immediate and never apply to strings (a
+              # string can't be a bytecode immediate), so they keep the
+              # numeric path unconditionally.
+              (and (not (get emit-cmp-im op))
+                   (or (= op 'eq) (= op 'neq))
+                   (= :string (get st (ins 2) :unknown))
+                   (= :string (get st (ins 3) :unknown)))
+              (array/push lines
+                          (string "    s" (ins 1) " = "
+                                  (if (= op 'neq) "!" "")
+                                  "janet_string_equal(" (emit-slot (ins 2) arity)
+                                  ", " (emit-slot (ins 3) arity) ");"))
+              (get emit-cmp-im op)
               (array/push lines
                           (string "    s" (ins 1) " = "
                                   (emit-slot (ins 2) arity) " " (emit-cmp-c op) " "
@@ -2365,7 +2443,7 @@
     (var concrete (and (> (length pt) 0) (not (d :vararg))))
     # Step 11: :array params are opaque-but-emittable (pointer temps);
     # :array returns are the (in-place) array itself
-    (each t pt (unless (or (get infer/numeric-types t) (= t :array) (= t :tuple) (= t :pointer)) (set concrete false)))
+    (each t pt (unless (or (get infer/numeric-types t) (= t :array) (= t :tuple) (= t :pointer) (= t :string)) (set concrete false)))
     # Phase 1: :nil is concrete -- a whole-program-proven-always-nil
     # return is a legitimate void kernel, not an unproven boxed value.
     (unless (or (get infer/numeric-types rt) (= rt :array) (= rt :nil)) (set concrete false))
@@ -2644,6 +2722,7 @@
           (= t :array) "JANET_ARRAY"
           (= t :tuple) "JANET_TUPLE"
           (= t :pointer) "JANET_POINTER"
+          (= t :string) "JANET_STRING"
           nil))
         (when expected
           (string "    if (janet_type(argv[" i "]) != " expected ") { " cn "_TELEMETRY_TYPE_GUARD(); janet_panicf(\"native " cn " argument " i " has wrong Janet type\"); }\n")))
@@ -2661,6 +2740,8 @@
                            (string "janet_unwrap_tuple(argv[" i "])")
                            (= t :pointer)
                            (string "janet_unwrap_pointer(argv[" i "])")
+                           (= t :string)
+                           (string "janet_unwrap_string(argv[" i "])")
                            (string "janet_unwrap_number(argv[" i "])")))
                   ", "))
   # Phase 1: a void kernel produces no C value at all -- rv stays nil as
@@ -2723,7 +2804,7 @@
     (var concrete (and (> (length pt) 0) (not (d :vararg))))
     # Step 11: :array params are opaque-but-emittable (pointer temps);
     # :array returns are the (in-place) array itself
-    (each t pt (unless (or (get infer/numeric-types t) (= t :array) (= t :tuple) (= t :pointer)) (set concrete false)))
+    (each t pt (unless (or (get infer/numeric-types t) (= t :array) (= t :tuple) (= t :pointer) (= t :string)) (set concrete false)))
     # Phase 1: :nil is concrete -- a whole-program-proven-always-nil
     # return is a legitimate void kernel, not an unproven boxed value.
     (unless (or (get infer/numeric-types rt) (= rt :array) (= rt :nil)) (set concrete false))
@@ -2775,6 +2856,13 @@
   (def cout @"")
   (buffer/push-string cout "#include <janet.h>\n#include <inttypes.h>\n#include <math.h>\n#include <stdlib.h>\n\n")
   (buffer/push-string cout "/* int32-domain bitwise helpers: boxed Janet errors outside int32\n * (integral doubles accepted); results wrap int32; shift counts mask\n * to 5 bits. Callers range/integrality-check operands (fail loud). */\nstatic int32_t k_band32(int32_t a, int32_t b) { return a & b; }\nstatic int32_t k_bor32(int32_t a, int32_t b) { return a | b; }\nstatic int32_t k_bxor32(int32_t a, int32_t b) { return a ^ b; }\nstatic int32_t k_sl32(int32_t a, int32_t b) { return (int32_t)((uint32_t)a << ((uint32_t)b & 31u)); }\nstatic int32_t k_sr32(int32_t a, int32_t b) { uint32_t n = (uint32_t)b & 31u; int32_t r = (int32_t)((uint32_t)a >> n); if ((a < 0) && (n != 0)) { r |= (int32_t)(~0u << (32u - n)); } return r; }\nstatic int32_t k_sru32(int32_t a, int32_t b) { return (int32_t)((uint32_t)a >> ((uint32_t)b & 31u)); }\n\n")
+  # Phase 2: one static JanetString slot per distinct string literal
+  # referenced by any kernel in this build, declared here and
+  # materialized once in native_init below (before any wrapper is
+  # reachable) -- see string-const-name/emit-c-string-literal.
+  (each bytes string-const-order
+    (buffer/push-string cout (string "static JanetString " (string-const-name bytes) ";\n")))
+  (when (> (length string-const-order) 0) (buffer/push-string cout "\n"))
   # extern C declarations used by the emitted kernels (raylib story)
   (each k kernels
     (each en (k :externs)
@@ -2794,6 +2882,10 @@
   (buffer/push-string cout "}\n#endif\n\n")
   (buffer/push-string cout "void native_init(JanetTable *env) {\n")
   (buffer/push-string cout "#if JANET_NATIVE_TELEMETRY\n    atexit(native_telemetry_report_all);\n#endif\n")
+  (each bytes string-const-order
+    (buffer/push-string cout
+      (string "    " (string-const-name bytes) " = janet_string((const uint8_t*)\""
+              (emit-c-string-literal bytes) "\", " (length bytes) ");\n")))
   (buffer/push-string cout "    static const JanetReg regs[] = {\n")
   (each k kernels
     (buffer/push-string cout
