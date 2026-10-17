@@ -1117,7 +1117,18 @@ struct JanetFiber {
      * switch — except raw yield and nested resume, which panic
      * (fail loud, generators stay private). */
     int shared_stack;
+    /* Erlang-parity exit cost: this fiber's own index in the slab
+     * state's census array (ss->fibers), making janet_census_remove an
+     * O(1) swap-remove instead of an O(live-fibers) linear scan --
+     * mass exit of N processes paid O(N^2) purely for that scan.
+     * JANET_CENSUS_UNTRACKED when not in any census. Treated strictly
+     * as a HINT, never as truth: census_remove validates
+     * ss->fibers[census_idx] == f and falls back to the full linear
+     * scan on any mismatch, so a stale index can only ever cost time,
+     * never drop a live fiber out of the GC root set. */
+    size_t census_idx;
 };
+#define JANET_CENSUS_UNTRACKED ((size_t) -1)
 
 /* Mark if a stack frame is a tail call for debugging */
 #define JANET_STACKFRAME_TAILCALL 1

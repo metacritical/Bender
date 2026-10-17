@@ -1892,16 +1892,48 @@ void janet_census_add(JanetFiber *f) {
         ss->fibers = nf;
         ss->fibers_cap = ncap;
     }
+    /* Erlang-parity exit cost: record the fiber's own slot so removal
+     * is O(1) (see census_idx in janet.h). */
+    f->census_idx = ss->fibers_count;
     ss->fibers[ss->fibers_count++] = f;
 }
 
+/* O(1) swap-remove via the fiber's recorded index, with a fail-safe
+ * linear-scan fallback. The scan this replaces was O(live fibers) per
+ * fiber death, making mass exit of N processes O(N^2) on its own.
+ *
+ * The index is a HINT, never trusted as truth: it is validated against
+ * the array before use, and ANY mismatch (stale index, fiber tracked in
+ * a different slab state than the one being swept, never-added fiber)
+ * falls back to the original exhaustive scan. Getting this wrong in the
+ * unsafe direction would silently drop a LIVE fiber out of the GC root
+ * set -- a use-after-free -- so the fallback is mandatory, not
+ * defensive clutter. */
 static void janet_census_remove(JanetFiber *f) {
     JanetSlabState *ss = (JanetSlabState *) janet_vm.slab_state;
     size_t i;
     if (NULL == ss) return;
+    /* Fast path: the recorded slot must be in range AND actually hold
+     * this fiber. Both checks are required -- a fiber censused on
+     * another slab state can carry an index that is in-range here but
+     * points at a different fiber. */
+    if (f->census_idx < ss->fibers_count && ss->fibers[f->census_idx] == f) {
+        size_t slot = f->census_idx;
+        JanetFiber *moved = ss->fibers[--ss->fibers_count];
+        ss->fibers[slot] = moved;
+        /* The relocated fiber's own index must follow it, or its later
+         * removal takes the slow path (correct, just slower). Skip when
+         * f WAS the last element: moved == f, and f is leaving. */
+        if (moved != f) moved->census_idx = slot;
+        f->census_idx = JANET_CENSUS_UNTRACKED;
+        return;
+    }
     for (i = 0; i < ss->fibers_count; i++) {
         if (ss->fibers[i] == f) {
-            ss->fibers[i] = ss->fibers[--ss->fibers_count];
+            JanetFiber *moved = ss->fibers[--ss->fibers_count];
+            ss->fibers[i] = moved;
+            if (moved != f) moved->census_idx = i;
+            f->census_idx = JANET_CENSUS_UNTRACKED;
             return;
         }
     }

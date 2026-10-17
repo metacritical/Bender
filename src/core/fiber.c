@@ -520,6 +520,12 @@ static JanetFiber *fiber_alloc(int32_t capacity) {
     /* Channel-pending registrations start empty (gcalloc does not
      * zero fresh bump slots — same rule as heap_lists above). */
     fiber->chan_pends = NULL;
+    /* Census slot sentinel BEFORE census_add (which assigns the real
+     * index): gcalloc hands back unzeroed bump slots, so without this
+     * any fiber reaching census_remove without having been added would
+     * carry a garbage index that could spuriously pass the fast-path
+     * validation. Sentinel first, real index second. */
+    fiber->census_idx = JANET_CENSUS_UNTRACKED;
     janet_census_add(fiber);
     {
         /* Step 1.2: nursery starts empty (pages claimed on first bump). */
