@@ -172,7 +172,11 @@
     :u64 "uint64_t" :u32 "uint32_t" :u16 "uint16_t" :u8 "uint8_t"
     :double "double" :float "float" :number "double"
     :array "JanetArray*" :tuple "JanetTuple" :pointer "void*"
-    :bool "int"})
+    :bool "int"
+    # Phase 1 (type-generator plan): a function proven to ALWAYS
+    # return nil (every 'ret/'retn site) is a legitimate void kernel --
+    # no boxed value is ever produced, so there is nothing to unbox.
+    :nil "void"})
 # alias spellings fold to the canonical width keyword
 (defn canon-hint [k] (get hint-canonical k k))
 (defn hint-of [id]
@@ -1676,7 +1680,12 @@
 (defn emit-fn-c [id d rt pt call-map emitted-names rts]
   (def arity (length pt))
   (when (d :vararg) (break [nil "vararg"]))
-  (unless (or (get infer/numeric-types rt) (= rt :array)) (break [nil "return not concrete"]))
+  # Phase 1: :nil is concrete too -- every 'ret/'retn site in a function
+  # whose whole-program return type resolved to :nil genuinely returns
+  # nil (type-join widens away from :nil the instant any other return
+  # value appears, so rt=:nil here is sound, not a stale default).
+  (unless (or (get infer/numeric-types rt) (= rt :array) (= rt :nil))
+    (break [nil "return not concrete"]))
   # Step 14b: polymorphic :number returns code-gen as :double. Sound:
   # boxed arithmetic IS double arithmetic, int-domain ops carry their
   # own runtime checks (bit ops) or refuse (int div), and every double
@@ -1833,8 +1842,15 @@
   (var used-externs @[])
   (var used-externs @[])
   (each slot (sort (keys written))
-    (array/push lines (string "    " (emit-kernel-type (get decl-types slot (get wtypes slot :double)) ct)
-                             " s" slot ";")))
+    # Phase 1: a slot whose only writes are call destinations for a
+    # :nil-returning (void) callee needs no C declaration at all --
+    # `void sN;` is an invalid incomplete-type declaration, and the
+    # call-emission branch above never assigns or reads such a slot
+    # (bare statement call, no assignment).
+    (def dt (get decl-types slot (get wtypes slot :double)))
+    (unless (= dt :nil)
+      (array/push lines (string "    " (emit-kernel-type dt ct)
+                               " s" slot ";"))))
   (var bad nil)
   (when slotbad (set bad slotbad))
   (each start leaders
@@ -1930,9 +1946,12 @@
             (do (def rvt (get st (ins 1) :unknown))
               # family check: int fn returns int-family values, float fn
               # returns any numeric (int promotes); array fn returns the
-              # array (in place); C converts the width
+              # array (in place); C converts the width; void fn's slot
+              # must itself have resolved to :nil (sound per the type-join
+              # widening argument at this function's native-eligibility gate)
               (def ok (cond
                         (= rt :array) (= rvt :array)
+                        (= rt :nil) (= rvt :nil)
                         (get int-hints rt) (get int-hints rvt)
                         (get float-hints rt)
                         (or (get infer/numeric-types rvt) (= rvt :bool))
@@ -1940,7 +1959,18 @@
               (unless ok
                 (set bad (string "ret slot is " rvt " not " rt))
                 (break))
-              (array/push lines (string "    return " (emit-slot (ins 1) arity) ";")))
+              (array/push lines (if (= rt :nil) "    return;"
+                                   (string "    return " (emit-slot (ins 1) arity) ";"))))
+            # retn (JOP_RETURN_NIL): a bare nil return with no value slot
+            # at all -- only sound for a function whose whole-program
+            # return type already resolved to :nil (same argument as 'ret
+            # above); any other rt here would mean type-join should have
+            # already widened away from :nil, so refuse defensively.
+            (= op 'retn)
+            (if (= rt :nil)
+              (array/push lines "    return;")
+              (do (set bad (string "retn in non-nil-returning fn (rt=" rt ")"))
+                (break)))
             (= op 'push) (array/push pending (emit-slot (ins 1) arity))
             (= op 'push2)
             (do (array/push pending (emit-slot (ins 1) arity))
@@ -2272,6 +2302,20 @@
                   # our own value; conversion could truncate).
                   (def ret-ok
                     (or (= trt rt) (get infer/numeric-types trt)))
+                  # Phase 1: a :nil-returning callee produces no C value
+                  # at all -- `sN = voidfn(args);` is invalid C, so a
+                  # void callee can NEVER compose into an assignment
+                  # regardless of ret-ok's numeric test above. Call it
+                  # as a bare statement instead; the destination slot
+                  # (ins 1) is never subsequently read for a real value
+                  # (the whole-program lattice already fail-closes any
+                  # attempt to use a :nil result as something concrete).
+                  (if (and tid cname (= trt :nil) (not spread) (not= op 'tcall)
+                           (call-args-compatible? tid st d pc))
+                    (do (array/push lines
+                                    (string "    " (emit-c-name cname)
+                                            "(" (string/join pending ", ") ");"))
+                      (set pending @[]))
                   (if (and tid cname ret-ok (not spread) (not= op 'tcall)
                            (call-args-compatible? tid st d pc))
                     (do (array/push lines
@@ -2285,7 +2329,7 @@
                                               "(" (string/join pending ", ") ");"))
                         (set pending @[]))
                       (do (set bad "call to non-native or type mismatch")
-                        (break))))))))
+                        (break)))))))))
             # ldu (load upvalue) is dead in emitted code: static calls
             # resolve by name, and any live use of the loaded value
             # carries :unknown through flow, refusing at the use site.
@@ -2322,7 +2366,9 @@
     # Step 11: :array params are opaque-but-emittable (pointer temps);
     # :array returns are the (in-place) array itself
     (each t pt (unless (or (get infer/numeric-types t) (= t :array) (= t :tuple) (= t :pointer)) (set concrete false)))
-    (unless (or (get infer/numeric-types rt) (= rt :array)) (set concrete false))
+    # Phase 1: :nil is concrete -- a whole-program-proven-always-nil
+    # return is a legitimate void kernel, not an unproven boxed value.
+    (unless (or (get infer/numeric-types rt) (= rt :array) (= rt :nil)) (set concrete false))
     # a def named like a declared extern is the compiled fallback
     # artifact — the real implementation lives in C
     (when (get externs (string (or (d :name) "?"))) (set concrete false))
@@ -2617,7 +2663,11 @@
                            (string "janet_unwrap_pointer(argv[" i "])")
                            (string "janet_unwrap_number(argv[" i "])")))
                   ", "))
-  (def rv (cond (= rt :array) "janet_wrap_array"
+  # Phase 1: a void kernel produces no C value at all -- rv stays nil as
+  # a sentinel; the final-line emission below special-cases it to call
+  # the kernel as a bare statement, then separately return nil.
+  (def rv (cond (= rt :nil) nil
+                (= rt :array) "janet_wrap_array"
                 (and (get int-hints rt) (not= int-policy :promote))
                 "janet_wrap_integer"
                 "janet_wrap_number"))
@@ -2639,7 +2689,9 @@
           " called with %d arguments, expected " (length pt) "\", argc); }\n"
           type-guards
           "    " cn "_TELEMETRY_HIT();\n"
-          "    return " rv "(" cn "(" ps "));\n}\n"
+          (if (nil? rv)
+            (string "    " cn "(" ps ");\n    return janet_wrap_nil();\n}\n")
+            (string "    return " rv "(" cn "(" ps "));\n}\n"))
           "#undef " cn "_TELEMETRY_HIT\n#undef " cn "_TELEMETRY_ARITY_GUARD\n#undef " cn "_TELEMETRY_TYPE_GUARD\n"))
 
 (when emit-native-dir (emit-native-all emit-native-dir))
@@ -2672,7 +2724,9 @@
     # Step 11: :array params are opaque-but-emittable (pointer temps);
     # :array returns are the (in-place) array itself
     (each t pt (unless (or (get infer/numeric-types t) (= t :array) (= t :tuple) (= t :pointer)) (set concrete false)))
-    (unless (or (get infer/numeric-types rt) (= rt :array)) (set concrete false))
+    # Phase 1: :nil is concrete -- a whole-program-proven-always-nil
+    # return is a legitimate void kernel, not an unproven boxed value.
+    (unless (or (get infer/numeric-types rt) (= rt :array) (= rt :nil)) (set concrete false))
     # Hybrid wrappers replace the bytecode definition entirely. A C loop
     # cannot yield a VM quantum and later resume its native stack/locals.
     # Keep loops boxed until native continuations exist; callers also stay
