@@ -51,11 +51,19 @@
 # bench/agents.janet the kernel parks silently; completion is detected
 # by mailbox quiescence via the done channel handshake below.
 
-(def rpid-ready (ev/thread-chan 1))
+# Plain ev/chan, not a thread-chan: with lanes=0 the collector hands
+# back a core/proc handle (below), which refuses marshal — ev/chan
+# passes same-VM values by reference.
+(def rpid-ready (ev/chan 1))
 (def collector
   (proc/spawn-local
     (fn []
-      (def rpid (proc/self-pid))
+      # proc/self-pid mints a LANE-routable pid tuple and panics
+      # without lanes (proc.c: "proc/self-pid requires lanes"): that
+      # panic killed the collector silently, rpid-ready/done were never
+      # given, and the main fiber parked forever on ev/take — the
+      # lanes=0 "hang". VM-local baseline uses the local handle.
+      (def rpid (if (> lanes 0) (proc/self-pid) (proc/self)))
       (ev/give rpid-ready rpid)
       (var sum 0)
       (var got 0)
