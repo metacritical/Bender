@@ -10,7 +10,20 @@
 #endif
 
 typedef struct JanetProcess {
-    JanetChannel *mbox; /* owned isolated mailbox (copy in/out) */    JanetChannel *sup;  /* plain completion channel (embeds fiber) */
+    /* B6 spawn-cost: the mailbox is LAZY — mbox is NULL at birth and
+     * materialized on first real use (proc/send, proc/recv, proc/pid —
+     * see janet_proc_ensure_mbox in proc.c). mbox_cap preserves the
+     * spawn-time capacity for that allocation. Every consumer already
+     * null-guards (ev.c retire, gc.c mark, proc.c kill), and the
+     * core/proc abstract never leaves its home VM (marshal refuses),
+     * so ensure-on-first-use has no cross-thread race. The sup channel
+     * stays EAGER: ev.c's completion hook pushes the :down event only
+     * when fiber->supervisor_channel is non-NULL, and suite-proc test
+     * 11's late-monitor path depends on that event being buffered
+     * even when nobody monitored during the proc's life. */
+    JanetChannel *mbox;
+    JanetChannel *sup;  /* plain completion channel (embeds fiber) */
+    int32_t mbox_cap;   /* capacity for the lazy mbox allocation */
     JanetFiber *fiber;  /* the process fiber (ev/go-scheduled) */
     uint32_t serial;    /* pid serial (never 0) */
     int done;           /* completion observed (quit/kill fast path) */

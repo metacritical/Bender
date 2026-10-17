@@ -716,6 +716,20 @@ static JanetProcess *janet_getproc(const Janet *argv, int32_t n) {
     return janet_getabstract(argv, n, &janet_proc_type);
 }
 
+/* B6 spawn-cost: materialize the mailbox on first real use. Called
+ * only on the proc's home VM (the core/proc abstract refuses marshal,
+ * so it never crosses threads; pid tuples carry the channel pointer
+ * itself and thus only exist after this has run). The assignment to
+ * proc->mbox makes the channel reachable through the proc (which the
+ * caller's argv/registry already roots) for any GC the subsequent
+ * channel push may trigger. */
+static JanetChannel *janet_proc_ensure_mbox(JanetProcess *proc) {
+    if (NULL == proc->mbox) {
+        proc->mbox = janet_channel_make_threaded_c(proc->mbox_cap);
+    }
+    return proc->mbox;
+}
+
 /* Mark everything the process owns (fiber, both channels, P1.2
  * stash + monitors + exit reason). */
 static int janet_procat_mark(void *p, size_t size) {
@@ -875,7 +889,18 @@ static Janet cfun_proc_spawn_impl(JanetFunction *func, int32_t cap, int isolated
              * channel used from a foreign thread"), which silently ate
              * lane-N -> lane-0 deliveries. The sup channel stays
              * isolated: only the home-lane proxy takes it. */
-            proc->mbox = janet_channel_make_threaded_c((int32_t) cap);
+            /* B6: the mbox is LAZY — most procs in a spawn burst are
+             * never sent anything before they park or die, and a
+             * threaded channel costs a malloc'd abstract plus mutex
+             * and cond init. It materializes on first use
+             * (janet_proc_ensure_mbox: send/try-send/recv/pid).
+             * The sup channel stays EAGER: ev.c's completion hook
+             * pushes the :down event only when the fiber carries a
+             * supervisor channel, and the late-monitor semantic
+             * (suite-proc test 11) needs that event buffered in the
+             * channel even when nobody monitored during the life. */
+            proc->mbox = NULL;
+            proc->mbox_cap = (int32_t) cap;
             proc->sup = janet_channel_make(8);
             /* P1.2 fields, lazily allocated (density: most procs never
              * stash or monitor — spawn no longer pays 2 arrays + 2
@@ -1193,8 +1218,13 @@ JANET_CORE_FN(cfun_proc_recv,
     if (janet_vm.coerce_error) {
         janet_panic("cannot proc/recv inside janet_call");
     }
+    /* B6: first recv materializes the mailbox (an empty mailbox and
+     * an unallocated one are behaviorally identical: no push site can
+     * exist without the channel pointer, which only this, send, or
+     * pid-of mint). */
+    JanetChannel *mbox = janet_proc_ensure_mbox(proc);
     Janet item;
-    if (janet_channel_pop(proc->mbox, &item, 0)) {
+    if (janet_channel_pop(mbox, &item, 0)) {
         janet_schedule(janet_vm.root_fiber, item);
     }
     janet_await();
@@ -1275,7 +1305,8 @@ JANET_CORE_FN(cfun_proc_pid,
 static JanetChannel *janet_proc_resolve_mbox(Janet x) {
     if (janet_checktype(x, JANET_ABSTRACT) &&
             janet_abstract_type(janet_unwrap_abstract(x)) == &janet_proc_type) {
-        return ((JanetProcess *) janet_unwrap_abstract(x))->mbox;
+        /* B6: lazy mbox — home-VM access only (see ensure helper). */
+        return janet_proc_ensure_mbox((JanetProcess *) janet_unwrap_abstract(x));
     }
     if (janet_checktype(x, JANET_TUPLE)) {
         const Janet *tup = janet_unwrap_tuple(x);
@@ -1305,7 +1336,9 @@ JANET_CORE_FN(cfun_proc_pid_of,
     tup[0] = janet_ckeywordv("pid");
     tup[1] = janet_wrap_integer(0);
     tup[2] = janet_wrap_integer((int64_t) proc->serial);
-    tup[3] = janet_wrap_abstract(proc->mbox);
+    /* B6: the carried mailbox is the pid tuple's routable face —
+     * materialize it here (once) so sends through the tuple resolve. */
+    tup[3] = janet_wrap_abstract(janet_proc_ensure_mbox(proc));
     return janet_wrap_tuple(janet_tuple_n(tup, 4));
 }
 

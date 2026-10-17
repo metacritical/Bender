@@ -373,17 +373,67 @@ All four were verified with the full discipline described in §7.
   binary search; per-minor `getenv` calls) are real but were noise-level
   in this profile; the reset pass was ~97% of the story.
 
-### 5.6 ⚠️ NOT STARTED: constant-factor spawn-cost gaps
+### 5.6 ✅ INVESTIGATED (B6, uncommitted diff): constant-factor spawn-cost gaps
 Identified against Erlang's ~1µs/spawn budget (external analysis, plausible
 but unverified in this tree):
 1. Two channels per proc (mailbox cap 16 + supervisor cap 8) allocated
    eagerly whether or not anyone monitors → lazy-allocate both.
+   **B6 finding (code-verified + implemented, uncommitted)**: the mbox is
+   now LAZY (NULL at birth, `janet_proc_ensure_mbox` materializes it on
+   first send/try-send/recv/pid; capacity kept in a new
+   `JanetProcess.mbox_cap`). Safe because every cross-file consumer already
+   null-guards (ev.c retire at ~2371, gc.c mark at ~2797, proc.c kill) and
+   the core/proc abstract never leaves its home VM (marshal refuses), so
+   ensure-on-first-use has no cross-thread race; pid tuples carry the
+   materialized channel pointer. The sup channel is **NOT lazy and cannot
+   be without touching ev.c** (off-limits): ev.c ~2382/2401 pushes the
+   completion event only when `fiber->supervisor_channel` is non-NULL, and
+   suite-proc test 11 ("late monitors deliver from the retained completion
+   event") depends on the event being buffered in the eager sup channel
+   when nobody monitored during the proc's life. Lazy sup would silently
+   drop late-registered reapers' events. Measured (isolated clean builds,
+   alternating runs, quiet machine): spawn-only path (procs that never
+   touch their mailbox) 3.22 → 3.03 µs/spawn median (~6%, ≈ the threaded
+   channel's malloc+mutex+cond cost); `bench/agents.janet` spawn-rate
+   unchanged (~230k/s both — every actor recv's immediately, so the alloc
+   just moves to first recv; net zero there, real win only for
+   never-messaged procs). Full battery dual-target identical (98/99 proc —
+   test 14 "both land" fails on clean HEAD too, pre-existing — plus
+   thread/ev/marsh/mailbox/pool all green, interpreter and AOT).
+   ⚠️ Measurement hazard recorded: benchmarking in the shared tree while
+   another agent rebuilds produces 5–40x phantom slowdowns from their
+   ASAN-instrumented binary; A/B numbers must come from isolated copies.
 2. Entry marshal-copy in `spawn-isolated` (Erlang passes `{M,F,A}`, no copy).
+   **B6 finding: the copy IS the P3.2 isolation semantic** — captured
+   values arrive by value; the P3.3 export-rule tests depend on it. Erlang
+   can skip the copy because module code is globally shared and immutable;
+   a Janet closure's funcdef/funcenv are parent-heap GC objects, so passing
+   the entry by reference would hang the strict child's heap attribution
+   off the parent's heap (exactly what per-proc sweeps and the strict bit
+   exist to prevent). A capture-free-closure carve-out is conceivable but
+   blocked by funcdef heap attribution. No change; design note only.
 3. Env table + proto chain + `:proc-self` binding (partly addressed by
-   `29c65339`).
+   `29c65339`). **B6 finding: already minimal.** 29c65339 narrowed the
+   env to out/err copy-forward (+ opt-in full chain); what remains per
+   spawn is one empty table + ≤3 puts, all load-bearing (`:out`/`:err` for
+   printing, `:proc-self` for `proc/self`; `proc/recv` already uses the
+   C back-pointer fast path). Nothing further safely gained.
 4. Per-spawn GC bookkeeping: census insert, handle rooting, owner-id
    assignment, nursery accounting → "registration-free liveness".
-5. Scheduler enqueue + supervisor wiring.
+   **B6 finding: all of these live in gc.c** (census insert at fiber
+   birth, slab owner filing in `janet_gcalloc`/`janet_slab_alloc`) — not
+   editable under B6's constraints. Read-only analysis: the census insert
+   IS the fiber-liveness mechanism ("registration-free liveness" already
+   exists in the sense that the census replaces explicit rooting for
+   fibers); the `janet_gcroot(proc_j)`/`gcunroot` pair in proc.c covers
+   the handle across the attributed-construction try block and cannot be
+   dropped without reordering allocation so the abstract is born last —
+   a gc.c-coupled refactor for ~two hash ops. Design note only.
+5. Scheduler enqueue + supervisor wiring. **B6 finding: already minimal.**
+   `janet_schedule` = flag check + one `active_tasks` table put (first
+   schedule only) + one ring-buffer queue push (ev.c ~695); supervisor
+   wiring is a single pointer store. Nothing avoidable or sensibly
+   deferrable.
 
 ### 5.7 ⚠️ NOT STARTED: remaining M4b items
 See §4.2 — async preemption of non-cooperating C code; running-task migration.
