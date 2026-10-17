@@ -3473,3 +3473,227 @@
   (print "native-lib " (length kernels) " kernels " outdir))
 
 (when emit-native-lib-dir (emit-native-lib emit-native-lib-dir))
+# ---------------------------------------------------------------------------
+# B7.2 Part B, Piece 1b: dce-reachable -- whole-program DCE safety gate.
+# (docs/internals/b7.2-part-b-design-note.md, "Piece 1"). A NEW,
+# deliberately paranoid classification layered ON TOP of the existing
+# fixpoint machinery above -- `reachable-from` itself is never modified
+# and never used as a safety argument: it only COMPUTES the reachable id
+# set once this gate has positively cleared the whole program.
+#
+# The gate walks every def's bytecode linearly looking for ANY instance
+# of four disqualifying patterns. Any one anywhere -> :unsafe, strip
+# nothing. Only a fully clean program earns a :safe verdict plus the
+# actual reachable set. V1 is allowed to strip nothing; the default for
+# "not sure" is always "taint everything".
+#
+# Patterns:
+#   1. a function value stored into a container: a function-value slot
+#      used as a `put`/`puti` value, pending-pushed when a container
+#      constructor (mkarr/mktup/mkbtp/mkbuf/mkstr/mkstu/mktab) consumes
+#      it, or left pending across any other non-consuming, non-call op
+#      (conservative: an unknown use, including `ret`).
+#   2. a function value pending-pushed as an ARGUMENT at a call/tcall
+#      site (the callee slot is excluded: it resolves statically via
+#      record-call). Maximally conservative: any function-typed value
+#      flowing into a call as an argument disqualifies -- refining to a
+#      smaller safe list is future work (design-note Piece 2).
+#   3. any def flagged by the EXISTING `tainted` fixpoint (any `dynsite`
+#      reachable backwards over calls+contains). tainted was built
+#      fail-soft for a different consumer and provably does NOT catch
+#      patterns 1/2 (a fn stored via mktab produces no `dynamic` edge),
+#      so it is an ADDITIONAL input, never a substitute.
+#   4. any bytecode op not on the whitelist of ops this file's
+#      emission/inference walks confidently handle. Default
+#      disqualifying (same fail-closed doctrine as emission's
+#      "unhandled op" refusal).
+#
+# Function-value producers tracked: `ldc` of a function/cfunction
+# constant, `lds` (self reference), `clo` (closure creation). `ldu`
+# (upvalue load) is NOT tracked as a producer: upvalues hold captured
+# values of any type and no static type evidence exists at this level,
+# so guessing would both over- and under-approximate -- documented
+# limitation, flagged here rather than silently ignored.
+# ---------------------------------------------------------------------------
+
+(var dce-recognized-ops
+  @{'ldi true 'ldn true 'ldt true 'ldf true 'ldc true 'ldu true 'lds true
+    'clo true 'movn true 'movf true
+    'add true 'sub true 'mul true 'div true 'divf true 'divim true
+    'mod true 'rem true 'addim true 'subim true 'mulim true
+    'band true 'bor true 'bxor true 'sl true 'sr true 'sru true
+    'slim true 'srim true 'sruim true
+    'lt true 'ltim true 'gt true 'gtim true 'lte true 'gte true
+    'eq true 'eqim true 'neq true 'neqim true 'ltu true 'gtu true
+    'cmp true 'next true 'in true 'len true 'get true 'put true 'puti true
+    'jmp true 'jmpif true 'jmpno true 'jmpni true 'jmpnn true
+    'call true 'tcall true 'ret true 'retn true 'err true 'res true
+    'push true 'push2 true 'push3 true 'pusha true
+    'mkarr true 'mktup true 'mkbtp true 'mkbuf true 'mkstr true 'mkstu true
+    'mktab true})
+
+# ops that OVERWRITE their dst slot (kills any previous function-ness).
+# Mirrors emit-writers plus the loads/constructors/call it omits.
+(var dce-writer-ops
+  @{'ldi true 'ldn true 'ldt true 'ldf true 'ldc true 'ldu true 'lds true
+    'clo true 'movn true 'movf true
+    'add true 'sub true 'mul true 'div true 'divf true 'divim true
+    'mod true 'rem true 'addim true 'subim true 'mulim true
+    'band true 'bor true 'bxor true 'sl true 'sr true 'sru true
+    'slim true 'srim true 'sruim true
+    'lt true 'ltim true 'gt true 'gtim true 'lte true 'gte true
+    'eq true 'eqim true 'neq true 'neqim true 'ltu true 'gtu true
+    'cmp true 'next true 'in true 'len true 'get true
+    'call true 'tcall true
+    'mkarr true 'mktup true 'mkbtp true 'mkbuf true 'mkstr true 'mkstu true
+    'mktab true})
+
+(defn dce-scan-def [id]
+  # returns nil, or [pattern pc description]
+  (def info (defs id))
+  (def d (info :d))
+  (def code (or (d :bytecode) @[]))
+  (def consts (or (d :constants) @[]))
+  (var fnslots @{})   # slot -> true when it holds a function value
+  # pending snapshots FN-NESS AT PUSH TIME (not live slot lookups):
+  # the callee slot at a call may alias an arg slot, and slots get
+  # reused/rewritten between the push and the call -- the property that
+  # matters is what the pushed VALUE was when it was pushed.
+  (var pending @[])
+  (var bad nil)
+  (defn pending-fn? []
+    (var found false)
+    (each s pending (when s (set found true)))
+    found)
+  (var pc 0)
+  (while (and (< pc (length code)) (nil? bad))
+    (def ins (code pc))
+    (def op (ins 0))
+    (cond
+      # Pattern 4: unrecognized op anywhere -> whole program unsafe.
+      (nil? (get dce-recognized-ops op))
+      (set bad [4 pc (string "unrecognized op " op)])
+
+      # Producers. ldc KILLS its dst first: slots are reused, and a
+      # stale fn-ness from an earlier producer on the same slot must
+      # not survive a re-load of a non-function constant into it.
+      # (clo/lds always produce a function, so setting true is
+      # already kill+set for them.)
+      (= op 'ldc)
+      (do (put fnslots (ins 1) nil)
+        (def c (consts (ins 2)))
+        (when (or (= :function (type c)) (= :cfunction (type c)))
+          (put fnslots (ins 1) true)))
+
+      (= op 'clo) (put fnslots (ins 1) true)
+      (= op 'lds) (put fnslots (ins 1) true)
+
+      # movn: dst <- src; movf: src <- dst (copies propagate fn-ness)
+      (= op 'movn)
+      (when (get fnslots (ins 2)) (put fnslots (ins 1) true))
+      (= op 'movf)
+      (when (get fnslots (ins 1)) (put fnslots (ins 2) true))
+
+      # Pattern 1, direct stores: fn value put into a container.
+      (and (= op 'put) (get fnslots (ins 3)))
+      (set bad [1 pc (string "function value in slot s" (ins 3)
+                             " stored into container via put")])
+      (and (= op 'puti) (get fnslots (ins 2)))
+      (set bad [1 pc (string "function value in slot s" (ins 2)
+                             " stored into container via puti")])
+
+      # Pending pushes: classified by their next consumer. The pending
+      # entry is the slot's fn-ness SNAPSHOT at push time.
+      (or (= op 'push) (= op 'push2) (= op 'push3))
+      (do
+        (array/push pending (get fnslots (ins 1)))
+        (when (or (= op 'push2) (= op 'push3))
+          (array/push pending (get fnslots (ins 2))))
+        (when (= op 'push3) (array/push pending (get fnslots (ins 3)))))
+      (= op 'pusha)
+      (do (array/push pending (get fnslots (ins 1)))
+        # spread push: unknown arity/uses, conservatively treat any fn
+        # here as immediately pattern-1
+        (when (get fnslots (ins 1))
+          (set bad [1 pc (string "function value in slot s" (ins 1)
+                                 " spread-pushed (pusha)")])))
+
+      # Call sites: pattern 2 when a fn value is a pending ARGUMENT
+      # (callee slot is not a push and never reaches `pending`).
+      (or (= op 'call) (= op 'tcall))
+      (do (when (pending-fn?)
+          (set bad [2 pc "function value pending as call argument"]))
+        (set pending @[]))
+
+      # Container constructors consuming pending: pattern 1.
+      (or (= op 'mkarr) (= op 'mktup) (= op 'mkbtp) (= op 'mkbuf)
+          (= op 'mkstr) (= op 'mkstu) (= op 'mktab))
+      (do (when (pending-fn?)
+          (set bad [1 pc (string "function value pending into " op
+                                 " (stored in container)")]))
+        (set pending @[]))
+
+      # Any other op with a fn value still pending across it: a
+      # non-consuming, non-call use -- conservative pattern 1 (covers
+      # `ret` of a fn value: the value escapes the def).
+      (when (pending-fn?)
+        (set bad [1 pc (string "function value pending across non-consuming op "
+                               op)])))
+
+    # Kill: any op that overwrites a dst slot destroys fn-ness there.
+    # (movn/movf are handled as copies in the dispatch above; clo/lds/
+    # ldc are the fn-value PRODUCERS -- their own clause already decided
+    # their dst's fn-ness, and a same-iteration kill would wipe it.)
+    (when (and (nil? bad) (get dce-writer-ops op)
+               (not (= op 'movn)) (not (= op 'movf))
+               (not (= op 'clo)) (not (= op 'lds)) (not (= op 'ldc)))
+      (put fnslots (ins 1) nil))
+    (++ pc))
+  bad)
+
+(var dce-verdict :safe)
+(var dce-bad-def -1)
+(var dce-bad-desc "")
+(var dce-bad-pc -1)
+(var dce-bad-pattern 0)
+(when (dyn :dce-debug)
+  (each i (range (length defs))
+    (print "dcebc " i " " (string/format "%q" (or (((defs i) :d) :bytecode) @[])))))
+# Pattern 4 + 1 + 2: scan every def's bytecode.
+(var dce-i 0)
+(while (and (= :safe dce-verdict) (< dce-i (length defs)))
+  (def v (dce-scan-def dce-i))
+  (when v
+    (set dce-verdict :unsafe)
+    (set dce-bad-def dce-i)
+    (set dce-bad-pattern (v 0))
+    (set dce-bad-pc (v 1))
+    (set dce-bad-desc (v 2)))
+  (++ dce-i))
+# Pattern 3: any dynsite anywhere (the existing taint fixpoint is
+# non-empty iff some def reaches a dynamic site) -> strip nothing.
+(when (and (= :safe dce-verdict) (not (empty? dynsite)))
+  (set dce-verdict :unsafe)
+  (set dce-bad-pattern 3)
+  (set dce-bad-def (first (sort (keys dynsite))))
+  (set dce-bad-pc -1)
+  (set dce-bad-desc "dynamic call site (dynsite, existing taint fixpoint)"))
+(if (= :unsafe dce-verdict)
+  (print "dce unsafe pattern " dce-bad-pattern
+         " def " dce-bad-def " (" ((defs dce-bad-def) :name) ")"
+         " pc " dce-bad-pc ": " dce-bad-desc
+         " -- stripping nothing")
+  (do
+    # Whole program cleared: the existing reachability computation is
+    # trustworthy for computing the concrete reachable set.
+    (def dce-reach (reachable-from roots))
+    (def dce-excluded @[])
+    (var dce-ri 0)
+    (each info defs
+      (when (nil? (get dce-reach dce-ri))
+        (array/push dce-excluded (string dce-ri ":" (info :name))))
+      (++ dce-ri))
+    (print "dce safe reachable "
+           (if (empty? dce-reach) "-" (string/join (map string (sorted (keys dce-reach))) " "))
+           " excluded "
+           (if (empty? dce-excluded) "-" (string/join dce-excluded " ")))))
