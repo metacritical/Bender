@@ -1,0 +1,97 @@
+#!/usr/bin/env bender
+# DCE cross-check harness (B7.2 Part B, Piece 1 -- see
+# docs/internals/b7.2-part-b-design-note.md). The actual safety net
+# for whole-program dead-code elimination: given a candidate set of
+# function names to strip, build TWO AOT binaries from the same
+# source (with and without those defn forms removed) and diff their
+# output byte-for-byte. No stripping decision in the real DCE
+# analysis (not yet built) is ever trusted on static analysis alone --
+# it is trusted because THIS harness proved it against real output.
+#
+# This version simulates "stripping" by literal source-text removal
+# of the named top-level defn/defn- forms (not via the real
+# reachability analysis, which is separate, later work) -- sufficient
+# to prove the harness itself is sound before anything more
+# sophisticated is built on top of it.
+#
+# Usage:
+#   bender tools/dce-crosscheck.janet <source.janet> <workdir> <name1> [name2 ...]
+# Exit 0 + prints PASS if both binaries produce identical stdout.
+# Exit 1 + prints FAIL + a diff if they diverge.
+
+(def raw-args (dyn :args))
+(def args (array/slice raw-args 1))
+(when (< (length args) 3)
+  (eprint "usage: dce-crosscheck.janet <source.janet> <workdir> <name1> [name2 ...]")
+  (os/exit 2))
+
+(def source (args 0))
+(def workdir (args 1))
+(def strip-names (array/slice args 2))
+
+(os/execute ["/bin/rm" "-rf" workdir] :p)
+(os/mkdir workdir)
+
+(def orig-src source)
+(def stripped-src (string workdir "/stripped-src.janet"))
+
+# Strip named top-level defn/defn- forms by literal AST filtering
+# (parse, drop matching forms, re-emit each remaining form via
+# string/format %j which round-trips Janet values back to readable
+# source text).
+(defn strip-forms [names]
+  (def nameset (table ;(mapcat (fn [n] [n true]) names)))
+  (def text (slurp orig-src))
+  (def forms (parse-all text))
+  (def kept (filter
+              (fn [f]
+                (not (and (tuple? f) (>= (length f) 2)
+                          (symbol? (get f 0))
+                          (or (= (string (get f 0)) "defn")
+                              (= (string (get f 0)) "defn-"))
+                          (symbol? (get f 1))
+                          (get nameset (string (get f 1))))))
+              forms))
+  (def out @"")
+  (each f kept
+    (buffer/push-string out (string/format "%j" f))
+    (buffer/push-string out "\n\n"))
+  (spit stripped-src (string out)))
+
+(strip-forms strip-names)
+
+(def orig-bin (string workdir "/orig"))
+(def stripped-bin (string workdir "/stripped"))
+
+(def env (merge @{} (os/environ) {"JANET_NO_PROFILE" "1"}))
+
+(defn build [src bin]
+  (= 0 (os/execute ["./build/bender" "--aot" src "--no-auto-pgo" "-o" bin] :e env)))
+
+(unless (build orig-src orig-bin)
+  (eprint "FAIL: original source did not even build")
+  (os/exit 1))
+(unless (build stripped-src stripped-bin)
+  (eprint "FAIL: stripped source did not build (stripping broke compilation --"
+          " this is itself evidence the stripped names were load-bearing)")
+  (os/exit 1))
+
+(def orig-out (string workdir "/orig.out"))
+(def stripped-out (string workdir "/stripped.out"))
+
+(os/execute ["/bin/sh" "-c" (string orig-bin " > " orig-out " 2>/dev/null")] :e env)
+(os/execute ["/bin/sh" "-c" (string stripped-bin " > " stripped-out " 2>/dev/null")] :e env)
+
+(def a (string (slurp orig-out)))
+(def b (string (slurp stripped-out)))
+
+(if (= a b)
+  (do (print "PASS: identical output with " (string/join strip-names ",") " stripped")
+    (os/exit 0))
+  (do
+    (print "FAIL: output diverged after stripping " (string/join strip-names ","))
+    (print "--- original ---")
+    (print a)
+    (print "--- stripped ---")
+    (print b)
+    (os/exit 1)))
