@@ -181,28 +181,48 @@
     # length-prefixed JanetStringHead immediately before the pointer
     # (janet.h:497,585) -- already a flat C value, no transformation
     # needed, only this type-map entry plus the kernel ops below.
-    :string "JanetString"})
+    :string "JanetString"
+    # Phase 3: JanetKeyword and JanetSymbol are also already
+    # `typedef const uint8_t *` (janet.h:586-587) -- same flat C value
+    # shape as :string, and additionally INTERNED (src/core/symcache.c,
+    # `#define janet_keyword janet_symbol`), so equal keywords/symbols
+    # are pointer-identical: raw C `==`/`!=` (the existing 'eq/'neq
+    # path) is already correct and NO content-equality kernel is
+    # needed, unlike Phase 2's non-interned strings.
+    :keyword "JanetKeyword"
+    :symbol "JanetSymbol"})
 
-# Phase 2: string literal constants used inside a kernel body (e.g. a
-# `case`/`=` dispatch against "linear"/"in_sine"/...) cannot be
-# emitted as a C string literal cast directly to JanetString -- a
-# JanetString must carry a real JanetStringHead (length + hash)
-# immediately before its bytes, which only `janet_string()` builds
-# correctly. Each distinct literal gets ONE static JanetString slot,
-# materialized once in native_init (before any wrapper can be called),
-# and every 'ldc of that same literal across every kernel in this
-# build references the same slot -- deduplicated by content, reset
-# per build (this var is module-global state across one compile run,
-# the same pattern already used by kernel-intrinsics/unit-import-files
-# elsewhere in this file).
-(var string-const-ids @{})
-(var string-const-order @[])
-(defn string-const-name [bytes]
-  (or (get string-const-ids bytes)
-      (do (def nm (string "k_str_" (length string-const-order)))
-        (put string-const-ids bytes nm)
-        (array/push string-const-order bytes)
+# Phase 2/3: atom (string/keyword/symbol) literal constants used
+# inside a kernel body (e.g. a `case`/`=` dispatch against "linear" /
+# :a / 'foo) can never be emitted as a bare C string literal cast to
+# the Janet pointer type -- each needs a real JanetStringHead
+# (strings) or real interning (keywords/symbols), which only the
+# runtime constructors `janet_string()` / `janet_keyword()` /
+# `janet_symbol()` perform. Each distinct literal gets ONE static
+# slot, materialized once in native_init (before any wrapper can be
+# called), and every 'ldc of that same literal across every kernel in
+# this build references that slot -- deduplicated by [tag bytes], so
+# identical bytes appearing as BOTH a string and a keyword (or
+# symbol) stay two distinct Janet values in two distinct slots. Reset
+# per build (module-global state across one compile run, same pattern
+# as kernel-intrinsics/unit-import-files elsewhere in this file).
+(var atom-const-ids @{})
+(var atom-const-order @[])
+(defn atom-const? [ty]
+  (or (= ty :string) (= ty :keyword) (= ty :symbol)))
+(defn atom-const-name [tag bytes]
+  (def key [tag bytes])
+  (or (get atom-const-ids key)
+      (do (def nm (string (case tag
+                            :string "k_str_"
+                            :keyword "k_kw_"
+                            "k_sym_")
+                          (length atom-const-order)))
+        (put atom-const-ids key nm)
+        (array/push atom-const-order key)
         nm)))
+(def atom-const-ctors
+  @{:string "janet_string" :keyword "janet_keyword" :symbol "janet_symbol"})
 (defn emit-c-string-literal [bytes]
   # C string literal body only -- caller supplies the surrounding
   # quotes. Escapes everything outside printable, non-quote, non-
@@ -1876,7 +1896,8 @@
             (set slotbad (string "slot s" slot " mixes signed/unsigned 64-bit"))
             (and (> (length kinds) 1)
                  (some (fn [t] (or (= t :array) (= t :tuple) (= t :struct)
-                                   (= t :nil) (= t :string))) kinds))
+                                   (= t :nil) (= t :string)
+                                   (= t :keyword) (= t :symbol))) kinds))
             # Phase 2: a slot reused by the register allocator for both
             # a string value and anything else (e.g. a comparison's
             # bool result reusing the same temp a later branch no
@@ -1990,12 +2011,12 @@
                 # carries :unknown through flow, refusing at the use site
                 # (same discipline as the ldu skip below).
                 nil
-                # Phase 2: a string constant references its deduplicated
-                # static JanetString slot (materialized once in
-                # native_init -- see string-const-name/emit-c-string-literal).
-                (= :string (type cval))
+                # Phase 2/3: a string/keyword/symbol constant references
+                # its deduplicated static slot (materialized once in
+                # native_init -- see atom-const-name/emit-c-string-literal).
+                (atom-const? (type cval))
                 (array/push lines (string "    s" (ins 1) " = "
-                                          (string-const-name cval) ";"))
+                                          (atom-const-name (type cval) cval) ";"))
                 (do (unless (and cval (= :number (type cval)))
                       (set bad "ldc non-number")
                       (break))
@@ -2443,7 +2464,7 @@
     (var concrete (and (> (length pt) 0) (not (d :vararg))))
     # Step 11: :array params are opaque-but-emittable (pointer temps);
     # :array returns are the (in-place) array itself
-    (each t pt (unless (or (get infer/numeric-types t) (= t :array) (= t :tuple) (= t :pointer) (= t :string)) (set concrete false)))
+    (each t pt (unless (or (get infer/numeric-types t) (= t :array) (= t :tuple) (= t :pointer) (= t :string) (= t :keyword) (= t :symbol)) (set concrete false)))
     # Phase 1: :nil is concrete -- a whole-program-proven-always-nil
     # return is a legitimate void kernel, not an unproven boxed value.
     (unless (or (get infer/numeric-types rt) (= rt :array) (= rt :nil)) (set concrete false))
@@ -2723,6 +2744,8 @@
           (= t :tuple) "JANET_TUPLE"
           (= t :pointer) "JANET_POINTER"
           (= t :string) "JANET_STRING"
+          (= t :keyword) "JANET_KEYWORD"
+          (= t :symbol) "JANET_SYMBOL"
           nil))
         (when expected
           (string "    if (janet_type(argv[" i "]) != " expected ") { " cn "_TELEMETRY_TYPE_GUARD(); janet_panicf(\"native " cn " argument " i " has wrong Janet type\"); }\n")))
@@ -2742,6 +2765,10 @@
                            (string "janet_unwrap_pointer(argv[" i "])")
                            (= t :string)
                            (string "janet_unwrap_string(argv[" i "])")
+                           (= t :keyword)
+                           (string "janet_unwrap_keyword(argv[" i "])")
+                           (= t :symbol)
+                           (string "janet_unwrap_symbol(argv[" i "])")
                            (string "janet_unwrap_number(argv[" i "])")))
                   ", "))
   # Phase 1: a void kernel produces no C value at all -- rv stays nil as
@@ -2804,7 +2831,7 @@
     (var concrete (and (> (length pt) 0) (not (d :vararg))))
     # Step 11: :array params are opaque-but-emittable (pointer temps);
     # :array returns are the (in-place) array itself
-    (each t pt (unless (or (get infer/numeric-types t) (= t :array) (= t :tuple) (= t :pointer) (= t :string)) (set concrete false)))
+    (each t pt (unless (or (get infer/numeric-types t) (= t :array) (= t :tuple) (= t :pointer) (= t :string) (= t :keyword) (= t :symbol)) (set concrete false)))
     # Phase 1: :nil is concrete -- a whole-program-proven-always-nil
     # return is a legitimate void kernel, not an unproven boxed value.
     (unless (or (get infer/numeric-types rt) (= rt :array) (= rt :nil)) (set concrete false))
@@ -2856,13 +2883,14 @@
   (def cout @"")
   (buffer/push-string cout "#include <janet.h>\n#include <inttypes.h>\n#include <math.h>\n#include <stdlib.h>\n\n")
   (buffer/push-string cout "/* int32-domain bitwise helpers: boxed Janet errors outside int32\n * (integral doubles accepted); results wrap int32; shift counts mask\n * to 5 bits. Callers range/integrality-check operands (fail loud). */\nstatic int32_t k_band32(int32_t a, int32_t b) { return a & b; }\nstatic int32_t k_bor32(int32_t a, int32_t b) { return a | b; }\nstatic int32_t k_bxor32(int32_t a, int32_t b) { return a ^ b; }\nstatic int32_t k_sl32(int32_t a, int32_t b) { return (int32_t)((uint32_t)a << ((uint32_t)b & 31u)); }\nstatic int32_t k_sr32(int32_t a, int32_t b) { uint32_t n = (uint32_t)b & 31u; int32_t r = (int32_t)((uint32_t)a >> n); if ((a < 0) && (n != 0)) { r |= (int32_t)(~0u << (32u - n)); } return r; }\nstatic int32_t k_sru32(int32_t a, int32_t b) { return (int32_t)((uint32_t)a >> ((uint32_t)b & 31u)); }\n\n")
-  # Phase 2: one static JanetString slot per distinct string literal
-  # referenced by any kernel in this build, declared here and
+  # Phase 2/3: one static slot per distinct string/keyword/symbol
+  # literal referenced by any kernel in this build, declared here and
   # materialized once in native_init below (before any wrapper is
-  # reachable) -- see string-const-name/emit-c-string-literal.
-  (each bytes string-const-order
-    (buffer/push-string cout (string "static JanetString " (string-const-name bytes) ";\n")))
-  (when (> (length string-const-order) 0) (buffer/push-string cout "\n"))
+  # reachable) -- see atom-const-name/emit-c-string-literal.
+  (each key atom-const-order
+    (buffer/push-string cout (string "static " (emit-c-type (key 0)) " "
+                                      (get atom-const-ids key) ";\n")))
+  (when (> (length atom-const-order) 0) (buffer/push-string cout "\n"))
   # extern C declarations used by the emitted kernels (raylib story)
   (each k kernels
     (each en (k :externs)
@@ -2882,10 +2910,12 @@
   (buffer/push-string cout "}\n#endif\n\n")
   (buffer/push-string cout "void native_init(JanetTable *env) {\n")
   (buffer/push-string cout "#if JANET_NATIVE_TELEMETRY\n    atexit(native_telemetry_report_all);\n#endif\n")
-  (each bytes string-const-order
+  (each key atom-const-order
     (buffer/push-string cout
-      (string "    " (string-const-name bytes) " = janet_string((const uint8_t*)\""
-              (emit-c-string-literal bytes) "\", " (length bytes) ");\n")))
+      (string "    " (get atom-const-ids key) " = "
+              (get atom-const-ctors (key 0))
+              "((const uint8_t*)\"" (emit-c-string-literal (key 1))
+              "\", " (length (key 1)) ");\n")))
   (buffer/push-string cout "    static const JanetReg regs[] = {\n")
   (each k kernels
     (buffer/push-string cout

@@ -1,0 +1,110 @@
+# Regression: :keyword / :symbol param support in the native kernel
+# emitter. See docs/internals/blueant-type-generator-plan.md Phase 3.
+#
+# JanetKeyword and JanetSymbol are both `typedef const uint8_t *`
+# (janet.h:586-587) -- same flat C value shape as Phase 2's
+# JanetString, but INTERNED (src/core/symcache.c; janet_keyword is a
+# #define alias of janet_symbol), so equal keywords/symbols are
+# pointer-identical: the existing 'eq/'neq -> raw C `==`/`!=` path is
+# already correct with NO content-equality kernel (unlike Phase 2's
+# non-interned strings, which needed janet_string_equal).
+#
+# Honest, tested boundary (same shape as Phase 2's string boundary):
+# a keyword-literal dispatch (`case`/`=` against :a/:b/:c constants)
+# needs its own 'ldc temp slots, and Janet's register allocator
+# commonly reuses those slots for the branch-merge result once the
+# literals' live ranges end. One Janet slot -> one C declaration
+# cannot hold both a JanetKeyword pointer and the numeric merge
+# result, so this phase REFUSES that shape (a real, tested safety
+# property -- see the dispatch case below) rather than emitting a
+# broken declaration. Closing it needs per-live-range slot splitting,
+# a bigger follow-up, not attempted here. Param-to-param keyword/
+# symbol comparison (no literal constant, hence no extra temp slot)
+# is unaffected and is this phase's positive, proven capability.
+(import ./helper :prefix "" :exit true)
+(start-suite)
+(def root "/tmp/janet-aot-native-keyword-suite")
+(os/execute ["/bin/rm" "-rf" root] :p)
+(os/mkdir root)
+(def env (merge @{} (os/environ) {"JANET_NO_PROFILE" "1"}))
+
+(defn build-and-run [name source]
+  (def src (string root "/" name ".janet"))
+  (def bin (string root "/" name))
+  (spit src source)
+  (def build-ok (= 0 (os/execute ["./build/bender" "--aot" src "--native"
+                                  "--no-auto-pgo" "-o" bin] :e env)))
+  (def run-ok (and build-ok (= 0 (os/execute [bin] :e env))))
+  (def interp-ok (= 0 (os/execute ["./build/bender" src] :e env)))
+  {:build build-ok :run run-ok :interp interp-ok
+   :names (if build-ok (string (slurp (string bin "-native/native-names.txt"))) "")})
+
+# --- Positive: param-to-param KEYWORD equality, including multi-byte
+# UTF-8 keyword content, combining into a numeric branch merge with
+# no literal constant temp slot involved (no slot-reuse risk) --
+# must compile native.
+(def r1 (build-and-run "kw-param-eq" `
+(defn- kw-eq-count [a k1 k2 k3 k4]
+  (put a 0 (+ (if (= k1 k2) 1 0) (if (= k3 k4) 1 0)))
+  nil)
+(def a @[0])
+(kw-eq-count a :aa :aa :bb :cc)
+(assert (= 1 (a 0)) "exactly one of the two keyword pairs matched")
+(kw-eq-count a :日本 :日本 :x :x)
+(assert (= 2 (a 0)) "both multi-byte UTF-8 keyword pairs matched")
+(kw-eq-count a :a :b :c :d)
+(assert (= 0 (a 0)) "neither keyword pair matched")
+`))
+(assert (r1 :build) "param-to-param keyword-eq fn build succeeds")
+(assert (string/find "kw-eq-count" (r1 :names))
+        "param-to-param keyword-eq fn got a native wrapper (the positive case)")
+(assert (r1 :run) "native binary's own assertions pass (pointer-equality on interned keywords)")
+(assert (r1 :interp) "same source passes identically under the interpreter")
+
+# --- Positive: param-to-param SYMBOL equality, including symbols
+# interned at runtime via (symbol "...") -- interned means the
+# pointer compare is still correct -- must also compile native.
+(def r2 (build-and-run "sym-param-eq" `
+(defn- sym-eq-count [a s1 s2 s3 s4]
+  (put a 0 (+ (if (= s1 s2) 1 0) (if (= s3 s4) 1 0)))
+  nil)
+(def a @[0])
+(sym-eq-count a 'aa 'aa 'bb 'cc)
+(assert (= 1 (a 0)) "exactly one of the two symbol pairs matched")
+(sym-eq-count a (symbol "gen-1") (symbol "gen-1") 'x 'x)
+(assert (= 2 (a 0)) "two separately-constructed interned symbols matched")
+(sym-eq-count a 'a 'b 'c 'd)
+(assert (= 0 (a 0)) "neither symbol pair matched")
+`))
+(assert (r2 :build) "param-to-param symbol-eq fn build succeeds")
+(assert (string/find "sym-eq-count" (r2 :names))
+        "param-to-param symbol-eq fn got a native wrapper (the positive case)")
+(assert (r2 :run) "native binary's own assertions pass (pointer-equality on interned symbols)")
+(assert (r2 :interp) "same source passes identically under the interpreter")
+
+# --- Dispatch boundary (honestly scoped, mirrors Phase 2's string
+# literal boundary): a keyword-switch dispatch against keyword
+# LITERAL constants reuses the literals' temp slot for the numeric
+# branch-merge result once their live range ends; the slot-mixing
+# guard added in Phase 3 makes this REFUSE cleanly (diagnostic, no
+# miscompiled C) and fall back to the boxed path, which still
+# produces correct output. Correctness here is "refuses safely and
+# answers right", NOT "goes native" -- tested as such below.
+(def r3 (build-and-run "kw-dispatch" `
+(defn- kw-rank [kw]
+  (case kw
+    :a 1
+    :b 2
+    :c 3
+    0))
+(assert (= 1 (kw-rank :a)) "rank :a")
+(assert (= 3 (kw-rank :c)) "rank :c")
+(assert (= 0 (kw-rank :zzz)) "rank default")
+`))
+(assert (r3 :build) "keyword-dispatch fn build still succeeds (falls back to boxed, not a hard error)")
+(assert (not (string/find "kw-rank" (r3 :names)))
+        "keyword-literal dispatch case correctly stays boxed (slot-mixing refuses, never miscompiles)")
+(assert (r3 :run) "boxed fallback still produces correct output for the dispatch case")
+(assert (r3 :interp) "same source passes identically under the interpreter")
+
+(end-suite)
