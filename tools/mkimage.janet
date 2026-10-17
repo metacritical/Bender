@@ -116,8 +116,27 @@
   (each l (string/split "\n" nf)
     (when (> (length l) 0) (put native-names (symbol l) true))))
 
+# Phase 4 (type-generator plan): dispatch functions. Their defn is NOT
+# stripped -- the C dispatcher's default arm needs the boxed body at
+# runtime via janet_call. Instead the defn stays, renamed to
+# <name>%boxed, and a registration form immediately after it installs
+# the boxed fn into native.c's n_disp_boxed table (native/dispatch-set-boxed,
+# registered by native_init pre-unmarshal -- hence the indirect
+# (curenv) resolution, same reason as the prelude rebinds below).
+(var dispatch-names @{})
+(when native-names-file
+  (def df (string/replace-all "native-names.txt" "native-dispatch.txt" native-names-file))
+  (when (and (not= df native-names-file)
+             (= :file (os/stat df :mode)))
+    (each l (string/split "\n" (slurp df))
+      (when (> (length l) 0) (put dispatch-names (symbol l) true)))))
+
 (when (next native-names)
-  # strip proven defn forms; keep everything else
+  # strip proven defn forms; keep everything else. Phase 4 exception:
+  # a dispatch function's defn is kept RENAMED to <name>%boxed and
+  # immediately followed by its boxed-registration form (must run
+  # before any call site can reach the dispatcher; defn placement in
+  # the original source is the earliest correct point).
   (def kept @[])
   (each f forms
     (if (and (tuple? f) (>= (length f) 2)
@@ -125,7 +144,21 @@
              (or (= (string (get f 0)) "defn") (= (string (get f 0)) "defn-"))
              (symbol? (get f 1))
              (get native-names (get f 1)))
-      nil
+      (do
+        (when (tuple? f)
+          (def orig (get f 1))
+          (if (get dispatch-names orig)
+            (do
+              (def boxed-sym (symbol (string orig "%boxed")))
+              (array/push kept (tuple (get f 0) boxed-sym ;(tuple/slice f 2)))
+              (array/push kept
+                          (tuple (tuple 'get
+                                        (tuple 'get '(curenv)
+                                               (tuple 'quote 'dispatch-set-boxed))
+                                        ':value)
+                                 (tuple 'quote (keyword orig))
+                                 boxed-sym)))
+            nil)))
       (array/push kept f)))
   (set forms kept)
   # prelude: rebind each native name from the env (wrapper cfunctions

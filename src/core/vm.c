@@ -408,6 +408,11 @@ static void janet_suspend_swap(JanetFiber *fiber, JanetSignal sig, Janet payload
  * types fit). Zero cost when off: callers guard on the NULL table. */
 #define JANET_PROFILE_MAXPARAMS 8
 #define JANET_PROFILE_ELEMSAMPLE 8
+/* Phase 4B: distinct observed VALUES per scalar atom param slot. A
+ * slot observing more distinct values than this is marked open (the
+ * consumer must refuse closed-set reasoning for it), never a huge
+ * set. */
+#define JANET_PROFILE_VALSAMPLE 8
 
 /* Direct-mapped entry cache (auto-PGO): real programs alternate
  * between functions, so a last-entry cache thrashes (16x slowdown
@@ -431,6 +436,7 @@ typedef struct {
     JanetArray *ea;
     JanetArray *mn;
     JanetArray *mx;
+    JanetArray *va;
 } JanetProfileCache;
 /* Phase C: the fast-path cache is per-thread. Worker VMs share this
  * translation unit across OS threads; a single global would let two
@@ -479,6 +485,7 @@ static void janet_profile_cache_fill(JanetTable *pt, JanetFuncDef *def, JanetTab
     c->ea = janet_unwrap_array(janet_table_get(e, janet_ckeywordv("elems")));
     c->mn = janet_unwrap_array(janet_table_get(e, janet_ckeywordv("mins")));
     c->mx = janet_unwrap_array(janet_table_get(e, janet_ckeywordv("maxs")));
+    c->va = janet_unwrap_array(janet_table_get(e, janet_ckeywordv("vals")));
     c->live = 1;
 }
 
@@ -554,6 +561,22 @@ static JanetTable *janet_profile_entry(JanetFunction *func) {
             janet_gcunroot(janet_wrap_array(mn));
             janet_gcunroot(janet_wrap_array(mx));
         }
+        {
+            /* Phase 4B: closed-value-set evidence for scalar atom
+             * (string/keyword/symbol) param slots. Per slot: nil =
+             * unobserved, array = observed distinct values (bounded by
+             * JANET_PROFILE_VALSAMPLE), true = open (too many distinct
+             * values observed -- closed-set reasoning must refuse).
+             * Booleans can never be a recorded atom value, so `true`
+             * is an unambiguous marker. Values stay alive through the
+             * entry table exactly like the mask arrays. */
+            JanetArray *va = janet_array(JANET_PROFILE_MAXPARAMS);
+            janet_gcroot(janet_wrap_array(va));
+            for (i = 0; i < JANET_PROFILE_MAXPARAMS; i++)
+                janet_array_push(va, janet_wrap_nil());
+            janet_table_put_raw(e, janet_ckeywordv("vals"), janet_wrap_array(va));
+            janet_gcunroot(janet_wrap_array(va));
+        }
         janet_table_put_raw(e, janet_ckeywordv("rets"), janet_wrap_integer(0));
         /* P3.4 bookkeeping put: pt is the profiler's identity map
          * (function-pointer keyed), the same class as the marshal
@@ -575,13 +598,14 @@ static JanetTable *janet_profile_entry(JanetFunction *func) {
 
 static void janet_profile_call(JanetFunction *func, const Janet *argv, int32_t argc) {
     int32_t n, i;
-    JanetArray *pa, *ea, *mn, *mx;
+    JanetArray *pa, *ea, *mn, *mx, *va;
     JanetProfileCache *hit = janet_profile_hit(func);
     if (NULL != hit) {
         pa = hit->pa;
         ea = hit->ea;
         mn = hit->mn;
         mx = hit->mx;
+        va = hit->va;
         hit->calls++;
     } else {
         JanetTable *e = janet_profile_entry(func);
@@ -591,6 +615,7 @@ static void janet_profile_call(JanetFunction *func, const Janet *argv, int32_t a
         ea = hit->ea;
         mn = hit->mn;
         mx = hit->mx;
+        va = hit->va;
         hit->calls++;
     }
     n = argc < JANET_PROFILE_MAXPARAMS ? argc : JANET_PROFILE_MAXPARAMS;
@@ -620,6 +645,45 @@ static void janet_profile_call(JanetFunction *func, const Janet *argv, int32_t a
             for (k = 0; k < nk; k++)
                 em |= (1u << (uint32_t) janet_type(av->data[k]));
             ea->data[i] = janet_wrap_integer((int64_t) em);
+        }
+        if (full && (at == (uint32_t) JANET_STRING ||
+                     at == (uint32_t) JANET_SYMBOL ||
+                     at == (uint32_t) JANET_KEYWORD)) {
+            /* Phase 4B: sample the concrete VALUE for scalar atom
+             * params (same 16-exact-then-1-in-8 discipline as the
+             * element/min-max evidence). janet_equals is content
+             * equality for strings and pointer equality for interned
+             * keywords/symbols -- exactly Janet's own equality. The
+             * freshly built vs array is rooted across its pushes and
+             * becomes reachable through the entry table on store. */
+            Janet slotv = va->data[i];
+            if (!janet_checktype(slotv, JANET_BOOLEAN)) {
+                JanetArray *vs = janet_checktype(slotv, JANET_ARRAY)
+                    ? janet_unwrap_array(slotv) : NULL;
+                int32_t k, found = 0;
+                if (NULL != vs)
+                    for (k = 0; k < vs->count; k++)
+                        if (janet_equals(vs->data[k], argv[i])) {
+                            found = 1;
+                            break;
+                        }
+                if (!found) {
+                    if (NULL == vs) {
+                        vs = janet_array(JANET_PROFILE_VALSAMPLE);
+                        janet_gcroot(janet_wrap_array(vs));
+                        janet_array_push(vs, argv[i]);
+                        va->data[i] = janet_wrap_array(vs);
+                        janet_gcunroot(janet_wrap_array(vs));
+                    } else if (vs->count < JANET_PROFILE_VALSAMPLE) {
+                        janet_array_push(vs, argv[i]);
+                    } else {
+                        /* Over the cap: the slot is open, not closed.
+                         * Drop the set and mark it; consumers must
+                         * fall back to boxed, never emit a huge set. */
+                        va->data[i] = janet_wrap_true();
+                    }
+                }
+            }
         }
     }
 }
@@ -791,6 +855,25 @@ JanetArray *janet_profile_rows(void) {
                     }
                     janet_table_put(info, janet_ckeywordv("mins"), janet_wrap_array(mins));
                     janet_table_put(info, janet_ckeywordv("maxs"), janet_wrap_array(maxs));
+                }
+                {
+                    /* Phase 4B value evidence: nil = unobserved, the
+                     * value array itself (strings/keywords/symbols
+                     * pretty-print cleanly), true = open (dumped as
+                     * :open for readability). */
+                    JanetArray *valsv = janet_array(0);
+                    JanetArray *va = janet_unwrap_array(janet_table_get(e, janet_ckeywordv("vals")));
+                    n = va->count;
+                    for (j = 0; j < n; j++) {
+                        Janet vv = va->data[j];
+                        if (janet_checktype(vv, JANET_NIL))
+                            janet_array_push(valsv, janet_wrap_nil());
+                        else if (janet_checktype(vv, JANET_BOOLEAN))
+                            janet_array_push(valsv, janet_ckeywordv("open"));
+                        else
+                            janet_array_push(valsv, vv);
+                    }
+                    janet_table_put(info, janet_ckeywordv("vals"), janet_wrap_array(valsv));
                 }
                 janet_table_put(info, janet_ckeywordv("rets"), janet_profile_mask_types(rm));
                 janet_array_push(row, janet_wrap_table(info));
@@ -1532,15 +1615,23 @@ static JanetSignal run_vm(JanetFiber *fiber, Janet in) {
             }
             vm_commit();
             {
-                Janet *callargv = fiber->data + fiber->stackstart;
                 int32_t callargc = fiber->stacktop - fiber->stackstart;
                 if (janet_fiber_funcframe(fiber, func)) {
                     int32_t n = fiber->stacktop - fiber->stackstart;
                     janet_panicf("%v called with %d argument%s, expected %d",
                                  callee, n, n == 1 ? "" : "s", func->def->arity);
                 }
+                /* UAF fix (Phase 4A): capture argv AFTER the frame push.
+                 * janet_fiber_funcframe may realloc fiber->data (capacity
+                 * growth), so a pointer captured before it dangles; the
+                 * args live at fiber->data + fiber->frame afterwards.
+                 * For vararg defs the trailing spread args are consolidated
+                 * into one tuple at index def->arity, so sample arity+1. */
                 if (NULL != janet_vm.profile_table)
-                    janet_profile_call(func, callargv, callargc);
+                    janet_profile_call(func, fiber->data + fiber->frame,
+                                       (func->def->flags & JANET_FUNCDEF_FLAG_VARARG)
+                                       ? func->def->arity + 1
+                                       : callargc);
             }
             stack = fiber->data + fiber->frame;
             pc = func->def->bytecode;
@@ -1578,7 +1669,6 @@ static JanetSignal run_vm(JanetFiber *fiber, Janet in) {
                 vm_do_trace(func, fiber->stacktop - fiber->stackstart, fiber->data + fiber->stackstart);
             }
             {
-                Janet *callargv = fiber->data + fiber->stackstart;
                 int32_t callargc = fiber->stacktop - fiber->stackstart;
                 if (janet_fiber_funcframe_tail(fiber, func)) {
                     janet_stack_frame(fiber->data + fiber->frame)->pc = pc;
@@ -1586,8 +1676,15 @@ static JanetSignal run_vm(JanetFiber *fiber, Janet in) {
                     janet_panicf("%v called with %d argument%s, expected %d",
                                  callee, n, n == 1 ? "" : "s", func->def->arity);
                 }
+                /* UAF fix (Phase 4A): same as JOP_CALL — funcframe_tail
+                 * reallocs fiber->data on growth and additionally MEMMOVES
+                 * the args down to fiber->data + fiber->frame, so both the
+                 * old pointer and the old stackstart location are invalid. */
                 if (NULL != janet_vm.profile_table)
-                    janet_profile_call(func, callargv, callargc);
+                    janet_profile_call(func, fiber->data + fiber->frame,
+                                       (func->def->flags & JANET_FUNCDEF_FLAG_VARARG)
+                                       ? func->def->arity + 1
+                                       : callargc);
             }
             stack = fiber->data + fiber->frame;
             pc = func->def->bytecode;

@@ -221,6 +221,21 @@
         (put atom-const-ids key nm)
         (array/push atom-const-order key)
         nm)))
+(defn- cmp-kind-class [t]
+  # value-rep vs pointer-rep operand classes for eq/neq emission
+  (cond (or (get int-hints t) (get float-hints t) (= t :number) (= t :bool)) :val
+        (or (= t :string) (= t :keyword) (= t :symbol) (= t :array)
+            (= t :tuple) (= t :pointer)) :ptr
+        :other))
+(defn- mixed-class-cmp? [a b]
+  # both operands concretely classed and in DIFFERENT classes: a value
+  # rep can never equal a pointer rep (janet_equals checks type first),
+  # so the comparison result is a compile-time constant. This is what
+  # makes a flip slot comparable inside a number-branch kernel whose
+  # other operand is a keyword param (and vice versa).
+  (and (not= :other (cmp-kind-class a)) (not= :other (cmp-kind-class b))
+       (not= (cmp-kind-class a) (cmp-kind-class b))))
+
 (def atom-const-ctors
   @{:string "janet_string" :keyword "janet_keyword" :symbol "janet_symbol"})
 (defn emit-c-string-literal [bytes]
@@ -2090,6 +2105,19 @@
                                   (if (= op 'neq) "!" "")
                                   "janet_string_equal(" (emit-slot (ins 2) arity)
                                   ", " (emit-slot (ins 3) arity) ");"))
+              # Phase 4: cross-class comparison (value rep vs pointer
+              # rep, both concrete): never equal by Janet semantics
+              # (janet_equals checks type first), so the result is a
+              # compile-time constant. Raw C `==` here is invalid C
+              # (double vs const uint8_t*) -- previously surfaced only
+              # as a late C-compiler error, now handled soundly.
+              (and (not (get emit-cmp-im op))
+                   (or (= op 'eq) (= op 'neq))
+                   (mixed-class-cmp? (get st (ins 2) :unknown)
+                                     (get st (ins 3) :unknown)))
+              (array/push lines
+                          (string "    s" (ins 1) " = "
+                                  (if (= op 'eq) "0" "1") ";"))
               (get emit-cmp-im op)
               (array/push lines
                           (string "    s" (ins 1) " = "
@@ -2804,6 +2832,124 @@
 
 (when emit-native-dir (emit-native-all emit-native-dir))
 
+# ---------------------------------------------------------------------------
+# Phase 4 (type-generator plan): switch/dispatch codegen for genuinely
+# polymorphic ("flip") slots. Today a slot is either proven ONE concrete
+# type (native-eligible) or the whole function stays boxed. This is the
+# middle tier: a slot whose PGO-observed type mask is a CLOSED, small set
+# of scalar atom types (>= 2 distinct observed types, every one with a
+# concrete C representation from Phases 1-3) gets a runtime dispatcher:
+# switch (janet_type(argv[slot])) with one specialized kernel per observed
+# type and a MANDATORY, reachable, correct `default` arm that falls back
+# to the fully boxed interpreter definition via janet_call. A value of a
+# never-trained type at runtime takes that default arm and must produce
+# the correct boxed answer -- never a crash, never silent wrong output.
+# That fallback is the single most important safety property of this
+# phase and is tested first-class in test/suite-native-dispatch.janet.
+#
+# Deliberately narrow scope (be conservative, only widen):
+#   - exactly ONE polymorphic param slot (multiple flip slots multiply
+#     dispatch complexity; not attempted),
+#   - observed types limited to :number/:string/:keyword/:symbol (the
+#     scalar atom shapes wrapper-for can already guard+unbox),
+#   - :number branches always emit as :double (boxed Janet arithmetic
+#     IS double arithmetic -- exact, never a truncating miscompile),
+#   - uniform proven return type (numeric/:array/:nil), non-vararg,
+#     loop-free (loop bodies still need resumable VM quanta),
+#   - the function is NOT statically provable (this tier only ADDS
+#     candidates that today stay boxed; never changes existing ones),
+#   - every per-branch emit-fn-c must succeed, else the whole function
+#     stays boxed (no partial dispatch).
+# ---------------------------------------------------------------------------
+
+(def dispatch-obs-types @{:number true :string true :keyword true :symbol true})
+(defn- dispatch-branch-suffix [t]
+  (case t :number "num" :string "str" :keyword "kw" "sym"))
+(defn- dispatch-branch-type [t]
+  # observed :number -> :double kernel param (see rationale above)
+  (if (= t :number) :double t))
+
+(defn- native-unwrap-expr [t i]
+  # One argument's unbox expression (mirrors wrapper-for's ps logic;
+  # factored out so the dispatcher can build per-branch arg lists).
+  (cond (get int-hints t)
+        (string "janet_unwrap_integer(argv[" i "])")
+        (= t :array)
+        (string "(JanetArray *)janet_unwrap_array(argv[" i "])")
+        (= t :tuple)
+        (string "janet_unwrap_tuple(argv[" i "])")
+        (= t :pointer)
+        (string "janet_unwrap_pointer(argv[" i "])")
+        (= t :string)
+        (string "janet_unwrap_string(argv[" i "])")
+        (= t :keyword)
+        (string "janet_unwrap_keyword(argv[" i "])")
+        (= t :symbol)
+        (string "janet_unwrap_symbol(argv[" i "])")
+        (string "janet_unwrap_number(argv[" i "])")))
+
+(defn- dispatch-janet-type-tag [t]
+  (case t :number "JANET_NUMBER" :string "JANET_STRING"
+    :keyword "JANET_KEYWORD" "JANET_SYMBOL"))
+
+(defn dispatch-wrapper-for [nm slot branches pt rt telemetry-id]
+  # branches: [{:obs :pt :cname}] ordered; each arm unboxes ALL args per
+  # that branch's pt (the flip slot per its branch type, the rest per the
+  # statically-proven pt) and calls that branch's specialized kernel.
+  (def cn (emit-c-name nm))
+  (def tid (string/format "%08X" telemetry-id))
+  (def rv (cond (= rt :nil) nil
+                (= rt :array) "janet_wrap_array"
+                (and (get int-hints rt) (not= int-policy :promote))
+                "janet_wrap_integer"
+                "janet_wrap_number"))
+  (def arms
+    (string/join
+      (seq [b :in branches]
+        (def call-args
+          (string/join (seq [i :range [0 (length (b :pt))]]
+                        (native-unwrap-expr ((b :pt) i) i)) ", "))
+        (string
+          "    case " (dispatch-janet-type-tag (b :obs)) ": {\n"
+          "        " cn "_TELEMETRY_HIT();\n"
+          (if (nil? rv)
+            (string "        " (b :cname) "(" call-args ");\n"
+                    "        return janet_wrap_nil();\n")
+            (string "        return " rv "(" (b :cname) "(" call-args "));\n"))
+          "    }\n"))
+      ""))
+  (string "#ifndef JANET_NATIVE_TELEMETRY\n#define JANET_NATIVE_TELEMETRY 1\n#endif\n"
+          "#if JANET_NATIVE_TELEMETRY\n"
+          "static JANET_THREAD_LOCAL unsigned long long " cn "_telemetry_calls;\n"
+          "static JANET_THREAD_LOCAL unsigned long long " cn "_telemetry_fallbacks;\n"
+          "static void " cn "_telemetry_report(void) {\n"
+          "  if (" cn "_telemetry_calls || " cn "_telemetry_fallbacks)\n"
+          "    fprintf(stderr, \"native-telemetry id=" tid " name=" cn " calls=%llu boxed-fallbacks=%llu\\n\", " cn "_telemetry_calls, " cn "_telemetry_fallbacks);\n}\n"
+          "#define " cn "_TELEMETRY_HIT() (++" cn "_telemetry_calls)\n"
+          "#define " cn "_TELEMETRY_FALLBACK() (++" cn "_telemetry_fallbacks)\n"
+          "#else\n#define " cn "_TELEMETRY_HIT() ((void)0)\n#define " cn "_TELEMETRY_FALLBACK() ((void)0)\n#define " cn "_telemetry_report() ((void)0)\n#endif\n"
+          "static Janet " cn "_wrapper(int32_t argc, Janet *argv) {\n"
+          "    if (argc != " (length pt) ") { " cn "_TELEMETRY_FALLBACK(); janet_panicf(\"native " cn
+          " called with %d arguments, expected " (length pt) "\", argc); }\n"
+          "    switch (janet_type(argv[" slot "])) {\n"
+          arms
+          "    default: break;\n"
+          "    }\n"
+          "    /* Phase 4: out-of-sample type at runtime -- fall back to the\n"
+          "     * fully boxed interpreter definition (kept in the image under\n"
+          "     <name>%boxed and registered from the mkimage prelude via\n"
+          "     native/dispatch-set-boxed). Correctness here is the safety\n"
+          "     property this whole tier rests on. */\n"
+          "    " cn "_TELEMETRY_FALLBACK();\n"
+          "    Janet fb = (NULL != n_disp_boxed)\n"
+          "        ? janet_table_get(n_disp_boxed, janet_ckeywordv(\"" nm "\"))\n"
+          "        : janet_wrap_nil();\n"
+          "    if (!janet_checktype(fb, JANET_FUNCTION))\n"
+          "        janet_panicf(\"native " cn ": untrained argument type and no boxed fallback registered\");\n"
+          "    return janet_call(janet_unwrap_function(fb), argc, argv);\n"
+          "}\n"
+          "#undef " cn "_TELEMETRY_HIT\n#undef " cn "_TELEMETRY_FALLBACK\n"))
+
 (defn emit-native-lib [outdir]
   # Step 12: hybrid-binary flavor. Emits native.c with the kernels PLUS
   # janet-cfunction wrappers (unbox args -> kernel -> rebox result) and a
@@ -2822,6 +2968,9 @@
     (def qs (string/join (map (fn [t] (if (= t :unknown) "?" (string t))) pt2) " "))
     (string "params [" qs "] ret " (if (= rt2 :unknown) "?" (string rt2))))
   (def cand @{})
+  # Phase 4: id -> {:slot j :types [observed keyword types]} for the
+  # dispatch middle tier (filled by the classification loop below).
+  (def disp-cand @{})
   (def lib-skips @[])
   (each id (range (length defs))
     (def info (get defs id))
@@ -2850,8 +2999,54 @@
                              "loop requires resumable VM quantum polls"])
       (if concrete
         (put cand id true)
-        (array/push lib-skips [id (string (or (d :name) "?"))
-                               (string "types not proven: " (describe-types-lib pt rt))]))))
+        (do
+          # Phase 4 middle tier: a function whose params are all
+          # concrete EXCEPT exactly one slot, whose PGO-observed type
+          # set is a closed, small set of scalar atom types, becomes a
+          # dispatch candidate (specialized kernel per observed type +
+          # mandatory boxed fallback). Everything else keeps today's
+          # skip. This tier only ADDS candidates a plain build keeps
+          # boxed today; statically-proven functions are unaffected.
+          (var disp nil)
+          (when (and (> (length pt) 0)
+                     (or (get infer/numeric-types rt) (= rt :array) (= rt :nil))
+                     profile-index)
+            (def nm4 (string (or (d :name) "")))
+            (def rows4 (get profile-index nm4))
+            (when rows4
+              (var unk -1)
+              (var pok true)
+              (var i4 0)
+              (each t pt
+                # the widened conflict value is :any (infer's top for
+                # unprovable params); :unknown appears for never-seen
+                # slots. Both mean "statically unproven" here.
+                (cond (or (= t :unknown) (= t :any))
+                      (if (= unk -1) (set unk i4) (set pok false))
+                      (or (get infer/numeric-types t) (= t :array) (= t :tuple)
+                          (= t :pointer) (= t :string) (= t :keyword) (= t :symbol))
+                      nil
+                      (set pok false))
+                (++ i4))
+              (when (and pok (>= unk 0))
+                (def types4 @{})
+                (var cok true)
+                (each row rows4
+                  (def ps4 (row :params))
+                  (def slot4 (if (< unk (length ps4)) (ps4 unk) nil))
+                  (if (indexed? slot4)
+                    (each t slot4
+                      (if (get dispatch-obs-types t)
+                        (put types4 t true)
+                        (set cok false)))
+                    (set cok false)))
+                (def n4 (length (keys types4)))
+                (when (and cok (>= n4 2) (<= n4 4))
+                  (set disp {:slot unk :types (sorted (keys types4))})))))
+          (if disp
+            (put disp-cand id disp)
+            (array/push lib-skips [id (string (or (d :name) "?"))
+                                   (string "types not proven: " (describe-types-lib pt rt))]))))))
   (def emitted-names @{})
   (def kernels @[])
   (def lib-skip-reason @{})
@@ -2879,6 +3074,47 @@
       (def d ((get defs id) :d))
       (array/push lib-skips [id (string (or (d :name) "?"))
                              (or (get lib-skip-reason id) "calls non-emitted native")])))
+  # Phase 4 emission pass: runs AFTER the dependency rounds so branch
+  # kernels can call already-emitted natives. Branch kernels are NOT
+  # registered in emitted-names (other kernels refuse to call a
+  # dispatcher natively -- callers stay boxed, conservative), and the
+  # dispatcher itself replaces the function's wrapper under its plain
+  # name. All-or-nothing per function: one failed branch => the whole
+  # function stays boxed.
+  (def disp-names @[])
+  (each id (sort (keys disp-cand))
+    (def info (get defs id))
+    (def d (info :d))
+    (def disp (get disp-cand id))
+    (def nm (string (d :name)))
+    (def pt (get pts id))
+    (def rt (rts id))
+    (def slot (disp :slot))
+    (var branches @[])
+    (var fail-reason nil)
+    (each obs (disp :types)
+      (def bt (dispatch-branch-type obs))
+      (def bname (string nm "%" (dispatch-branch-suffix obs)))
+      (def bd (merge d {:name bname}))
+      (def bpt (map |(if (= $0 slot) bt $1) (range (length pt)) pt))
+      (def [res reason] (emit-fn-c id bd rt bpt call-map emitted-names rts))
+      (if res
+        (array/push branches {:obs obs :pt bpt :cname (emit-c-name bname)
+                              :code (res :code) :externs (res :externs)})
+        (do (set fail-reason (string "dispatch branch " obs ": " reason))
+            (break))))
+    (if fail-reason
+      (array/push lib-skips [id nm fail-reason])
+      (do
+        (array/push disp-names nm)
+        (array/push kernels
+                    {:name nm
+                     :code (string/join (map |($0 :code) branches) "\n")
+                     :externs (distinct (flatten (map |($0 :externs) branches)))
+                     :wrapper (dispatch-wrapper-for nm slot branches pt rt id)
+                     :dispatch true})
+        (print "native-dispatch " id " " nm " slot " slot " "
+               (string/join (map string (disp :types)) " ")))))
   (each [id nm r] lib-skips (print "native-skip " id " " nm " " r))
   (def cout @"")
   (buffer/push-string cout "#include <janet.h>\n#include <inttypes.h>\n#include <math.h>\n#include <stdlib.h>\n\n")
@@ -2891,6 +3127,24 @@
     (buffer/push-string cout (string "static " (emit-c-type (key 0)) " "
                                       (get atom-const-ids key) ";\n")))
   (when (> (length atom-const-order) 0) (buffer/push-string cout "\n"))
+  # Phase 4: boxed-fallback registry for dispatch wrappers. The AOT
+  # image keeps the original (boxed) defn of every dispatch function
+  # under <name>%boxed (mkimage rename, see native-dispatch.txt); the
+  # image prelude registers it here right after the defn runs, before
+  # any call site can reach the dispatcher. GC-rooted once, on first
+  # registration.
+  (when (not (empty? (filter |(get $0 :dispatch) kernels)))
+    (buffer/push-string cout
+      "static JanetTable *n_disp_boxed = NULL;\n"
+      "static Janet cfun_disp_set_boxed(int32_t argc, Janet *argv) {\n"
+      "    janet_fixarity(argc, 2);\n"
+      "    if (NULL == n_disp_boxed) {\n"
+      "        n_disp_boxed = janet_table(4);\n"
+      "        janet_gcroot(janet_wrap_table(n_disp_boxed));\n"
+      "    }\n"
+      "    janet_table_put(n_disp_boxed, argv[0], argv[1]);\n"
+      "    return janet_wrap_nil();\n"
+      "}\n\n"))
   # extern C declarations used by the emitted kernels (raylib story)
   (each k kernels
     (each en (k :externs)
@@ -2920,6 +3174,8 @@
   (each k kernels
     (buffer/push-string cout
       (string "    { \"" (k :name) "\", " (emit-c-name (k :name)) "_wrapper, NULL },\n")))
+  (when (not (empty? (filter |(get $0 :dispatch) kernels)))
+    (buffer/push-string cout "    { \"dispatch-set-boxed\", cfun_disp_set_boxed, NULL },\n"))
   (buffer/push-string cout "    { NULL, NULL, NULL } };\n")
   (buffer/push-string cout "    janet_cfuns(env, \"native\", regs);\n")
   (buffer/push-string cout "    if (sizeof(regs)/sizeof(regs[0]) > 1)\n        fprintf(stderr, \"native_init: registered %d wrappers\\n\", (int) (sizeof(regs)/sizeof(regs[0]) - 1));\n")
@@ -2928,6 +3184,13 @@
   (def nl @"")
   (each k kernels (buffer/push-string nl (k :name)) (buffer/push-string nl "\n"))
   (spit (string outdir "/native-names.txt") nl)
+  # Phase 4: dispatch function names -- mkimage keeps (rather than
+  # strips) these defns, renamed to <name>%boxed, and registers them
+  # into n_disp_boxed from the image prelude.
+  (when (not (empty? disp-names))
+    (def dnl @"")
+    (each n2 disp-names (buffer/push-string dnl n2) (buffer/push-string dnl "\n"))
+    (spit (string outdir "/native-dispatch.txt") dnl))
   (print "native-lib " (length kernels) " kernels " outdir))
 
 (when emit-native-lib-dir (emit-native-lib emit-native-lib-dir))
