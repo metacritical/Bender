@@ -1,0 +1,86 @@
+# B7.2 Part A: supervision-tree library (examples/supervisor.janet),
+# OTP-style one_for_one supervision over core/proc processes. Built
+# entirely on existing primitives (proc/spawn, examples/proc.janet's
+# monitor) -- no new C code.
+#
+# Found and fixed while writing this suite: teardown-child's quit
+# budget was a fixed 0.2s for every child, including nested
+# supervisor children -- but a nested supervisor's own graceful
+# :proc-quit handler recursively tears down ITS children before
+# replying, which routinely exceeds 0.2s. Losing that race
+# proc/kill'd the nested supervisor before it could tear down its
+# own children, orphaning them (observed directly: a 1-level-nested
+# tree, stopped via stop-tree, left an infinite-loop worker alive and
+# the whole process hanging on exit). Fixed by giving supervisor-type
+# children a 3.0s budget (workers keep 0.2s), still safely under
+# stop-tree's own top-level 5s race. Test 5 below is this exact case.
+(import ./helper :prefix "" :exit true)
+(import ../examples/supervisor :as sup)
+(start-suite)
+
+# 1. Supervisor starts its children; which-children reports them alive.
+((fn []
+(defn worker-a [] (proc/spawn (fn [] (forever (ev/sleep 1.0)))))
+(def spec (sup/supervisor :t1-root 3 5 [(sup/child :a worker-a :permanent)]))
+(def h (sup/start-tree spec))
+(ev/sleep 0.1)
+(def wc (sup/which-children h))
+(assert (not (nil? (get wc :a))) "child :a present")
+(assert ((get wc :a) :alive) "child :a alive")
+(sup/stop-tree h)
+))
+
+# 2. A :permanent child that crashes gets a NEW proc, not the dead one.
+((fn []
+(defn crashy [] (proc/spawn (fn [] (ev/sleep 0.05) (error "boom"))))
+(def spec (sup/supervisor :t2-root 10 5 [(sup/child :c crashy :permanent)]))
+(def h (sup/start-tree spec))
+(ev/sleep 0.1)
+(def pid1 ((get (sup/which-children h) :c) :pid))
+(ev/sleep 0.2)
+(def pid2 ((get (sup/which-children h) :c) :pid))
+(assert (not= pid1 pid2) "permanent child restarted with a NEW pid")
+(sup/stop-tree h)
+))
+
+# 3. A :temporary child that crashes is NOT restarted.
+((fn []
+(defn crashy [] (proc/spawn (fn [] (ev/sleep 0.05) (error "boom"))))
+(def spec (sup/supervisor :t3-root 10 5 [(sup/child :t crashy :temporary)]))
+(def h (sup/start-tree spec))
+(ev/sleep 0.3)
+(assert (nil? (get (sup/which-children h) :t)) "temporary child not restarted")
+(sup/stop-tree h)
+))
+
+# 4. Restart-intensity/period limit: a child crashing faster than the
+# limit causes the supervisor itself to give up (safety property --
+# a crash loop escalates instead of spinning forever). Bounded sleep
+# so a bug here cannot hang the suite indefinitely.
+((fn []
+(defn fastcrash [] (proc/spawn (fn [] (error "fast-boom"))))
+(def spec (sup/supervisor :t4-root 2 5 [(sup/child :fc fastcrash :permanent)]))
+(def h (sup/start-tree spec))
+(ev/sleep 1.0)
+(assert (not (proc/alive? (get h :proc)))
+        "supervisor gives up after exceeding its restart intensity")
+))
+
+# 5. Nested supervisor (supervisor supervising another supervisor),
+# two levels deep -- the regression case for the teardown-timeout fix
+# above. Must both run correctly AND tear down cleanly (no orphaned
+# grandchild left alive after stop-tree, which would hang the whole
+# process on exit -- that is exactly what this test would catch).
+((fn []
+(defn worker-b [] (proc/spawn (fn [] (forever (ev/sleep 1.0)))))
+(def inner (sup/supervisor :t5-inner 3 5 [(sup/child :b worker-b :permanent)]))
+(def outer-spec @{:type :supervisor :name :t5-outer :intensity 3 :period 5
+                   :children [inner]})
+(def h (sup/start-tree outer-spec))
+(ev/sleep 0.1)
+(def wc (sup/which-children h))
+(assert (not (nil? (get wc :t5-inner))) "nested supervisor child present")
+(sup/stop-tree h)
+))
+
+(end-suite)
