@@ -1060,6 +1060,25 @@
 (def rts (res :rts))
 (def nnp (res :nnp))
 (def pts (res :pts))
+# Phase 5 (type-generator plan): closed-shape local tables. infer/analyze
+# detects, per function, which mktab-constructed table slots have a
+# CLOSED shape (fixed literal keyword keys, :long/:double fields, single
+# entry-block construction, constant-key-only get/put, zero escapes --
+# full decision rule in tools/infer.janet's block comment). tshapes maps
+# id -> {slot -> shape}; taccs maps id -> {pc -> validated pread/pwrite};
+# topened reports sticky-opened slots (every refusal is a correct boxed
+# fallback, never a silent miscompile).
+(def tshapes (or (res :tshapes) @{}))
+(def taccs (or (res :taccs) @{}))
+(def topened (or (res :topened) @{}))
+(each id (range (length defs))
+  (def nm5 (string (or ((get defs id) :name) "?")))
+  (eachp [slot shp] (or (get tshapes id) @{})
+    (print "table-flat " id " " nm5 " slot " slot " "
+           (string/join (map (fn [k] (string k ":" ((shp :fields) k)))
+                             (shp :order)) ",")))
+  (eachp [slot opc] (or (get topened id) @{})
+    (print "table-open " id " " nm5 " slot " slot " at pc " opc)))
 (each id (range (length defs))
   (def t (rts id))
   (when (get infer/numeric-types t)
@@ -1071,6 +1090,136 @@
     (unless (get infer/numeric-types t) (set all-concrete false)))
   (when all-concrete
     (print "ptypes " id " " (string/join (map string parr) " "))))
+# Phase 5 flat-struct emission helpers. A shaped table slot is declared
+# as a LOCAL C struct (valid C, defined once per kernel body, deduped by
+# name): struct nsh<id>_<base-slot> { <ctype> f0; ... }; fields are
+# positional in construction order; access reuses the same direct-member
+# memory-access discipline as the :kernel pread/pwrite intrinsics (this
+# is the auto-discovered sibling of the hand-declared ffi/defstruct
+# path -- same field contract :long/:double, same fail-closed guards).
+(defn nshape-name [id shp] (string "nsh" id "_" (shp :base)))
+(defn nshape-var [shp] (string "nshv" (shp :base)))
+(defn nshape-ctype [t] (if (= t :long) "int64_t" "double"))
+
+(defn- operand-slots-of [op ins]
+  # slots READ by op (dst excluded), mirroring infer/shape-reads.
+  # MUST cover every reader family: a missed read makes the forward
+  # scan in dead-key-ldc? run off the end and wrongly declare a LIVE
+  # keyword load dead (a real miscompile, caught by probe).
+  (cond
+    (= op 'len) @[(ins 2)]
+    (= op 'get) @[(ins 2) (ins 3)]
+    (= op 'put) @[(ins 2) (ins 3)]
+    (= op 'push) @[(ins 1)]
+    (= op 'push2) @[(ins 1) (ins 2)]
+    (= op 'push3) @[(ins 1) (ins 2) (ins 3)]
+    (= op 'pusha) @[(ins 1)]
+    (or (= op 'jmpif) (= op 'jmpno) (= op 'jmpni) (= op 'jmpnn)
+        (= op 'ret)) @[(ins 1)]
+    (= op 'call) @[(ins 2)]
+    (= op 'tcall) @[(ins 1)]
+    (= op 'movn) @[(ins 2)]
+    (= op 'movf) @[(ins 1)]
+    (or (get infer/arith-ops op) (get infer/bit-ops op)
+        (get infer/cmp-ops op) (get infer/div-ops op)) @[(ins 2) (ins 3)]
+    (or (get infer/arith-im-ops op) (get infer/bit-im-ops op)) @[(ins 2)]
+    # pure writers / control transfer read nothing
+    (or (= op 'ldi) (= op 'ldc) (= op 'ldn) (= op 'ldt) (= op 'ldf)
+        (= op 'ldu) (= op 'lds) (= op 'jmp)
+        (= op 'mkarr) (= op 'mktup) (= op 'mkbtp) (= op 'mkbuf)
+        (= op 'mkstr) (= op 'mkstu) (= op 'mktab)) @[]
+    # puti reads its value operand; any other unknown op is assumed to
+    # read every common operand slot (fail-closed; tuples vary in
+    # length so use safe gets)
+    (= op 'puti) @[(get ins 2)]
+    (filter |(not (nil? $0)) @[(get ins 1) (get ins 2) (get ins 3)])))
+
+(defn- push-slots-of [op ins]
+  (case op 'push @[(ins 1)] 'push2 @[(ins 1) (ins 2)] 'push3 @[(ins 1) (ins 2) (ins 3)] nil))
+
+(defn dead-key-ldc? [id d pc slot kw]
+  # Phase 5: a keyword-constant 'ldc feeding ONLY a closed-shape key
+  # position (an mktab construction key, a pread call's key argument,
+  # or a pwrite put's key slot) is DEAD in emitted code -- field
+  # indices resolve statically -- so both its C assignment and its
+  # declaration-type evidence are skipped. This is what keeps the
+  # Phase 2/3 slot-mixing guard from refusing every table literal:
+  # the compiler routes :kw keys through temp slots it later reuses
+  # for numerics. Fail-closed forward scan from pc+1:
+  #   - an instruction that neither reads nor writes slot: continue;
+  #   - a WRITE of slot with no read of it first: dead live range ->
+  #     skippable (the loaded key is never consumed as a value);
+  #   - a push collects args; at the run's consumer, slot must sit at
+  #     a dead-key position (mktab: even index AND a shape exists;
+  #     call/tcall with a validated pread: index 0) -- else not dead;
+  #   - any other READ of slot: not dead.
+  # The direct put-key form ((ldc S kw) then (put T S V)) is dead iff
+  # the put at pc+1 is a validated pwrite and S is its key slot.
+  (def code (or (get d :bytecode) @[]))
+  (def n (length code))
+  # the put-key form ((ldc S kw) ... (put T S V), value ldc between)
+  # is handled inside the main loop below.
+  (var q (+ pc 1))
+  (var args @[])
+  (var res nil)
+  (while (< q n)
+    (def ins (code q))
+    (def op (ins 0))
+    (def rd (operand-slots-of op ins))
+    (def psl (push-slots-of op ins))
+    (cond
+      # put-key form: slot read as a validated pwrite's key -> dead
+      (and (= op 'put) (= slot (ins 2)))
+      (do
+        (def ta (get (get taccs id) q))
+        (set res (and ta (= :pwrite (ta :kind))))
+        (break))
+      psl
+      # extend the pending arg run
+      (array/push args ;psl)
+      (and rd (find |(= $ slot) rd))
+      # a live read outside a dead-key position
+      (do (set res false) (break))
+      # consumer of the push run (only real consumers decide; other
+      # non-push instructions between pushes keep the run open)
+      (and (> (length args) 0) (nil? psl)
+           (or (= op 'mktab) (= op 'call) (= op 'tcall)))
+      (do
+        (def pos (find-index |(= $ slot) args))
+        (set res
+             (cond
+               (nil? pos)
+               # slot was not pushed by this run at all -- its load is
+               # dead IF this consumer did not read it either (rd was
+               # checked above); keep scanning conservatively
+               nil
+               # NOTE: args collected here are only the SUFFIX of the
+               # consumer's arg list (pushes before our ldc are not
+               # visible to a forward scan), so index parity is not
+               # decidable -- classify by the SHAPE instead: the key-
+               # word constant is dead iff it is one of the shape's
+               # keys (a keyword can only sit at a key position here;
+               # keyword VALUES are excluded by the shape rule itself)
+               (= op 'mktab)
+               (do (def mshp (get (get tshapes id) (ins 1)))
+                 (and mshp (get (mshp :fields) kw)))
+               (or (= op 'call) (= op 'tcall))
+               (do (def ta (get (get taccs id) q))
+                 (and ta (= :pread (ta :kind)) (= 0 pos)))
+               false))
+        (when (not= res nil) (break))
+        # unresolved (slot not in this run): keep scanning
+        (set args @[]))
+      # a write of slot with no read: dead live range
+      (and (get infer/shape-dst-ops op)
+           (= slot (ins (get infer/shape-dst-ops op))))
+      (do (set res true) (break))
+      nil)
+    (++ q))
+  (if (not= res nil) res
+    # ran off the end with the load never consumed as a live value
+    true))
+
 (def cnts @{:long 0 :double 0 :number 0})
 (each id (range (length defs))
   (def t (rts id))
@@ -1358,14 +1507,18 @@
                               (= :number (get st (ins 3) :unknown))))
                    :number :unknown))
             (= op 'call)
-            (do (def tid (get cmap pc))
-              (if tid
-                (put st (ins 1) (rts tid))
-                (do (def pdt (pure-dest-type id pc))
-                  (if pdt
-                    (put st (ins 1) pdt)
-                    (do (def sh (call-shape-idx d pc st))
-                      (when sh (put st (ins 1) :number)))))))
+            (do (def fta (get (get taccs id) pc))
+              (if (and fta (= (fta :kind) :pread))
+                # Phase 5: validated constant-key table read -> field type
+                (put st (ins 1) (fta :type))
+                (do (def tid (get cmap pc))
+                  (if tid
+                    (put st (ins 1) (rts tid))
+                    (do (def pdt (pure-dest-type id pc))
+                      (if pdt
+                        (put st (ins 1) pdt)
+                        (do (def sh (call-shape-idx d pc st))
+                          (when sh (put st (ins 1) :number)))))))))
             nil)
           (++ pc))
         (def lastins (code (- endx 1)))
@@ -1813,14 +1966,26 @@
       # would otherwise mix function/number and refuse (nbody s21).
       # Flow/state walks still record :unknown (conservative: any live
       # non-call use refuses downstream).
+      # Phase 5: a keyword constant consumed ONLY as a closed-shape
+      # table key is dead in emitted code (indices resolve statically);
+      # skipping its wput keeps the slot's numeric reuse declarable.
       (do (def wcc ((or (d :constants) @[]) (ins 2)))
-        (unless (or (= :cfunction (type wcc)) (= :function (type wcc)))
+        (unless (or (= :cfunction (type wcc)) (= :function (type wcc))
+                    (and (= :keyword (type wcc))
+                         (dead-key-ldc? id d wpc (ins 1) wcc)))
           (wput (ins 1) (infer/const-num-type d (ins 2)))))
       (= wop 'ldn) (wput (ins 1) :nil)
       (or (= wop 'ldt) (= wop 'ldf)) (wput (ins 1) :bool)
       (= wop 'len) (wput (ins 1) :long)
-      (= wop 'movn) (wput (ins 1) (get wtypes (ins 2) :unknown))
-      (= wop 'movf) (wput (ins 2) (get wtypes (ins 1) :unknown))
+      # Phase 5: a move out of a shaped table slot is dead in emitted
+      # code (the flat struct lives in its own variable); contribute no
+      # declaration evidence to the dest slot
+      (= wop 'movn)
+      (unless (get (get tshapes id) (ins 2))
+        (wput (ins 1) (get wtypes (ins 2) :unknown)))
+      (= wop 'movf)
+      (unless (get (get tshapes id) (ins 1))
+        (wput (ins 2) (get wtypes (ins 1) :unknown)))
       (get infer/arith-im-ops wop)
       (wput (ins 1) (infer/arith-join (get wtypes (ins 2) :unknown) :long))
       (get infer/arith-ops wop)
@@ -1836,8 +2001,14 @@
       (get infer/cmp-ops wop) (wput (ins 1) :bool)
       (or (= wop 'mkarr)) (wput (ins 1) :array)
       (or (= wop 'mktup) (= wop 'mkbtp)) (wput (ins 1) :tuple)
-      (or (= wop 'mkbuf) (= wop 'mkstr) (= wop 'mkstu) (= wop 'mktab))
+      # Phase 5: a shaped mktab contributes NO declaration evidence
+      # (the flat struct lives in its own variable; the table slot is
+      # typically reused for construction operands); an unshaped one
+      # keeps the historical :unknown (refuses downstream).
+      (or (= wop 'mkbuf) (= wop 'mkstr) (= wop 'mkstu))
       (wput (ins 1) :unknown)
+      (= wop 'mktab)
+      (unless (get (get tshapes id) (ins 1)) (wput (ins 1) :unknown))
       (= wop 'ldu)
       # Like ldc-loaded functions above: upvalue loads are overwhelmingly
       # dead callee values (extern fallbacks, closed-over fns resolve by
@@ -1853,16 +2024,21 @@
                         (= :number (get wtypes (ins 3) :unknown))))
              :number :unknown))
       (= wop 'call)
-      (do (def wtid (get cmap wpc))
-        (if wtid
-          (wput (ins 1) (rts wtid))
-          (do (def wpdt (pure-dest-type id wpc))
-            (if wpdt
-              (wput (ins 1) wpdt)
-              # call-shaped access declares a numeric dst (wtypes stands in
-              # for st in this linear sweep; same rule as flow-check)
-              (do (def wsh (call-shape-idx d wpc wtypes))
-                (when wsh (wput (ins 1) :number)))))))
+      (do (def wta (get (get taccs id) wpc))
+        (if (and wta (= (wta :kind) :pread))
+          # Phase 5: a validated constant-key table read declares the
+          # field's exact type
+          (wput (ins 1) (wta :type))
+          (do (def wtid (get cmap wpc))
+            (if wtid
+              (wput (ins 1) (rts wtid))
+              (do (def wpdt (pure-dest-type id wpc))
+                (if wpdt
+                  (wput (ins 1) wpdt)
+                  # call-shaped access declares a numeric dst (wtypes stands in
+                  # for st in this linear sweep; same rule as flow-check)
+                  (do (def wsh (call-shape-idx d wpc wtypes))
+                    (when wsh (wput (ins 1) :number)))))))))
       nil)
     (++ wpc)
     (def wpos (get emit-writers wop))
@@ -1963,6 +2139,20 @@
             (when (and (or (= op 'call) (= op 'tcall))
                        (nil? (get cmap pc)))
               (call-shape-idx d pc st)))
+          # Phase 5: snapshot of a VALIDATED constant-key table read at
+          # this pc (from infer's taccs -- same pattern as cmap): loaded
+          # before the state update below because the dest slot often
+          # reuses the key-constant temp once its live range ends.
+          (def ta-now
+            (when (or (= op 'call) (= op 'tcall))
+              (def ta (get (get taccs id) pc))
+              (when (and ta (= (ta :kind) :pread)) ta)))
+          # Phase 5: the mktab arm below needs the pending VALUE
+          # expressions, but the state-update cond's literal-constructor
+          # arm resets pending before the emission cond runs -- snapshot
+          # the arg list first (same pattern as ta-now).
+          (def mk-now
+            (when (= op 'mktab) (array ;pending)))
           # keep the slot-type state current (mirrors flow-check)
           (cond
             (= op 'ldi) (put st (ins 1) :long)
@@ -2006,13 +2196,15 @@
                               (= :number (get st (ins 3) :unknown))))
                    :number :unknown))
             (= op 'call)
-            (do (def tid (get cmap pc))
-              (if tid
-                (put st (ins 1) (rts tid))
-                (do (def pdt (pure-dest-type id pc))
-                  (if pdt
-                    (put st (ins 1) pdt)
-                    (when sh-now (put st (ins 1) :number))))))
+            (if ta-now
+              (put st (ins 1) (ta-now :type))
+              (do (def tid (get cmap pc))
+                (if tid
+                  (put st (ins 1) (rts tid))
+                  (do (def pdt (pure-dest-type id pc))
+                    (if pdt
+                      (put st (ins 1) pdt)
+                      (when sh-now (put st (ins 1) :number)))))))
             nil)
           (cond
             (= op 'ldi)
@@ -2025,6 +2217,13 @@
                 # resolve by core name; any live use of the loaded value
                 # carries :unknown through flow, refusing at the use site
                 # (same discipline as the ldu skip below).
+                nil
+                # Phase 5 carve-out: a keyword constant that feeds only
+                # a closed-shape table key never emits at all -- field
+                # indices resolve statically, and its slot may be
+                # declared for a reused numeric temp instead.
+                (and (= :keyword (type cval))
+                     (dead-key-ldc? id d pc (ins 1) cval))
                 nil
                 # Phase 2/3: a string/keyword/symbol constant references
                 # its deduplicated static slot (materialized once in
@@ -2228,12 +2427,56 @@
                                       (emit-slot (ins 3) arity) ";")))
                 (do (set bad "mod needs float or nonneg-int operands (policy TBD)")
                   (break))))
+            # Phase 5: moving a closed-shape table slot (the compiler's
+            # callee-position move) is dead in emitted code -- the flat
+            # struct lives in its own variable and access sites refer
+            # to it directly.
             (= op 'movn)
-            (array/push lines (string "    s" (ins 1) " = "
-                                      (emit-slot (ins 2) arity) ";"))
+            (if (get (get tshapes id) (ins 2))
+              nil
+              (array/push lines (string "    s" (ins 1) " = "
+                                        (emit-slot (ins 2) arity) ";")))
             (= op 'movf)
-            (array/push lines (string "    s" (ins 2) " = "
-                                      (emit-slot (ins 1) arity) ";"))
+            (if (get (get tshapes id) (ins 1))
+              nil
+              (array/push lines (string "    s" (ins 2) " = "
+                                        (emit-slot (ins 1) arity) ";")))
+            # Phase 5: a proven closed-shape mktab lowers to a LOCAL C
+            # struct (declared and zero-initialized right here -- valid
+            # C, and the single-construction rule guarantees this site
+            # executes at most once per call) plus field stores from
+            # the pending VALUE expressions (odd positions; even
+            # positions are the keyword keys, resolved statically --
+            # their ldc loads were skipped as dead keys). The struct
+            # lives in its own variable, NOT the table slot: the slot
+            # was almost certainly reused by the register allocator
+            # for the construction operands. No shape -> refuse (the
+            # table stays boxed in the interpreter fallback, never a
+            # forced layout).
+            (= op 'mktab)
+            (do (def mshp (get (get tshapes id) (ins 1)))
+              (if mshp
+                (do
+                  (def snm (nshape-name id mshp))
+                  (def svn (nshape-var mshp))
+                  (array/push lines
+                              (string "    struct " snm " { "
+                                      (string/join
+                                        (seq [i :range [0 (length (mshp :order))]]
+                                          (string (nshape-ctype ((mshp :fields) ((mshp :order) i)))
+                                                  " f" i)) "; ") "; };"))
+                  (array/push lines
+                              (string "    struct " snm " " svn " = {0};"))
+                  (var mi 0)
+                  (each mk (mshp :order)
+                    (array/push lines
+                                (string "    " svn ".f" mi " = ("
+                                        (nshape-ctype ((mshp :fields) mk)) ")("
+                                        (mk-now (+ 1 (* 2 mi))) ");"))
+                    (++ mi))
+                  (set pending @[]))
+                (do (set bad "unhandled op mktab")
+                  (break))))
             # Step 11: array access. janet get-OOB returns nil, which has
             # no unboxed representation — the native kernel aborts
             # instead (documented opt-in divergence). In-bounds loops of
@@ -2274,9 +2517,27 @@
               (array/push lines
                           (string "    s" (ins 1) " = janet_unwrap_number(" gdata ");")))
             (= op 'put)
-            # (put arr idx val): dst IS the array slot (ins 1).
-            # :number indices carry the runtime integrality guard.
-            (do (unless (and (= :array (get st (ins 1) :unknown))
+            # Phase 5 first: a VALIDATED constant-key table write (infer
+            # taccs) lowers to a direct member store into the flat
+            # struct -- same pwrite discipline as the :kernel intrinsics
+            # (:long into a :double field casts exactly for |v| <= 2^53,
+            # the documented int-width caveat; double into :long was
+            # already refused by the analysis).
+            (do (def pwta (get (get taccs id) pc))
+              (if (and pwta (= (pwta :kind) :pwrite))
+                (do (def pwshp (get (get tshapes id) (pwta :base)))
+                  (var pwidx -1)
+                  (var pwi 0)
+                  (each pwk (pwshp :order)
+                    (when (= pwk (pwta :field)) (set pwidx pwi))
+                    (++ pwi))
+                  (array/push lines
+                              (string "    " (nshape-var pwshp) ".f" pwidx " = ("
+                                      (nshape-ctype (pwta :type)) ")("
+                                      (emit-slot (ins 3) arity) ");")))
+              # (put arr idx val): dst IS the array slot (ins 1).
+              # :number indices carry the runtime integrality guard.
+              (do (unless (and (= :array (get st (ins 1) :unknown))
                              (or (infer/int-family? (get st (ins 2) :unknown))
                                  (= :number (get st (ins 2) :unknown)))
                              (get infer/numeric-types (get st (ins 3) :unknown)))
@@ -2292,7 +2553,7 @@
               (array/push lines
                           (string "    " (emit-slot (ins 1) arity) "->data[(int64_t)("
                                   (emit-slot (ins 2) arity) ")] = janet_wrap_number("
-                                  (emit-slot (ins 3) arity) ");")))
+                                  (emit-slot (ins 3) arity) ");")))))
             (= op 'puti)
             # puti: constant-index put (dst=ins1, value=ins2, index=ins3).
             # Bounds abort like put (fail loud); the constant is int32
@@ -2341,6 +2602,23 @@
                                   (get emit-bit-im-c op) "((int32_t)"
                                   (emit-slot (ins 2) arity) ", (int32_t)"
                                   (ins 3) ");")))
+            # Phase 5: a VALIDATED constant-key table read (infer
+            # taccs) lowers to a direct member load out of the flat
+            # struct (pread) -- checked before pure/core calls because
+            # the callee slot's lattice type is :unknown (a table), so
+            # no other call arm can claim it.
+            (or ta-now)
+            (do (def tshp5 (get (get tshapes id) (ta-now :base)))
+              (var tidx5 -1)
+              (var ti5 0)
+              (each tk5 (tshp5 :order)
+                (when (= tk5 (ta-now :field)) (set tidx5 ti5))
+                (++ ti5))
+              (def tmem5 (string (nshape-var tshp5) ".f" tidx5))
+              (if (= op 'tcall)
+                (array/push lines (string "    return " tmem5 ";"))
+                (array/push lines (string "    s" (ins 1) " = " tmem5 ";")))
+              (set pending @[]))
             # call-shaped array/tuple access (see call-shape-idx):
             # single-index (a i) into :array/:tuple lowers exactly like
             # get (bounds abort, fail loud). Checked before the general
@@ -2373,6 +2651,7 @@
             (or (and (or (= op 'call) (= op 'tcall))
                      (nil? (get cmap pc))
                      (not sh-now)
+                     (not ta-now)
                      (pure-call-shape id pc st d)))
             (do (def pres (pure-call-shape id pc st d))
               (def pspec (pres 0))
