@@ -201,6 +201,17 @@ struct JanetVM {
     int gc_minor_phase;
     size_t gc_young_bytes;
     size_t gc_minor_threshold;
+    /* Threaded-abstract visit cycle (Erlang-parity residual O(n) fix,
+     * see gc.c's janet_threaded_visited): the threaded_abstracts
+     * registry's "visited this collection" marker is a cycle stamp,
+     * not a boolean, so no post-minor reset pass over the registry is
+     * needed (the old pass walked the whole table -- O(registry
+     * capacity) ~= O(channels ever registered) -- after every single
+     * fiber minor, the dominant residual O(n)-per-minor term at
+     * bench/agents.janet N=100000, 97% of sample-profile samples).
+     * Bumped once at the start of every collection, alongside
+     * janet_gc_epoch_next. */
+    uint32_t gc_visit_cycle;
     /* Step 1 (process heaps): monotonic owner-id source for fibers.
      * 0 is reserved (shared/unowned); wraps past 4B fibers (reissue
      * is accounting-only noise, never a dangling pointer). */

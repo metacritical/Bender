@@ -1778,7 +1778,68 @@ produced no output and was not debugged further):
   output this session as non-trivial sample share). Cheap individually,
   but worth auditing if the above doesn't fully explain the residual.
 
+## RESOLVED (2026-10-17): the residual O(n)-per-minor cost — NOT sweep_pending
+
+The sweep_pending tail-walk hypothesis above is **disproved**. By code
+inspection: `janet_sweep_drain_pending` runs at the end of *every* minor
+(universal narrowing) and empties the list (`sweep_pending[k] = NULL`), so
+its cost is amortized O(deaths-since-last-drain) — the list never
+accumulates. It does not appear in the profile at all.
+
+**Actual root cause**, found via macOS `sample` on a clean non-ASAN
+rebuild of the N=100000 run sampled ~30s in (ticks phase): **97% of all
+samples** inside `janet_collect_fiber_minor` at the
+`janet_reset_threaded_visited_minor()` call site (pre-fix gc.c:2582).
+That function — a Phase 2b-iii fix for stale threaded-abstract visit
+markers — walked the ENTIRE `janet_vm.threaded_abstracts` table
+(capacity-sized loop; ~2 channel registrations per proc ⇒ ≈O(N) entries,
+and table capacity never shrinks) after EVERY fiber minor. Minors ≈ N ⇒
+O(N²) total; per-minor cost ~O(n): exactly the measured 4.5x-per-call-
+for-5x-N shape.
+
+**Fix (landed this session, uncommitted diff per workspace rules)**:
+replaced the registry's boolean visited marker with a per-collection
+**cycle stamp** — `JanetVM.gc_visit_cycle` (uint32), bumped inside
+`janet_gc_epoch_next()` which already runs exactly once at the start of
+every collection (fiber/proc/global minor and full major — all four call
+sites verified). "Visited this collection" = registry value is a number
+equal to the current cycle (`janet_threaded_visited`, gc.c). The whole
+registry reset pass and its three call sites are deleted. Mark-site flip
+(gc.c ~200) now stamps the cycle; `janet_sweep`'s unvisited test
+(~gc.c:956) uses the same compare. `false` writers (abstract.c
+registration + home_gc_authorized re-arm, marsh.c transfer, janet_sweep's
+post-major reset, tombstones) stay valid — false and stale stamps both
+read as not-visited; the nil ⇒ incref single-claim rule is unchanged.
+uint32 wrap needs one entry to sit unvisited through exactly 2^32
+collections — accounting noise, same accepted class as gc_owner wrap.
+
+**Before/after** (`bench/agents.janet`, interpreter, JANET_NO_PROFILE=1,
+clean rebuild, same machine):
+
+| N | ticks before | ticks after | speedup |
+|---|---|---|---|
+| 20,000 | 4.49s (35,623 msgs/s) | 1.43s (112,163 msgs/s) | 3.1x |
+| 100,000 | 113.4s (7,054 msgs/s) | 26.5s (30,150 msgs/s) | 4.3x |
+
+20k→100k is now 18.5x wall for 5x N — the dominant per-minor O(n) term
+is gone, but a further (smaller) superlinear residual remains; likely in
+the spawn phase and allocation-path page-directory growth, not the
+per-minor collector path. Next optimizer: profile the spawn phase
+against §5.6's constant-factor list.
+
+**Verification battery** (all on the fixed tree): proc 98/99 (the one
+failure, "both land" line 185, reproduces 3/3 on a stashed clean
+baseline — pre-existing timing flake; AOT proc is 99/99), thread 30/30,
+ev 776/776, marsh 73/73, mailbox 76/76, pool 56/56, gc-minor 12/12;
+JANET_GC_VERIFY/HEAP_VERIFY/PROC_VERIFY targeted runs green;
+gcsetinterval-65536 stress on suite-boot (1591/1591) and suite-ev
+(776/776) green; AOT dual-target green for proc/marsh/gc-minor; C
+regressions: test-threaded-abstract-mark-claim PASS (the one that
+exercises this exact marker), ev-selfpipe x2 PASS, test-gc-pcall fail =
+known pre-existing.
+
 ### N=1000000: functional completion, not performance, is the target for this phase
+
 Per user direction, the explicit bar for this phase is: does it FINISH,
 not how fast. A generous-timeout run was in progress when this handoff
 was written; see the session's final status update for the actual

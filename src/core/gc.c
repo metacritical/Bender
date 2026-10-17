@@ -49,6 +49,46 @@ static void janet_mark_string(const uint8_t *str);
 static void janet_mark_fiber(JanetFiber *fiber);
 static void janet_mark_abstract(void *adata);
 
+#ifdef JANET_EV
+/* Phase 2b-iii + Erlang-parity residual O(n) fix: a minor's mark phase
+ * can flip a threaded abstract's registry "visited this cycle" marker
+ * (gc.c first-visit gcmark dispatch), but janet_collect_minor calls
+ * janet_sweep_heaps directly, never janet_sweep -- so with the original
+ * boolean marker only a full janet_sweep's reset loop ever cleared it,
+ * and a stale true marker would let the next cycle's mark skip re-running
+ * gcmark on that abstract's internals (exactly the Phase 1
+ * janet_mark_table crash chain pointed at via janet_thread_handle_mark).
+ *
+ * ORIGINAL FIX (O(n) per minor): a post-minor pass reset every abstract
+ * entry back to false -- but it walked the ENTIRE registry table
+ * (capacity-sized, ~= every channel/abstract ever registered) after
+ * EVERY fiber minor. With minors ~= N actors and registry ~= N entries
+ * that is O(N^2) overall, and it measured as 97% of all samples in a
+ * `sample` profile of bench/agents.janet N=100000 (see
+ * docs/internals/proc-lanes.md).
+ *
+ * CURRENT FORM (O(1) per collection): the marker is a per-collection
+ * CYCLE STAMP (JanetVM.gc_visit_cycle, bumped in janet_gc_epoch_next
+ * at the start of every collection). An entry is "visited this
+ * collection" iff its registry value is a number equal to the current
+ * cycle. Stamps from previous cycles are automatically stale -- no
+ * reset pass at all. The marker never touches the refcount,
+ * home_gc_authorized, or any teardown decision, which stay major-only
+ * (a minor still cannot decide liveness/teardown).
+ *
+ * Valid registry values: nil (never registered), false (registered,
+ * not visited -- written by abstract.c's registration and re-arm
+ * paths, marsh.c's transfer, janet_sweep's post-major reset, and
+ * tombstones), or a number (the cycle that last visited it; stale
+ * numbers read as not-visited). uint32 wrap needs the same entry to
+ * survive, unvisited, exactly 2^32 collections -- accounting noise
+ * only, same class as gc_owner wrap. */
+static int janet_threaded_visited(Janet marker) {
+    return janet_checktype(marker, JANET_NUMBER)
+           && janet_unwrap_number(marker) == (double) janet_vm.gc_visit_cycle;
+}
+#endif
+
 /* Local state that is only temporary for gc */
 static JANET_THREAD_LOCAL uint32_t depth = JANET_RECURSION_GUARD;
 #ifdef JANET_GC_COUNT
@@ -94,6 +134,14 @@ static JANET_THREAD_LOCAL int32_t janet_gc_epoch = 0;
 
 static void janet_gc_epoch_next(void) {
     janet_gc_epoch = (janet_gc_epoch % 15) + 1;
+    /* Threaded-abstract visit cycle (Erlang-parity residual O(n) fix):
+     * this function runs exactly once at the start of EVERY collection
+     * (fiber minor, proc minor, global minor, full major), so bumping
+     * the visit cycle here guarantees each collection sees a fresh
+     * cycle stamp. "Visited this collection" for a threaded abstract
+     * registry entry is then value == gc_visit_cycle, which makes the
+     * old post-minor whole-registry reset pass unnecessary. */
+    janet_vm.gc_visit_cycle++;
 }
 
 /* Mark a value */
@@ -186,23 +234,25 @@ static void janet_mark_abstract(void *adata) {
                 janet_abstract_head(adata)->home_vm == (void *) &janet_vm)
             janet_abstract_head(adata)->home_gc_authorized = 1;
         /* Visit-flag semantics: the table's value is this cycle's
-         * "already visited" marker (the sweep resets every entry to
-         * false). First visit this cycle: flip it and run gcmark so
-         * the abstract's INTERNALS — channel items, pending-entry
-         * values — are marked exactly like non-threaded abstracts'.
-         * Without this, values buffered inside a channel were
-         * collectable at any GC boundary, surviving only while a
-         * sender-side reference happened to keep them alive. */
+         * "already visited" marker -- a per-collection cycle stamp
+         * (see janet_threaded_visited); first visit this cycle stamps
+         * it and runs gcmark so the abstract's INTERNALS — channel
+         * items, pending-entry values — are marked exactly like
+         * non-threaded abstracts'. Without this, values buffered
+         * inside a channel were collectable at any GC boundary,
+         * surviving only while a sender-side reference happened to
+         * keep them alive. */
         Janet kv = janet_wrap_abstract(adata);
         Janet registered = janet_table_get(&janet_vm.threaded_abstracts, kv);
-        if (!janet_truthy(registered)) {
+        if (!janet_threaded_visited(registered)) {
             /* A foreign raw heap edge can reach this abstract without
              * unmarshaling it first. Its first registry insertion must own
              * a claim, just like a transferred channel-buffer reference.
-             * An existing false slot already owns one. */
+             * An existing false (or stale-stamp) slot already owns one. */
             if (janet_checktype(registered, JANET_NIL))
                 janet_abstract_incref(adata);
-            janet_table_put(&janet_vm.threaded_abstracts, kv, janet_wrap_true());
+            janet_table_put(&janet_vm.threaded_abstracts, kv,
+                            janet_wrap_number((double) janet_vm.gc_visit_cycle));
             /* Stale heap references can outlive the abstract: freed heads
              * are poisoned (type == NULL), nothing left to mark, and
              * reading the freed header is unsound. */
@@ -873,29 +923,6 @@ static void janet_quarantine_maybe_drain(void) {
     }
 }
 
-#ifdef JANET_EV
-/* Phase 2b-iii: a minor's mark phase can flip a threaded abstract's
- * registry "visited this cycle" marker true (gc.c first-visit gcmark
- * dispatch), but janet_collect_minor calls janet_sweep_heaps directly,
- * never janet_sweep -- so only a full janet_sweep's reset loop (below)
- * ever clears that marker back to false. Left alone, the stale true
- * marker survives every subsequent minor AND the mark phase of the
- * next major, which then sees "already visited" and skips re-running
- * gcmark on that abstract's internals for the whole cycle: exactly the
- * mechanism the Phase 1 janet_mark_table crash chain pointed at
- * (profile_rows reached via janet_thread_handle_mark). Reset ONLY the
- * per-cycle visited marker after every minor's mark phase -- never the
- * refcount, home_gc_authorized, or any teardown decision, which must
- * stay major-only (a minor still cannot decide liveness/teardown). */
-static void janet_reset_threaded_visited_minor(void) {
-    JanetKV *items = janet_vm.threaded_abstracts.data;
-    for (int32_t i = 0; i < janet_vm.threaded_abstracts.capacity; i++) {
-        if (janet_checktype(items[i].key, JANET_ABSTRACT)) {
-            items[i].value = janet_wrap_false();
-        }
-    }
-}
-#endif
 
 void janet_sweep(void) {
     janet_sweep_weak_drop();
@@ -924,8 +951,10 @@ void janet_sweep(void) {
              * then 0, the item will be collected. This ensures that only one interpreter
              * will clean up the threaded abstract. */
 
-            /* If not visited... */
-            if (!janet_truthy(items[i].value)) {
+            /* If not visited (cycle-stamp compare, see
+             * janet_threaded_visited; false and stale stamps read as
+             * not-visited)... */
+            if (!janet_threaded_visited(items[i].value)) {
                 void *abst = janet_unwrap_abstract(items[i].key);
                 JanetAbstractHead *head = janet_abstract_head(abst);
                 /* This unvisited entry is the home VM's completed major
@@ -2578,9 +2607,6 @@ void janet_collect_fiber_minor(JanetFiber *f) {
      * risk from bucketing by it. */
     janet_xfb_mark_owned(ss, f->gc_owner);
     janet_vm.gc_mark_phase = 0;
-#ifdef JANET_EV
-    janet_reset_threaded_visited_minor();
-#endif
     /* Erlang-parity messaging fix (docs/internals/proc-lanes.md): the
      * real O(n^2) root cause, confirmed by direct code inspection (no
      * profiling ambiguity) -- janet_sweep_heaps_owned's wide path
@@ -2800,9 +2826,6 @@ void janet_collect_process(JanetProcess *proc) {
     if (NULL != proc->monitors) janet_mark(janet_wrap_array(proc->monitors));
     janet_mark(proc->exit_reason);
     janet_vm.gc_mark_phase = 0;
-#ifdef JANET_EV
-    janet_reset_threaded_visited_minor();
-#endif
     if (NULL != getenv("JANET_PROC_VERIFY")) {
         /* Gather P-owned young unmarked candidates (bounded sample).
          * P3.5b Slice A: candidates live in per-fiber lists too. */
@@ -2870,9 +2893,6 @@ void janet_collect_minor(void) {
     janet_vm.gc_minor_phase = 1;
     janet_mark_roots();
     janet_vm.gc_mark_phase = 0;
-#ifdef JANET_EV
-    janet_reset_threaded_visited_minor();
-#endif
     if (getenv("JANET_GC_VERIFY")) {
         if (janet_gc_verify_minor()) {
             fprintf(stderr, "gc-verify: minor mark incomplete, aborting\n");

@@ -30,6 +30,10 @@ here is backed by a commit, a measurement, or an explicit "not verified" label.
   Phase 1" item) has not been started. **Do not jump to Phase 3** — an
   earlier draft of this file wrongly recommended that; see §9.1 for the
   retraction and §9.3 for the corrected, dependency-respecting order.
+  *(Update 2026-10-17: 2b-iii policy confirmed already landed — §9.2; the
+  §5.5 residual O(n)-per-minor cost root-caused and fixed — see §5.5; the
+  per-proc independence design note written — §9.2. Remaining Phase 2b
+  follow-on: implement the design note.)*
 
 ---
 
@@ -324,26 +328,50 @@ All four were verified with the full discipline described in §7.
   `janet_thread_new_run`'s `janet_try_init`/`janet_deinit` (thread shutdown).
 - Found under ASAN on `test/suite-proc.janet`. Not investigated.
 
-### 5.5 ⚠️ NOT STARTED: residual O(n)-per-minor cost
-- N=20000 → N=100000 is 4.0s → 98s; per-minor cost ~0.2ms → ~0.9ms (a ~4.5x
-  per-call increase for 5x N) → something still scales ~O(n) per minor call.
+### 5.5 ✅ RESOLVED (2026-10-17 session): residual O(n)-per-minor cost
+- N=20000 → N=100000 was 4.0s → 98s; per-minor cost ~0.2ms → ~0.9ms (a ~4.5x
+  per-call increase for 5x N) → something still scaled ~O(n) per minor call.
   Minor count confirmed ≈ N (one per actor), nurseries correctly tiny.
-- **Strongest untested candidate**: `janet_sweep_drain_pending` (`gc.c:1702`),
-  called on every minor now that narrowing is universal. It walks a **global**
-  `janet_vm.sweep_pending[0..2]` list to find its TAIL before splicing; dying
-  fibers PREPEND their whole `heap_lists[]` onto that same global list
-  (`gc.c` ~618–630). If deaths outpace drains, the tail-walk cost grows with N.
-  - A diagnostic instrumentation attempt compiled but produced no output and
-    was abandoned (per direction to stop chasing performance). **Debug that
-    first** (check the `dpt_calls` gating / env detection), or measure
-    `sweep_pending[k]` lengths directly via lldb at increasing points in an
-    N=100000 vs N=20000 run.
-  - If confirmed, the fix is almost certainly: track the list's own tail
-    pointer incrementally (O(1) append) instead of re-walking.
-- Secondary unruled-out candidates: `janet_slab_page_for`'s binary search over
-  `ss->dir` (O(log pages), probably not dominant); per-minor fixed overhead
-  including an **unconditional `getenv("JANET_ROOT_TRACE")` on every single
-  minor** (visible in `sample` output — cheap but on the hot path).
+- **Root cause FOUND and FIXED — it was NOT `janet_sweep_drain_pending`.**
+  The handoff's sweep_pending tail-walk hypothesis is DISPROVED: the drain
+  runs after every minor and empties the list, so its cost is amortized
+  O(deaths since last drain), which stays tiny. (Found by code inspection
+  before profiling; confirmed by not appearing in the profile at all.)
+- **Actual root cause** (macOS `sample`, clean non-ASAN rebuild, N=100000
+  mid-run: **97% of all samples** in `janet_collect_fiber_minor` at the
+  `janet_reset_threaded_visited_minor()` call, gc.c:2582 in the pre-fix
+  tree): that function walks the ENTIRE `janet_vm.threaded_abstracts`
+  registry table — a capacity-sized loop over every channel/abstract ever
+  registered (~2 per proc, so ≈O(N), and capacity never shrinks) — after
+  EVERY fiber minor. Minors ≈ N → **O(N²) total**, exactly the measured
+  ~O(n)-per-minor shape.
+- **Fix**: replaced the registry's boolean "visited this cycle" marker with
+  a per-collection **cycle stamp** (`JanetVM.gc_visit_cycle`, uint32,
+  bumped inside `janet_gc_epoch_next` which already runs exactly once at
+  the start of every collection). "Visited this collection" =
+  `value == cycle` (helper `janet_threaded_visited`, gc.c). Deleted the
+  whole-registry reset pass and its three call sites; updated the mark-site
+  flip (gc.c ~200) and `janet_sweep`'s unvisited test (gc.c ~956).
+  Writers of `false` (abstract.c registration/re-arm, marsh.c transfer,
+  janet_sweep's post-major reset, tombstones) remain valid — false and
+  stale stamps both read as "not visited"; the nil→incref single-claim
+  semantics are preserved exactly.
+- **Numbers** (`bench/agents.janet`, interpreter, `JANET_NO_PROFILE=1`,
+  clean rebuild, same machine): N=20000 ticks 4.49s → **1.43s** (3.1x);
+  N=100000 ticks 113.4s → **26.5s** (4.3x). 20k→100k is now 18.5x wall
+  for 5x N — better but still superlinear; a further residual term
+  remains (candidates: allocation-path page-directory growth, spawn-phase
+  costs; see §5.6), but the dominant per-minor O(n) term is gone.
+- **Verification**: full battery per §8 — proc/thread/ev/marsh/mailbox/
+  pool/gc-minor suites (proc 98/99 pre-existing flake "both land",
+  reproduced 3/3 on stashed clean baseline; AOT proc is 99/99), AOT
+  dual-target green, `JANET_GC_VERIFY`/`JANET_HEAP_VERIFY`/`JANET_PROC_VERIFY`
+  runs green, gcsetinterval 65536 stress on suite-boot/ev green, C
+  regressions: threaded-abstract-mark-claim PASS, ev-selfpipe x2 PASS,
+  gc-pcall fail = known pre-existing.
+- Secondary candidates from the old §5.5 text (`janet_slab_page_for`
+  binary search; per-minor `getenv` calls) are real but were noise-level
+  in this profile; the reset pass was ~97% of the story.
 
 ### 5.6 ⚠️ NOT STARTED: constant-factor spawn-cost gaps
 Identified against Erlang's ~1µs/spawn budget (external analysis, plausible
@@ -491,9 +519,9 @@ Do not jump phases. The corrected order is §9.3.
 | **Phase 2b — collector swap** (`aot-plan.md` §"Phase 2b", line 184: *"NEXT; not started"* header is itself now stale — slices landed individually) | three ordered slices, see below | ⚠️ **INCOMPLETE** |
 | ↳ 2b-i | scoped roots for generated/C code (`janet_gcshadow_push/mark/pop_to`) | **DONE** |
 | ↳ 2b-ii | immutable-string heap split (`JanetVM.string_blocks`) | **DONE** |
-| ↳ 2b-iii | slab/size-class allocator + generations | ⚠️ **"Storage done, policy open"** — storage landed (16 KiB pages, 8 size classes 32–512B); **generational/sweep policy still open** |
+| ↳ 2b-iii | slab/size-class allocator + generations | **DONE, including policy** — storage (16 KiB pages, 8 size classes 32–512B) AND the generational/sweep policy both landed: per-page age (young 0–1, old 2+), dirty flags, write barriers in table/array store primitives, minors skipping old-clean containers, `test/suite-gc-minor.janet` torture gate, `JANET_GC_VERIFY` minor-edge verifier. The earlier "policy open" row here was doc drift vs aot-plan.md's "Policy done (this checkout)" — corrected 2026-10-17 after code inspection + gate runs (gc-minor 12/12, gcsetinterval 65536 stress on boot/ev, GC_VERIFY green) |
 | ↳ "GC hardening" steps 1–5 | separate hardening pass (not the collector swap) | **DONE** |
-| ↳ **per-proc GC independence** | the full collector swap goal | ⚠️ **NOT STARTED** (handoff §5.8) |
+| ↳ **per-proc GC independence** | the full collector swap goal | ⚠️ **DESIGN NOTE WRITTEN** — `docs/internals/per-proc-gc-independence.md` (scoped 5-slice plan reusing owner attribution, per-fiber heap_lists, xfb buckets, narrow sweeps; first milestone = per-owner slab arenas). Not implemented |
 | **Phase 3** | named registry; supervision-tree library; M:N scheduler core / resident-proc migration | ⚠️ **NOT STARTED** (see §9.4) |
 | Phase 3.5 / 5 candidates | copy-by-default messages; messaging-throughput campaign; proc migration | copy-by-default **DONE**; throughput campaign **DONE this session** (§1); migration open |
 | M4b (milestone, not a numbered phase) | true preemption | re-scoped by measurement, §4.2 — mostly already shipped |
