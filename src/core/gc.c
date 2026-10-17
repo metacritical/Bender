@@ -3105,12 +3105,36 @@ void janet_clear_memory(void) {
         if (janet_checktype(items[i].key, JANET_ABSTRACT)) {
             void *abst = janet_unwrap_abstract(items[i].key);
             JanetAbstractHead *head = janet_abstract_head(abst);
-            /* Stale entry over a freed (poisoned) abstract: skip. */
-            if (NULL == head->type) continue;
+            /* Stale entry over a freed (poisoned) abstract: the header
+             * is gone (quarantine drain above, an earlier refcount
+             * free, or a routed teardown callback). Nil the slot in
+             * place so later table probes in this same teardown
+             * (janet_deinit_block's tombstone put for another
+             * abstract) never janet_equals against the dead key. */
+            if (NULL == head->type) {
+                items[i].key = janet_wrap_nil();
+                items[i].value = janet_wrap_false();
+                janet_vm.threaded_abstracts.deleted++;
+                janet_vm.threaded_abstracts.count--;
+                continue;
+            }
             if (head->type->gcperthread) {
                 janet_assert(!head->type->gcperthread(head->data, head->size), "per-thread finalizer failed");
             }
             janet_abstract_decref_maybe_free(abst);
+            /* Tombstone in place (mirrors janet_sweep): the decref may
+             * have freed the header (large-path heads hit real free()),
+             * and a lingering key would be compared by any later
+             * janet_table_put/remove in the blocks walk below --
+             * use-after-free in janet_equals (value.c). Skip if the
+             * decref path already tombstoned, so count bookkeeping is
+             * not applied twice. */
+            if (!janet_checktype(items[i].key, JANET_NIL)) {
+                items[i].key = janet_wrap_nil();
+                items[i].value = janet_wrap_false();
+                janet_vm.threaded_abstracts.deleted++;
+                janet_vm.threaded_abstracts.count--;
+            }
         }
     }
 #endif
