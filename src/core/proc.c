@@ -1426,6 +1426,99 @@ JANET_CORE_FN(cfun_proc_done,
     return janet_wrap_boolean(proc->done);
 }
 
+/* B7.1 named process registry (erlang:register/2, whereis/1,
+ * unregister/1). janet_vm.proc_registry is a lazily-allocated
+ * keyword -> core/proc JanetTable, root-marked in gc.c alongside
+ * top_dyns/profile_table and reset in vm.c's init/deinit (see those
+ * sites for the full reasoning) -- no further GC plumbing needed
+ * here; an ordinary JanetTable's own marking covers the registered
+ * proc handles, so a live registration correctly keeps its process
+ * reachable, and removing a stale entry (below) correctly releases
+ * that reference.
+ *
+ * Known, bounded race: proc->done is set by the reaper path
+ * (cfun_proc_record_exit, "right after taking the completion
+ * event"), which can run strictly after the underlying fiber has
+ * actually finished. There is no earlier authoritative signal
+ * available without deeper scheduler plumbing. This means a name
+ * can remain "in use" for a brief window after its process is
+ * actually gone, but NEVER the other way around (whereis/register
+ * never observes a name as free while its proc is still genuinely
+ * alive) -- the lag leans in the safe direction, so proc->done is
+ * used as-is rather than inventing an unverified workaround. */
+static JanetTable *janet_proc_registry_table(void) {
+    if (NULL == janet_vm.proc_registry) {
+        janet_vm.proc_registry = janet_table(0);
+    }
+    return janet_vm.proc_registry;
+}
+
+JANET_CORE_FN(cfun_proc_register,
+              "(proc/register name proc)",
+              "B7.1: register `proc` under keyword `name` for "
+              "proc/whereis lookup. Panics if `name` is already "
+              "registered to a process that is not proc/done? -- a "
+              "live registration is never silently overwritten. If "
+              "the previous holder of `name` has completed, the "
+              "registration is replaced without requiring an "
+              "explicit unregister first. Returns `proc`.") {
+    janet_fixarity(argc, 2);
+    if (!janet_checktype(argv[0], JANET_KEYWORD)) {
+        janet_panicf("proc/register name must be a keyword, got %v", argv[0]);
+    }
+    JanetProcess *proc = janet_getproc(argv, 1);
+    JanetTable *reg = janet_proc_registry_table();
+    Janet prev = janet_table_get(reg, argv[0]);
+    if (janet_checktype(prev, JANET_ABSTRACT) &&
+            janet_abstract_type(janet_unwrap_abstract(prev)) == &janet_proc_type) {
+        JanetProcess *prevproc = (JanetProcess *) janet_unwrap_abstract(prev);
+        if (!prevproc->done) {
+            janet_panicf("proc/register: name %v already registered to a live process",
+                         argv[0]);
+        }
+    }
+    janet_table_put(reg, argv[0], argv[1]);
+    (void) proc;
+    return argv[1];
+}
+
+JANET_CORE_FN(cfun_proc_whereis,
+              "(proc/whereis name)",
+              "B7.1: look up the process registered under keyword "
+              "`name`, or nil if unregistered. If the registered "
+              "process has since completed, the stale entry is "
+              "removed and nil is returned -- a caller never "
+              "receives a handle to an already-finished process.") {
+    janet_fixarity(argc, 1);
+    if (!janet_checktype(argv[0], JANET_KEYWORD)) {
+        janet_panicf("proc/whereis name must be a keyword, got %v", argv[0]);
+    }
+    if (NULL == janet_vm.proc_registry) return janet_wrap_nil();
+    Janet found = janet_table_get(janet_vm.proc_registry, argv[0]);
+    if (janet_checktype(found, JANET_NIL)) return janet_wrap_nil();
+    JanetProcess *proc = (JanetProcess *) janet_unwrap_abstract(found);
+    if (proc->done) {
+        janet_table_remove(janet_vm.proc_registry, argv[0]);
+        return janet_wrap_nil();
+    }
+    return found;
+}
+
+JANET_CORE_FN(cfun_proc_unregister,
+              "(proc/unregister name)",
+              "B7.1: remove the registration under keyword `name`, "
+              "if present. No-op, not an error, if nothing is "
+              "registered under that name. Returns nil.") {
+    janet_fixarity(argc, 1);
+    if (!janet_checktype(argv[0], JANET_KEYWORD)) {
+        janet_panicf("proc/unregister name must be a keyword, got %v", argv[0]);
+    }
+    if (NULL != janet_vm.proc_registry) {
+        janet_table_remove(janet_vm.proc_registry, argv[0]);
+    }
+    return janet_wrap_nil();
+}
+
 JANET_CORE_FN(cfun_proc_exit_reason,
               "(proc/exit-reason p)",
               "P1.2: the recorded exit reason (:normal on clean exit).") {
@@ -1498,6 +1591,9 @@ static const JanetRegExt proc_cfuns_ext[] = {
     JANET_CORE_REG("proc/trap-exit", cfun_proc_trap_exit),
     JANET_CORE_REG("proc/trap?", cfun_proc_trap),
     JANET_CORE_REG("proc/killed?", cfun_proc_killed),
+    JANET_CORE_REG("proc/register", cfun_proc_register),
+    JANET_CORE_REG("proc/whereis", cfun_proc_whereis),
+    JANET_CORE_REG("proc/unregister", cfun_proc_unregister),
     JANET_REG_END
 };
 

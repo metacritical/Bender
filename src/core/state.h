@@ -150,6 +150,16 @@ struct JanetVM {
      * We need this to look up the constructors when unmarshalling. */
     JanetTable *abstract_registry;
 
+    /* B7.1 named process registry: keyword name -> core/proc handle
+     * (erlang:register/2, whereis/1, unregister/1). Lazily allocated --
+     * NULL means "nothing named yet", behaviorally identical to an
+     * empty table, and most programs never name a process (the same
+     * discipline as B6's lazy mailbox and B3's lazy stash/monitors).
+     * Owned by proc.c; it is a naked C pointer, so gc.c must mark it
+     * as a C root at every root-set site that already marks top_dyns
+     * and profile_table -- see janet_proc_registry() in proc.c. */
+    JanetTable *proc_registry;
+
     /* Immutable value cache */
     const uint8_t **cache;
     uint32_t cache_capacity;

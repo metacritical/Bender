@@ -2287,6 +2287,17 @@ static void janet_mark_roots(void) {
     if (janet_vm.profile_table) {
         janet_mark(janet_wrap_table(janet_vm.profile_table));
     }
+    /* B7.1 named proc registry: same class as the two above -- a C
+     * container mutated without the janet write barrier. Marking it
+     * keeps a REGISTERED proc alive (correct: a live registration must
+     * keep its process reachable); a completed proc is dropped from
+     * the table by the next proc/whereis or proc/register that touches
+     * the name, which releases the reference naturally. No gcroot and
+     * no extra marking code: an ordinary JanetTable's own marking
+     * walks the values (janet_procat_mark covers the proc's children). */
+    if (janet_vm.proc_registry) {
+        janet_mark(janet_wrap_table(janet_vm.proc_registry));
+    }
     if (janet_vm.root_fiber != NULL) { /* Can be NULL if janet_collect called outside of interpreter loop */
         janet_mark_fiber(janet_vm.root_fiber);
     }
@@ -2571,6 +2582,14 @@ void janet_collect_fiber_minor(JanetFiber *f) {
     if (janet_vm.profile_table) {
         janet_mark(janet_wrap_table(janet_vm.profile_table));
     }
+    /* B7.1 named proc registry: third member of the same pin set. A
+     * proc/register that ran on some fiber stored a proc handle into
+     * this table without a write barrier, so a LATER actor's own minor
+     * would otherwise sweep that handle (the registry entry then holds
+     * a freed proc). Marked here exactly as top_dyns is. */
+    if (janet_vm.proc_registry) {
+        janet_mark(janet_wrap_table(janet_vm.proc_registry));
+    }
     /* Event-loop C roots: the spawn task queue and the timeout queue
      * are naked C arrays that hold queued wakeups — task fibers and
      * resume values — allocated young on ANY fiber's heap (a channel
@@ -2661,6 +2680,11 @@ static void janet_mark_proc_shared(uint32_t owner_id) {
     }
     if (janet_vm.profile_table) {
         janet_mark(janet_wrap_table(janet_vm.profile_table));
+    }
+    /* B7.1 named proc registry (same pin set as top_dyns; see the
+     * long note in janet_mark_roots). */
+    if (janet_vm.proc_registry) {
+        janet_mark(janet_wrap_table(janet_vm.proc_registry));
     }
     {
         JanetCompiler *comp;

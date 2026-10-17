@@ -2611,6 +2611,10 @@ int janet_init(void) {
     janet_vm.abstract_registry = janet_table(0);
     janet_gcroot(janet_wrap_table(janet_vm.abstract_registry));
 
+    /* B7.1 named proc registry: lazy (NULL until proc/register runs;
+     * NULL reads exactly like an empty table at every use site). */
+    janet_vm.proc_registry = NULL;
+
     /* Traversal */
     janet_vm.traversal = NULL;
     janet_vm.traversal_base = NULL;
@@ -2784,6 +2788,7 @@ void janet_deinit(void) {
     janet_free(janet_vm.slab_state);
     janet_vm.slab_state = NULL;
     janet_vm.abstract_registry = NULL;
+    janet_vm.proc_registry = NULL;
     janet_vm.core_env = NULL;
     janet_vm.top_dyns = NULL;
     janet_vm.user = NULL;
