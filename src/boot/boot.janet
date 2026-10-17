@@ -5815,6 +5815,12 @@
   (var pgo-args "")
   (var pgo-stdin "")
   (var no-auto-pgo false)
+  # B7.2 Part B, Piece 1c: opt-in whole-program dead-code elimination.
+  # Off by default so no existing build invocation changes behavior
+  # (design-note Piece 1, point 4: "never silently on"). Only meaningful
+  # with --native, since the dce-reachable gate runs inside the
+  # callgraph.janet invocation that only the native path makes.
+  (var dce false)
   (var appargs @[])
   (var i 0)
   (def n (length aotargs))
@@ -5835,13 +5841,19 @@
       (= a "--pgo") (do (set pgo true) (set pgo-args (aot-next aotargs i "--pgo")) (+= i 2))
       (= a "--pgo-stdin") (do (set pgo-stdin (aot-next aotargs i "--pgo-stdin")) (+= i 2))
       (= a "--no-auto-pgo") (do (set no-auto-pgo true) (++ i))
+      (= a "--dce") (do (set dce true) (++ i))
       (= a "-x") (do (array/push extrac (aot-next aotargs i "-x")) (+= i 2))
       (= a "--ldflags") (do (set ldflags (aot-next aotargs i "--ldflags")) (+= i 2))
       (string/has-prefix? "-" a) (aot-die (string "unknown flag " a))
       (do (when (not (empty? src)) (aot-die "one input only"))
           (set src a) (++ i))))
   (when (empty? src)
-    (aot-die "usage: bender --aot app.janet [-o app] [-c] [-S] [-E args...] [--native] [-Oz] [--release] [--upx] [--externs FILE] [--include FILE] [-x FILE] [--ldflags STR] [--pgo ARGS] [--pgo-stdin FILE] [--no-auto-pgo]"))
+    (aot-die "usage: bender --aot app.janet [-o app] [-c] [-S] [-E args...] [--native] [-Oz] [--release] [--upx] [--dce] [--externs FILE] [--include FILE] [-x FILE] [--ldflags STR] [--pgo ARGS] [--pgo-stdin FILE] [--no-auto-pgo]"))
+  # --dce only has an effect on the native path: the dce-reachable gate
+  # lives in callgraph.janet, which the plain-image path never invokes.
+  # Refuse loudly rather than silently ignoring the flag.
+  (when (and dce (not native))
+    (aot-die "--dce requires --native (the dce-reachable gate runs in the native callgraph pass)"))
   (when (and size-opt (or only-c print-c run-mode))
     (aot-die "-Oz needs a real binary build (no -c/-S/-E)"))
   (when pack-upx
@@ -6093,11 +6105,25 @@
         (aot-die "--release needs compatible cached PGO evidence and a replayable workload; run --pgo first" 1))
       (when (and pack-upx (not gate))
         (aot-die "--upx needs --pgo or compatible cached evidence with a replayable workload" 1))
+      # B7.2 Part B, Piece 1c. The exclusion file is the ONLY channel
+      # carrying the dce-reachable verdict to mkimage.janet (same
+      # write-a-file/read-a-file convention as native-names.txt). A
+      # stale file from an earlier --dce build in the same ndir would
+      # silently re-strip on a later non---dce build, so it is removed
+      # unconditionally first: "no file" is the canonical encoding of
+      # both "flag absent" and ":unsafe verdict".
+      (def dce-excluded-file (string ndir "/dce-excluded.txt"))
+      (unless (os/stat ndir) (os/mkdir ndir))
+      (when (os/stat dce-excluded-file) (try (os/rm dce-excluded-file) ([_] nil)))
       (aot-run-tool tooldir "callgraph.janet"
                     [src ;inc-args ;profile-args "--emit-native-lib" ndir
+                     ;(if dce ["--dce"] [])
                      ;(if externs ["--externs" externs] [])])
       (aot-run-tool tooldir "mkimage.janet"
-                    [src "--native" (string ndir "/native-names.txt") cfile])
+                    [src "--native" (string ndir "/native-names.txt")
+                     ;(if (and dce (os/stat dce-excluded-file))
+                        ["--dce-excluded" dce-excluded-file] [])
+                     cfile])
       (when print-c
         (file/write stdout (slurp cfile))
         (file/write stdout (slurp (string ndir "/native.c"))))
@@ -6179,7 +6205,8 @@
     (if native
       (do (def ndir (string out "-native"))
         (aot-clean [out cfile (string ndir "/native.c")
-                     (string ndir "/native-names.txt")]
+                     (string ndir "/native-names.txt")
+                     (string ndir "/dce-excluded.txt")]
                    [ndir stage]))
       (aot-clean [out cfile] [stage]))
     (os/exit code))

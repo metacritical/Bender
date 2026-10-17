@@ -18,21 +18,33 @@
 # eval/compile/dobytes on runtime strings is NOT detected statically yet —
 # programs using them build but keep interpreting at runtime.
 
-# :args[0] is this script's path; SRC OUT [--native names.txt]
+# :args[0] is this script's path;
+# SRC OUT [--native names.txt] [--dce-excluded dce-excluded.txt]
 (def rawargs (tuple/slice (dyn :args) 1))
 (var args @[])
 (var native-names @{})
 (var native-names-file nil)
+# B7.2 Part B, Piece 1c: names callgraph.janet's dce-reachable gate
+# proved unreachable under a :safe whole-program verdict. Absent flag
+# == absent file == empty set == strip nothing, which is exactly the
+# pre-Piece-1c behavior of this file.
+(var dce-excluded-names @{})
+(var dce-excluded-file nil)
 (var nai 0)
 (while (< nai (length rawargs))
   (def a (rawargs nai))
-  (if (and (= a "--native") (< (+ nai 1) (length rawargs)))
+  (cond
+    (and (= a "--native") (< (+ nai 1) (length rawargs)))
     (do (set native-names-file (rawargs (+ nai 1)))
+        (++ nai))
+    (and (= a "--dce-excluded") (< (+ nai 1) (length rawargs)))
+    (do (set dce-excluded-file (rawargs (+ nai 1)))
         (++ nai))
     (array/push args a))
   (++ nai))
 (when (< (length args) 2)
-  (eprint "usage: mkimage.janet SRC.janet OUT.c [--native names.txt]")
+  (eprint "usage: mkimage.janet SRC.janet OUT.c [--native names.txt]"
+          " [--dce-excluded dce-excluded.txt]")
   (os/exit 1))
 (def srcpath (get args 0))
 (def outpath (get args 1))
@@ -131,19 +143,41 @@
     (each l (string/split "\n" (slurp df))
       (when (> (length l) 0) (put dispatch-names (symbol l) true)))))
 
-(when (next native-names)
+# B7.2 Part B, Piece 1c: the dce-reachable exclusion set. Only written
+# by callgraph.janet under --dce AND a :safe whole-program verdict, so
+# reaching this point with a non-empty set already means the paranoid
+# gate positively cleared every construct in the program. This file
+# performs no reachability reasoning of its own: it is a pure consumer
+# of that verdict, exactly as it is a pure consumer of native-names.txt.
+(when dce-excluded-file
+  (when (= :file (os/stat dce-excluded-file :mode))
+    (each l (string/split "\n" (slurp dce-excluded-file))
+      (when (> (length l) 0) (put dce-excluded-names (symbol l) true)))))
+
+# The loop below now runs when EITHER set is non-empty. The two checks
+# are independent and the native one has strict priority: a name in
+# both sets MUST take the native path, because native stripping is
+# paired with a prelude rebind (and possibly a %boxed dispatch form)
+# that the unconditional DCE drop would leave dangling.
+(when (or (next native-names) (next dce-excluded-names))
   # strip proven defn forms; keep everything else. Phase 4 exception:
   # a dispatch function's defn is kept RENAMED to <name>%boxed and
   # immediately followed by its boxed-registration form (must run
   # before any call site can reach the dispatcher; defn placement in
   # the original source is the earliest correct point).
   (def kept @[])
+  # Piece 1c bookkeeping: names actually dropped (with their slot in
+  # `kept`) and names the residual-reference audit below put back.
+  (def dce-dropped @[])
+  (def dce-restored @[])
   (each f forms
-    (if (and (tuple? f) (>= (length f) 2)
-             (symbol? (get f 0))
-             (or (= (string (get f 0)) "defn") (= (string (get f 0)) "defn-"))
-             (symbol? (get f 1))
-             (get native-names (get f 1)))
+    (def top-defn?
+      (and (tuple? f) (>= (length f) 2)
+           (symbol? (get f 0))
+           (or (= (string (get f 0)) "defn") (= (string (get f 0)) "defn-"))
+           (symbol? (get f 1))))
+    (cond
+      (and top-defn? (get native-names (get f 1)))
       (do
         (when (tuple? f)
           (def orig (get f 1))
@@ -159,8 +193,98 @@
                                  (tuple 'quote (keyword orig))
                                  boxed-sym)))
             nil)))
+
+      # B7.2 Part B, Piece 1c: the second, independent check. Unlike the
+      # native case above there is no replacement of any kind -- the form
+      # is dropped outright, no prelude rebind, no %boxed fallback. That
+      # asymmetry is deliberate: native stripping removes a body that
+      # something still calls (through a C wrapper), whereas a DCE drop
+      # removes a body the gate proved nothing can reach at all.
+      #
+      # Dropped names are recorded rather than discarded: the residual-
+      # reference audit below re-examines them against the surviving
+      # forms and puts any name back that is still mentioned. A dropped
+      # form therefore leaves a PLACEHOLDER in `kept` rather than
+      # vanishing, so a restore can put the original defn back at its
+      # exact source position. Order is load-bearing: a restored defn is
+      # by definition still referenced, and in this one-thunk model it
+      # must still precede its users.
+      (and top-defn? (get dce-excluded-names (get f 1)))
+      # NOTE: the placeholder MUST be a mutable array (@[...]), not a
+      # bracket-tuple: parsed source forms are themselves tuples, so a
+      # tuple placeholder would be indistinguishable from real code and
+      # the audit below would silently treat it as a surviving form.
+      (do (array/push dce-dropped @[(get f 1) (length kept)])
+        (array/push kept @[:dce-dropped (get f 1) f]))
+
       (array/push kept f)))
-  (set forms kept)
+
+  # --- Residual-reference audit (fail-closed, B7.2 Part B, Piece 1c) ---
+  # The whole-program gate in callgraph.janet reasons over BYTECODE. This
+  # file edits SOURCE FORMS, and the two views are not interchangeable:
+  # this compiler's single-thunk model means a defn that survived into the
+  # thunk at all necessarily still has a live symbol reference somewhere in
+  # it, and silently deleting that binding yields "unknown symbol" at best
+  # and a wrong image at worst. So nothing is trusted on the verdict alone:
+  # every dropped name is re-checked against the forms that actually
+  # survived, and any name still mentioned is RESTORED (strip nothing for
+  # that name) rather than guessed about. Refusing to strip is always a
+  # correct outcome here -- the design note's "V1 is allowed to strip
+  # nothing" applies per name, not just per build.
+  (when (next dce-excluded-names)
+    (defn mentions-sym? [form sym]
+      (cond
+        (symbol? form) (= form sym)
+        (or (tuple? form) (array? form))
+        (do (var hit false)
+          (each sub form (when (mentions-sym? sub sym) (set hit true)))
+          hit)
+        (or (table? form) (struct? form))
+        (do (var hit false)
+          (eachp [k v] form
+            (when (or (mentions-sym? k sym) (mentions-sym? v sym)) (set hit true)))
+          hit)
+        false))
+    # Fixpoint, not a single pass: restoring one defn makes its OWN body
+    # a surviving form, which can in turn reference another dropped name.
+    # Iterate until no further restore happens, so the kept set is closed
+    # under reference -- a single pass would leave a dangling symbol.
+    (var changed true)
+    (while changed
+      (set changed false)
+      (each entry dce-dropped
+        (def nm (entry 0))
+        (def slot (entry 1))
+        (when (and (array? (get kept slot))
+                   (= :dce-dropped (get (get kept slot) 0)))
+          (var referenced false)
+          # Scan only the forms that genuinely survive: placeholders are
+          # the dropped bodies themselves and must not count as references
+          # to one another (a dead cluster is dropped as a unit, and its
+          # internal cross-references are exactly what makes it dead).
+          (each kf kept
+            (unless (and (array? kf) (= :dce-dropped (get kf 0)))
+              (when (mentions-sym? kf nm) (set referenced true))))
+          (when referenced
+            (eprint "mkimage: dce: refusing to strip " nm
+                    " -- still referenced by a surviving form (keeping it)")
+            (array/push dce-restored nm)
+            # restore in place, preserving original source order
+            (put kept slot ((get kept slot) 2))
+            (set changed true))))))
+
+  # Collapse: placeholders that were never restored disappear for real.
+  (def kept-final @[])
+  (each kf kept
+    (unless (and (array? kf) (= :dce-dropped (get kf 0)))
+      (array/push kept-final kf)))
+  (when (next dce-excluded-names)
+    (eprint "mkimage: dce: stripped " (- (length dce-dropped) (length dce-restored))
+            " of " (length dce-dropped) " candidate defn forms"
+            (if (empty? dce-restored) ""
+              (string " (restored: " (string/join (map string dce-restored) " ") ")"))))
+
+  (set forms kept-final)
   # prelude: rebind each native name from the env (wrapper cfunctions
   # registered by native_init before the thunk runs). NOTE: unwrap with
   # (get ... :value), NEVER (:value ...) -- the latter is method-invoke

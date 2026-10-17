@@ -45,6 +45,14 @@
 # raylib story).
 (var emit-native-dir nil)
 (var emit-native-lib-dir nil)
+# B7.2 Part B, Piece 1c: --dce opts in to WRITING the dce-reachable
+# verdict out as dce-excluded.txt (next to native-names.txt) for
+# mkimage.janet to consume. Without it the gate at the end of this
+# file still runs and still prints its diagnostic verdict (Piece 1b
+# behavior, byte-identical), but nothing is written and no build can
+# strip anything. The flag only enables EMISSION; it never relaxes
+# the gate.
+(var dce-emit false)
 (var externs-file nil)
 (var profile-file nil)
 # Step 13: int-overflow policy. wrap (default): kernels compute in
@@ -63,6 +71,8 @@
     (do (set emit-native-dir (args (+ i 1))) (++ i))
     (and (= a "--emit-native-lib") (< (+ i 1) (length args)))
     (do (set emit-native-lib-dir (args (+ i 1))) (++ i))
+    (= a "--dce")
+    (set dce-emit true)
     (and (= a "--externs") (< (+ i 1) (length args)))
     (do (set externs-file (args (+ i 1))) (++ i))
     (and (= a "--profile") (< (+ i 1) (length args)))
@@ -3696,4 +3706,40 @@
     (print "dce safe reachable "
            (if (empty? dce-reach) "-" (string/join (map string (sorted (keys dce-reach))) " "))
            " excluded "
-           (if (empty? dce-excluded) "-" (string/join dce-excluded " ")))))
+           (if (empty? dce-excluded) "-" (string/join dce-excluded " ")))
+    # --- B7.2 Part B, Piece 1c: emit the verdict for mkimage.janet ---
+    # Written ONLY on a :safe verdict and ONLY under --dce. On :unsafe
+    # the write is skipped entirely, so an absent file means exactly the
+    # same thing as "--dce was never passed": mkimage strips nothing.
+    # That equivalence is the design note's "V1 is allowed to strip
+    # nothing" principle made mechanical rather than documented.
+    #
+    # mkimage.janet matches top-level `defn`/`defn-` forms BY NAME, so
+    # only names that are unambiguously safe to match that way are
+    # emitted. Three filters, all fail-closed:
+    #   - "thunk" is never emitted (it is a unit entry, not a defn).
+    #   - a generated "<anon-N>" name has no source-level defn form.
+    #   - a name owned by MORE than one def id is dropped unless EVERY
+    #     id carrying that name is excluded; otherwise a name match in
+    #     mkimage would delete a reachable homonym. `name-ids` (built
+    #     at registration) is the authority for that ownership check.
+    (when (and dce-emit emit-native-lib-dir)
+      (def dce-excluded-ids @{})
+      (var dce-xi 0)
+      (each info defs
+        (when (nil? (get dce-reach dce-xi)) (put dce-excluded-ids dce-xi true))
+        (++ dce-xi))
+      (def dce-names @[])
+      (each nm (sorted (keys name-ids))
+        (def ids (get name-ids nm))
+        (when (and (not= nm "thunk")
+                   (not (string/has-prefix? "<anon-" nm))
+                   (all (fn [one] (get dce-excluded-ids one)) ids))
+          (array/push dce-names nm)))
+      (def dce-buf @"")
+      (each nm dce-names
+        (buffer/push-string dce-buf nm)
+        (buffer/push-string dce-buf "\n"))
+      (spit (string emit-native-lib-dir "/dce-excluded.txt") (string dce-buf))
+      (print "dce emit " (length dce-names) " excluded names "
+             emit-native-lib-dir "/dce-excluded.txt"))))
