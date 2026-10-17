@@ -1316,6 +1316,37 @@ static void janet_chanat_mark_fq(JanetQueue *fq) {
 static int janet_chanat_mark(void *p, size_t s) {
     (void) s;
     JanetChannel *chan = p;
+    if (janet_chan_is_threaded(chan)) {
+        /* Threaded-channel internals must not be marked from an
+         * arbitrary VM's GC. Every mutation of items/read_pending/
+         * write_pending (push growth realloc, pop+unpack freeing the
+         * transit buffer, pending claims, teardown deinit) happens
+         * under the channel lock on SOME OTHER thread, so an
+         * unlocked mark iterates freed memory (ASAN-confirmed
+         * heap-use-after-free at the loops below: the items.data
+         * array freed by a concurrent push's realloc, and item
+         * values freed by a concurrent pop's unpack). Taking the
+         * lock here instead is not an option: marking while holding
+         * a channel's lock recurses into marking other threaded
+         * abstracts reachable from the marked values and deadlocks/
+         * livelocks under contention (verified by a reverted fix
+         * attempt). Marking is also unnecessary here:
+         *  - items only ever hold immediates (no mark needed) or
+         *    transit buffers from janet_chan_pack -- raw janet_malloc
+         *    memory that is NOT a GC object on any VM's heap; its
+         *    lifetime is queue ownership (freed only by the popper
+         *    or deinit, under the lock), so no collector ever needs
+         *    to keep it alive;
+         *  - every fiber parked on a threaded channel (both the
+         *    push path and the pop path) is janet_gcroot'd by its
+         *    OWN VM while queued (see the janet_gcroot calls beside
+         *    both pending enqueues), so the pending fibers are kept
+         *    alive by their enqueuing VMs, not by this mark.
+         * Plain/isolated channels are single-VM by contract: their
+         * pendings are NOT rooted and their raw item values ARE
+         * heap-shared, so they keep the full mark below. */
+        return 0;
+    }
     janet_chanat_mark_fq(&chan->read_pending);
     janet_chanat_mark_fq(&chan->write_pending);
     JanetQueue *items = &chan->items;
