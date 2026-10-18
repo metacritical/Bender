@@ -159,5 +159,8 @@ CTestTestfile.cmake
 
 # End of https://www.gitignore.io/api/cmake
 
+# macOS Finder metadata is not project source.
+.DS_Store
+
 # Astyle
 *.orig
