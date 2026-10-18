@@ -291,6 +291,53 @@ int main(int argc, char **argv) {
         puts("breakpoint/step suppression preserved");
     }
 
+    /* 5b. Re-entry validation cache: a raw non-breakpoint mutation of the
+     * definition between resumes (primitive constant bits) invalidates the
+     * cached verdict, so the mutated constant is observed through boxed
+     * execution and no native entry happens until the word is restored. */
+    {
+        assert(janet_native_register(boundary, &nx_1_code));
+        reset_state();
+        JanetFiber *f1 = spawn1(boundary, 4);
+        Janet r1;
+        assert(janet_continue(f1, janet_wrap_nil(), &r1) == JANET_SIGNAL_OK);
+        assert(nx_1_entries > 0);
+        janet_gcunroot(janet_wrap_fiber(f1));
+        int32_t ci = -1;
+        for (int32_t i = 0; i < boundary->def->constants_length; i++) {
+            Janet c = boundary->def->constants[i];
+            if (janet_checktype(c, JANET_NUMBER)) {
+                double v = janet_unwrap_number(c);
+                if (!memcmp(&v, &(double){0.5}, sizeof(double))) { ci = i; break; }
+            }
+        }
+        assert(ci >= 0);
+        Janet hold = boundary->def->constants[ci];
+        assert(janet_checktype(hold, JANET_NUMBER));
+        boundary->def->constants[ci] = janet_wrap_number(1.5);
+        assert(!janet_native_matches(boundary->def, &nx_1_code));
+        reset_state();
+        JanetFiber *f2 = spawn1(boundary, 4);
+        Janet r2;
+        uint64_t before = nx_1_entries;
+        assert(janet_continue(f2, janet_wrap_nil(), &r2) == JANET_SIGNAL_OK);
+        assert(nx_1_entries == before); /* mutated def: cache must not admit native entry */
+        assert(janet_checktype(r2, JANET_NUMBER));
+        assert(janet_unwrap_number(r2) == janet_unwrap_number(r1) + 4.0); /* boxed sees 1.5 */
+        janet_gcunroot(janet_wrap_fiber(f2));
+        boundary->def->constants[ci] = hold;
+        assert(janet_native_matches(boundary->def, &nx_1_code));
+        reset_state();
+        JanetFiber *f3 = spawn1(boundary, 4);
+        Janet r3;
+        assert(janet_continue(f3, janet_wrap_nil(), &r3) == JANET_SIGNAL_OK);
+        assert(nx_1_entries > before); /* restored def: native entry resumes */
+        assert(janet_unwrap_number(r3) == janet_unwrap_number(r1));
+        janet_gcunroot(janet_wrap_fiber(f3));
+        reset_state();
+        puts("between-resume constant mutation detected by re-entry validation");
+    }
+
 #ifndef JANET_NO_INTERPRETER_INTERRUPT
     /* 6. Marshal: parked mixed frame marshals without machine addresses;
      * the unmarshaled closure re-attaches lazily and finishes correctly.
