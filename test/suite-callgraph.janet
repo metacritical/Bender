@@ -73,14 +73,36 @@
 (assert (has "tainted 0") "thunk tainted via contains")
 (assert (has "fix 9 1 3") "fix summary exact")
 
-# same name in two files is ambiguous, not silently first-wins
+# Same name in two files must never be silently first-wins. This used to
+# assert "ambiguous 4 dup": with two defs named `dup` the resolver gave up.
+# Per-unit source scoping (6f1a74d0, "Local names can resolve only within
+# their own unit") made this PRECISE rather than merely safe -- `caller`
+# lives in cg-amb2, and Janet's lexical scoping means it calls cg-amb2's
+# OWN dup (def 3), never cg-amb1's (def 1). Asserting the precise edge is
+# strictly stronger than asserting ambiguity: a first-wins bug would
+# resolve to def 1 and fail the second assertion below.
 (spit "/tmp/cg-amb1.janet" "(defn dup [] 1)\n")
 (spit "/tmp/cg-amb2.janet" "(defn dup [] 2)\n(defn caller [] (dup))\n")
 (assert (= 0 (os/execute ["/bin/sh" "-c"
   "./build/bender tools/callgraph.janet /tmp/cg-amb1.janet /tmp/cg-amb2.janet > /tmp/cg-amb-out.txt"] :p))
   "callgraph multi-file runs")
-(assert (not (nil? (string/find "ambiguous 4 dup"
-  (slurp "/tmp/cg-amb-out.txt")))) "duplicate def ambiguous")
+(def amb-text (slurp "/tmp/cg-amb-out.txt"))
+(assert (not (nil? (string/find "calls 4 3" amb-text)))
+  "duplicate def resolves to its OWN unit's def")
+(assert (nil? (string/find "calls 4 1" amb-text))
+  "duplicate def never resolves across units (no first-wins)")
+
+# A cross-unit UNQUALIFIED name is not evidence of a call target: that unit
+# simply does not compile, and the tool says so honestly instead of
+# attributing the call to the same-named def in another file.
+(spit "/tmp/cg-amb3.janet" "(defn dup [] 1)\n")
+(spit "/tmp/cg-amb4.janet" "(defn caller2 [] (dup))\n")
+(assert (= 0 (os/execute ["/bin/sh" "-c"
+  "./build/bender tools/callgraph.janet /tmp/cg-amb3.janet /tmp/cg-amb4.janet > /tmp/cg-amb2-out.txt"] :p))
+  "callgraph cross-unit runs")
+(assert (not (nil? (string/find "uncompiled /tmp/cg-amb4.janet"
+  (slurp "/tmp/cg-amb2-out.txt"))))
+  "cross-unit unqualified name reported uncompiled, never attributed")
 
 
 # Step 3 (arity audit): called-as arity sets, mismatches, unknowns
@@ -478,7 +500,25 @@
         "wrapper telemetry reports stable numeric kernel identity")
 (assert (string/find "atexit(native_telemetry_report_all)" telemetry-c)
         "telemetry snapshots through atexit")
-(assert (string/find "if (sizeof(regs)/sizeof(regs[0]) > 1)" telemetry-c)
+# A build with wrappers announces them; a build with NONE must stay silent,
+# so native_init never pollutes the stderr of a subprocess that happens to
+# emit no kernels. This used to assert the C-level runtime guard
+# `if (sizeof(regs)/sizeof(regs[0]) > 1)`. 978400f1 moved that decision
+# compile-time into the emitter -- the fprintf is only written when
+# `kernels` is non-empty -- which is strictly better (a zero-kernel build
+# emits no statement at all, rather than a runtime check that is always
+# false). Assert the BEHAVIOR, not the retired mechanism: this build has
+# wrappers so it reports them, and the zero-kernel build below emits
+# nothing.
+(assert (string/find "native_init: registered" telemetry-c)
+        "a build WITH wrappers announces them")
+(spit "/tmp/cg-zerokernel.janet"
+  "(defn opaque [x] (string x))\n(defn main [] (print (opaque 1)))\n")
+(assert (= 0 (os/execute ["/bin/sh" "-c"
+  "rm -rf /tmp/cg-zerokernel && ./build/bender tools/callgraph.janet /tmp/cg-zerokernel.janet --emit-native-lib /tmp/cg-zerokernel >/dev/null 2>&1"] :p))
+  "zero-kernel native lib emits")
+(assert (nil? (string/find "native_init: registered"
+                           (slurp "/tmp/cg-zerokernel/native.c")))
         "zero-wrapper native init does not pollute subprocess output")
 (assert (= 0 (os/execute ["cc" "-O2" "-w" "-fwrapv"
   "-DJANET_NATIVE_TELEMETRY=0" "-Isrc/include" "-Isrc/conf"
