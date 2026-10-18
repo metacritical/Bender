@@ -2,8 +2,10 @@
 # :array callee result without confusing the C pointer with a double.
 (import ./helper :prefix "" :exit true)
 (start-suite)
-(def root (string (or (os/getenv "XDG_CACHE_HOME") "/tmp")
-                  "/janet-native-array-result-suite"))
+(def root (string (or (os/getenv "JANET_AOT_TEST_ROOT")
+                      (os/getenv "XDG_CACHE_HOME") "/tmp")
+                  "/janet-native-array-result-suite-" (os/getpid)))
+(assert (nil? (os/stat root)) "test root must be unused")
 (os/mkdir root)
 (def source (string root "/app.janet"))
 (def binary (string root "/app"))
