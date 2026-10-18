@@ -766,12 +766,66 @@ static JanetSlot janetc_def(JanetFopts opts, int32_t argn, const Janet *argv) {
         return janetc_cslot(janet_wrap_nil());
     }
     check_metadata_lint(c, attr_table);
+    /* The expanded binding metadata is authoritative. Only a direct named
+     * function literal has a provable one-to-one child identity. */
+    Janet hint = janet_table_get_keyword(attr_table, "hint");
+    int hinted = janet_checktype(hint, JANET_TABLE) || janet_checktype(hint, JANET_STRUCT);
+    Janet selections = janet_table_get_keyword(c->env, "analysis-retain-profiled-defs");
+    Janet selected_line = janet_wrap_nil();
+    if (c->retain_hinted_exports_for_analysis && janet_checktype(argv[0], JANET_SYMBOL) &&
+        janet_checktype(selections, JANET_TABLE))
+        selected_line = janet_table_get(janet_unwrap_table(selections), argv[0]);
+    int profiled = janet_checkint(selected_line);
+    int retain = c->retain_hinted_exports_for_analysis && (hinted || profiled) &&
+                 !janet_truthy(janet_table_get_keyword(attr_table, "private"));
+    JanetScope *fn_scope = c->scope;
+    while (fn_scope && !(fn_scope->flags & JANET_SCOPE_FUNCTION)) fn_scope = fn_scope->parent;
+    int32_t defs_before = fn_scope ? janet_v_count(fn_scope->defs) : 0;
+    int32_t code_before = janet_v_count(c->buffer);
     opts.flags &= ~JANET_FOPTS_HINT;
     SlotHeadPair *into = NULL;
     into = dohead_destructure(c, into, opts, argv[0], argv[argn - 1]);
     if (c->result.status == JANET_COMPILE_ERROR) {
         janet_v_free(into);
         return janetc_cslot(janet_wrap_nil());
+    }
+    if (retain) {
+        int matched = 0;
+        JanetFuncDef *child = NULL;
+        Janet rhs = argv[argn - 1];
+        if (janet_checktype(argv[0], JANET_SYMBOL) && janet_checktype(rhs, JANET_TUPLE)) {
+            JanetTuple form = janet_unwrap_tuple(rhs);
+            if (janet_tuple_length(form) >= 3 && janet_symeq(form[0], "fn") &&
+                janet_checktype(form[1], JANET_SYMBOL) &&
+                janet_equals(form[1], argv[0]) &&
+                janet_v_count(into) == 1 && fn_scope &&
+                janet_v_count(fn_scope->defs) == defs_before + 1) {
+                child = fn_scope->defs[defs_before];
+                if (!child->name || !janet_equals(janet_wrap_string(child->name),
+                                                   janet_wrap_string(janet_unwrap_symbol(argv[0]))))
+                    child = NULL;
+                for (int32_t pc = code_before; pc < janet_v_count(c->buffer); pc++) {
+                    uint32_t op = c->buffer[pc];
+                    if ((op & 0x7F) == JOP_CLOSURE && (op >> 16) == (uint32_t) defs_before &&
+                        ((op >> 8) & 0xFF) == (uint32_t) into[0].rhs.index)
+                        matched++;
+                }
+            }
+        }
+        if (matched == 1 && child && profiled &&
+            (!child->sourcemap || child->bytecode_length == 0 ||
+             child->sourcemap[0].line != janet_unwrap_integer(selected_line))) {
+            profiled = 0;
+            if (!hinted)
+                janet_eprintf("analysis retention refused for profiled def %v: source line does not match child identity\n", argv[0]);
+        }
+        if (matched == 1 && child && (hinted || profiled)) {
+            JanetRetainedDef entry = {fn_scope, NULL, child, hinted ? hint : janet_wrap_nil(), profiled};
+            janet_v_push(c->retained_defs, entry);
+        } else if (matched != 1 || !child) {
+            janet_eprintf("analysis retention refused for %s def %v: cannot prove direct closure identity\n",
+                          hinted ? "hinted" : "profiled", argv[0]);
+        }
     }
     JanetSlot ret = janetc_cslot(janet_wrap_nil());
     for (int32_t i = 0; i < janet_v_count(into); i++) {
@@ -1137,7 +1191,7 @@ static JanetSlot janetc_while(JanetFopts opts, int32_t argn, const Janet *argv) 
         int32_t defindex = janetc_addfuncdef(c, def);
         /* Do basic optimization */
         if (!(c->scope->flags & JANET_SCOPE_UNUSED)) {
-            janet_bytecode_optimize(def, c->optimize);
+            janetc_optimize_funcdef(c, def);
         }
         /* And then load the closure and call it. */
         int32_t cloreg = janetc_regalloc_temp(&c->scope->ra, JANETC_REGTEMP_0);
@@ -1398,7 +1452,7 @@ static JanetSlot janetc_fn(JanetFopts opts, int32_t argn, const Janet *argv) {
 
     /* Do basic optimization */
     if (!(fnscope.flags & JANET_SCOPE_UNUSED)) {
-        janet_bytecode_optimize(def, c->optimize);
+        janetc_optimize_funcdef(c, def);
     }
 
     /* Instantiate closure */

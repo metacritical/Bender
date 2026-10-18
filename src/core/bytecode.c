@@ -23,6 +23,7 @@
 #ifndef JANET_AMALG
 #include "features.h"
 #include <janet.h>
+#include "compile.h"
 #include "gc.h"
 #include "util.h"
 #include "vector.h"
@@ -910,7 +911,8 @@ static void rewrite_symbolmap(JanetFuncDef *def, uint32_t *pc_map) {
 }
 
 /* Remove unused closure defs */
-void janet_bytecode_remove_unused_closures(JanetFuncDef *def) {
+static void janet_bytecode_remove_unused_closures_for_analysis(
+    JanetFuncDef *def, const JanetRetainedDef *retained, int32_t count) {
     if (def->defs_length < 1) return;
     uint32_t *code = def->bytecode;
     int32_t words = ((def->defs_length - 1) >> 5) + 1;
@@ -925,6 +927,15 @@ void janet_bytecode_remove_unused_closures(JanetFuncDef *def) {
             case JOP_CLOSURE:
                 bs_set_bit(bitset, E);
                 continue;
+        }
+    }
+    for (int32_t r = 0; r < count; r++) {
+        if (retained[r].parent != def) continue;
+        for (int32_t i = 0; i < def->defs_length; i++) {
+            if (def->defs[i] == retained[r].child) {
+                bs_set_bit(bitset, i);
+                break;
+            }
         }
     }
 
@@ -965,6 +976,10 @@ void janet_bytecode_remove_unused_closures(JanetFuncDef *def) {
     }
 
     janet_free(bitset);
+}
+
+void janet_bytecode_remove_unused_closures(JanetFuncDef *def) {
+    janet_bytecode_remove_unused_closures_for_analysis(def, NULL, 0);
 }
 
 /* Remove unused constants from the constant buffer */
@@ -1721,7 +1736,8 @@ uint32_t *janet_bytecode_inline_chunk(JanetFuncDef *idef,
 
 /* Entry point for optimization. The def should already be valid as determined by janet_verify.
  * The compiler may skip this check for performance but the assembler will not. */
-void janet_bytecode_optimize(JanetFuncDef *def, int32_t level) {
+void janet_bytecode_optimize_for_analysis(JanetFuncDef *def, int32_t level,
+                                         const JanetRetainedDef *retained, int32_t count) {
     int32_t delta;
 #ifdef JANET_DEBUG
     int result = janet_verify(def);
@@ -1759,13 +1775,17 @@ void janet_bytecode_optimize(JanetFuncDef *def, int32_t level) {
 #endif
         } while (delta < 0);
         janet_bytecode_remove_unused_constants(def);
-        janet_bytecode_remove_unused_closures(def);
+        janet_bytecode_remove_unused_closures_for_analysis(def, retained, count);
         janet_bytecode_compact_slots(def);
     }
 #ifdef JANET_BOOTSTRAP
     total_instruction_count += def->bytecode_length;
     total_funcdefs_optimized++;
 #endif
+}
+
+void janet_bytecode_optimize(JanetFuncDef *def, int32_t level) {
+    janet_bytecode_optimize_for_analysis(def, level, NULL, 0);
 }
 
 /* Verify some bytecode */

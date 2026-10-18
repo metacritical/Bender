@@ -8,7 +8,7 @@
 #
 # Edge kinds:
 #   def <id> <name> arity <a> slots <s> instrs <n>   every discovered FuncDef
-#   contains <parent> <child>                  JOP_CLOSURE nesting
+#   contains <parent> <child>                  surviving JOP_CLOSURE edge
 #   calls <caller> <callee>                     direct call, unique target
 #   extern <caller> <name>                      call to unknown/global name
 #   ambiguous <caller> <name>                   >1 same-named target
@@ -29,10 +29,9 @@
 # the file compiles as one (do ...) exactly like the real loader treats
 # sequential forms for references — a forward reference to a name defined
 # later fails the whole unit (same "unknown symbol" the loader reports),
-# recorded as one honest `uncompiled` line. Top-level defns the unit never
-# references are dropped by the compiler's dead-store elimination, so the
-# graph is precisely the statically-live code; anything reachable only
-# dynamically (eval) needs the interpreter fallback flagged by `dynamic`.
+# recorded as one honest `uncompiled` line. Selected hinted or observed
+# public named functions retained solely for analysis are registered without
+# executable closure edges; ordinary image compilation still drops them.
 
 (var args (tuple/slice (dyn :args) 1))
 # --emit-native DIR: also emit unboxed C for defs whose param/return
@@ -109,23 +108,32 @@
 (var next-id 0)
 (var defs @[])        # id -> {:d disasm-struct :name string}
 (var name-ids @{})    # name -> array of ids
+(var import-origins @{}) # [unit source binding] is handled per caller source below
+(var unit-function-bindings @{}) # source -> imported function value -> unique qualified binding
+(var unit-hint-paths @{}) # exact compiler-reported child path -> expanded binding hint
+(var unit-profile-paths @{}) # exact compiler-reported child path -> profiled binding
 (var edges @[])       # tuples in discovery order
 (var callsites 0)
 (var resolved 0)
 
-(defn register-def [d source]
+(defn register-def [d source path]
   (def id next-id)
   (++ next-id)
   (def name (string (or (d :name) (string "<anon-" id ">"))))
-  (array/push defs @{:d d :name name :hint nil :source source})
+  (array/push defs @{:d d :name name
+                     :hint (get (get unit-hint-paths source) path)
+                     :profiled (get (get unit-profile-paths source) path)
+                     :source source})
   (def bucket (get name-ids name))
   (if bucket
     (array/push bucket id)
     (put name-ids name @[id]))
   # children pre-order, right after the parent: ids read top-down and
   # each subtree occupies one contiguous range
+  (var childidx 0)
   (each child (or (d :defs) @[])
-    (register-def child source))
+    (register-def child source (string path "/" childidx))
+    (++ childidx))
   id)
 
 # Step 4 (type hints): optional Clojure-style annotations. Surface:
@@ -322,10 +330,13 @@
     (each form (or (get unit-forms f) @[])
       (when (and (tuple? form) (>= (length form) 3)
                  (symbol? (form 0))
-                 (or (= (string (form 0)) "defn") (= (string (form 0)) "defn-")))
+                 (or (= (string (form 0)) "defn")
+                     (= (string (form 0)) "defn-")
+                     (= (string (form 0)) "def")))
         # keep every defn form so the native emitter can eval one for
         # expected values (hinted or not)
-        (put all-defn-forms (string (form 1)) form)
+        (unless (= (string (form 0)) "def")
+          (put all-defn-forms (string (form 1)) form))
         # find defn forms carrying hints and record the hint under every
         # name-ids entry registered for that name. Two surfaces:
         # (defn f {:hint {...}} ...)            dict modifier
@@ -337,7 +348,7 @@
           (set h (get m :hint)))
         # bare param-only hints: (defn f [x ^double y] ...) — no dict,
         # no ^ return hint, but the arglist carries ^ params
-        (when (nil? h)
+        (when (and (nil? h) (not= (string (form 0)) "def"))
           (def arglist (if (or (table? m) (struct? m)) (form 3) (form 2)))
           (when (and (tuple? arglist)
                      (some (fn [a] (and (symbol? a) (= 94 (get (string a) 0))))
@@ -357,7 +368,8 @@
                 (do (array/push ph :number) (++ k))))
             (put hm :params (tuple ;ph))
             (set h hm)))
-        (when (and (symbol? m) (= 94 (get (string m) 0)))
+        (when (and (not= (string (form 0)) "def")
+                   (symbol? m) (= 94 (get (string m) 0)))
           # ^ returns-hint + optional ^ param hints in the arglist
           (def hm @{})
           (var rnm (string/slice (string m) 1))
@@ -385,21 +397,43 @@
           (set h hm))
         # canonicalize alias spellings (:int -> :i32, :f32 -> :float)
         # so every consumer sees one width vocabulary
-        (when h
+        (when (and h (not= (string (form 0)) "defn-")
+                   (not (and (dictionary? m) (get m :private))))
+          (unless (dictionary? h)
+            (eprint "callgraph: malformed hinted export: " f " " (form 1))
+            (set h nil)))
+        (when (and h (not= (string (form 0)) "defn-")
+                   (not (and (dictionary? m) (get m :private))))
           (when (struct? h) (set h (table ;(kvs h))))
-          (when (get h :params)
+          (when (indexed? (get h :params))
             (put h :params (tuple ;(map canon-hint (get h :params)))))
           (when (get h :returns)
             (put h :returns (canon-hint (get h :returns)))))
-        (when h
+        (when (and h (not= (string (form 0)) "defn-")
+                   (not (and (dictionary? m) (get m :private))))
           (def nm (string (form 1)))
-          (def ids (get name-ids nm))
-          (when ids
-            (each id ids
-              (def info (get defs id))
-              (put info :hint h))
-            (++ nhints)))
+          (def ids (filter (fn [id] (= ((defs id) :source) f))
+                           (or (get name-ids nm) @[])))
+          (if (and (= (length ids) 1) (get (defs (ids 0)) :hint))
+            nil
+            (eprint "callgraph: hinted export not registered unambiguously: " f " " nm)))
 )))
+  # Only compiler-expanded binding metadata attached to an exact FuncDef
+  # path can authorize a hint. Source text is used for missing-hint
+  # diagnostics, never for associating a same-named child.
+  (each info defs
+    (when (get info :hint)
+      (var h (get info :hint))
+      (if (dictionary? h)
+        (do (when (struct? h) (set h (table ;(kvs h))))
+          (when (indexed? (get h :params))
+            (put h :params (tuple ;(map canon-hint (get h :params)))))
+          (when (get h :returns)
+            (put h :returns (canon-hint (get h :returns))))
+          (put info :hint h)
+          (++ nhints))
+        (do (eprint "callgraph: malformed expanded hint: " (info :source) " " (info :name))
+          (put info :hint nil)))))
   nhints)
 
 (defn check-hints []
@@ -488,9 +522,20 @@
                (do (def t2 @{}) (put extern-call-map caller-id t2) t2))
            pc tname)
       tname)
-    (do (def ids (get name-ids tname))
+    (do (def source ((defs caller-id) :source))
+      (def origin (get (get import-origins source) tname))
+      # An imported binding must have a proven origin. Local names can
+      # resolve only within their own unit; cross-unit unqualified names
+      # are not evidence of a call target.
+      (def lookup (if (dictionary? origin) (get origin :name) tname))
+      (def ids (filter (fn [id]
+                         (= ((defs id) :source)
+                            (if (dictionary? origin) (get origin :source) source)))
+                       (or (get name-ids lookup) @[])))
       (cond
-        (nil? ids)
+        (= origin :ambiguous)
+        (do (array/push edges ["ambiguous" caller-id tname]) nil)
+        (empty? ids)
         (do (array/push edges ["extern" caller-id tname]) nil)
         (= 1 (length ids))
         (do (array/push edges ["calls" caller-id (ids 0)])
@@ -498,7 +543,7 @@
           (ids 0))
         (do (array/push edges ["ambiguous" caller-id tname]) nil)))))
 
-(defn const-target [d cidx core-names]
+(defn const-target [caller-id d cidx core-names]
   # classify a constant for call resolution. Returns a tuple
   # [kind payload]: [:fn name] [:core name] [:key name] [:no].
   (def consts (or (d :constants) @[]))
@@ -507,7 +552,11 @@
     (do (def c (consts cidx))
       (def t (type c))
       (cond
-        (= t :function) [:fn (string (or ((disasm c) :name) "?"))]
+        (= t :function)
+        (do (def binding (get (get unit-function-bindings ((defs caller-id) :source)) c))
+          (cond (string? binding) [:fn binding]
+                (= binding :ambiguous) [:ambiguous (string (or ((disasm c) :name) "?"))]
+                [:no nil]))
         (= t :cfunction) (do (def n (get core-names c))
                            (if n [:core n] [:no nil]))
         (= t :keyword) [:key (string c)]
@@ -562,9 +611,11 @@
             # nearest writer found
             (cond
               (= op 'ldc)
-              (do (def ct (const-target d (ins 2) core-names))
+              (do (def ct (const-target caller-id d (ins 2) core-names))
                 (cond
                   (= (ct 0) :fn) (set target (resolve-name caller-id (ct 1) pc))
+                  (= (ct 0) :ambiguous)
+                  (array/push edges ["ambiguous" caller-id (ct 1)])
                   (= (ct 0) :core)
                   (do (array/push edges ["extern" caller-id (ct 1)])
                     # record core-cfunction call sites for pure-call
@@ -669,13 +720,16 @@
   # then this def's own call sites (each audited for arity)
   (def info (defs id))
   (def d (info :d))
+  (def code (or (d :bytecode) @[]))
   (var cid (+ id 1))
+  (var childidx 0)
   (each child (or (d :defs) @[])
-    (array/push edges ["contains" id cid])
-    (+= cid (subtree-size cid)))
+    (when (some (fn [ins] (and (= (ins 0) 'clo) (= (ins 2) childidx))) code)
+      (array/push edges ["contains" id cid]))
+    (+= cid (subtree-size cid))
+    (++ childidx))
   (def cmap @{})
   (put call-map id cmap)
-  (def code (or (d :bytecode) @[]))
   (var pc 0)
   (each ins code
     (def op (ins 0))
@@ -723,6 +777,9 @@
         (try
           (do (def path (string (form 1)))
             (def modenv (require path))
+            (def found (try (module/find path) ([_] nil)))
+            (def source (if (and (indexed? found) (string? (found 0)))
+                          (found 0) nil))
             # L2: remember resolved source files so analysis covers
             # engine modules, not just the entry (kernel visibility).
             (try
@@ -740,13 +797,103 @@
               (def only (get kargs :only))
               (def ep (or (get kargs :export) (= head (quote use))))
               (def pfx (or (and as (string as "/")) prefix
-                           (string (last (string/split "/" (string path))) "/")))
-              (merge-module env modenv pfx ep only)))
+                           (string (first (string/split "." (last (string/split "/" (string path))))) "/")))
+              (merge-module env modenv pfx ep only)
+              (def origins (or (get import-origins unitfile)
+                               (do (def o @{}) (put import-origins unitfile o) o)))
+              (each k (keys modenv)
+                (when (and (symbol? k) (not (get (get modenv k) :private))
+                           (or (nil? only)
+                               (some (fn [v] (and (symbol? v) (= (string v) (string k)))) only)))
+                  (def binding (string pfx k))
+                  (def old (get origins binding))
+                  (put origins binding
+                       (if (and source (nil? old))
+                         {:source source :name (string k) :export ep}
+                         :ambiguous))))))
           ([e] (eprint "aot: import pre-execution failed for " (form 1) ": " e)
                (os/exit 2))))))
   (setdyn :current-file prev-current-file))
 
 (var core-names @{})
+
+# Parse profile identities BEFORE whole-unit compilation. The full PGO
+# parser below still checks signatures, types and provenance before inference;
+# this early pass accepts only well-shaped, positive-call source identities.
+# Profile text is data, never evaluated.
+(var retention-rows @[])
+(when profile-file
+  (def forms (parse-all (slurp profile-file)))
+  (unless (and (= 1 (length forms)) (indexed? (forms 0)))
+    (error "invalid PGO profile: expected one row array"))
+  (each row (forms 0)
+    (unless (and (indexed? row) (= 2 (length row))
+                 (indexed? (row 0)) (= 3 (length (row 0)))
+                 (or (nil? ((row 0) 0)) (string? ((row 0) 0)))
+                 (number? ((row 0) 1)) (= ((row 0) 1) (math/trunc ((row 0) 1)))
+                 (or (nil? ((row 0) 2)) (string? ((row 0) 2)))
+                 (table? (row 1))
+                 (number? (get (row 1) :calls))
+                 (>= (get (row 1) :calls) 0)
+                 (= (get (row 1) :calls) (math/trunc (get (row 1) :calls))))
+      (error "invalid PGO profile: malformed row identity or calls"))
+    (when (and (string? ((row 0) 0)) (string? ((row 0) 2))
+               (> ((row 0) 1) 0) (> (get (row 1) :calls) 0))
+      (array/push retention-rows (row 0)))))
+
+(defn profile-source-matches? [file recorded]
+  (def target (try (os/realpath file) ([_] nil)))
+  (def hits @{})
+  (when target
+    (if (string/has-prefix? "/" recorded)
+      (when (os/stat recorded)
+        (put hits (os/realpath recorded) true))
+      (do (var dir target)
+        # Try each ancestor of the analyzed unit; do not guess a project
+        # root or accept a basename/suffix match from another module.
+        (while dir
+          (def slash (string/find "/" (string/reverse dir)))
+          (set dir (if (nil? slash) nil
+                     (if (= (- (length dir) slash 1) 0) "/"
+                       (string/slice dir 0 (- (length dir) slash 1)))))
+          (when dir
+            (def candidate (string dir (if (= dir "/") "" "/") recorded))
+            (when (os/stat candidate)
+              (put hits (os/realpath candidate) true)))
+          (when (= dir "/") (set dir nil))))))
+  (and target (= 1 (length (keys hits))) (get hits target)))
+
+(defn count-definition-forms [forms name]
+  (var count 0)
+  (defn visit [form]
+    (when (tuple? form)
+      (when (and (>= (length form) 2) (symbol? (form 0))
+                 (symbol? (form 1)) (= (string (form 1)) name)
+                 (get @{"def" true "defn" true "defn-" true} (string (form 0))))
+        (++ count))
+      (each child form (visit child))))
+  (each form forms (visit form))
+  count)
+
+(defn profile-selections-for-unit [file forms]
+  (def by-name @{})
+  (each identity retention-rows
+    (when (profile-source-matches? file (identity 0))
+      (def name (identity 2))
+      (def bucket (or (get by-name name)
+                      (do (def a @[]) (put by-name name a) a)))
+      (array/push bucket identity)))
+  (def selected @{})
+  (each [name bucket] (pairs by-name)
+    (def occurrences (count-definition-forms forms name))
+    # VM-generated thunks/while closures are not source bindings and
+    # cannot be selected for exported-definition retention.
+    (when (> occurrences 0)
+      (if (and (= 1 (length bucket)) (= 1 occurrences))
+        (put selected (symbol name) ((bucket 0) 1))
+        (eprint "callgraph: profile retention refused for " file " " name
+                ": duplicate identity or definition"))))
+  selected)
 
 (defn analyze-unit [f]
   (when (get analyzed-files f) (break))
@@ -754,6 +901,8 @@
   (def text (slurp f))
   (def forms (parse-all text))
   (def env (make-env))
+  (put env :retain-hinted-exports-for-analysis true)
+  (put env :analysis-retain-profiled-defs (profile-selections-for-unit f forms))
   # mirror the janet CLI: the script's directory joins the module syspath
   # so relative imports (../src/...) resolve like a normal `janet f.janet`
   (def slash-idx (string/find "/" (string/reverse f)))
@@ -769,7 +918,12 @@
     (def entry (get env name))
     (def v (if (table? entry) (get entry :value) entry))
     (when (or (= :function (type v)) (= :cfunction (type v)))
-      (put core-names v (string name))))
+      (put core-names v (string name)))
+    (when (and (= :function (type v))
+               (get (get import-origins f) (string name)))
+      (def bindings (or (get unit-function-bindings f)
+                        (do (def b @{}) (put unit-function-bindings f b) b)))
+      (put bindings v (if (nil? (get bindings v)) (string name) :ambiguous))))
   (each form forms
     (when (and (tuple? form) (>= (length form) 1)
                (symbol? (form 0)) (= (string (form 0)) "defmacro"))
@@ -810,7 +964,9 @@
     (array/push edges ["uncompiled" f -1 (string (res 1))])
     (not= :function (type thunk))
     (array/push edges ["uncompiled" f -1 (string (get thunk :error))])
-    (register-def (disasm thunk) f)))
+    (do (put unit-hint-paths f (get env :analysis-retained-hint-paths))
+      (put unit-profile-paths f (get env :analysis-retained-profile-paths))
+      (register-def (disasm thunk) f ""))))
 
 # entry files first, then L2: drain transitively discovered import
 # source files (engine modules become analyzable: registration,
@@ -1084,6 +1240,24 @@
                           :type-from (get info :type-from @[])})
       (put profile-index nm bucket)))
   (print "profile " (length rows) " rows"))
+
+# Inference is keyed by name internally. Do not supply it evidence for a
+# different file/line or a same-named candidate: such a match can otherwise
+# appear to prove types for an unrelated retained definition.
+(when profile-index
+  (each [nm bucket] (pairs profile-index)
+    (def ids (get name-ids nm @[]))
+    (var valid (and (= 1 (length ids)) (= 1 (length bucket))))
+    (when valid
+      (def info (defs (ids 0)))
+      (def sm (get (info :d) :sourcemap))
+      (def identity ((bucket 0) :identity))
+      (unless (and (indexed? sm) (> (length sm) 0)
+                   (= (get (sm 0) 0) (identity 1))
+                   (string? (identity 0))
+                   (profile-source-matches? (info :source) (identity 0)))
+        (set valid false)))
+    (unless valid (put profile-index nm nil))))
 
 # Step 6+ (hybrid inference): hints are direct contracts (used as-is for
 # unboxing, never weakened); call-site widening + fixpoint prove the

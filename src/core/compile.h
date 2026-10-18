@@ -89,6 +89,15 @@ typedef struct JanetSlot JanetSlot;
 typedef struct JanetFopts JanetFopts;
 typedef struct JanetFunOptimizer JanetFunOptimizer;
 typedef struct JanetSpecial JanetSpecial;
+typedef struct JanetRetainedDef JanetRetainedDef;
+
+struct JanetRetainedDef {
+    JanetScope *scope; /* Live scope only; cleared at finalization or pop. */
+    JanetFuncDef *parent;
+    JanetFuncDef *child;
+    Janet hint;
+    int profiled; /* Analysis-only observed exported binding. */
+};
 
 #define JANET_SLOT_CONSTANT 0x10000
 #define JANET_SLOT_NAMED 0x20000
@@ -201,6 +210,10 @@ struct JanetCompiler {
      * janetc_init and unrooted in janetc_deinit. See janetc_pin. */
     JanetArray *pins;
 
+    /* Compiler-only, GC-marked identities; never serialized on FuncDefs. */
+    JanetRetainedDef *retained_defs;
+    int retain_hinted_exports_for_analysis;
+
     /* Cached version of (dyn *redef*) and (dyn *optimize*) */
     int is_redef;
     int32_t optimize;
@@ -291,6 +304,7 @@ JanetSlot janetc_value(JanetFopts opts, Janet x);
  * (and therefore collections), e.g. macroexpansion results consumed
  * element-by-element by the emitter. */
 void janetc_pin(JanetCompiler *c, Janet x);
+void janetc_optimize_funcdef(JanetCompiler *c, JanetFuncDef *def);
 
 /* Push and pop from the scope stack */
 void janetc_scope(JanetScope *s, JanetCompiler *c, int flags, const char *name);
@@ -313,5 +327,7 @@ uint32_t *janet_bytecode_inline_chunk(JanetFuncDef *idef,
 
 /* Bytecode optimization */
 void janet_bytecode_optimize(JanetFuncDef *def, int32_t level);
+void janet_bytecode_optimize_for_analysis(JanetFuncDef *def, int32_t level,
+                                         const JanetRetainedDef *retained, int32_t count);
 
 #endif
