@@ -429,6 +429,11 @@ static void janet_mark_compiler(JanetCompiler *c) {
     if (c->env) janet_mark_table(c->env);
     if (c->lints) janet_mark_array(c->lints);
     if (c->result.funcdef) janet_mark_funcdef(c->result.funcdef);
+    for (int32_t i = 0; i < janet_v_count(c->retained_defs); i++) {
+        janet_mark(c->retained_defs[i].hint);
+        if (c->retained_defs[i].parent) janet_mark_funcdef(c->retained_defs[i].parent);
+        if (c->retained_defs[i].child) janet_mark_funcdef(c->retained_defs[i].child);
+    }
     for (JanetScope *s = c->scope; s; s = s->parent) {
         if (s->consts) {
             janet_mark_many(s->consts, janet_v_count(s->consts));

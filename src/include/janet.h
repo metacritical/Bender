@@ -1266,6 +1266,25 @@ struct JanetSymbolMap {
     const uint8_t *symbol;
 };
 
+/* Linked, executable-lifetime metadata; never contains GC references or gets
+ * serialized. All bytecode PCs are legal entries. Enabled only in a runtime
+ * built with JANET_NATIVE_EXECUTORS. */
+typedef enum { JANET_NATIVE_VM, JANET_NATIVE_INTERRUPT } JanetNativeStep;
+typedef JanetNativeStep (*JanetNativeExecutor)(JanetFiber *, JanetFuncDef *, uint32_t **);
+typedef struct {
+    JanetType type;
+    double number; /* numeric value or boolean 0/1; no boxed pointers */
+} JanetNativeConstant;
+typedef struct JanetNativeCode {
+    JanetNativeExecutor execute;
+    const uint32_t *words;
+    const JanetNativeConstant *constants;
+    int32_t length, slotcount, arity, min_arity, max_arity, flags, constants_length;
+} JanetNativeCode;
+JANET_API int janet_native_register(JanetFunction *, const JanetNativeCode *);
+JANET_API int janet_native_matches(JanetFuncDef *, const JanetNativeCode *);
+JANET_API int janet_native_poll(int condition);
+
 /* A function definition. Contains information needed to instantiate closures. */
 struct JanetFuncDef {
     JanetGCObject gc;
@@ -1273,6 +1292,7 @@ struct JanetFuncDef {
     Janet *constants;
     JanetFuncDef **defs;
     uint32_t *bytecode;
+    const JanetNativeCode *native_code;
     uint32_t *closure_bitset; /* Bit set indicating which slots can be referenced by closures. */
 
     /* Various debug information */

@@ -8,7 +8,7 @@
 #
 # Edge kinds:
 #   def <id> <name> arity <a> slots <s> instrs <n>   every discovered FuncDef
-#   contains <parent> <child>                  JOP_CLOSURE nesting
+#   contains <parent> <child>                  surviving JOP_CLOSURE edge
 #   calls <caller> <callee>                     direct call, unique target
 #   extern <caller> <name>                      call to unknown/global name
 #   ambiguous <caller> <name>                   >1 same-named target
@@ -29,11 +29,11 @@
 # the file compiles as one (do ...) exactly like the real loader treats
 # sequential forms for references — a forward reference to a name defined
 # later fails the whole unit (same "unknown symbol" the loader reports),
-# recorded as one honest `uncompiled` line. Top-level defns the unit never
-# references are dropped by the compiler's dead-store elimination, so the
-# graph is precisely the statically-live code; anything reachable only
-# dynamically (eval) needs the interpreter fallback flagged by `dynamic`.
+# recorded as one honest `uncompiled` line. Selected hinted or observed
+# public named functions retained solely for analysis are registered without
+# executable closure edges; ordinary image compilation still drops them.
 
+(import ./loop-executor :as loop-executor)
 (var args (tuple/slice (dyn :args) 1))
 # --emit-native DIR: also emit unboxed C for defs whose param/return
 # types are concrete (hinted contracts OR inference-proven)
@@ -109,23 +109,32 @@
 (var next-id 0)
 (var defs @[])        # id -> {:d disasm-struct :name string}
 (var name-ids @{})    # name -> array of ids
+(var import-origins @{}) # [unit source binding] is handled per caller source below
+(var unit-function-bindings @{}) # source -> imported function value -> unique qualified binding
+(var unit-hint-paths @{}) # exact compiler-reported child path -> expanded binding hint
+(var unit-profile-paths @{}) # exact compiler-reported child path -> profiled binding
 (var edges @[])       # tuples in discovery order
 (var callsites 0)
 (var resolved 0)
 
-(defn register-def [d]
+(defn register-def [d source path]
   (def id next-id)
   (++ next-id)
   (def name (string (or (d :name) (string "<anon-" id ">"))))
-  (array/push defs @{:d d :name name :hint nil})
+  (array/push defs @{:d d :name name
+                     :hint (get (get unit-hint-paths source) path)
+                     :profiled (get (get unit-profile-paths source) path)
+                     :source source})
   (def bucket (get name-ids name))
   (if bucket
     (array/push bucket id)
     (put name-ids name @[id]))
   # children pre-order, right after the parent: ids read top-down and
   # each subtree occupies one contiguous range
+  (var childidx 0)
   (each child (or (d :defs) @[])
-    (register-def child))
+    (register-def child source (string path "/" childidx))
+    (++ childidx))
   id)
 
 # Step 4 (type hints): optional Clojure-style annotations. Surface:
@@ -322,10 +331,13 @@
     (each form (or (get unit-forms f) @[])
       (when (and (tuple? form) (>= (length form) 3)
                  (symbol? (form 0))
-                 (or (= (string (form 0)) "defn") (= (string (form 0)) "defn-")))
+                 (or (= (string (form 0)) "defn")
+                     (= (string (form 0)) "defn-")
+                     (= (string (form 0)) "def")))
         # keep every defn form so the native emitter can eval one for
         # expected values (hinted or not)
-        (put all-defn-forms (string (form 1)) form)
+        (unless (= (string (form 0)) "def")
+          (put all-defn-forms (string (form 1)) form))
         # find defn forms carrying hints and record the hint under every
         # name-ids entry registered for that name. Two surfaces:
         # (defn f {:hint {...}} ...)            dict modifier
@@ -337,7 +349,7 @@
           (set h (get m :hint)))
         # bare param-only hints: (defn f [x ^double y] ...) — no dict,
         # no ^ return hint, but the arglist carries ^ params
-        (when (nil? h)
+        (when (and (nil? h) (not= (string (form 0)) "def"))
           (def arglist (if (or (table? m) (struct? m)) (form 3) (form 2)))
           (when (and (tuple? arglist)
                      (some (fn [a] (and (symbol? a) (= 94 (get (string a) 0))))
@@ -357,7 +369,8 @@
                 (do (array/push ph :number) (++ k))))
             (put hm :params (tuple ;ph))
             (set h hm)))
-        (when (and (symbol? m) (= 94 (get (string m) 0)))
+        (when (and (not= (string (form 0)) "def")
+                   (symbol? m) (= 94 (get (string m) 0)))
           # ^ returns-hint + optional ^ param hints in the arglist
           (def hm @{})
           (var rnm (string/slice (string m) 1))
@@ -385,21 +398,43 @@
           (set h hm))
         # canonicalize alias spellings (:int -> :i32, :f32 -> :float)
         # so every consumer sees one width vocabulary
-        (when h
+        (when (and h (not= (string (form 0)) "defn-")
+                   (not (and (dictionary? m) (get m :private))))
+          (unless (dictionary? h)
+            (eprint "callgraph: malformed hinted export: " f " " (form 1))
+            (set h nil)))
+        (when (and h (not= (string (form 0)) "defn-")
+                   (not (and (dictionary? m) (get m :private))))
           (when (struct? h) (set h (table ;(kvs h))))
-          (when (get h :params)
+          (when (indexed? (get h :params))
             (put h :params (tuple ;(map canon-hint (get h :params)))))
           (when (get h :returns)
             (put h :returns (canon-hint (get h :returns)))))
-        (when h
+        (when (and h (not= (string (form 0)) "defn-")
+                   (not (and (dictionary? m) (get m :private))))
           (def nm (string (form 1)))
-          (def ids (get name-ids nm))
-          (when ids
-            (each id ids
-              (def info (get defs id))
-              (put info :hint h))
-            (++ nhints)))
+          (def ids (filter (fn [id] (= ((defs id) :source) f))
+                           (or (get name-ids nm) @[])))
+          (if (and (= (length ids) 1) (get (defs (ids 0)) :hint))
+            nil
+            (eprint "callgraph: hinted export not registered unambiguously: " f " " nm)))
 )))
+  # Only compiler-expanded binding metadata attached to an exact FuncDef
+  # path can authorize a hint. Source text is used for missing-hint
+  # diagnostics, never for associating a same-named child.
+  (each info defs
+    (when (get info :hint)
+      (var h (get info :hint))
+      (if (dictionary? h)
+        (do (when (struct? h) (set h (table ;(kvs h))))
+          (when (indexed? (get h :params))
+            (put h :params (tuple ;(map canon-hint (get h :params)))))
+          (when (get h :returns)
+            (put h :returns (canon-hint (get h :returns))))
+          (put info :hint h)
+          (++ nhints))
+        (do (eprint "callgraph: malformed expanded hint: " (info :source) " " (info :name))
+          (put info :hint nil)))))
   nhints)
 
 (defn check-hints []
@@ -488,9 +523,20 @@
                (do (def t2 @{}) (put extern-call-map caller-id t2) t2))
            pc tname)
       tname)
-    (do (def ids (get name-ids tname))
+    (do (def source ((defs caller-id) :source))
+      (def origin (get (get import-origins source) tname))
+      # An imported binding must have a proven origin. Local names can
+      # resolve only within their own unit; cross-unit unqualified names
+      # are not evidence of a call target.
+      (def lookup (if (dictionary? origin) (get origin :name) tname))
+      (def ids (filter (fn [id]
+                         (= ((defs id) :source)
+                            (if (dictionary? origin) (get origin :source) source)))
+                       (or (get name-ids lookup) @[])))
       (cond
-        (nil? ids)
+        (= origin :ambiguous)
+        (do (array/push edges ["ambiguous" caller-id tname]) nil)
+        (empty? ids)
         (do (array/push edges ["extern" caller-id tname]) nil)
         (= 1 (length ids))
         (do (array/push edges ["calls" caller-id (ids 0)])
@@ -498,7 +544,7 @@
           (ids 0))
         (do (array/push edges ["ambiguous" caller-id tname]) nil)))))
 
-(defn const-target [d cidx core-names]
+(defn const-target [caller-id d cidx core-names]
   # classify a constant for call resolution. Returns a tuple
   # [kind payload]: [:fn name] [:core name] [:key name] [:no].
   (def consts (or (d :constants) @[]))
@@ -507,7 +553,11 @@
     (do (def c (consts cidx))
       (def t (type c))
       (cond
-        (= t :function) [:fn (string (or ((disasm c) :name) "?"))]
+        (= t :function)
+        (do (def binding (get (get unit-function-bindings ((defs caller-id) :source)) c))
+          (cond (string? binding) [:fn binding]
+                (= binding :ambiguous) [:ambiguous (string (or ((disasm c) :name) "?"))]
+                [:no nil]))
         (= t :cfunction) (do (def n (get core-names c))
                            (if n [:core n] [:no nil]))
         (= t :keyword) [:key (string c)]
@@ -562,9 +612,11 @@
             # nearest writer found
             (cond
               (= op 'ldc)
-              (do (def ct (const-target d (ins 2) core-names))
+              (do (def ct (const-target caller-id d (ins 2) core-names))
                 (cond
                   (= (ct 0) :fn) (set target (resolve-name caller-id (ct 1) pc))
+                  (= (ct 0) :ambiguous)
+                  (array/push edges ["ambiguous" caller-id (ct 1)])
                   (= (ct 0) :core)
                   (do (array/push edges ["extern" caller-id (ct 1)])
                     # record core-cfunction call sites for pure-call
@@ -669,13 +721,16 @@
   # then this def's own call sites (each audited for arity)
   (def info (defs id))
   (def d (info :d))
+  (def code (or (d :bytecode) @[]))
   (var cid (+ id 1))
+  (var childidx 0)
   (each child (or (d :defs) @[])
-    (array/push edges ["contains" id cid])
-    (+= cid (subtree-size cid)))
+    (when (some (fn [ins] (and (= (ins 0) 'clo) (= (ins 2) childidx))) code)
+      (array/push edges ["contains" id cid]))
+    (+= cid (subtree-size cid))
+    (++ childidx))
   (def cmap @{})
   (put call-map id cmap)
-  (def code (or (d :bytecode) @[]))
   (var pc 0)
   (each ins code
     (def op (ins 0))
@@ -723,6 +778,9 @@
         (try
           (do (def path (string (form 1)))
             (def modenv (require path))
+            (def found (try (module/find path) ([_] nil)))
+            (def source (if (and (indexed? found) (string? (found 0)))
+                          (found 0) nil))
             # L2: remember resolved source files so analysis covers
             # engine modules, not just the entry (kernel visibility).
             (try
@@ -740,13 +798,112 @@
               (def only (get kargs :only))
               (def ep (or (get kargs :export) (= head (quote use))))
               (def pfx (or (and as (string as "/")) prefix
-                           (string (last (string/split "/" (string path))) "/")))
-              (merge-module env modenv pfx ep only)))
+                           (string (first (string/split "." (last (string/split "/" (string path))))) "/")))
+              (merge-module env modenv pfx ep only)
+              (def origins (or (get import-origins unitfile)
+                               (do (def o @{}) (put import-origins unitfile o) o)))
+              (each k (keys modenv)
+                (when (and (symbol? k) (not (get (get modenv k) :private))
+                           (or (nil? only)
+                               (some (fn [v] (and (symbol? v) (= (string v) (string k)))) only)))
+                  (def binding (string pfx k))
+                  (def old (get origins binding))
+                  (put origins binding
+                       (if (and source (nil? old))
+                         {:source source :name (string k) :export ep}
+                         :ambiguous))))))
           ([e] (eprint "aot: import pre-execution failed for " (form 1) ": " e)
                (os/exit 2))))))
   (setdyn :current-file prev-current-file))
 
 (var core-names @{})
+
+# Parse profile identities BEFORE whole-unit compilation. The full PGO
+# parser below still checks signatures, types and provenance before inference;
+# this early pass accepts only well-shaped, positive-call source identities.
+# Profile text is data, never evaluated.
+(var retention-rows @[])
+(when profile-file
+  (def forms (parse-all (slurp profile-file)))
+  (unless (and (= 1 (length forms)) (indexed? (forms 0)))
+    (error "invalid PGO profile: expected one row array"))
+  (each row (forms 0)
+    (unless (and (indexed? row) (= 2 (length row))
+                 (indexed? (row 0)) (= 3 (length (row 0)))
+                 (or (nil? ((row 0) 0)) (string? ((row 0) 0)))
+                 (number? ((row 0) 1)) (= ((row 0) 1) (math/trunc ((row 0) 1)))
+                 (or (nil? ((row 0) 2)) (string? ((row 0) 2)))
+                 (table? (row 1))
+                 (number? (get (row 1) :calls))
+                 (>= (get (row 1) :calls) 0)
+                 (= (get (row 1) :calls) (math/trunc (get (row 1) :calls))))
+      (error "invalid PGO profile: malformed row identity or calls"))
+    (when (and (string? ((row 0) 0)) (string? ((row 0) 2))
+               (> ((row 0) 1) 0) (> (get (row 1) :calls) 0))
+      (array/push retention-rows (row 0)))))
+
+(defn profile-source-matches? [file recorded]
+  (def target (try (os/realpath file) ([_] nil)))
+  (def hits @{})
+  (when target
+    (if (string/has-prefix? "/" recorded)
+      (when (os/stat recorded)
+        (put hits (os/realpath recorded) true))
+      (do (var dir target)
+        # Try each ancestor of the analyzed unit; do not guess a project
+        # root or accept a basename/suffix match from another module.
+        (while dir
+          (def slash (string/find "/" (string/reverse dir)))
+          (set dir (if (nil? slash) nil
+                     (if (= (- (length dir) slash 1) 0) "/"
+                       (string/slice dir 0 (- (length dir) slash 1)))))
+          (when dir
+            (def candidate (string dir (if (= dir "/") "" "/") recorded))
+            (when (os/stat candidate)
+              (put hits (os/realpath candidate) true)))
+          (when (= dir "/") (set dir nil))))))
+  (and target (= 1 (length (keys hits))) (get hits target)))
+
+(defn count-definition-forms [forms name]
+  (var count 0)
+  (defn visit [form]
+    (when (tuple? form)
+      (when (and (>= (length form) 2) (symbol? (form 0))
+                 (symbol? (form 1)) (= (string (form 1)) name)
+                 (get @{"def" true "defn" true "defn-" true} (string (form 0))))
+        (++ count))
+      (each child form (visit child))))
+  (each form forms (visit form))
+  count)
+
+(defn profile-selections-for-unit [file forms]
+  (def by-name @{})
+  (each identity retention-rows
+    (when (profile-source-matches? file (identity 0))
+      (def name (identity 2))
+      (def bucket (or (get by-name name)
+                      (do (def a @[]) (put by-name name a) a)))
+      (array/push bucket identity)))
+  (def selected @{})
+  (each [name bucket] (pairs by-name)
+    (def occurrences (count-definition-forms forms name))
+    # VM-generated thunks/while closures are not source bindings and
+    # cannot be selected for exported-definition retention.
+    (when (> occurrences 0)
+      # A merged home/worker profile has multiple observation rows for
+      # one function. Their paths were individually verified against file
+      # above; require the same line/name, not one row per function.
+      (def first (bucket 0))
+      (if (and (= 1 occurrences)
+               (every? (map (fn [identity]
+                              (and (= (identity 1) (first 1))
+                                   (= (identity 2) (first 2))
+                                   (profile-source-matches? file (identity 0))))
+                            bucket)))
+        (put selected (symbol name) ((bucket 0) 1))
+        (eprint "callgraph: profile retention refused for " file " " name
+                ": duplicate identity or definition"))))
+  selected)
 
 (defn analyze-unit [f]
   (when (get analyzed-files f) (break))
@@ -754,6 +911,8 @@
   (def text (slurp f))
   (def forms (parse-all text))
   (def env (make-env))
+  (put env :retain-hinted-exports-for-analysis true)
+  (put env :analysis-retain-profiled-defs (profile-selections-for-unit f forms))
   # mirror the janet CLI: the script's directory joins the module syspath
   # so relative imports (../src/...) resolve like a normal `janet f.janet`
   (def slash-idx (string/find "/" (string/reverse f)))
@@ -769,7 +928,12 @@
     (def entry (get env name))
     (def v (if (table? entry) (get entry :value) entry))
     (when (or (= :function (type v)) (= :cfunction (type v)))
-      (put core-names v (string name))))
+      (put core-names v (string name)))
+    (when (and (= :function (type v))
+               (get (get import-origins f) (string name)))
+      (def bindings (or (get unit-function-bindings f)
+                        (do (def b @{}) (put unit-function-bindings f b) b)))
+      (put bindings v (if (nil? (get bindings v)) (string name) :ambiguous))))
   (each form forms
     (when (and (tuple? form) (>= (length form) 1)
                (symbol? (form 0)) (= (string (form 0)) "defmacro"))
@@ -810,7 +974,9 @@
     (array/push edges ["uncompiled" f -1 (string (res 1))])
     (not= :function (type thunk))
     (array/push edges ["uncompiled" f -1 (string (get thunk :error))])
-    (register-def (disasm thunk))))
+    (do (put unit-hint-paths f (get env :analysis-retained-hint-paths))
+      (put unit-profile-paths f (get env :analysis-retained-profile-paths))
+      (register-def (disasm thunk) f ""))))
 
 # entry files first, then L2: drain transitively discovered import
 # source files (engine modules become analyzable: registration,
@@ -998,6 +1164,26 @@
     (profile-invalid "invalid range bound"))
   value)
 
+(defn- profile-signatures [value calls]
+  (when (or (nil? value) (= value :open)) (break value))
+  (profile-sequence value :signatures)
+  (when (> (length value) 8) (profile-invalid "signature histogram over cap"))
+  (def seen @{})
+  (var total 0)
+  (each pair value
+    (unless (and (indexed? pair) (= 2 (length pair))
+                 (indexed? (pair 0)) (<= (length (pair 0)) 8)
+                 (number? (pair 1)) (> (pair 1) 0)
+                 (= (pair 1) (math/trunc (pair 1))))
+      (profile-invalid "invalid signature entry"))
+    (each tag (pair 0) (unless (keyword? tag) (profile-invalid "invalid signature tag")))
+    (def key (string/format "%j" (pair 0)))
+    (when (get seen key) (profile-invalid "duplicate signature"))
+    (put seen key true)
+    (+= total (pair 1)))
+  (unless (= total calls) (profile-invalid "signature counts do not match calls"))
+  value)
+
 (defn- profile-rows [path]
   (def text (slurp path))
   (unless text (profile-invalid "cannot read profile"))
@@ -1019,6 +1205,7 @@
     (def calls (get info :calls))
     (unless (and (number? calls) (>= calls 0) (= calls (math/trunc calls)))
       (profile-invalid "invalid call count"))
+    (profile-signatures (get info :signatures) calls)
     (each field [:params :elems]
       (def slots (profile-sequence (get info field @[]) field))
       (each slot slots (profile-types slot field)))
@@ -1054,7 +1241,8 @@
     (def nm (if (>= (length id) 3) (string (id 2)) nil))
     (when nm
       (def bucket (or (get profile-index nm) @[]))
-      (array/push bucket {:params (get info :params @[])
+      (array/push bucket {:identity id :signatures (get info :signatures)
+                          :params (get info :params @[])
                           :mins (map prof-bound (get info :mins @[]))
                           :maxs (map prof-bound (get info :maxs @[]))
                           :calls (get info :calls 0)
@@ -1062,6 +1250,30 @@
                           :type-from (get info :type-from @[])})
       (put profile-index nm bucket)))
   (print "profile " (length rows) " rows"))
+
+# Inference is keyed by name internally. Do not supply it evidence for a
+# different file/line or a same-named candidate: such a match can otherwise
+# appear to prove types for an unrelated retained definition.
+(when profile-index
+  (each [nm bucket] (pairs profile-index)
+    (def ids (get name-ids nm @[]))
+    (var valid (= 1 (length ids)))
+    (when valid
+      (def info (defs (ids 0)))
+      (def sm (get (info :d) :sourcemap))
+      # Keep all observations, including their distinct :from and
+      # :type-from provenance, only if EVERY row is the same verified
+      # source/line/name identity as the one registered FuncDef.
+      (unless (and (indexed? sm) (> (length sm) 0)
+                   (every? (map (fn [row]
+                                  (def identity (row :identity))
+                                  (and (= (identity 2) nm)
+                                       (= (get (sm 0) 0) (identity 1))
+                                       (string? (identity 0))
+                                       (profile-source-matches? (info :source) (identity 0))))
+                                bucket)))
+        (set valid false)))
+    (unless valid (put profile-index nm nil))))
 
 # Step 6+ (hybrid inference): hints are direct contracts (used as-is for
 # unboxing, never weakened); call-site widening + fixpoint prove the
@@ -1652,13 +1864,14 @@
 # Native-to-native call argument check: each passed arg must convert
 # exactly into the callee param (same type, or int->float which is
 # exact for |v| <= 2^53 like all int kernels). float->int refuses
-# (truncation diverges from boxed). Unclear walks allow (legacy
-# behavior — the common direct-call patterns verify strictly).
+# (truncation diverges from boxed). In particular, an array argument
+# must be proven before bypassing the wrapper's type guard.
 (defn call-args-compatible? [tid st d pc]
   (def cpt (get pts tid))
-  (when (nil? cpt) (break true))
+  (when (nil? cpt) (break false))
   (def slots (call-arg-slots d pc))
-  (when (nil? slots) (break true))
+  (when (nil? slots)
+    (break (not (some (fn [t] (= t :array)) cpt))))
   (when (not= (length slots) (length cpt)) (break false))
   (var i 0)
   (var ok true)
@@ -2163,6 +2376,13 @@
           # the arg list first (same pattern as ta-now).
           (def mk-now
             (when (= op 'mktab) (array ;pending)))
+          # Check direct-call args against their PRE-call types. The VM
+          # may reuse an argument register for the call's destination;
+          # after the state update, that register has the return type.
+          (def args-now
+            (when (and (or (= op 'call) (= op 'tcall))
+                       (number? (get cmap pc)))
+              (call-args-compatible? (get cmap pc) st d pc)))
           # keep the slot-type state current (mirrors flow-check)
           (cond
             (= op 'ldi) (put st (ins 1) :long)
@@ -2709,15 +2929,20 @@
                       (break))))
                 (do (def cname (if tid (get emitted-names tid)))
                   (def trt (if tid (rts tid) :unknown))
-                  # Composition: numeric-returning callees compose into
-                  # any caller (the temp carries the callee type; int
-                  # callers refuse via purity fail-closed). Pointer
-                  # returns still require exact match (no unwrapping).
+                  # Numeric results compose as before. An exact array
+                  # result also composes when the destination is proven
+                  # array on this path AND every write to that C slot is
+                  # array-typed (the declaration join refuses mixed slots).
+                  # This does not unbox array elements.
                   # Args must convert exactly (int->float ok, float->int
                   # refuses). Tail calls keep exact match (returned as
                   # our own value; conversion could truncate).
                   (def ret-ok
-                    (or (= trt rt) (get infer/numeric-types trt)))
+                    (or (and (not= trt :array) (= trt rt))
+                        (get infer/numeric-types trt)
+                        (and (= trt :array)
+                             (= (get st (ins 1) :unknown) :array)
+                             (= (get decl-types (ins 1) :unknown) :array))))
                   # Phase 1: a :nil-returning callee produces no C value
                   # at all -- `sN = voidfn(args);` is invalid C, so a
                   # void callee can NEVER compose into an assignment
@@ -2727,19 +2952,19 @@
                   # (the whole-program lattice already fail-closes any
                   # attempt to use a :nil result as something concrete).
                   (if (and tid cname (= trt :nil) (not spread) (not= op 'tcall)
-                           (call-args-compatible? tid st d pc))
+                            args-now)
                     (do (array/push lines
                                     (string "    " (emit-c-name cname)
                                             "(" (string/join pending ", ") ");"))
                       (set pending @[]))
                   (if (and tid cname ret-ok (not spread) (not= op 'tcall)
-                           (call-args-compatible? tid st d pc))
+                            args-now)
                     (do (array/push lines
                                     (string "    s" (ins 1) " = "
                                             (emit-c-name cname) "(" (string/join pending ", ") ");"))
                       (set pending @[]))
                     (if (and tid cname (= trt rt) (not spread)
-                             (call-args-compatible? tid st d pc))
+                              args-now)
                       (do (array/push lines
                                       (string "    return " (emit-c-name cname)
                                               "(" (string/join pending ", ") ");"))
@@ -3181,6 +3406,31 @@
   (case t :number "JANET_NUMBER" :string "JANET_STRING"
     :keyword "JANET_KEYWORD" "JANET_SYMBOL"))
 
+(defn- dispatch-int-guard [t i]
+  # janet_unwrap_integer casts a double to int32_t (janet.h), EVEN when
+  # the kernel param is :long/:u64/:u32. Never enter that conversion
+  # outside the signed int32 domain; retain narrower width bounds too.
+  # All other values must reach the original boxed closure instead.
+  (def bound (case t :i8 "127" :u8 "255" :i16 "32767"
+               :u16 "65535" "2147483647"))
+  (def lower (if (get @{:u8 true :u16 true :u32 true :u64 true} t)
+               "0" (case t :i8 "-128" :i16 "-32768"
+                     "-2147483648")))
+  (string "isfinite(janet_unwrap_number(argv[" i "])) && "
+          "trunc(janet_unwrap_number(argv[" i "])) == janet_unwrap_number(argv[" i "]) && "
+          "janet_unwrap_number(argv[" i "]) >= " lower " && "
+          "janet_unwrap_number(argv[" i "]) <= " bound))
+
+(defn- dispatch-arg-guard [t i]
+  (def tag (cond (get infer/numeric-types t) "JANET_NUMBER"
+                 (= t :array) "JANET_ARRAY" (= t :tuple) "JANET_TUPLE"
+                 (= t :pointer) "JANET_POINTER"
+                 (= t :string) "JANET_STRING" (= t :keyword) "JANET_KEYWORD"
+                 (= t :symbol) "JANET_SYMBOL" nil))
+  (when tag (string "janet_type(argv[" i "]) == " tag
+                    (if (get int-hints t)
+                      (string " && " (dispatch-int-guard t i)) ""))))
+
 (defn dispatch-wrapper-for [nm slot branches pt rt telemetry-id]
   # branches: [{:obs :pt :cname}] ordered; each arm unboxes ALL args per
   # that branch's pt (the flip slot per its branch type, the rest per the
@@ -3200,6 +3450,9 @@
                         (native-unwrap-expr ((b :pt) i) i)) ", "))
         (string
           "    case " (dispatch-janet-type-tag (b :obs)) ": {\n"
+          (string/join
+            (seq [i :range [0 (length (b :pt))]]
+              (string "        if (!(" (dispatch-arg-guard ((b :pt) i) i) ")) break;\n")) "")
           "        " cn "_TELEMETRY_HIT();\n"
           (if (nil? rv)
             (string "        " (b :cname) "(" call-args ");\n"
@@ -3239,6 +3492,56 @@
           "}\n"
           "#undef " cn "_TELEMETRY_HIT\n#undef " cn "_TELEMETRY_FALLBACK\n"))
 
+(defn joint-wrapper-for [nm branches arity rt telemetry-id]
+  (def cn (emit-c-name nm))
+  (def tid (string/format "%08X" telemetry-id))
+  (def rv (cond (= rt :nil) nil (= rt :array) "janet_wrap_array"
+                (and (get int-hints rt) (not= int-policy :promote)) "janet_wrap_integer"
+                "janet_wrap_number"))
+  (def arms (string/join
+    (seq [b :in branches]
+      (def idx (b :index))
+      (def tests (string/join
+        (seq [i :range [0 arity]] (dispatch-arg-guard ((b :signature) i) i)) " && "))
+      (def args (string/join
+        (seq [i :range [0 arity]] (native-unwrap-expr ((b :pt) i) i)) ", "))
+      (string "    if (" tests ") {\n"
+              "        " cn "_VARIANT_" idx "();\n"
+              (if rv
+                (string "        return " rv "(" (b :cname) "(" args "));\n")
+                (string "        " (b :cname) "(" args ");\n"
+                        "        return janet_wrap_nil();\n"))
+              "    }\n")) ""))
+  (string "#ifndef JANET_NATIVE_TELEMETRY\n#define JANET_NATIVE_TELEMETRY 1\n#endif\n"
+          "#if JANET_NATIVE_TELEMETRY\n"
+          (string/join (seq [b :in branches]
+            (string "static JANET_THREAD_LOCAL unsigned long long " cn "_variant_" (b :index) ";\n")) "")
+          "static JANET_THREAD_LOCAL unsigned long long " cn "_telemetry_fallbacks;\n"
+          "static void " cn "_telemetry_report(void) {\n"
+          "    fprintf(stderr, \"native-telemetry id=" tid " name=" cn " boxed-fallbacks=%llu"
+          (string/join (seq [b :in branches]
+            (string " variant-" (b :index) "=%llu")) "")
+          "\\n\", " cn "_telemetry_fallbacks"
+          (string/join (seq [b :in branches]
+            (string ", " cn "_variant_" (b :index))) "") ");\n}\n"
+          (string/join (seq [b :in branches]
+            (string "#define " cn "_VARIANT_" (b :index) "() (++" cn "_variant_" (b :index) ")\n")) "")
+          "#define " cn "_FALLBACK() (++" cn "_telemetry_fallbacks)\n"
+          "#else\n#define " cn "_telemetry_report() ((void)0)\n"
+          (string/join (seq [b :in branches]
+            (string "#define " cn "_VARIANT_" (b :index) "() ((void)0)\n")) "")
+          "#define " cn "_FALLBACK() ((void)0)\n#endif\n"
+          "static Janet " cn "_wrapper(int32_t argc, Janet *argv) {\n"
+          "    if (argc != " arity ") { janet_panicf(\"native " cn
+          " called with %d arguments, expected " arity "\", argc); }\n"
+          arms
+          "    " cn "_FALLBACK();\n"
+          "    Janet fb = (NULL != n_disp_boxed) ? janet_table_get(n_disp_boxed, "
+          "janet_ckeywordv(\"" nm "\")) : janet_wrap_nil();\n"
+          "    if (!janet_checktype(fb, JANET_FUNCTION))\n"
+          "        janet_panicf(\"native " cn ": no boxed fallback registered\");\n"
+          "    return janet_call(janet_unwrap_function(fb), argc, argv);\n}\n"))
+
 (defn emit-native-lib [outdir]
   # Step 12: hybrid-binary flavor. Emits native.c with the kernels PLUS
   # janet-cfunction wrappers (unbox args -> kernel -> rebox result) and a
@@ -3260,6 +3563,7 @@
   # Phase 4: id -> {:slot j :types [observed keyword types]} for the
   # dispatch middle tier (filled by the classification loop below).
   (def disp-cand @{})
+  (def joint-cand @{})
   (def lib-skips @[])
   (each id (range (length defs))
     (def info (get defs id))
@@ -3334,8 +3638,39 @@
                   (set disp {:slot unk :types (sorted (keys types4))})))))
           (if disp
             (put disp-cand id disp)
-            (array/push lib-skips [id (string (or (d :name) "?"))
-                                   (string "types not proven: " (describe-types-lib pt rt))]))))))
+            (do
+              # Distinct complete vectors, never a Cartesian product of
+              # :params. Disasm lacks source lines; refuse duplicate names
+              # or multiple source-line identities outright.
+              (def nmj (string (or (d :name) "")))
+              (def rowsj (get profile-index nmj))
+              (var valid (and rowsj (= 1 (length (get name-ids nmj @[])))
+                              (<= 1 (length pt)) (<= (length pt) 8)
+                              (not (d :vararg))
+                              (or (= rt :double) (= rt :number) (= rt :nil))))
+              (def sigs @{})
+              (when valid
+                (def identity ((rowsj 0) :identity))
+                (each row rowsj
+                  (def idj (row :identity))
+                  (def hist (row :signatures))
+                  (unless (and (= identity idj) (= (idj 0) (info :source))
+                               (indexed? hist))
+                    (set valid false))
+                  (when (indexed? hist)
+                    (each pair hist
+                      (def sig (pair 0))
+                      (unless (= (length sig) (length pt))
+                        (set valid false))
+                      (each tag sig
+                        (unless (get dispatch-obs-types tag) (set valid false)))
+                      (when valid (put sigs (string/format "%j" sig) sig)))))
+                (def njs (length (keys sigs)))
+                (when (and valid (>= njs 2) (<= njs 8))
+                  (put joint-cand id (seq [key :in (sorted (keys sigs))] (get sigs key)))))
+              (unless (get joint-cand id)
+                (array/push lib-skips [id nmj
+                                       (string "types not proven: " (describe-types-lib pt rt))]))))))))
   (def emitted-names @{})
   (def kernels @[])
   (def lib-skip-reason @{})
@@ -3371,6 +3706,36 @@
   # name. All-or-nothing per function: one failed branch => the whole
   # function stays boxed.
   (def disp-names @[])
+  (each id (sort (keys joint-cand))
+    (def info (get defs id))
+    (def d (info :d))
+    (def nm (string (d :name)))
+    (def rt (rts id))
+    (def arity (length (get pts id)))
+    (var branches @[])
+    (var failure nil)
+    (var ix 0)
+    (each sig (get joint-cand id)
+      (def bname (string nm "%joint_" id "_" ix))
+      (def bpt (map dispatch-branch-type sig))
+      (def [res reason] (emit-fn-c id (merge d {:name bname}) rt bpt
+                                   call-map emitted-names rts))
+      (if res
+        (array/push branches {:index ix :signature sig :pt bpt
+                              :cname (emit-c-name bname) :code (res :code)
+                              :externs (res :externs)})
+        (do (set failure (string "joint variant " ix ": " reason)) (break)))
+      (++ ix))
+    (if failure
+      (array/push lib-skips [id nm failure])
+      (do
+        (array/push disp-names nm)
+        (array/push kernels {:name nm
+                             :code (string/join (map |($0 :code) branches) "\n")
+                             :externs (distinct (flatten (map |($0 :externs) branches)))
+                             :wrapper (joint-wrapper-for nm branches arity rt id)
+                             :dispatch true})
+        (print "native-joint-dispatch " id " " nm " " (length branches)))))
   (each id (sort (keys disp-cand))
     (def info (get defs id))
     (def d (info :d))
@@ -3407,6 +3772,35 @@
   (each [id nm r] lib-skips (print "native-skip " id " " nm " " r))
   (def cout @"")
   (buffer/push-string cout "#include <janet.h>\n#include <inttypes.h>\n#include <math.h>\n#include <stdlib.h>\n\n")
+  # Independent tier: never insert executor ids into emitted-names/kernels.
+  (def executors @[])
+  (when (= "1" (os/getenv "JANET_NATIVE_EXECUTORS"))
+    (each id (range (length defs))
+      (def d ((get defs id) :d))
+      (when (and (loop-executor/eligible? d)
+                 (= 1 (length (get name-ids (string (d :name)) @[]))))
+        (array/push executors id)
+        (buffer/push-string cout (loop-executor/emit id d))
+        (print "native-executor " id " " (d :name)))))
+  (def manifest @"")
+  (each id executors
+    (buffer/push-string manifest (string id " " (((get defs id) :d) :name) "\n")))
+  (spit (string outdir "/native-executors.txt") manifest)
+  (when (not (empty? executors))
+    (buffer/push-string cout
+      "static Janet cfun_executor_register(int32_t argc, Janet *argv) {\n"
+      "janet_fixarity(argc,2); JanetFunction *f = janet_getfunction(argv,1);\n"
+      "int ok = 0; switch (janet_getinteger(argv,0)) {\n")
+    (each id executors
+      (buffer/push-string cout (string "case " id ": ok = janet_native_register(f, &nx_" id "_code); break;\n")))
+    (buffer/push-string cout
+      "default: break; } if (!ok) fprintf(stderr, \"native executor registration refused\\n\");\n"
+      "return janet_wrap_boolean(ok); }\n"
+      "static Janet cfun_executor_stats(int32_t argc, Janet *argv) {\n"
+      "janet_fixarity(argc,1); uint64_t a=0,b=0,c=0; switch(janet_getinteger(argv,0)) {\n")
+    (each id executors
+      (buffer/push-string cout (string "case " id ": a=nx_" id "_entries; b=nx_" id "_edges; c=nx_" id "_fallbacks; break;\n")))
+    (buffer/push-string cout "} Janet *t=janet_tuple_begin(3); t[0]=janet_wrap_number(a); t[1]=janet_wrap_number(b); t[2]=janet_wrap_number(c); return janet_wrap_tuple(janet_tuple_end(t)); }\n"))
   (buffer/push-string cout "/* int32-domain bitwise helpers: boxed Janet errors outside int32\n * (integral doubles accepted); results wrap int32; shift counts mask\n * to 5 bits. Callers range/integrality-check operands (fail loud). */\nstatic int32_t k_band32(int32_t a, int32_t b) { return a & b; }\nstatic int32_t k_bor32(int32_t a, int32_t b) { return a | b; }\nstatic int32_t k_bxor32(int32_t a, int32_t b) { return a ^ b; }\nstatic int32_t k_sl32(int32_t a, int32_t b) { return (int32_t)((uint32_t)a << ((uint32_t)b & 31u)); }\nstatic int32_t k_sr32(int32_t a, int32_t b) { uint32_t n = (uint32_t)b & 31u; int32_t r = (int32_t)((uint32_t)a >> n); if ((a < 0) && (n != 0)) { r |= (int32_t)(~0u << (32u - n)); } return r; }\nstatic int32_t k_sru32(int32_t a, int32_t b) { return (int32_t)((uint32_t)a >> ((uint32_t)b & 31u)); }\n\n")
   # Phase 2/3: one static slot per distinct string/keyword/symbol
   # literal referenced by any kernel in this build, declared here and
@@ -3460,6 +3854,8 @@
               "((const uint8_t*)\"" (emit-c-string-literal (key 1))
               "\", " (length (key 1)) ");\n")))
   (buffer/push-string cout "    static const JanetReg regs[] = {\n")
+  (when (not (empty? executors))
+    (buffer/push-string cout "    { \"executor-register\", cfun_executor_register, NULL },\n    { \"executor-stats\", cfun_executor_stats, NULL },\n"))
   (each k kernels
     (buffer/push-string cout
       (string "    { \"" (k :name) "\", " (emit-c-name (k :name)) "_wrapper, NULL },\n")))
@@ -3467,7 +3863,10 @@
     (buffer/push-string cout "    { \"dispatch-set-boxed\", cfun_disp_set_boxed, NULL },\n"))
   (buffer/push-string cout "    { NULL, NULL, NULL } };\n")
   (buffer/push-string cout "    janet_cfuns(env, \"native\", regs);\n")
-  (buffer/push-string cout "    if (sizeof(regs)/sizeof(regs[0]) > 1)\n        fprintf(stderr, \"native_init: registered %d wrappers\\n\", (int) (sizeof(regs)/sizeof(regs[0]) - 1));\n")
+  (when (not (empty? kernels))
+    (buffer/push-string cout (string "    fprintf(stderr, \"native_init: registered " (length kernels) " wrappers\\n\");\n")))
+  (when (not (empty? executors))
+    (buffer/push-string cout (string "    fprintf(stderr, \"native_init: available " (length executors) " frame executors\\n\");\n")))
   (buffer/push-string cout "}\n")
   (spit (string outdir "/native.c") cout)
   (def nl @"")

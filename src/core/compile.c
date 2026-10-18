@@ -184,6 +184,12 @@ void janetc_scope(JanetScope *s, JanetCompiler *c, int flags, const char *name) 
 void janetc_popscope(JanetCompiler *c) {
     JanetScope *oldscope = c->scope;
     JanetScope *newscope = oldscope->parent;
+    /* A failed/unused function may pop without producing a FuncDef. Never
+     * leave its stack address available for a later sibling scope to reuse. */
+    for (int32_t i = 0; i < janet_v_count(c->retained_defs); i++) {
+        if (c->retained_defs[i].scope == oldscope)
+            c->retained_defs[i].scope = NULL;
+    }
     /* Move free slots to parent scope if not a new function.
      * We need to know the total number of slots used when compiling the function. */
     if (!(oldscope->flags & (JANET_SCOPE_FUNCTION | JANET_SCOPE_UNUSED)) && newscope) {
@@ -1170,6 +1176,23 @@ void janet_def_addflags(JanetFuncDef *def) {
 JanetFuncDef *janetc_pop_funcdef(JanetCompiler *c, JanetString name) {
     JanetScope *scope = c->scope;
     JanetFuncDef *def = janet_funcdef_alloc();
+    for (int32_t i = 0; i < janet_v_count(c->retained_defs); i++) {
+        if (c->retained_defs[i].scope == scope) {
+            int found = 0;
+            for (int32_t j = 0; j < janet_v_count(scope->defs); j++) {
+                if (scope->defs[j] == c->retained_defs[i].child) {
+                    c->retained_defs[i].parent = def;
+                    found = 1;
+                    break;
+                }
+            }
+            /* Clear even on failure: this address is transient stack storage. */
+            c->retained_defs[i].scope = NULL;
+            if (!found)
+                janet_eprintf("analysis retention refused: hinted child missing from finalized scope %s\n",
+                              scope->name);
+        }
+    }
     def->slotcount = scope->ra.max + 1;
 
     janet_assert(scope->flags & JANET_SCOPE_FUNCTION, "expected function scope");
@@ -1324,6 +1347,10 @@ static void janetc_init(JanetCompiler *c, JanetTable *env, const uint8_t *where,
     c->lints = lints;
     c->is_redef = janet_truthy(janet_table_get_keyword(c->env, "redef"));
     c->optimize = to_optimization_level(janet_table_get_keyword(c->env, "optimize"));
+    Janet retain = janet_table_get_keyword(c->env, "retain-hinted-exports-for-analysis");
+    c->retain_hinted_exports_for_analysis =
+        janet_checktype(retain, JANET_BOOLEAN) && janet_truthy(retain);
+    c->retained_defs = NULL;
     /* Rooted pin array for compiler-held values (see janetc_pin). The
      * gcroot itself never triggers a collection, so creating and pinning
      * the empty array is atomic. */
@@ -1345,9 +1372,42 @@ static void janetc_init(JanetCompiler *c, JanetTable *env, const uint8_t *where,
 static void janetc_deinit(JanetCompiler *c) {
     janet_v_free(c->buffer);
     janet_v_free(c->mapbuffer);
+    janet_v_free(c->retained_defs);
     janet_gcunroot(janet_wrap_array(c->pins));
     janet_vm.compiler_stack = c->compiler_next;
     c->env = NULL;
+}
+
+void janetc_optimize_funcdef(JanetCompiler *c, JanetFuncDef *def) {
+    if (c->retain_hinted_exports_for_analysis)
+        janet_bytecode_optimize_for_analysis(def, c->optimize,
+                                              c->retained_defs, janet_v_count(c->retained_defs));
+    else
+        janet_bytecode_optimize(def, c->optimize);
+}
+
+/* Publish only children demonstrably present in the final optimized tree.
+ * This analysis-only sidecar identifies their exact disasm paths, never
+ * their names; it is not part of a FuncDef or a marshaled image. */
+static void janetc_record_retained_paths(JanetCompiler *c, JanetFuncDef *def,
+                                         const uint8_t *path, JanetTable *paths,
+                                         JanetTable *profile_paths) {
+    for (int32_t j = 0; j < def->defs_length; j++) {
+        JanetFuncDef *child = def->defs[j];
+        JanetString childpath = janet_formatc("%s/%d", path, j);
+        janetc_pin(c, janet_wrap_string(childpath));
+        for (int32_t i = 0; i < janet_v_count(c->retained_defs); i++) {
+            JanetRetainedDef *r = c->retained_defs + i;
+            if (r->parent == def && r->child == child) {
+                if (janet_truthy(r->hint))
+                    janet_table_put(paths, janet_wrap_string(childpath), r->hint);
+                if (r->profiled)
+                    janet_table_put(profile_paths, janet_wrap_string(childpath), janet_wrap_true());
+                break;
+            }
+        }
+        janetc_record_retained_paths(c, child, childpath, paths, profile_paths);
+    }
 }
 
 /* Pin a value for the duration of the compilation. The push itself can
@@ -1382,8 +1442,19 @@ JanetCompileResult janet_compile_lint(Janet source,
     if (c.result.status == JANET_COMPILE_OK) {
         JanetFuncDef *def = janetc_pop_funcdef(&c, janet_cstring("thunk"));
         janet_def_addflags(def);
-        janet_bytecode_optimize(def, c.optimize);
+        janetc_optimize_funcdef(&c, def);
         c.result.funcdef = def;
+        if (c.retain_hinted_exports_for_analysis) {
+            JanetTable *paths = janet_table(4);
+            janetc_pin(&c, janet_wrap_table(paths));
+            JanetTable *profile_paths = janet_table(4);
+            janetc_pin(&c, janet_wrap_table(profile_paths));
+            janetc_record_retained_paths(&c, def, (const uint8_t *) "", paths, profile_paths);
+            janet_table_put(env, janet_ckeywordv("analysis-retained-hint-paths"),
+                            janet_wrap_table(paths));
+            janet_table_put(env, janet_ckeywordv("analysis-retained-profile-paths"),
+                            janet_wrap_table(profile_paths));
+        }
     } else {
         c.result.error_mapping = c.current_mapping;
         janetc_popscope(&c);

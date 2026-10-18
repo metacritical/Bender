@@ -135,6 +135,14 @@
 # the boxed fn into native.c's n_disp_boxed table (native/dispatch-set-boxed,
 # registered by native_init pre-unmarshal -- hence the indirect
 # (curenv) resolution, same reason as the prelude rebinds below).
+(var executor-names @{})
+(when native-names-file
+  (def ef (string/replace-all "native-names.txt" "native-executors.txt" native-names-file))
+  (when (and (not= ef native-names-file) (= :file (os/stat ef :mode)))
+    (each l (string/split "\n" (slurp ef))
+      (when (> (length l) 0)
+        (def pair (string/split " " l))
+        (put executor-names (symbol (pair 1)) (scan-number (pair 0)))))))
 (var dispatch-names @{})
 (when native-names-file
   (def df (string/replace-all "native-names.txt" "native-dispatch.txt" native-names-file))
@@ -159,13 +167,14 @@
 # both sets MUST take the native path, because native stripping is
 # paired with a prelude rebind (and possibly a %boxed dispatch form)
 # that the unconditional DCE drop would leave dangling.
-(when (or (next native-names) (next dce-excluded-names))
+(when (or (next native-names) (next dce-excluded-names) (next executor-names))
   # strip proven defn forms; keep everything else. Phase 4 exception:
   # a dispatch function's defn is kept RENAMED to <name>%boxed and
   # immediately followed by its boxed-registration form (must run
   # before any call site can reach the dispatcher; defn placement in
   # the original source is the earliest correct point).
   (def kept @[])
+  (def registered-executors @{})
   # Piece 1c bookkeeping: names actually dropped (with their slot in
   # `kept`) and names the residual-reference audit below put back.
   (def dce-dropped @[])
@@ -177,6 +186,13 @@
            (or (= (string (get f 0)) "defn") (= (string (get f 0)) "defn-"))
            (symbol? (get f 1))))
     (cond
+      (and top-defn? (get executor-names (get f 1)))
+      (do
+        (array/push kept f)
+        (put registered-executors (get f 1) true)
+        (array/push kept
+                    (tuple (tuple 'get (tuple 'get '(curenv) (tuple 'quote 'executor-register)) ':value)
+                           (get executor-names (get f 1)) (get f 1))))
       (and top-defn? (get native-names (get f 1)))
       (do
         (when (tuple? f)
@@ -218,6 +234,10 @@
         (array/push kept @[:dce-dropped (get f 1) f]))
 
       (array/push kept f)))
+
+  (each nm (keys executor-names)
+    (unless (get registered-executors nm)
+      (eprint "mkimage: executor target " nm " has no retained top-level defn; stays boxed")))
 
   # --- Residual-reference audit (fail-closed, B7.2 Part B, Piece 1c) ---
   # The whole-program gate in callgraph.janet reasons over BYTECODE. This

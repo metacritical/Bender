@@ -1,0 +1,2 @@
+@[@[@["test/fixtures/hinted-export/profile-module.janet" 1 "hot"] @{:calls 12}]
+  @[@["test/fixtures/hinted-export/profile-module.janet" 99 "hot"] @{:calls 4}]]

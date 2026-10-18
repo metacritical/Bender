@@ -5725,54 +5725,113 @@
   (os/rmdir lock)
   result)
 
-(defn- aot-cache-store [out ndir workload stdin sources captured-input]
-  # persist a successful --pgo build's profile + workload for future
-  # automatic builds. Best effort, never fails the build.
+(defn- aot-merge-profiles [paths dest]
+  (def exe (dyn *executable* "bender"))
+  (unless (= 0 (os/execute [exe (string (aot-tools-dir) "/profile-merge.janet")
+                             "--accumulate" "--out" dest
+                             ;(map (fn [path] (string "home=" path)) paths)]
+                            (if (string/find "/" exe) :e :ep)))
+    (error "profile accumulation failed")))
+
+(defn- aot-report-divergence [paths]
+  (when (> (length paths) 1)
+    (def exe (dyn *executable* "bender"))
+    (unless (= 0 (os/execute [exe (string (aot-tools-dir) "/profile-divergence.janet") ;paths]
+                           (if (string/find "/" exe) :e :ep)))
+      (error "profile divergence report failed"))))
+
+# v3 stores a manifest and independently replayable raw observations. v2 is
+# read as a single workload, with its oracle regenerated at replay time.
+(defn- aot-cache-load [cdir key sources]
+  (def base (string cdir "/" key))
+  (def meta (try (parse (slurp (string base ".meta"))) ([_] nil)))
+  (def identity (aot-source-identity sources))
+  (unless (and identity (dictionary? meta) (deep= (get meta :sources) identity))
+    (break nil))
+  (def records
+    (if (= 3 (get meta :version))
+      (get meta :workloads)
+      (if (and (= 2 (get meta :version))
+               (os/stat (string base ".workload"))
+               (os/stat (string base ".stdin"))
+               (= (get meta :args) (string (slurp (string base ".workload"))))
+               (= (get meta :has-stdin) (not (empty? (string (slurp (string base ".stdin"))))))
+               (deep= (get meta :stdin-bytes)
+                      (if (os/stat (string base ".input"))
+                        (string (slurp (string base ".input"))) nil)))
+        [{:args (get meta :args) :stdin-bytes (get meta :stdin-bytes)
+          :has-stdin (get meta :has-stdin) :profile (string base ".jdn")
+          :oracle nil}]
+        nil)))
+  (unless (and (indexed? records) (not (empty? records))) (break nil))
+  (when (and (= 3 (get meta :version))
+             (not (and (string? (get meta :aggregate))
+                       (= :file (os/stat (get meta :aggregate) :mode)))))
+    (break nil))
+  (var valid true)
+  (each rec records
+    (unless (and (dictionary? rec) (string? (get rec :args))
+                 (boolean? (get rec :has-stdin))
+                 (if (get rec :has-stdin) (string? (get rec :stdin-bytes))
+                     (nil? (get rec :stdin-bytes)))
+                 (string? (get rec :profile))
+                 (= :file (os/stat (get rec :profile) :mode))
+                 (if (= 3 (get meta :version))
+                   (and (string? (get rec :oracle))
+                        (= :file (os/stat (get rec :oracle) :mode)))
+                   (nil? (get rec :oracle))))
+      (set valid false)))
+  (unless valid (break nil))
+  records)
+
+(defn- aot-cache-store [out ndir workload stdin sources captured-input previous-meta]
+  # Publish immutable generation files before atomically switching the
+  # manifest. Never modify a file referenced by the previous manifest.
   (try
     (do (def cdir (aot-cache-dir))
       (when cdir
         (aot-mkdir-p cdir)
         (def key (aot-cache-key out))
         (aot-cache-transaction cdir key (fn []
-        (def cached (string cdir "/" key ".jdn"))
-        (def fresh (string ndir "/profile.jdn"))
         (def meta (string cdir "/" key ".meta"))
-        (def snapshot (string cdir "/" key ".input"))
-        (def current-input captured-input)
-        (def identity {:version 2 :args workload :has-stdin (not (empty? stdin))
-                       :stdin-bytes (if current-input (string current-input) nil)
-                       :sources (aot-source-identity sources)})
-        (unless (get identity :sources) (error "missing PGO source identity"))
-        # Legacy and differently replayed runs cannot contribute to this gate.
-        (def same-workload
-          (and (os/stat meta) (= :file (os/stat cached :mode))
-               (os/stat (string cdir "/" key ".workload"))
-               (= (string (slurp (string cdir "/" key ".workload"))) workload)
-               (os/stat (string cdir "/" key ".stdin"))
-               (= (string (slurp (string cdir "/" key ".stdin"))) stdin)
-               (deep= (try (parse (slurp meta)) ([_] nil)) identity)
-               (if current-input
-                 (and (os/stat snapshot) (= (string (slurp snapshot)) (string current-input)))
-                 (nil? (os/stat snapshot)))))
-        (def valid-cache (and same-workload (aot-cache-fresh? cached sources)))
-        (if valid-cache
-          (do (def tmp (string cached ".merge-" (os/getpid)))
-            (def exe (dyn *executable* "bender"))
-            (unless (= 0 (os/execute [exe (string (aot-tools-dir) "/profile-merge.janet")
-                                       "--accumulate" "--out" tmp
-                                       (string "cached=" cached)
-                                       (string "home=" fresh)]
-                                      (if (string/find "/" exe) :e :ep)))
-              (error "profile accumulation failed"))
-            (os/rename tmp cached))
-          (spit cached (slurp fresh)))
-        (spit (string cdir "/" key ".workload") workload)
-        (spit (string cdir "/" key ".stdin") stdin)
-        (when current-input (spit snapshot current-input))
-        (when (and (nil? current-input) (os/stat snapshot)) (os/rm snapshot))
-        (spit meta (string/format "%j" identity))
-        (eprint "bender --aot: cached PGO profile for automatic rebuilds")))))
-    ([_] (eprint "bender --aot: warning: could not write PGO cache"))))
+        (unless (= previous-meta (if (os/stat meta) (string (slurp meta)) nil))
+          (error "PGO cache changed during collection; retry training"))
+        (def identity (aot-source-identity sources))
+        (unless identity (error "missing PGO source identity"))
+        (def prior (or (aot-cache-load cdir key sources) @[]))
+        (def records @[])
+        (each r prior (array/push records r))
+        (def pos (find-index (fn [r] (and (= workload (get r :args))
+                                          (= (not (empty? stdin)) (get r :has-stdin))
+                                          (= captured-input (get r :stdin-bytes)))) records))
+        # An exclusive directory reserves a unique generation even if a
+        # previous writer crashed and left unpublished files behind.
+        (var serial 0)
+        (var generation nil)
+        (while (and (nil? generation) (< serial 1024))
+          (def trial (string cdir "/" key ".rev-" (os/getpid) "-" serial))
+          (if (os/mkdir trial) (set generation trial) (++ serial)))
+        (unless generation (error "could not reserve PGO cache generation"))
+        (def raw (string generation "/profile.jdn"))
+        (def oracle (string generation "/oracle.out"))
+        (if pos
+          (aot-merge-profiles [(get (records pos) :profile) (string ndir "/profile.raw.jdn")] raw)
+          (spit raw (slurp (string ndir "/profile.raw.jdn"))))
+        (spit oracle (slurp (string ndir "/expected.out")))
+        (def rec {:args workload :has-stdin (not (empty? stdin))
+                  :stdin-bytes captured-input :profile raw :oracle oracle})
+        (if pos (put records pos rec) (array/push records rec))
+        (def aggregate (string generation "/aggregate.jdn"))
+        (aot-merge-profiles (map (fn [r] (get r :profile)) records) aggregate)
+        (def metatmp (string meta ".tmp-" (os/getpid)))
+        (spit metatmp (string/format "%j" {:version 3 :sources identity
+                                           :aggregate aggregate :workloads records}))
+        (when (os/getenv "JANET_PGO_FAIL_BEFORE_MANIFEST")
+          (error "injected pre-manifest PGO cache failure"))
+        (os/rename metatmp meta)
+        (eprint "bender --aot: cached PGO profiles for " (length records) " workloads")
+        true))))
+    ([e] (eprint "bender --aot: PGO cache publication failed: " e) false)))
 
 (defn- aot-abs-exe []
   (def exe (dyn *executable* "bender"))
@@ -5982,6 +6041,8 @@
       (var gate false)
       (var gate-workload "")
       (var gate-stdin "")
+      (var gate-records @[])
+      (var prior-cache-meta nil)
       (var captured-stdin nil)
       (when pgo
         # phase 0 (collect): interpreter under the type collector;
@@ -6012,19 +6073,112 @@
           (aot-die (string "profile run failed with exit " pcode) 1))
         (when (nil? (os/stat prof))
           (aot-die "collector produced no profile (is JANET_PROFILE wired?)" 1))
+        (spit (string ndir "/profile.raw.jdn") (slurp prof))
+        # Shape with compatible prior runs, and verify each old oracle as
+        # well as the new one before either publishing or installing.
+        (def cdir (aot-cache-dir))
+        (when (and cdir (os/stat cdir))
+          (def key (aot-cache-key out))
+          (def meta-path (string cdir "/" key ".meta"))
+          # Snapshot metadata under the same lock as cache publication.
+          # A busy cache is not evidence that can authorize a new build.
+          (var prior nil)
+          (try
+            (aot-cache-transaction cdir key (fn []
+              (when (os/stat meta-path)
+                (set prior-cache-meta (string (slurp meta-path))))
+              (set prior (aot-cache-load cdir key [src ;includes ;extrac]))))
+            ([e] (aot-die (string "PGO cache busy or unreadable: " e) 1)))
+          (def recorded (try (parse prior-cache-meta) ([_] nil)))
+          (when (and (= 3 (get recorded :version))
+                     (deep= (get recorded :sources)
+                            (aot-source-identity [src ;includes ;extrac]))
+                     (nil? prior))
+            (aot-die "corrupt compatible v3 PGO cache; refusing collection" 1))
+          (when prior
+            (each r prior
+              (def ordinal (length gate-records))
+              (def input-path (string ndir "/prior-stdin-" ordinal))
+              (def replay-stdin (if (get r :has-stdin) input-path ""))
+              (when (get r :has-stdin) (spit input-path (get r :stdin-bytes)))
+              (var oracle (get r :oracle))
+              # v2 stored no oracle; regenerate it from its exact recorded
+              # argv/stdin under the already-verified source identity.
+              (when (nil? oracle)
+                (set oracle (string ndir "/legacy-oracle-" ordinal ".out"))
+                (def oenv (merge @{} (os/environ) {"JANET_NO_PROFILE" "1"}))
+                (def oout (file/open oracle :w))
+                (var oin nil)
+                (when (get r :has-stdin)
+                  (set oin (file/open replay-stdin :r))
+                  (put oenv :in oin))
+                (put oenv :out oout)
+                (def oexe (aot-abs-exe))
+                (def ocode (os/execute [oexe src ;(aot-words (get r :args))]
+                                       (if (string/find "/" oexe) :e :ep) oenv))
+                (file/close oout)
+                (when oin (file/close oin))
+                (unless (= 0 ocode)
+                  (aot-die "legacy PGO oracle regeneration failed" 1)))
+              (array/push gate-records {:args (get r :args) :stdin replay-stdin
+                                        :oracle oracle}))
+            (aot-report-divergence [;(map (fn [r] (get r :profile)) prior)
+                                    (string ndir "/profile.raw.jdn")])
+            (aot-merge-profiles [;(map (fn [r] (get r :profile)) prior)
+                                 (string ndir "/profile.raw.jdn")]
+                                (string ndir "/profile.joined.jdn"))
+            (os/rename (string ndir "/profile.joined.jdn") prof)))
         (eprint "bender --aot: pgo collected profile")
         (set profile-args ["--profile" prof])
         (set gate true)
         (set gate-workload pgo-args)
-        (set gate-stdin (if captured-stdin (string ndir "/stdin.capture") "")))
+        (set gate-stdin (if captured-stdin (string ndir "/stdin.capture") ""))
+        (array/push gate-records {:args pgo-args :stdin gate-stdin
+                                  :oracle expected}))
       # auto-PGO: no flags needed. A fresh cached profile (collected by
       # first binary runs or earlier --pgo builds, newer than sources,
       # with a recorded workload) applies automatically through the
       # same parity gate. Anything missing prints what to do instead;
       # --no-auto-pgo skips this entirely. Never breaks the build.
       (var auto false)
+      # A v3 cache is a set of verified, independently replayable runs.
+      # Immutable generations permit replay after a locked manifest snapshot;
+      # contention itself still means the cache is unavailable for this build.
+      (var cache-busy false)
       (when (and native (not pgo) (not no-auto-pgo)
                  (not only-c) (not print-c) (not run-mode))
+        (def cdir (aot-cache-dir))
+        (when (and cdir (os/stat cdir))
+          (def key (aot-cache-key out))
+          (var meta nil)
+          (var records nil)
+          (try
+            (aot-cache-transaction cdir key (fn []
+              (set meta (try (parse (slurp (string cdir "/" key ".meta"))) ([_] nil)))
+              (when (= 3 (get meta :version))
+                (set records (aot-cache-load cdir key [src ;includes ;extrac])))))
+            ([e] (set cache-busy true)
+                 (eprint "bender --aot: PGO cache busy or unreadable; building unoptimized")))
+          (when (= 3 (get meta :version))
+            (when records
+              (unless (os/stat ndir) (os/mkdir ndir))
+              (aot-report-divergence (map (fn [r] (get r :profile)) records))
+              # Rebuild the aggregate from the verified raw records: never
+              # allow a stale aggregate to erase one workload's evidence.
+              (aot-merge-profiles (map (fn [r] (get r :profile)) records)
+                                  (string ndir "/profile.jdn"))
+              (set profile-args ["--profile" (string ndir "/profile.jdn")])
+              (each r records
+                (def input-path (string ndir "/replay-stdin-" (length gate-records)))
+                (when (get r :has-stdin) (spit input-path (get r :stdin-bytes)))
+                (array/push gate-records {:args (get r :args)
+                                          :stdin (if (get r :has-stdin) input-path "")
+                                          :oracle (get r :oracle)}))
+              (set gate true)
+              (set auto true)
+              (eprint "bender --aot: verifying " (length gate-records) " cached workloads")))))
+      (when (and native (not pgo) (not no-auto-pgo)
+                 (not cache-busy) (not gate) (not only-c) (not print-c) (not run-mode))
         (def cdir (aot-cache-dir))
         (when cdir
           (def key (aot-cache-key out))
@@ -6100,11 +6254,15 @@
                     (set gate true)
                     (set auto true)
                     (set gate-workload wargs)
-                    (set gate-stdin wstdin))))))
+                    (set gate-stdin wstdin)
+                    (array/push gate-records {:args wargs :stdin wstdin
+                                              :oracle expected}))))))
       (when (and release (not gate))
         (aot-die "--release needs compatible cached PGO evidence and a replayable workload; run --pgo first" 1))
       (when (and pack-upx (not gate))
         (aot-die "--upx needs --pgo or compatible cached evidence with a replayable workload" 1))
+      (when (and pack-upx (> (length gate-records) 1))
+        (aot-die "--upx multi-workload packed parity is not implemented" 1))
       # B7.2 Part B, Piece 1c. The exclusion file is the ONLY channel
       # carrying the dce-reachable verdict to mkimage.janet (same
       # write-a-file/read-a-file convention as native-names.txt). A
@@ -6149,45 +6307,41 @@
             (do (def candidate (string out ".pgo-tmp"))
               (aot-run-cc [;ccbase candidate])
               (def actual (string ndir "/actual.out"))
-              (def aout (file/open actual :w))
-              (def aenv (merge @{} (os/environ)))
-              (when release (put aenv "JANET_NO_PROFILE" "1"))
-              (var ainfile nil)
-              (var runnable true)
-              (when (not (empty? gate-stdin))
-                (if (os/stat gate-stdin)
-                  (do (set ainfile (file/open gate-stdin :r))
-                    (put aenv :in ainfile))
-                  (do (eprint "bender --aot: gate stdin file is gone; building unoptimized")
-                    (set runnable false))))
-              (put aenv :out aout)
-              (var acode nil)
-              (when runnable
-                (set acode (os/execute [candidate ;(aot-words gate-workload)] :e aenv)))
-              (file/close aout)
-              (when ainfile (file/close ainfile))
-              (cond (not runnable)
-                    (if (and auto (not release))
-                      (do (set gate-fallback true))
-                      (aot-die "gate stdin file is gone" 1))
-                    (not= acode 0)
-                    (if (and auto (not release))
-                      (do (eprint "bender --aot: gated binary exited nonzero; building unoptimized")
-                        (set gate-fallback true))
-                      (aot-die (string "pgo-built binary exited " acode) 1))
-                    (not= (string (slurp expected)) (string (slurp actual)))
-                    (if (and auto (not release))
-                      (do (eprint "bender --aot: cached-profile gate mismatch (stale workload?); building unoptimized")
-                        (set gate-fallback true))
-                      (do (eprint "bender --aot: PGO PARITY FAILED (artifacts kept in " ndir ")")
-                        (os/exit 1)))
-                    (do (size-finish candidate)
+              (for idx 0 (length gate-records)
+                (def rec (gate-records idx))
+                (def aout (file/open actual :w))
+                (def aenv (merge @{} (os/environ) {"JANET_NO_PROFILE" "1"}))
+                (var ainfile nil)
+                (def input (get rec :stdin))
+                (when (not (empty? input))
+                  (unless (os/stat input)
+                    (aot-die (string "gate stdin file is gone for workload " idx) 1))
+                  (set ainfile (file/open input :r))
+                  (put aenv :in ainfile))
+                (put aenv :out aout)
+                (def acode (os/execute [candidate ;(aot-words (get rec :args))] :e aenv))
+                (file/close aout)
+                (when ainfile (file/close ainfile))
+                (when (or (not= acode 0)
+                          (not= (string (slurp (get rec :oracle))) (string (slurp actual))))
+                  (eprint "bender --aot: PGO PARITY FAILED workload " idx
+                          " argv=" (get rec :args) " (artifacts in " ndir ")")
+                  (if (and auto (not release))
+                    (set gate-fallback true)
+                    (aot-die "PGO workload parity failed; no binary installed" 1))))
+              (unless gate-fallback
+                (do (size-finish candidate)
                       (package-upx candidate gate-workload gate-stdin)
-                      (os/rename candidate out)
-                      (eprint "bender --aot: pgo parity ok, installed " out)
                       # explicit --pgo refreshes the cache (profile +
-                      # workload) for future automatic builds.
-                      (when pgo (aot-cache-store out ndir gate-workload pgo-stdin [src ;includes ;extrac] captured-stdin))))))
+                      # workload) before installing. Failure preserves the
+                      # previous binary and previous published cache state.
+                      (when pgo
+                        (unless (aot-cache-store out ndir gate-workload pgo-stdin
+                                                 [src ;includes ;extrac] captured-stdin
+                                                 prior-cache-meta)
+                          (aot-die "PGO cache publication failed; no binary installed" 1)))
+                      (os/rename candidate out)
+                      (eprint "bender --aot: pgo parity ok, installed " out)))))
           (when (and release gate-fallback)
             (aot-die "--release parity failed; no unoptimized release fallback" 1))
           (when (and pack-upx gate-fallback)
