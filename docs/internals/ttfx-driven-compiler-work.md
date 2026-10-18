@@ -26,6 +26,13 @@ GUI appearance/tick cadence, numeric behavior, GC, debugger behavior and exact V
 quantum/suspension ordering. Call counts, emission and successful registration
 are not performance measurements. Use focused matched timing only after correctness.
 
+Latest verified CLI release comparison:
+[Omarchy AOT/PGO versus Rust](omarchy-cli-release-comparison.md). Full output
+parity passes, but the rebuilt release remains within noise of previous Janet;
+Rust fx is 6–39× faster on the measured whole-process dump workloads. Six leaf
+kernels remain; the current compiler infrastructure has not nativeized the hot
+mixed-operation scene loops. Do not describe these changes as a measured speedup.
+
 ## Compiler branch history (not yet merged into shared master)
 
 Development began at `5fe56858` in isolated worktrees to preserve other agents'
