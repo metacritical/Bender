@@ -470,6 +470,22 @@ static void janet_suspend_swap(JanetFiber *fiber, JanetSignal sig, Janet payload
  * set. */
 #define JANET_PROFILE_VALSAMPLE 8
 #define JANET_PROFILE_SIGSAMPLE 8
+/* Stream D step A: distinct observed table/struct KEY SETS per param
+ * slot ("shapes"). ttfx-style record passing means most unprovable
+ * params are tables carrying a fixed key set -- a struct wearing a
+ * hash table's clothing. Recording the observed key sets lets the
+ * build emit a real C struct with offset field access instead of
+ * janet_table_get hash probes. Same discipline as VALSAMPLE above: a
+ * slot observing more distinct shapes than this is marked OPEN and the
+ * consumer must keep it a boxed JanetTable* -- exactly the correct
+ * outcome for a genuine dictionary (dynamic keys), so real
+ * dictionaries disqualify themselves automatically. */
+#define JANET_PROFILE_SHAPESAMPLE 4
+/* Guard against pathological records: a key set wider than this is
+ * treated as open rather than flattened (struct layout churn stops
+ * being worth it, and it signals the value is used as a map). ttfx's
+ * widest real record (canvas) is ~18 keys. */
+#define JANET_PROFILE_SHAPEMAXKEYS 24
 
 /* Direct-mapped entry cache (auto-PGO): real programs alternate
  * between functions, so a last-entry cache thrashes (16x slowdown
@@ -494,6 +510,7 @@ typedef struct {
     JanetArray *mn;
     JanetArray *mx;
     JanetArray *va;
+    JanetArray *sh;
     Janet sig;
 } JanetProfileCache;
 /* Phase C: the fast-path cache is per-thread. Worker VMs share this
@@ -544,6 +561,7 @@ static void janet_profile_cache_fill(JanetTable *pt, JanetFuncDef *def, JanetTab
     c->mn = janet_unwrap_array(janet_table_get(e, janet_ckeywordv("mins")));
     c->mx = janet_unwrap_array(janet_table_get(e, janet_ckeywordv("maxs")));
     c->va = janet_unwrap_array(janet_table_get(e, janet_ckeywordv("vals")));
+    c->sh = janet_unwrap_array(janet_table_get(e, janet_ckeywordv("shapes")));
     c->sig = janet_table_get(e, janet_ckeywordv("signatures"));
     c->live = 1;
 }
@@ -636,6 +654,23 @@ static JanetTable *janet_profile_entry(JanetFunction *func) {
             janet_table_put_raw(e, janet_ckeywordv("vals"), janet_wrap_array(va));
             janet_gcunroot(janet_wrap_array(va));
         }
+        {
+            /* Stream D step A: observed table/struct KEY SETS per slot.
+             * Per slot: nil = unobserved, array of key-arrays = the
+             * distinct observed shapes (bounded by
+             * JANET_PROFILE_SHAPESAMPLE), true = open (too many
+             * distinct shapes, or a key set wider than
+             * JANET_PROFILE_SHAPEMAXKEYS, or a non-keyword key --
+             * consumers must keep the slot a boxed table). Booleans can
+             * never be a recorded shape, so `true` is unambiguous, the
+             * same marker discipline as :vals above. */
+            JanetArray *sh = janet_array(JANET_PROFILE_MAXPARAMS);
+            janet_gcroot(janet_wrap_array(sh));
+            for (i = 0; i < JANET_PROFILE_MAXPARAMS; i++)
+                janet_array_push(sh, janet_wrap_nil());
+            janet_table_put_raw(e, janet_ckeywordv("shapes"), janet_wrap_array(sh));
+            janet_gcunroot(janet_wrap_array(sh));
+        }
         janet_table_put_raw(e, janet_ckeywordv("rets"), janet_wrap_integer(0));
         /* Joint, full-arity tag vectors; true denotes OPEN. The entry
          * owns this array and every nested vector across GC. */
@@ -665,7 +700,7 @@ static JanetTable *janet_profile_entry(JanetFunction *func) {
 
 static void janet_profile_call(JanetFunction *func, const Janet *argv, int32_t argc) {
     int32_t n, i;
-    JanetArray *pa, *ea, *mn, *mx, *va;
+    JanetArray *pa, *ea, *mn, *mx, *va, *sh;
     JanetProfileCache *hit = janet_profile_hit(func);
     if (NULL != hit) {
         pa = hit->pa;
@@ -673,6 +708,7 @@ static void janet_profile_call(JanetFunction *func, const Janet *argv, int32_t a
         mn = hit->mn;
         mx = hit->mx;
         va = hit->va;
+        sh = hit->sh;
         hit->calls++;
     } else {
         JanetTable *e = janet_profile_entry(func);
@@ -683,6 +719,7 @@ static void janet_profile_call(JanetFunction *func, const Janet *argv, int32_t a
         mn = hit->mn;
         mx = hit->mx;
         va = hit->va;
+        sh = hit->sh;
         hit->calls++;
     }
     n = argc < JANET_PROFILE_MAXPARAMS ? argc : JANET_PROFILE_MAXPARAMS;
@@ -790,6 +827,89 @@ static void janet_profile_call(JanetFunction *func, const Janet *argv, int32_t a
                          * Drop the set and mark it; consumers must
                          * fall back to boxed, never emit a huge set. */
                         va->data[i] = janet_wrap_true();
+                    }
+                }
+            }
+        }
+        if (full && NULL != sh && i < sh->count &&
+                (at == (uint32_t) JANET_TABLE || at == (uint32_t) JANET_STRUCT)) {
+            /* Stream D step A: record this table's KEY SET. Only
+             * all-keyword key sets are recordable: a struct field needs
+             * a stable C identifier, and a non-keyword key (number,
+             * string, computed value) is the signature of a real
+             * dictionary, which must stay boxed. Any such key marks the
+             * slot open immediately rather than recording a partial
+             * shape. */
+            Janet slotsh = sh->data[i];
+            if (!janet_checktype(slotsh, JANET_BOOLEAN)) {
+                const JanetKV *kvs = NULL;
+                int32_t cap = 0, cnt = 0;
+                if (at == (uint32_t) JANET_TABLE) {
+                    JanetTable *t = janet_unwrap_table(argv[i]);
+                    kvs = t->data;
+                    cap = t->capacity;
+                    cnt = t->count;
+                } else {
+                    const JanetKV *st = janet_unwrap_struct(argv[i]);
+                    kvs = st;
+                    cap = janet_struct_capacity(st);
+                    cnt = janet_struct_length(st);
+                }
+                if (cnt > JANET_PROFILE_SHAPEMAXKEYS) {
+                    sh->data[i] = janet_wrap_true();
+                } else {
+                    /* Collect keys in the table's own slot order, then
+                     * compare order-insensitively below: two tables with
+                     * the same keys can hash them into different slots,
+                     * so raw order is not canonical. */
+                    Janet keybuf[JANET_PROFILE_SHAPEMAXKEYS];
+                    int32_t nk = 0, j;
+                    int bad = 0;
+                    for (j = 0; j < cap && nk <= JANET_PROFILE_SHAPEMAXKEYS; j++) {
+                        if (janet_checktype(kvs[j].key, JANET_NIL)) continue;
+                        if (!janet_checktype(kvs[j].key, JANET_KEYWORD)) { bad = 1; break; }
+                        if (nk == JANET_PROFILE_SHAPEMAXKEYS) { bad = 1; break; }
+                        keybuf[nk++] = kvs[j].key;
+                    }
+                    if (bad) {
+                        sh->data[i] = janet_wrap_true();
+                    } else {
+                        JanetArray *shapes = janet_checktype(slotsh, JANET_ARRAY)
+                            ? janet_unwrap_array(slotsh) : NULL;
+                        int found = 0;
+                        int32_t si;
+                        if (NULL != shapes) {
+                            for (si = 0; si < shapes->count && !found; si++) {
+                                JanetArray *cand = janet_unwrap_array(shapes->data[si]);
+                                if (cand->count != nk) continue;
+                                /* order-insensitive set compare */
+                                int32_t a2, b2, matched = 0;
+                                for (a2 = 0; a2 < nk; a2++) {
+                                    for (b2 = 0; b2 < cand->count; b2++)
+                                        if (janet_equals(keybuf[a2], cand->data[b2])) { matched++; break; }
+                                }
+                                if (matched == nk) found = 1;
+                            }
+                        }
+                        if (!found) {
+                            if (NULL != shapes && shapes->count >= JANET_PROFILE_SHAPESAMPLE) {
+                                sh->data[i] = janet_wrap_true();
+                            } else {
+                                JanetArray *ks = janet_array(nk);
+                                janet_gcroot(janet_wrap_array(ks));
+                                for (j = 0; j < nk; j++) janet_array_push(ks, keybuf[j]);
+                                if (NULL == shapes) {
+                                    shapes = janet_array(JANET_PROFILE_SHAPESAMPLE);
+                                    janet_gcroot(janet_wrap_array(shapes));
+                                    janet_array_push(shapes, janet_wrap_array(ks));
+                                    sh->data[i] = janet_wrap_array(shapes);
+                                    janet_gcunroot(janet_wrap_array(shapes));
+                                } else {
+                                    janet_array_push(shapes, janet_wrap_array(ks));
+                                }
+                                janet_gcunroot(janet_wrap_array(ks));
+                            }
+                        }
                     }
                 }
             }
@@ -1021,6 +1141,26 @@ JanetArray *janet_profile_rows(void) {
                             janet_array_push(valsv, vv);
                     }
                     janet_table_put(info, janet_ckeywordv("vals"), janet_wrap_array(valsv));
+                }
+                {
+                    /* Stream D step A shape evidence: nil = unobserved,
+                     * an array of key-arrays = the distinct observed
+                     * key sets, :open = too many shapes / too wide /
+                     * non-keyword keys (consumer must keep it boxed).
+                     * Same dump discipline as :vals above. */
+                    JanetArray *shv = janet_array(0);
+                    JanetArray *sh = janet_unwrap_array(janet_table_get(e, janet_ckeywordv("shapes")));
+                    n = sh->count;
+                    for (j = 0; j < n; j++) {
+                        Janet vv = sh->data[j];
+                        if (janet_checktype(vv, JANET_NIL))
+                            janet_array_push(shv, janet_wrap_nil());
+                        else if (janet_checktype(vv, JANET_BOOLEAN))
+                            janet_array_push(shv, janet_ckeywordv("open"));
+                        else
+                            janet_array_push(shv, vv);
+                    }
+                    janet_table_put(info, janet_ckeywordv("shapes"), janet_wrap_array(shv));
                 }
                 janet_table_put(info, janet_ckeywordv("rets"), janet_profile_mask_types(rm));
                 janet_array_push(row, janet_wrap_table(info));
