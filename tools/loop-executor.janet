@@ -32,8 +32,15 @@
 # Explicit VM boundaries: eligible in descriptors, never executed natively.
 # The whole divide/modulo family stays in the VM alongside calls, argument
 # pushes, collection access/mutation and allocation.
+# `in` is handled natively below (see NX_IN): it is a PURE READ, so
+# unlike `put` it cannot allocate, cannot need a GC write barrier, and
+# cannot trigger a collection. `put` deliberately stays a boundary --
+# JOP_PUT does vm_commit, sets RESUME_NO_USEVAL, may GROW the array
+# (allocation), and ends with vm_checkgc, none of which an executor is
+# permitted to do. `get` also stays: it returns nil for a missing key
+# where `in` raises, and its nil-default path is compiled as a branch.
 (def boundaries {'call true 'tcall true 'push true 'push2 true 'push3 true
-                 'get true 'in true 'len true 'next true 'put true
+                 'get true 'len true 'next true 'put true
                  'mkarr true 'mkbuf true 'mktup true
                  'div true 'divim true 'divf true 'mod true 'rem true})
 
@@ -44,7 +51,8 @@
 (defn- allowed-op? [op]
   (or (get simple op) (get arithmetic op) (get comparisons op)
       (get branches op) (get boundaries op)
-      (get bitwise op) (get shifts op) (= op 'bnot)))
+      (get bitwise op) (get shifts op) (= op 'bnot)
+      (= op 'in) (= op 'inim)))
 
 (defn eligible? [d]
   (and (d :bytecode-words) (not (d :vararg)) (not (d :structarg))
@@ -147,6 +155,38 @@
     (def z (get ins 3))
     (out "L" (string k) ":;")
     (cond
+      # Native `in` / `inim`: ARRAY and TUPLE with an in-range
+      # non-negative integer index are read directly; EVERYTHING else
+      # (tables, structs, strings, buffers, negative or fractional or
+      # out-of-range indices, non-indexable values) exits to the VM at
+      # this exact PC so janet_in performs it and raises identically.
+      # Pure read -- no allocation, no GC write barrier, no collection --
+      # which is why `in` can be native here while `put` cannot. This is
+      # the single most frequent boundary (6.6% of ttfx matrix
+      # dispatches); removing it lengthens native regions, which is the
+      # actual limit on this tier (a boundary every ~4.3 instructions,
+      # each re-entry re-running the structural compare).
+      (or (= op 'in) (= op 'inim))
+      (do
+        (out tag "_ops++;")
+        (def keyexpr (if (= op 'inim)
+                       (string "(double)(uint32_t)(" z ")")
+                       (string "janet_unwrap_number(s[" z "])")))
+        (out "{ Janet nxds_ = s[" (string c) "];")
+        (unless (= op 'inim)
+          (out "if (!janet_checktype(s[" (string z) "], JANET_NUMBER)) { NX_BOUNDARY(" (string k) "); }"))
+        (out "double nxk_ = " keyexpr "; int32_t nxi_ = (int32_t) nxk_;")
+        (out "if (nxk_ != (double) nxi_ || nxi_ < 0) { NX_BOUNDARY(" (string k) "); }")
+        (out "if (janet_checktype(nxds_, JANET_ARRAY)) {")
+        (out "  JanetArray *nxa_ = janet_unwrap_array(nxds_);")
+        (out "  if (nxi_ >= nxa_->count) { NX_BOUNDARY(" (string k) "); }")
+        (out "  s[" (string a) "] = nxa_->data[nxi_];")
+        (out "} else if (janet_checktype(nxds_, JANET_TUPLE)) {")
+        (out "  const Janet *nxt_ = janet_unwrap_tuple(nxds_);")
+        (out "  if (nxi_ >= janet_tuple_length(nxt_)) { NX_BOUNDARY(" (string k) "); }")
+        (out "  s[" (string a) "] = nxt_[nxi_];")
+        (out "} else { NX_BOUNDARY(" (string k) "); } }"))
+
       (get boundaries op) (out "NX_BOUNDARY(" (string k) "); /* " (string op) ": VM executes once */")
       (or (get arithmetic op) (get comparisons op))
       (do
