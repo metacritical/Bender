@@ -1300,6 +1300,7 @@
     (when nm
       (def bucket (or (get profile-index nm) @[]))
       (array/push bucket {:identity id :signatures (get info :signatures)
+                          :shapes (get info :shapes @[])
                           :params (get info :params @[])
                           :mins (map prof-bound (get info :mins @[]))
                           :maxs (map prof-bound (get info :maxs @[]))
@@ -3679,6 +3680,77 @@
       (print "dce emit " (length dce-names) " excluded names "
              emit-native-lib-dir "/dce-excluded.txt"))))
 
+
+# --- Stream D step B gate: is struct-flattening a table param WORTH it? ---
+# A table param arrives as a real JanetTable* whose slots are hash
+# distributed, so a kernel cannot address fields by fixed offset. It must
+# flatten at the boundary: N janet_table_get probes on entry, then O(1)
+# offset loads inside. That wins ONLY if the body reads fields MORE often
+# than the field count -- read each field once and flattening merely moves
+# the same probes to the boundary. So before emitting anything, report the
+# ratio per closed-shape param, counting constant-key reads of the param
+# slot in the bytecode (`in`/`inim`/`get` whose data-structure operand is
+# that slot).
+(when (and profile-index (os/getenv "JANET_SHAPE_REPORT"))
+  (def rows @[])
+  (each id (range (length defs))
+    (def info (get defs id))
+    (def d (info :d))
+    (def nm (string (d :name)))
+    (def bucket (get profile-index nm))
+    (when bucket
+      (each entry bucket
+        (def shapes (get entry :shapes @[]))
+        (var slot 0)
+        (each sh shapes
+          # a usable shape is a non-empty array of key-arrays, all agreeing
+          (when (and (indexed? sh) (> (length sh) 0) (indexed? (first sh)))
+            (def nkeys (length (first sh)))
+            (def nshapes (length sh))
+            # count constant-key reads whose ds operand is this param slot
+            # Count field reads of THIS param slot. Must include call
+            # syntax: measured, (ctx :key) compiles to ldc+push+tcall --
+            # a GENERIC CALL -- not to `in`. Counting only in/inim/get
+            # reported reads=0 for every ttfx record and made the ratio
+            # look uniformly hopeless when the reads were simply taking
+            # a different opcode path.
+            (var reads 0)
+            (def code (or (d :bytecode) @[]))
+            (var ci 0)
+            (while (< ci (length code))
+              (def ins (code ci))
+              (def op (ins 0))
+              (cond
+                # direct indexed read: ds operand is slot
+                (and (or (= op (quote in)) (= op (quote inim)) (= op (quote get)))
+                     (>= (length ins) 3) (= (ins 2) slot))
+                (++ reads)
+                # call syntax: push <slot> then call/tcall -- the record
+                # itself is the callee, so the pushed arg is the key
+                (and (or (= op (quote push)) (= op (quote push2)) (= op (quote push3)))
+                     (>= (length ins) 2))
+                (do (var cj (+ ci 1))
+                  (while (and (< cj (length code))
+                              (let [o2 ((code cj) 0)]
+                                (or (= o2 (quote push)) (= o2 (quote push2)) (= o2 (quote push3)))))
+                    (++ cj))
+                  (when (< cj (length code))
+                    (def cop ((code cj) 0))
+                    (when (and (or (= cop (quote call)) (= cop (quote tcall)))
+                               (>= (length (code cj)) 2)
+                               (= ((code cj) (if (= cop (quote tcall)) 1 2)) slot))
+                      (++ reads))))
+                nil)
+              (++ ci))
+            (array/push rows [(get entry :calls 0) nm slot nkeys nshapes reads]))
+          (++ slot)))))
+  (sort rows (fn [a b] (> (a 0) (b 0))))
+  (print "shape-report calls name slot keys shapes fieldreads ratio")
+  (each r rows
+    (def reads (r 5)) (def nkeys (r 3))
+    (print "shape-report " (r 0) " " (r 1) " slot" (r 2)
+           " keys=" nkeys " shapes=" (r 4) " reads=" reads
+           " ratio=" (if (> nkeys 0) (string/format "%.2f" (/ reads nkeys)) "-"))))
 
 (when emit-native-dir (emit-native-all emit-native-dir))
 
