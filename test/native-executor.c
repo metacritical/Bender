@@ -41,7 +41,14 @@ static JanetFunction *assembled(const JanetNativeCode *code) {
     d->bytecode_length = code->length;
     d->bytecode = janet_malloc((size_t)code->length * sizeof(uint32_t));
     memcpy(d->bytecode, code->words, (size_t)code->length * sizeof(uint32_t));
-    assert(code->constants_length == 0);
+    d->constants_length = code->constants_length;
+    if (d->constants_length) {
+        d->constants = janet_malloc((size_t)d->constants_length * sizeof(Janet));
+        for (int32_t i = 0; i < d->constants_length; i++) {
+            assert(code->constants[i].type == JANET_NUMBER);
+            d->constants[i] = janet_wrap_number(code->constants[i].number);
+        }
+    }
     JanetFunction *f = janet_thunk(d); janet_gcroot(janet_wrap_function(f));
     return f;
 }
@@ -255,6 +262,29 @@ int main(int argc, char **argv) {
         }
         janet_gcunroot(janet_wrap_function(f));
     }
+    /* Independent bit oracle for emitted constants, not runtime arguments. */
+    const double expected_constants[] = {
+        -0.0, 0.0, 0x1.fffffffffffffp1023, -0x1.fffffffffffffp1023,
+        0x1p-1022, 0x1p-1074
+    };
+    assert(nx_120_code.constants_length == 6);
+    for (int i = 0; i < 6; i++) {
+        assert(nx_120_code.constants[i].type == JANET_NUMBER);
+        assert(!memcmp(&nx_120_code.constants[i].number,
+                       &expected_constants[i], sizeof(double)));
+    }
+    JanetFunction *roundtrip = assembled(&nx_120_code);
+    attach(roundtrip, &nx_120_code);
+    JanetFiber *rf = spawn(roundtrip, 0);
+    assert(janet_continue(rf, janet_wrap_nil(), &result) == JANET_SIGNAL_OK);
+    double actual_zero = janet_unwrap_number(result);
+    assert(!memcmp(&actual_zero, &expected_constants[0], sizeof(double)));
+    assert(nx_120_entries > 0);
+    roundtrip->def->constants[0] = janet_wrap_number(0.0);
+    assert(!janet_native_matches(roundtrip->def, &nx_120_code));
+    janet_gcunroot(janet_wrap_fiber(rf));
+    janet_gcunroot(janet_wrap_function(roundtrip));
+    puts("emitted signed-zero/extreme finite/subnormal constant roundtrip passed");
     puts("primitive/conditional/self-edge oracles and 392 IEEE numeric pairs passed");
     printf("generated counters: sum entries=%llu backedges=%llu guards=%llu; nested entries=%llu backedges=%llu\n",
            (unsigned long long)nx_1_entries, (unsigned long long)nx_1_edges, (unsigned long long)nx_1_fallbacks,

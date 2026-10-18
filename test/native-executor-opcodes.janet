@@ -18,4 +18,10 @@
                        (addim 1 1 1) (ltim 2 1 3) (jmpif 2 -2) (retn)]})
 (each [id op] (map tuple (range 110 118) '[lt lte gt gte eq neq sub mul])
   (emit id {:arity 2 :slotcount 3 :bytecode [(tuple op 2 0 1) '(ret 2) '(jmp 0)]}))
+# These values must survive Janet parsing, emitter formatting and C compilation.
+# The C oracle uses independent hexadecimal floating-point literals.
+(emit 120 {:arity 1 :slotcount 1
+           :constants [-0.0 0.0 1.7976931348623157e308 -1.7976931348623157e308
+                       2.2250738585072014e-308 4.9406564584124654e-324]
+           :bytecode '[(ldc 0 0) (ret 0) (jmp 0)]})
 (file/close output)
