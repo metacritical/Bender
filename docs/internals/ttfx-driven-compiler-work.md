@@ -49,8 +49,11 @@ Preserved checkpoint refs: `ttfx-compiler-verified-base`,
 The completed commits were merged into the original repository's `master`
 checkout as **`58268620`**, preserving component and merge history. The incoming
 files did not overlap the shared checkout's 12 pre-existing dirty/untracked files;
-SHA-256 checks confirmed all 12 were preserved byte-for-byte. Source integration
-does not imply that the installed compiler binary was rebuilt.
+SHA-256 checks confirmed all 12 were preserved byte-for-byte. The original checkout
+was subsequently rebuilt: `build/bender` reports `1.43.0-dev-5180da8a` and
+`build/libjanet.a` was refreshed, with experimental executors default-off.
+Array-result 16, joint-dispatch 28, hinted-export 78, multiseed 35, release 14,
+and auto-PGO 98 assertions passed (269 total), plus hinted-callgraph checks.
 
 ## Implemented and validated
 
@@ -159,6 +162,21 @@ in the isolated integration branch, then coordinate a normal merge into clean ma
 Shared-tree inventories initially recorded 11 Janet and 202 ttfx dirty/untracked
 entries; a subsequent SHA-256 comparison found them unchanged. Review source,
 tests/docs, generated artifacts, CI/ignore edits and ownership independently.
-In particular, shared Janet `implementation_plan.md` reports another agent's
-accidental partial overwrite: its owner must reconstruct/review it before merging.
-Retain worktree/branch references until integration and preservation are verified.
+At the user's request, remaining original-checkout WIP was then organized into
+feature commits rather than blanket-staged:
+
+| Commit | Preserved work |
+|---|---|
+| `ebb83566` | Archive the unrelated partial recovery at `recovered/role-subagents-plan.partial.md`; restore the tracked Janet plan |
+| `151bdc24` | Ignore Finder metadata without deleting it |
+| `5ada1e33` | Historical combined compiler/messaging roadmap |
+| `092269e1` | Historical DCE safety-gate/stripping plans |
+| `6a3f59a2` | Type-generator design, with historical-scope corrections |
+| `6f2da236` | Historical workload diagnosis, not an application-optimization mandate |
+| `8bee3ee1` | Manual pool probes and byte-preserved archived proc snapshots |
+
+The original partial plan cannot be fully reconstructed; its fragment and recovery
+note remain preserved, not endorsed as current instructions. Both manual pool
+probes exited 0 under a timeout. Historical plans include provenance/status warnings.
+The original Janet worktree was clean after these commits; ttfx's separate WIP was
+not included in this compiler cleanup. Branch/worktree references remain available.
