@@ -1192,4 +1192,27 @@
   (assert-error "borim keeps int32 range check" (bor 4294967296 255))
   (assert-error "bxorim keeps int32 range check" (bxor 4294967296 255)))
 
+# JOP_PUT_INDEX unsigned gate. This opcode is JINT_SSU but do_put used the
+# SIGNED gate, which (a) MISCOMPILED a literal negative index -- (put arr
+# -1 v) read -1 back as uint8 255 and silently wrote there, growing the
+# array, while a genuinely runtime -1 raised -- and (b) needlessly fell
+# back to JOP_PUT for indices 128..255.
+(do
+  (def a (array/new-filled 8 :x))
+  (assert-error "literal negative put index raises (was: wrote index 255)"
+                (put a -1 :boom))
+  (assert (= 8 (length a)) "failed put must not have grown the array")
+  # constant and runtime paths must agree
+  (def b (array/new-filled 8 :x))
+  (def neg (do (var v -1) v))
+  (assert-error "runtime negative put index raises" (put b neg :boom))
+  # the widened range writes the right element
+  (def c (array/new-filled 300 :x))
+  (put c 255 :at255)
+  (put c 128 :at128)
+  (assert (= :at255 (in c 255)) "puti reaches index 255")
+  (assert (= :at128 (in c 128)) "puti reaches index 128 (past signed int8)")
+  (assert (= :x (in c 254)) "puti wrote only the intended slot")
+  (assert (= 300 (length c)) "puti did not resize"))
+
 (end-suite)

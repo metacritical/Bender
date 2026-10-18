@@ -248,16 +248,28 @@ static JanetSlot do_cmp(JanetFopts opts, JanetSlot *args) {
     return opreduce(opts, args, JOP_COMPARE, 0, janet_wrap_nil(), janet_wrap_nil());
 }
 static JanetSlot do_put(JanetFopts opts, JanetSlot *args) {
-    int8_t inline_index = 0;
-    if (can_slot_be_imm(args[1], &inline_index)) {
+    /* JOP_PUT_INDEX is JINT_SSU -- its index field is UNSIGNED 0..255.
+     * This used the SIGNED can_slot_be_imm + janetc_emit_ssi, which was
+     * wrong in both directions:
+     *   - MISCOMPILE: a literal negative index passed the signed gate and
+     *     was read back as uint8, so (put arr -1 v) silently wrote index
+     *     255 (growing the array to 256) instead of raising. A genuinely
+     *     runtime -1 took JOP_PUT and raised correctly, so the constant
+     *     and variable paths disagreed. Same root cause as the
+     *     JOP_IN_IMMEDIATE bug fixed in a7b49516.
+     *   - NARROW: indices 128..255 are representable but fell back to the
+     *     slower JOP_PUT form for no reason.
+     * Using the unsigned gate fixes both. */
+    uint8_t inline_index = 0;
+    if (can_slot_be_uimm(args[1], &inline_index)) {
         /* Use JOP_PUT_INDEX */
         if (opts.flags & JANET_FOPTS_DROP) {
-            janetc_emit_ssi(opts.compiler, JOP_PUT_INDEX, args[0], args[2], inline_index, 0);
+            janetc_emit_ssu(opts.compiler, JOP_PUT_INDEX, args[0], args[2], inline_index, 0);
             return janetc_cslot(janet_wrap_nil());
         } else {
             JanetSlot t = janetc_gettarget(opts);
             janetc_copy(opts.compiler, t, args[0]);
-            janetc_emit_ssi(opts.compiler, JOP_PUT_INDEX, t, args[2], inline_index, 0);
+            janetc_emit_ssu(opts.compiler, JOP_PUT_INDEX, t, args[2], inline_index, 0);
             return t;
         }
     } else {
