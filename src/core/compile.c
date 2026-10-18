@@ -1329,7 +1329,7 @@ JanetFuncDef *janetc_pop_funcdef(JanetCompiler *c, JanetString name) {
 }
 
 static int32_t to_optimization_level(Janet x) {
-    if (!janet_checkint(x)) return 0;
+    if (!janet_checkint(x)) return 1;
     int32_t int_level = janet_unwrap_integer(x);
     return int_level;
 }

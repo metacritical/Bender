@@ -182,3 +182,71 @@ reverted.
 Do not enable level 2 or 3. Measured larger static code (+13%
 instructions on scene.janet) with no speed gain over level 1, on this
 workload.
+
+## 7. Resolution (2026-10-19): emitter fixed, default flipped to 1
+
+The §3 blocker is fixed and the default is now 1.
+
+The real defect was in the EMITTER, not in infer: emit-fn-c updates
+its slot-type state BEFORE the emission gate runs, and level 1 makes
+`get` reuse its index temp as the destination (`get 3 2 3`), so the
+gate read the get's own :number RESULT where the :long index had been
+and refused. Fix (efa04d58): a pre-update snapshot of the get's
+operand types (get-now), the same pattern as the existing sh-now /
+ta-now snapshots for call-shaped access, which were added for exactly
+this dest-reuses-operand aliasing. The gate now also accepts :number
+indices with the existing Step 17 integrality guard, completing the
+state rule (put and infer already accepted them; the guard's :number
+arm was dead).
+
+With that, `to_optimization_level`'s absent-value default is 1
+(matching boot.janet:10's own core compilation), the *optimize*
+docstring is updated, and suite-unknown's symbolmap fixture pins its
+level explicitly (level 1 legitimately constant-folds dead defs and
+prunes their symbolmap entries — a coherent, smaller map — so that
+fixture must not depend on the process default).
+
+Verification, all with default 1:
+
+- suite-callgraph **206/206** (204 prior + 2 new fixture tests that
+  pin level 1 in-file via `(setdyn :optimize 1)` and assert the
+  aliased get shape still emits and passes native parity; they fail
+  with "k-xor8o get requires array and int index" without the fix).
+- Full battery: boot 1629/1629, marsh 73/73, asm 7/7, array 49/49,
+  buffer 77/77, table 15/15, string 69/69, capi 9/9, ev 776/776,
+  pool 56/56, aot-release 14/14, dce-strip 61/61,
+  native-struct-shape 30/30, native-executor matrix pass, and a full
+  sweep of every `test/suite*.janet` green except:
+  - suite-proc 98/99 ("both land") — PRE-EXISTING at HEAD f9780afd
+    with level 0, with and without the uncommitted gc.c edit; not
+    caused by the optimizer.
+  - suite-aot-profile-env fails ONLY under `JANET_NO_PROFILE=1`
+    (it asserts an auto-PGO dump exists; 16/16 without the variable).
+- ttfx, identical PGO protocol both sides (two decrypt workloads,
+  seeds 42 and 7, bounded 12 frames, then `--release`, private
+  caches): native-names IDENTICAL at level 1 and level 0 — 4 kernels
+  each (`plain-length`, `k-next-word!`, `k-next-pack!`,
+  `k-next-scale!`). **No kernel loss.** (The older verified binary
+  shows 6 because the app tree has since changed: `floor-div` now
+  refuses on a duplicate definition in `src/canvas.janet` — the same
+  refusal at level 0 — and `round-half-even`/`out-bounce` classify
+  ambiguous — also identical at level 0.)
+- Byte parity: all 37 effects, FULL dumps, seed 42,
+  `ruby-port/logo.txt`: level-1 build == level-0 build == previous
+  verified binary, byte-identical (e.g. decrypt dump SHA-256
+  `47fe71b8b53ed5c2643c66cc5aaa99d4342e925ec3b2c0106ff6f89d7c93266d`
+  at both levels).
+- Paired 3-round `--bench` (both full PGO+release builds, alternating
+  run order): beams +1.21%, decrypt +1.13%, fireworks +0.55%,
+  matrix −1.36%, smoke −1.47%, vhstape +0.46%, wipe −0.02%. All
+  within round-to-round spread except matrix, which over 8 paired
+  rounds is reproducibly ~1.1% SLOWER. Verdict: **end-to-end ~0%**,
+  exactly as §5 measured — the optimizer demonstrably applies
+  (scene.janet static 5876→5809 instructions, 543→485 `movn`) but
+  ttfx's hot path is call-heavy, not `movn`-bound.
+
+So the default flip stands on: consistency with the core's own
+compilation level, the free static-size win, and the now-removed
+aliasing trap — NOT on a ttfx speedup, because there is none (and
+matrix gives ~1% back, reproducibly). §6's caution against levels 2
+and 3 is unchanged.

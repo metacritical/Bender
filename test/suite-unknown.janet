@@ -282,6 +282,11 @@
                  @['x 'y])
           "symbolmap upvalues"))
 
+# Optimizer note: pinned to level 0 via in-file setdyn -- level 1
+# constant-folds the dead x/y/z defs away and prunes their symbolmap
+# entries (a coherent, smaller map), so this fixture must compile at
+# a fixed level rather than the process default.
+(setdyn :optimize 0)
 (assert (deep= (in (disasm (defn a [arg]
                              (def x 10)
                              (do
@@ -294,6 +299,7 @@
                  [1 6 2 'y]
                  [2 6 3 'z]])
         "arg & inner symbolmap")
+(setdyn :optimize nil)
 # @[(0 2 0 arg) (0 2 1 a) (0 2 2 x) (0 2 3 y) (0 2 4 z)]
 
 # 4782a76
