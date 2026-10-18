@@ -119,8 +119,15 @@ void janet_gcpressure(size_t s) {
 static void janet_clear_all_reachable_bits(void);
 
 /* Phase 1.1 epoch mark: gc.c-local 4-bit epoch in flags 11-14. Stale
- * bits self-invalidate; the sweep zeroes survivors, so the wrap can
- * only cause one-cycle-late frees — no wipe, no wrap-clear. */
+ * bits self-invalidate PROVIDED no listed block carries a stamp out of
+ * a sweep: the sweep zeroes every survivor AND every unmarked floater
+ * (old/foreign/fiber blocks a minor or scoped sweep keeps), zeroes
+ * blocks on entry to quarantine, and full collects pre-clear every
+ * listed stamp before marking (janet_clear_all_reachable_bits) to
+ * erase stamps left by scoped collections on lists they do not sweep.
+ * With those, "nonzero stamp == marked this collection" holds for
+ * every listed block at every sweep entry point, so the 15-value wrap
+ * cannot resurrect a dead block as a false reachable verdict. */
 static JANET_THREAD_LOCAL int32_t janet_gc_epoch = 0;
 
 #undef janet_gc_mark
@@ -878,11 +885,36 @@ static void janet_sweep_list(JanetGCObject **head, int heap_kind, int is_minor,
                 janet_deinit_block(current);
                 janet_gc_release(current);
             } else {
+                /* Zero the epoch stamp on the way into quarantine: the
+                 * verdict "dead" must persist into the next weak-drop
+                 * (minors quarantine without judging weak entries, so
+                 * quarantined headers can outlive this cycle). A stale
+                 * stamp left intact here could match the wrapped epoch
+                 * 15 collections later and read as a false live verdict
+                 * — keeping a weak entry whose key drains immediately
+                 * after (dangling). Zeroed, the header reads not-
+                 * reachable at every future epoch, which is exactly
+                 * the block's settled fate. */
+                current->flags &= ~JANET_MEM_EPOCH_MASK;
                 current->data.next = janet_vm.gc_quarantine[heap_kind];
                 janet_vm.gc_quarantine[heap_kind] = current;
                 janet_vm.gc_quarantine_count++;
             }
         } else {
+            /* Floater: survives this sweep UNMARKED (old block in a
+             * minor, fiber in a minor, foreign-owner block in a scoped
+             * sweep). Zero the stale stamp so the 15-value epoch wrap
+             * can never read it back as reachable: an unmarked fiber
+             * that parked through a minor keeps the stamp of the last
+             * cycle that marked it, and janet_gc_epoch revisits every
+             * value every 15 collections — a matching wrap then keeps
+             * the dead block out of the free set (false survivor) and,
+             * worse, keeps its weak-table entries alive at the next
+             * major's weak-drop (suite-ev2's "no leaked roots"). With
+             * the stamp zeroed here, "nonzero epoch stamp" again means
+             * exactly "marked this collection" for every listed block
+             * at all times, as the Phase 1.1 design assumes. */
+            current->flags &= ~JANET_MEM_EPOCH_MASK;
             previous = current;
         }
         current = next;
@@ -3002,6 +3034,20 @@ void janet_collect(void) {
     janet_gc_epoch_next();
     depth = JANET_RECURSION_GUARD;
     janet_vm.gc_mark_phase = 1;
+    /* Pre-clear every listed block's epoch stamp before marking. This
+     * restores the invariant janet_clear_all_reachable_bits was written
+     * for (its comment says "full collects therefore pre-clear every
+     * bit before marking") but which was never actually invoked.
+     * Scoped collections (per-fiber/per-proc minors) mark foreign-listed
+     * blocks through shared C roots (top_dyns, the proc registry, xfb,
+     * the ev queues) and then sweep only their own lists, so those
+     * foreign blocks carry stamps past the sweep that should have
+     * cleared them. Left in place, a 15-collection epoch wrap can turn
+     * such a stale stamp into a false janet_gc_reachable verdict:
+     * janet_mark's early return then skips re-marking a LIVE block's
+     * subtree and the sweep below frees its unmarked children while
+     * reachable. O(listed blocks), the same order as the major. */
+    janet_clear_all_reachable_bits();
     /* Try to prevent many major collections back to back.
      * A full collection will take O(janet_vm.block_count) time.
      * If we have a large heap, make sure our interval is not too
