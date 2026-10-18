@@ -39,6 +39,10 @@ void janet_debug_break(JanetFuncDef *def, int32_t pc) {
     if (pc >= def->bytecode_length || pc < 0)
         janet_panic("invalid bytecode offset");
     def->bytecode[pc] |= 0x80;
+    /* Breakpoint bits are exact-compare mismatches for native executors;
+     * invalidate cached validation verdicts so the next native region
+     * entry re-runs the full compare and stays boxed. */
+    janet_native_invalidate();
 }
 
 /* Remove a break point from a function */
@@ -46,6 +50,7 @@ void janet_debug_unbreak(JanetFuncDef *def, int32_t pc) {
     if (pc >= def->bytecode_length || pc < 0)
         janet_panic("invalid bytecode offset");
     def->bytecode[pc] &= ~((uint32_t)0x80);
+    janet_native_invalidate();
 }
 
 /*

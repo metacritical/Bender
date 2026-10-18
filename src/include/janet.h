@@ -1300,6 +1300,16 @@ JANET_API void janet_native_registry_add(const JanetNativeCode *n);
 JANET_API int janet_native_registry_count(void);
 JANET_API uint32_t janet_native_registry_generation(void);
 JANET_API int janet_native_try_attach(JanetFuncDef *d);
+/* VM region re-entry validation for d->native_code: exact structural
+ * compare, with janet_verify amortized to the first validation of the
+ * (def, descriptor) pair (deterministic over the compared fields) and
+ * the verdict cached for the current validation epoch. */
+JANET_API int janet_native_revalidate(JanetFuncDef *d);
+/* Invalidate cached whole-definition validation verdicts (bumps the
+ * per-VM epoch). Called on VM resume entry, debugger breakpoint writes,
+ * and descriptor publication, so any def change between resumes forces
+ * a fresh exact janet_native_matches at the next native region entry. */
+JANET_API void janet_native_invalidate(void);
 JANET_API uint64_t janet_native_stat(int which);
 JANET_API uint64_t janet_native_exit_stat(int opcode);
 /* janet_native_stat indexes */
@@ -1318,6 +1328,14 @@ struct JanetFuncDef {
     uint32_t *bytecode;
     const JanetNativeCode *native_code;
     uint32_t native_attach_gen; /* lazy attach already tried at this registry generation */
+    /* Region re-entry validation cache: `native_verified` is the descriptor
+     * whose exact structural match was last proven for this def, at the
+     * `native_verified_epoch` validation epoch. The cache only skips
+     * re-running the proof while nothing can have changed the def;
+     * janet_native_matches remains the sole authority and is re-run after
+     * every invalidation (resume, breakpoint write, publication). */
+    const JanetNativeCode *native_verified;
+    uint64_t native_verified_epoch;
     uint32_t *closure_bitset; /* Bit set indicating which slots can be referenced by closures. */
 
     /* Various debug information */

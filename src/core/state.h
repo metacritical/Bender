@@ -123,6 +123,11 @@ struct JanetVM {
     uint64_t native_attach_nomatch;
     uint64_t native_vm_exits;
     uint64_t native_exit_opcodes[256];
+    /* Validation epoch for cached whole-definition native verdicts.
+     * Bumped on every VM resume entry, debugger breakpoint write and
+     * descriptor publication; a def's cached verdict is usable only at
+     * the epoch it was proven at (see JanetFuncDef.native_verified). */
+    uint64_t native_epoch;
 
     /* The current running fiber on the current thread.
      * Set and unset by functions in vm.c */

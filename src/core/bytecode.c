@@ -1924,6 +1924,8 @@ JanetFuncDef *janet_funcdef_alloc(void) {
     def->bytecode = NULL;
     def->native_code = NULL;
     def->native_attach_gen = 0;
+    def->native_verified = NULL;
+    def->native_verified_epoch = 0;
     def->closure_bitset = NULL;
     def->flags = 0;
     def->slotcount = 0;
@@ -1951,8 +1953,18 @@ JanetFuncDef *janet_funcdef_alloc(void) {
  * VM at the boundary's original unexecuted PC, so boundaries are never
  * executed natively but their words are still compared exactly. Opaque
  * constant entries only assert that a pool index exists; the live value is
- * loaded at execution time and never assumed. */
-int janet_native_matches(JanetFuncDef *d, const JanetNativeCode *n) {
+ * loaded at execution time and never assumed.
+ *
+ * Split into the exact structural compare (scalars, every word, primitive
+ * constant bits, opcode allowlist) and the bytecode well-formedness gate
+ * (janet_verify). The structural compare is what the exact-match contract
+ * is about and runs at every native entry epoch; janet_verify is
+ * deterministic over those same compared fields — only debug symbolmap
+ * data falls outside them and no supported path mutates it after
+ * creation — so the VM amortizes it to the first validation of a
+ * (definition, descriptor) pair. janet_native_matches (both parts) stays
+ * the full authority for registration, attachment and direct calls. */
+static int native_structure_matches(JanetFuncDef *d, const JanetNativeCode *n) {
     if (!n || !n->execute || !n->words || n->length <= 0 ||
             n->slotcount < 0 || n->arity < 0 || n->min_arity < 0 ||
             n->max_arity < n->min_arity || n->constants_length < 0 ||
@@ -2011,7 +2023,28 @@ int janet_native_matches(JanetFuncDef *d, const JanetNativeCode *n) {
             default: return 0; /* Includes every breakpoint bit. */
         }
     }
-    return janet_verify(d) == 0;
+    return 1;
+}
+
+int janet_native_matches(JanetFuncDef *d, const JanetNativeCode *n) {
+    return native_structure_matches(d, n) && janet_verify(d) == 0;
+}
+
+/* VM region re-entry validation for a definition with a descriptor set:
+ * run the exact structural compare, amortizing janet_verify to the first
+ * validation of this (definition, descriptor) pair (deterministic over
+ * the structurally compared fields). Updates the definition's validation
+ * cache on success; a failure leaves the cache untouched so the next
+ * region entry re-runs the compare. */
+int janet_native_revalidate(JanetFuncDef *d) {
+    const JanetNativeCode *n = d->native_code;
+    if (d->native_verified == n && d->native_verified_epoch == janet_vm.native_epoch)
+        return 1;
+    if (!native_structure_matches(d, n)) return 0;
+    if (d->native_verified != n && janet_verify(d) != 0) return 0;
+    d->native_verified = n;
+    d->native_verified_epoch = janet_vm.native_epoch;
+    return 1;
 }
 
 int janet_native_register(JanetFunction *f, const JanetNativeCode *n) {
@@ -2019,6 +2052,9 @@ int janet_native_register(JanetFunction *f, const JanetNativeCode *n) {
 #ifdef JANET_NATIVE_EXECUTORS
     if (janet_native_matches(f->def, n)) {
         f->def->native_code = n;
+        /* Validation just ran; seed the re-entry cache at this epoch. */
+        f->def->native_verified = n;
+        f->def->native_verified_epoch = janet_vm.native_epoch;
         return 1;
     }
 #else
@@ -2032,14 +2068,63 @@ int janet_native_register(JanetFunction *f, const JanetNativeCode *n) {
  * encountered by the VM (imported image constants, unmarshaled closures,
  * later evaluation) attach lazily: the first dispatch after publication
  * tries the unique structurally-matching descriptor once per generation.
- * Names and hashes never decide attachment; janet_native_matches does. */
+ * The registry is indexed by a cheap exact key (scalar shape fields plus
+ * a rolling hash over every bytecode word, computed once at publish), so
+ * an attach attempt hashes the definition once and runs the full
+ * janet_native_matches exact compare only on a key hit — definitions
+ * with no key hit do zero verify work. Names and keys never decide
+ * attachment; janet_native_matches does. */
 
 #define JANET_NATIVE_REGISTRY_MAX 256
+#define JANET_NATIVE_REGISTRY_BUCKETS 512u /* power of two */
 
 #ifdef JANET_NATIVE_EXECUTORS
 static const JanetNativeCode *native_registry[JANET_NATIVE_REGISTRY_MAX];
+static uint64_t native_registry_keys[JANET_NATIVE_REGISTRY_MAX];
+static int32_t native_registry_buckets[JANET_NATIVE_REGISTRY_BUCKETS]; /* head idx+1, 0 empty */
+static int32_t native_registry_chain[JANET_NATIVE_REGISTRY_MAX]; /* next idx, -1 end */
 static int32_t native_registry_len;
 static uint32_t native_registry_gen;
+
+/* Rolling FNV-1a over the exact scalar shape and every bytecode word.
+ * Equal keys are necessary for an exact structural match, never
+ * sufficient: the full janet_native_matches word compare still decides
+ * (a 64-bit key collision only costs one wasted exact compare). Constant
+ * entries are deliberately not hashed. Opaque descriptor entries assume
+ * nothing about the live pool value, so hashing the def's actual constant
+ * bits could diverge from an exactly-matching opaque descriptor — and
+ * could mask the primitive/opaque ambiguity the attach search must still
+ * detect. Constants are cheap to compare exactly after a key hit. */
+static uint64_t native_shape_key(int32_t length, int32_t slotcount, int32_t arity,
+                                 int32_t min_arity, int32_t max_arity, int32_t flags,
+                                 int32_t constants_length, const uint32_t *words) {
+    uint64_t h = 0xcbf29ce484222325ull;
+#define NATIVE_KEY_MIX(x) do { h ^= (uint64_t)(x); h *= 0x100000001b3ull; } while (0)
+    NATIVE_KEY_MIX(length);
+    NATIVE_KEY_MIX(slotcount);
+    NATIVE_KEY_MIX(arity);
+    NATIVE_KEY_MIX(min_arity);
+    NATIVE_KEY_MIX(max_arity);
+    NATIVE_KEY_MIX(flags);
+    NATIVE_KEY_MIX(constants_length);
+    for (int32_t i = 0; i < length; i++) NATIVE_KEY_MIX(words[i]);
+#undef NATIVE_KEY_MIX
+    return h;
+}
+
+static uint64_t native_def_key(const JanetFuncDef *d) {
+    return native_shape_key(d->bytecode_length, d->slotcount, d->arity,
+                            d->min_arity, d->max_arity, d->flags,
+                            d->constants_length, d->bytecode);
+}
+
+/* Cheap prefilter before whole-definition validation. */
+static int native_shape_prefilter(const JanetFuncDef *d, const JanetNativeCode *n) {
+    return d->bytecode_length == n->length && d->slotcount == n->slotcount &&
+           d->arity == n->arity && d->min_arity == n->min_arity &&
+           d->max_arity == n->max_arity && d->flags == n->flags &&
+           d->constants_length == n->constants_length;
+}
 #endif
 
 int janet_native_region_allowed(const JanetNativeCode *n, uint32_t pc) {
@@ -2050,10 +2135,26 @@ int janet_native_region_allowed(const JanetNativeCode *n, uint32_t pc) {
 void janet_native_registry_add(const JanetNativeCode *n) {
 #ifdef JANET_NATIVE_EXECUTORS
     if (!n || !n->execute) return;
-    if (native_registry_len < JANET_NATIVE_REGISTRY_MAX)
-        native_registry[native_registry_len++] = n;
+    if (native_registry_len < JANET_NATIVE_REGISTRY_MAX) {
+        int32_t idx = native_registry_len++;
+        uint64_t key = native_shape_key(n->length, n->slotcount, n->arity,
+                                        n->min_arity, n->max_arity, n->flags,
+                                        n->constants_length, n->words);
+        uint32_t b = (uint32_t)key & (JANET_NATIVE_REGISTRY_BUCKETS - 1);
+        native_registry[idx] = n;
+        native_registry_keys[idx] = key;
+        native_registry_chain[idx] = native_registry_buckets[b] - 1;
+        native_registry_buckets[b] = idx + 1;
+    }
     native_registry_gen++;
+    janet_vm.native_epoch++; /* conservative: publication can enable attachment */
+#else
+    (void)n;
 #endif
+}
+
+void janet_native_invalidate(void) {
+    janet_vm.native_epoch++;
 }
 
 int janet_native_registry_count(void) {
@@ -2072,30 +2173,27 @@ uint32_t janet_native_registry_generation(void) {
 #endif
 }
 
-/* Cheap prefilter before whole-definition validation. */
-static int native_shape_prefilter(const JanetFuncDef *d, const JanetNativeCode *n) {
-    return d->bytecode_length == n->length && d->slotcount == n->slotcount &&
-           d->arity == n->arity && d->min_arity == n->min_arity &&
-           d->max_arity == n->max_arity && d->flags == n->flags &&
-           d->constants_length == n->constants_length;
-}
-
 int janet_native_try_attach(JanetFuncDef *d) {
 #ifdef JANET_NATIVE_EXECUTORS
     d->native_attach_gen = native_registry_gen;
     if (d->native_code) return 1; /* explicit registration already won */
     janet_vm.native_attach_attempts++;
+    uint64_t key = native_def_key(d);
+    uint32_t b = (uint32_t)key & (JANET_NATIVE_REGISTRY_BUCKETS - 1);
     const JanetNativeCode *unique = NULL;
     int ambiguous = 0, prehits = 0;
-    for (int32_t i = 0; i < native_registry_len && !ambiguous; i++) {
-        const JanetNativeCode *n = native_registry[i];
-        if (!native_shape_prefilter(d, n)) continue;
+    for (int32_t ci = native_registry_buckets[b] - 1; ci >= 0 && !ambiguous;
+            ci = native_registry_chain[ci]) {
+        if (native_registry_keys[ci] != key) continue; /* bucket slot collision */
+        const JanetNativeCode *n = native_registry[ci];
+        if (!native_shape_prefilter(d, n)) continue; /* 64-bit key collision guard */
         prehits++;
         if (janet_native_matches(d, n)) {
             if (unique) ambiguous = 1;
             else unique = n;
         }
     }
+    (void)prehits; /* only read by JANET_NATIVE_ATTACH_DEBUG diagnostics */
     if (ambiguous) {
         janet_vm.native_attach_ambiguous++;
         return 0;
@@ -2112,6 +2210,9 @@ int janet_native_try_attach(JanetFuncDef *d) {
         return 0;
     }
     d->native_code = unique;
+    /* Validation just ran; seed the re-entry cache at this epoch. */
+    d->native_verified = unique;
+    d->native_verified_epoch = janet_vm.native_epoch;
     janet_vm.native_attach_attached++;
 #ifdef JANET_NATIVE_ATTACH_DEBUG
     fprintf(stderr, "native-attach: attached def name=%s len=%d\n",

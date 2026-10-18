@@ -147,17 +147,23 @@
 #ifdef JANET_NATIVE_EXECUTORS
 static JANET_THREAD_LOCAL int native_stepping;
 /* Region gating and lazy structural attachment. Whole-definition
- * validation (janet_native_matches) only runs at useful native region
+ * validation (janet_native_matches) runs at useful native region
  * starts recorded in the descriptor mask; consecutive VM-only
- * instructions after a boundary exit cost one bitmap check. Lazy
- * attachment tries the unique structurally-matching registered
- * descriptor once per registry generation per definition. */
+ * instructions after a boundary exit cost one bitmap check. The
+ * verdict is cached per definition at the current validation epoch
+ * (bumped at every resume entry, breakpoint write and publication),
+ * so a long run pays full validation once per definition per resume
+ * while any change to a definition between resumes is re-detected.
+ * Lazy attachment tries the unique key-matching registered descriptor
+ * once per registry generation per definition. */
 #define vm_native() do { \
     if (!native_stepping) { \
         JanetFuncDef *ndef_ = func->def; \
         if (NULL != ndef_->native_code) { \
-            if (janet_native_region_allowed(ndef_->native_code, (uint32_t)(pc - ndef_->bytecode)) && \
-                    janet_native_matches(ndef_, ndef_->native_code)) { \
+            if (janet_native_region_allowed(ndef_->native_code, (uint32_t)(pc - ndef_->bytecode))) { \
+                if ((ndef_->native_verified != ndef_->native_code || \
+                        ndef_->native_verified_epoch != janet_vm.native_epoch) && \
+                        !janet_native_revalidate(ndef_)) break; \
                 uint32_t *npc = pc; \
                 vm_commit(); \
                 JanetNativeStep result = ndef_->native_code->execute(fiber, ndef_, &npc); \
@@ -1049,6 +1055,13 @@ void janet_profile_dump(const char *path) {
 
 /* Interpreter main loop */
 static JanetSignal run_vm(JanetFiber *fiber, Janet in) {
+#ifdef JANET_NATIVE_EXECUTORS
+    /* New resume: invalidate cached whole-definition validation verdicts.
+     * Any change to a definition made between resumes (debugger
+     * breakpoints, raw C edits while parked) is re-detected by the full
+     * exact compare at this resume's first native region entry. */
+    janet_vm.native_epoch++;
+#endif
 
     /* opcode -> label lookup if using clang/GCC */
 #ifdef JANET_USE_COMPUTED_GOTOS

@@ -954,6 +954,8 @@ static const uint8_t *unmarshal_one_def(
         def->bytecode = NULL;
         def->native_code = NULL;
         def->native_attach_gen = 0;
+        def->native_verified = NULL;
+        def->native_verified_epoch = 0;
         def->sourcemap = NULL;
         def->symbolmap = NULL;
         def->symbolmap_length = 0;
