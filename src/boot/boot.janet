@@ -6080,9 +6080,15 @@
         (when (and cdir (os/stat cdir))
           (def key (aot-cache-key out))
           (def meta-path (string cdir "/" key ".meta"))
-          (when (os/stat meta-path)
-            (set prior-cache-meta (string (slurp meta-path))))
-          (def prior (aot-cache-load cdir key [src ;includes ;extrac]))
+          # Snapshot metadata under the same lock as cache publication.
+          # A busy cache is not evidence that can authorize a new build.
+          (var prior nil)
+          (try
+            (aot-cache-transaction cdir key (fn []
+              (when (os/stat meta-path)
+                (set prior-cache-meta (string (slurp meta-path))))
+              (set prior (aot-cache-load cdir key [src ;includes ;extrac]))))
+            ([e] (aot-die (string "PGO cache busy or unreadable: " e) 1)))
           (def recorded (try (parse prior-cache-meta) ([_] nil)))
           (when (and (= 3 (get recorded :version))
                      (deep= (get recorded :sources)
@@ -6136,15 +6142,24 @@
       # --no-auto-pgo skips this entirely. Never breaks the build.
       (var auto false)
       # A v3 cache is a set of verified, independently replayable runs.
-      # Loading is read-only; the final binary must pass every oracle.
+      # Immutable generations permit replay after a locked manifest snapshot;
+      # contention itself still means the cache is unavailable for this build.
+      (var cache-busy false)
       (when (and native (not pgo) (not no-auto-pgo)
                  (not only-c) (not print-c) (not run-mode))
         (def cdir (aot-cache-dir))
         (when (and cdir (os/stat cdir))
           (def key (aot-cache-key out))
-          (def meta (try (parse (slurp (string cdir "/" key ".meta"))) ([_] nil)))
+          (var meta nil)
+          (var records nil)
+          (try
+            (aot-cache-transaction cdir key (fn []
+              (set meta (try (parse (slurp (string cdir "/" key ".meta"))) ([_] nil)))
+              (when (= 3 (get meta :version))
+                (set records (aot-cache-load cdir key [src ;includes ;extrac])))))
+            ([e] (set cache-busy true)
+                 (eprint "bender --aot: PGO cache busy or unreadable; building unoptimized")))
           (when (= 3 (get meta :version))
-            (def records (aot-cache-load cdir key [src ;includes ;extrac]))
             (when records
               (unless (os/stat ndir) (os/mkdir ndir))
               (aot-report-divergence (map (fn [r] (get r :profile)) records))
@@ -6163,7 +6178,7 @@
               (set auto true)
               (eprint "bender --aot: verifying " (length gate-records) " cached workloads")))))
       (when (and native (not pgo) (not no-auto-pgo)
-                 (not gate) (not only-c) (not print-c) (not run-mode))
+                 (not cache-busy) (not gate) (not only-c) (not print-c) (not run-mode))
         (def cdir (aot-cache-dir))
         (when cdir
           (def key (aot-cache-key out))

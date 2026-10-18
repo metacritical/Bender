@@ -17,195 +17,204 @@
 # LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
 # FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
 # IN THE SOFTWARE.
-#
-# Auto-PGO loop: first binary runs collect into the standard cache;
-# later plain builds widen from it automatically through the parity
-# gate. XDG_CACHE_HOME is isolated per run; JANET_AUTO_PGO_MIN_CALLS=0
-# keeps small programs deterministic (the 10k default needs slow ones).
 
 (import ./helper :prefix "" :exit true)
 (start-suite)
-
-(def tmpcache "/tmp/janet-autopgo-test")
-
-# run argv, capture stdout as a string
-(defn capture [argv]
-  (def p (os/spawn argv :p {:out :pipe}))
-  (def out (:read (p :out) :all))
-  (os/proc-wait p)
-  (string out))
-(os/execute ["/bin/rm" "-rf" tmpcache] :p)
+(def root (string (os/getenv "JANET_AOT_TEST_ROOT" "/tmp")
+                  "/janet-autopgo-suite-" (os/getpid)))
+(unless (assert (nil? (os/stat root)) "test root must be unused")
+  (error "refusing to reuse test root"))
+(os/mkdir root)
+(defn path [name] (string root "/" name))
+(def tmpcache (path "cache"))
 (os/mkdir tmpcache)
-# process env: inherited by every os/execute below (env prefixes do
-# NOT survive && in sh, so prefixing commands is unreliable)
 (os/setenv "XDG_CACHE_HOME" tmpcache)
-(def mincalls "JANET_AUTO_PGO_MIN_CALLS=0 ")
+(os/setenv "JANET_NO_PROFILE" nil)
+(os/setenv "JANET_AUTO_PGO" nil)
+(os/setenv "JANET_AUTO_PGO_MIN_CALLS" nil)
+(def env (os/environ))
+(def collect-env (merge @{} env {"JANET_AUTO_PGO_MIN_CALLS" "0"}))
+(def forced-env (merge @{} collect-env {"JANET_AUTO_PGO" "1"}))
+(def quiet-env (merge @{} env {"JANET_NO_PROFILE" "1"}))
+(defn cache [name] (string tmpcache "/janet/pgo/" name))
+(defn text [name] (string (slurp name)))
+(defn manifest [name] (parse (slurp (cache (string name ".meta")))))
+(defn capture [argv]
+  (def p (os/spawn argv :ep (merge @{} quiet-env {:out :pipe})))
+  (def out (:read (p :out) :all))
+  (assert (= 0 (os/proc-wait p)) "captured process succeeds")
+  (string out))
+(defn run [name &opt process-env]
+  (def log (file/open (path (string name ".run.log")) :w))
+  (def status (os/execute [(path name)] :ep (merge @{} (or process-env collect-env) {:out log :err log})))
+  (file/close log)
+  status)
+(defn build [source name opts logname]
+  (def log (file/open (path logname) :w))
+  (def status (os/execute ["./build/bender" "--aot" (path source) "--native"
+                          ;opts "-o" (path name)] :ep (merge @{} quiet-env {:out log :err log})))
+  (file/close log)
+  status)
+(defn sidecars [&opt key]
+  (def prefix (string (or key "apg-pgo") ".jdn.run-"))
+  (filter (fn [name] (string/has-prefix? prefix name)) (os/dir (cache ""))))
+(defn calls [profile]
+  (get ((find (fn [row] (= "half" (get (row 0) 2))) (parse (slurp profile))) 1) :calls))
 
-# a program with a kernelizable hot fn
-(spit "/tmp/apg-demo.janet" (string
+(spit (path "demo.janet") (string
   "(defn half {:hint {:params [:long :long] :returns :long}} [a b] (div a b))\n"
   "(var s 0)\n"
   "(for i 0 500 (set s (+ s (half (+ i 10) 3))))\n"
   "(print s)\n"))
-(def expect-out (capture ["./build/bender" "/tmp/apg-demo.janet"]))
+(def expect-out (capture ["./build/bender" (path "demo.janet")]))
+# Runtime observations have no replayable workload identity.
+(assert (= 0 (build "demo.janet" "apg-bin" [] "first.log")) "demo builds")
+(assert (= expect-out (capture [(path "apg-bin")])) "demo output correct")
+(assert (= 0 (run "apg-bin")) "demo runs")
+(def runtime-profile (cache "apg-bin.jdn"))
+(assert (os/stat runtime-profile) "first run collects to cache")
+(os/rename runtime-profile (path "first-runtime.jdn"))
+(def parallel-log (file/open (path "parallel.log") :w))
+(def p1 (os/spawn [(path "apg-bin")] :ep (merge @{} collect-env {:out parallel-log :err parallel-log})))
+(def p2 (os/spawn [(path "apg-bin")] :ep (merge @{} collect-env {:out parallel-log :err parallel-log})))
+(assert (= 0 (os/proc-wait p1)) "parallel first run completes")
+(assert (= 0 (os/proc-wait p2)) "parallel second run completes")
+(file/close parallel-log)
+(assert (> (length (parse (slurp runtime-profile))) 0) "parallel publication remains parseable")
+(def runtime-before (text runtime-profile))
+(def modified (os/stat runtime-profile :modified))
+(assert (= 0 (run "apg-bin")) "demo runs again")
+(assert (= modified (os/stat runtime-profile :modified)) "second run leaves timestamp alone")
+(assert (= runtime-before (text runtime-profile)) "second run leaves evidence alone")
+(os/rename runtime-profile (path "parallel-runtime.jdn"))
+(assert (= 0 (run "apg-bin" (merge @{} forced-env {"JANET_NO_PROFILE" "1"}))) "opt-out run succeeds")
+(assert (nil? (os/stat runtime-profile)) "opt-out writes nothing")
+(spit (path "tiny.janet") "(print (+ 1 2))\n")
+(assert (= 0 (build "tiny.janet" "apg-tiny" [] "tiny.log")) "tiny builds")
+(assert (= 0 (run "apg-tiny" env)) "tiny runs with default threshold")
+(assert (nil? (os/stat (cache "apg-tiny.jdn"))) "trivial run writes nothing by default")
 
-# 1. first run collects (no cache before)
-(assert (= 0 (os/execute ["/bin/sh" "-c"
-  "rm -rf /tmp/apg-bin* && ./build/bender --aot /tmp/apg-demo.janet --native -o /tmp/apg-bin >/dev/null 2>&1"] :p))
-  "demo builds")
-(assert (= expect-out (capture ["/tmp/apg-bin"]))
-        "demo output correct")
-(assert (= 0 (os/execute ["/bin/sh" "-c" (string mincalls "/tmp/apg-bin >/dev/null 2>&1")] :p))
-  "demo runs")
-(assert (not (nil? (os/stat (string tmpcache "/janet/pgo/apg-bin.jdn"))))
-        "first run collects to cache")
+# Trusted profiles are immutable generation files referenced by a v3 manifest.
+(assert (= 0 (build "demo.janet" "apg-pgo" ["--pgo" ""] "pgo.log")) "pgo build succeeds")
+(def initial (manifest "apg-pgo"))
+(assert (= 3 (get initial :version)) "v3 manifest published")
+(def records (get initial :workloads))
+(assert (= 1 (length records)) "one workload recorded")
+(def first-record (records 0))
+(assert (= "" (get first-record :args)) "empty argv retained")
+(assert (not (get first-record :has-stdin)) "absent stdin retained")
+(assert (nil? (get first-record :stdin-bytes)) "absent stdin has no captured bytes")
+(def cache-profile (get initial :aggregate))
+(def before (text cache-profile))
+(def raw-before (text (get first-record :profile)))
+(def oracle-before (text (get first-record :oracle)))
+(assert (> (length (parse before)) 0) "aggregate profile populated")
+(assert (= expect-out oracle-before) "captured oracle matches interpreter")
+(assert (= 0 (build "demo.janet" "apg-pgo" [] "auto.log")) "plain rebuild succeeds")
+(assert (string/find "verifying 1 cached workloads" (text (path "auto.log"))) "rebuild applies v3 cache")
+(assert (string/find "parity ok" (text (path "auto.log"))) "gate passes on apply")
+(assert (= expect-out (capture [(path "apg-pgo")])) "optimized output correct")
+(def manifest-before (text (cache "apg-pgo.meta")))
+# Explicit v3 training does not create the runtime diagnostic base. The first
+# forced observation publishes that base; subsequent observations use sidecars.
+(def diagnostic-base (cache "apg-pgo.jdn"))
+(assert (nil? (os/stat diagnostic-base)) "trusted generation is separate from runtime base")
+(assert (= 0 (run "apg-pgo" forced-env)) "first forced diagnostic run succeeds")
+(def diagnostic-before (text diagnostic-base))
+(assert (> (length (parse diagnostic-before)) 0) "forced run publishes parseable diagnostic base")
+(assert (= 0 (length (sidecars))) "first diagnostic observation needs no sidecar")
+(assert (= manifest-before (text (cache "apg-pgo.meta"))) "diagnostic base preserves manifest")
+(assert (= before (text cache-profile)) "diagnostic base preserves trusted aggregate")
+(assert (= 0 (run "apg-pgo" forced-env)) "forced second run succeeds")
+(assert (= diagnostic-before (text diagnostic-base)) "forced second run preserves diagnostic base")
+(assert (= before (text cache-profile)) "forced run preserves cached evidence")
+(assert (= 1 (length (sidecars))) "forced run creates sidecar")
+(def diagnostic-sidecar (cache ((sidecars) 0)))
+(def sidecar-before (text diagnostic-sidecar))
+(assert (> (length (parse sidecar-before)) 0) "diagnostic sidecar remains parseable")
+(assert (= 0 (build "demo.janet" "apg-pgo" [] "sidecar.log")) "rebuild with sidecar succeeds")
+(assert (= manifest-before (text (cache "apg-pgo.meta"))) "sidecar preserves manifest")
+(assert (= before (text cache-profile)) "ungated sidecar never changes aggregate")
+(assert (= raw-before (text (get first-record :profile))) "sidecar preserves raw profile")
+(assert (= oracle-before (text (get first-record :oracle))) "sidecar preserves oracle")
+(assert (= 1 (length (sidecars))) "ungated sidecar retained for diagnostics")
+(assert (= diagnostic-before (text diagnostic-base)) "rebuild preserves diagnostic base bytes")
+(assert (= sidecar-before (text diagnostic-sidecar)) "rebuild preserves diagnostic sidecar bytes")
+(assert (string/find "parity ok" (text (path "sidecar.log"))) "trusted profile passes gate")
+(assert (= expect-out (capture [(path "apg-pgo")])) "rebuilt output correct")
 
-# Parallel first runs publish exactly one base without truncating it.
-(os/execute ["/bin/sh" "-c" (string "rm -f " tmpcache "/janet/pgo/apg-bin.jdn")] :p)
-(assert (= 0 (os/execute ["/bin/sh" "-c"
-  (string mincalls "/tmp/apg-bin >/dev/null 2>&1 & "
-          mincalls "/tmp/apg-bin >/dev/null 2>&1 & wait")] :p))
-  "parallel first runs complete")
-(def concurrent-cache (string tmpcache "/janet/pgo/apg-bin.jdn"))
-(assert (not (nil? (os/stat concurrent-cache))) "parallel runs publish base")
-(assert (> (length (parse (slurp concurrent-cache))) 0)
-        "parallel publication remains parseable")
+# Source edits cannot be authorized by a later runtime sidecar.
+(spit (path "stale.janet") "(print :old)\n")
+(assert (= 0 (build "stale.janet" "apg-stale" ["--pgo" ""] "stale-first.log")) "stale fixture trains")
+(def stale-meta (text (cache "apg-stale.meta")))
+(def stale-profile (get (parse stale-meta) :aggregate))
+(def stale-before (text stale-profile))
+(assert (= 0 (run "apg-stale" forced-env)) "old binary establishes diagnostic base")
+(def stale-diagnostic (text (cache "apg-stale.jdn")))
+(spit (path "stale.janet") "(print :new)\n")
+(assert (= 0 (run "apg-stale" forced-env)) "old binary creates forced sidecar")
+(assert (= 1 (length (sidecars "apg-stale"))) "stale binary publishes diagnostic sidecar")
+(assert (= stale-diagnostic (text (cache "apg-stale.jdn"))) "stale sidecar preserves diagnostic base")
+(assert (= 0 (build "stale.janet" "apg-stale" [] "stale.log")) "stale profile falls back")
+(assert (= stale-meta (text (cache "apg-stale.meta"))) "stale manifest remains unchanged")
+(assert (= stale-before (text stale-profile)) "stale aggregate remains unchanged")
+(assert (string/find "no replayable workload" (text (path "stale.log"))) "changed source rejects cached workload")
+(assert (nil? (string/find "verifying 1 cached workloads" (text (path "stale.log"))))
+        "changed source cannot replay stale evidence")
+(assert (= "new\n" (capture [(path "apg-stale")])) "fallback runs edited source")
 
-# 2. second run does not recollect (profile exists)
-(def m1 (get (os/stat (string tmpcache "/janet/pgo/apg-bin.jdn")) :modified))
-(os/execute ["/bin/sh" "-c" "sleep 1"] :p)
-(assert (= 0 (os/execute ["/bin/sh" "-c" (string mincalls "/tmp/apg-bin >/dev/null 2>&1")] :p))
-  "demo runs again")
-(def m2 (get (os/stat (string tmpcache "/janet/pgo/apg-bin.jdn")) :modified))
-(assert (= m1 m2) "second run leaves cache alone")
+# Repetition accumulates observations; distinct workloads retain earlier ones.
+(assert (= 0 (build "demo.janet" "apg-pgo" ["--pgo" ""] "repeat.log")) "repeated training succeeds")
+(def repeated (manifest "apg-pgo"))
+(def repeat-record ((get repeated :workloads) 0))
+(assert (= 1 (length (get repeated :workloads))) "repeat keeps one workload")
+(assert (> (calls (get repeat-record :profile)) (calls (get first-record :profile))) "raw calls accumulate")
+(assert (> (calls (get repeated :aggregate)) (calls cache-profile)) "aggregate calls accumulate")
+(assert (= raw-before (text (get first-record :profile))) "old raw generation immutable")
+(assert (= before (text cache-profile)) "old aggregate immutable")
+(assert (= oracle-before (text (get first-record :oracle))) "old oracle immutable")
+(assert (= oracle-before (text (get repeat-record :oracle))) "repeat preserves oracle bytes")
+(assert (= 0 (build "demo.janet" "apg-pgo" ["--pgo" "different"] "different.log")) "distinct training succeeds")
+(def distinct-meta (manifest "apg-pgo"))
+(def distinct-records (get distinct-meta :workloads))
+(assert (= 2 (length distinct-records)) "distinct workloads retained")
+(assert (deep= repeat-record (distinct-records 0)) "previous workload evidence retained")
+(assert (= "different" (get (distinct-records 1) :args)) "new workload argv recorded")
+(assert (= expect-out (text (get (distinct-records 1) :oracle))) "new workload oracle captured")
+(assert (= (calls (get distinct-meta :aggregate))
+           (+ (calls (get (distinct-records 0) :profile))
+              (calls (get (distinct-records 1) :profile)))) "aggregate includes both workloads")
+(assert (= 0 (build "demo.janet" "apg-pgo" [] "multi.log")) "plain rebuild replays retained workloads")
+(assert (string/find "verifying 2 cached workloads" (text (path "multi.log"))) "both retained workloads replay")
+(assert (string/find "parity ok" (text (path "multi.log"))) "multi-workload parity passes")
 
-# 3. JANET_NO_PROFILE disables even forced collection
-(os/execute ["/bin/sh" "-c" (string "rm -f " tmpcache "/janet/pgo/apg-bin.jdn")] :p)
-(assert (= 0 (os/execute ["/bin/sh" "-c"
-  (string "JANET_NO_PROFILE=1 JANET_AUTO_PGO=1 " mincalls "/tmp/apg-bin >/dev/null 2>&1")] :p))
-  "demo runs with opt-out")
-(assert (nil? (os/stat (string tmpcache "/janet/pgo/apg-bin.jdn")))
-        "opt-out writes nothing")
-
-# 4. default threshold: trivial runs don't create cache files
-(spit "/tmp/apg-tinysrc.janet" "(print (+ 1 2))\n")
-(assert (= 0 (os/execute ["/bin/sh" "-c"
-  "rm -rf /tmp/apg-tiny /tmp/apg-tiny-native /tmp/apg-tiny.c && ./build/bender --aot /tmp/apg-tinysrc.janet --native -o /tmp/apg-tiny >/dev/null 2>&1"] :p))
-  "tiny builds")
-(assert (= 0 (os/execute ["/bin/sh" "-c" "/tmp/apg-tiny >/dev/null 2>&1"] :p))
-  "tiny runs")
-(assert (nil? (os/stat (string tmpcache "/janet/pgo/apg-tiny.jdn")))
-        "trivial run writes nothing by default")
-
-# 5. explicit --pgo stores profile + workload; plain rebuild auto-applies
-(assert (= 0 (os/execute ["/bin/sh" "-c" "rm -rf /tmp/apg-pgo* && ./build/bender --aot /tmp/apg-demo.janet --native --pgo \"\" -o /tmp/apg-pgo >/dev/null 2>&1"] :p))
-  "pgo build succeeds")
-(assert (not (nil? (os/stat (string tmpcache "/janet/pgo/apg-pgo.jdn"))))
-        "pgo stores profile")
-(assert (not (nil? (os/stat (string tmpcache "/janet/pgo/apg-pgo.workload"))))
-        "pgo stores workload")
-(assert (= 0 (os/execute ["/bin/sh" "-c" "./build/bender --aot /tmp/apg-demo.janet --native -o /tmp/apg-pgo >/tmp/apg-auto-out.txt 2>&1"] :p))
-  "plain rebuild succeeds")
-(def auto-log (string (slurp "/tmp/apg-auto-out.txt")))
-(assert (not (nil? (string/find "applying cached PGO profile" auto-log)))
-        "rebuild applies cache automatically")
-(assert (not (nil? (string/find "parity ok" auto-log)))
-        "gate passes on apply")
-(assert (= expect-out (capture ["/tmp/apg-pgo"]))
-        "optimized output correct")
-
-# 6. Forced binary runs have no replayable workload identity; keep their
-# sidecars diagnostic and never fold them into a gateable profile.
-(def cache-profile (string tmpcache "/janet/pgo/apg-pgo.jdn"))
-(def before (string (slurp cache-profile)))
-(assert (= 0 (os/execute ["/bin/sh" "-c"
-  (string "JANET_AUTO_PGO=1 " mincalls "/tmp/apg-pgo >/dev/null 2>&1")] :p))
-  "forced second run succeeds")
-(assert (= before (string (slurp cache-profile))) "forced run preserves cached evidence")
-(def sidecars (filter (fn [name] (string/has-prefix? "apg-pgo.jdn.run-" name))
-                      (os/dir (string tmpcache "/janet/pgo"))))
-(assert (= 1 (length sidecars)) "forced run creates sidecar")
-(assert (= 0 (os/execute ["/bin/sh" "-c"
-  "./build/bender --aot /tmp/apg-demo.janet --native -o /tmp/apg-pgo >/tmp/apg-merged-out.txt 2>&1"] :p))
-  "plain rebuild merges sidecar")
-(assert (= before (string (slurp cache-profile))) "ungated sidecar never changes cache")
-(assert (= 1 (length (filter (fn [name] (string/has-prefix? "apg-pgo.jdn.run-" name))
-                             (os/dir (string tmpcache "/janet/pgo")))))
-        "ungated sidecar retained for diagnostics")
-(def merged-log (string (slurp "/tmp/apg-merged-out.txt")))
-(assert (string/find "parity ok" merged-log) "merged profile passes gate")
-(assert (= expect-out (capture ["/tmp/apg-pgo"])) "merged binary output correct")
-# Stale cache is never refreshed merely by merging a later sidecar.
-(spit "/tmp/apg-stale-source.janet" "(print :old)\n")
-(assert (= 0 (os/execute ["/bin/sh" "-c"
-  "./build/bender --aot /tmp/apg-stale-source.janet --native -o /tmp/apg-stale >/dev/null 2>&1"] :p))
-  "stale fixture builds")
-(assert (= 0 (os/execute ["/bin/sh" "-c"
-  (string mincalls "/tmp/apg-stale >/dev/null 2>&1")] :p))
-  "old fixture profiles")
-(def stale-cache (string tmpcache "/janet/pgo/apg-stale.jdn"))
-(def stale-before (string (slurp stale-cache)))
-(os/execute ["/bin/sh" "-c" "sleep 1"] :p)
-(spit "/tmp/apg-stale-source.janet" "(print :new)\n")
-(assert (= 0 (os/execute ["/bin/sh" "-c"
-  (string "JANET_AUTO_PGO=1 " mincalls "/tmp/apg-stale >/dev/null 2>&1")] :p))
-  "old binary creates forced sidecar")
-(assert (= 0 (os/execute ["/bin/sh" "-c"
-  "./build/bender --aot /tmp/apg-stale-source.janet --native -o /tmp/apg-stale >/tmp/apg-stale-log.txt 2>&1"] :p))
-  "stale profile falls back without build failure")
-(assert (= stale-before (string (slurp stale-cache))) "stale cache remains unchanged")
-(assert (string/find "stale" (string (slurp "/tmp/apg-stale-log.txt")))
-        "stale sidecar diagnostic")
-
-# Explicit profiles accumulate only for the identical replayable workload.
-(def trusted-before (string (slurp cache-profile)))
-(assert (= 0 (os/execute ["/bin/sh" "-c"
-  "./build/bender --aot /tmp/apg-demo.janet --native --pgo \"\" -o /tmp/apg-pgo >/tmp/apg-repeat-log.txt 2>&1"] :p))
-  "same-workload explicit collection succeeds")
-(assert (not (= trusted-before (string (slurp cache-profile))))
-        "same-workload evidence accumulates")
-(def repeat-profile (string (slurp cache-profile)))
-(assert (= 0 (os/execute ["/bin/sh" "-c"
-  "./build/bender --aot /tmp/apg-demo.janet --native --pgo \"different\" -o /tmp/apg-pgo >/tmp/apg-different-log.txt 2>&1"] :p))
-  "different-workload explicit collection succeeds")
-(def replaced-profile (string (slurp cache-profile)))
-(assert (not (= repeat-profile replaced-profile)) "different workload starts a new profile")
-(assert (= "different" (string (slurp (string tmpcache "/janet/pgo/apg-pgo.workload"))))
-        "new workload recorded")
-(assert (= "different" (get (parse (slurp (string tmpcache "/janet/pgo/apg-pgo.meta"))) :args))
-        "new workload metadata recorded")
-
-# Stdin is captured before collection and replayed immutably. Changing
-# the caller's file later must not alter the cached oracle.
-(spit "/tmp/apg-input.txt" "alpha\n")
-(spit "/tmp/apg-stdin.janet" "(print (file/read stdin :all))\n")
-(assert (= 0 (os/execute ["/bin/sh" "-c"
-  "./build/bender --aot /tmp/apg-stdin.janet --native --pgo \"\" --pgo-stdin /tmp/apg-input.txt -o /tmp/apg-stdin >/tmp/apg-stdin-build.txt 2>&1"] :p))
-  "stdin PGO build succeeds")
-(def input-cache (string tmpcache "/janet/pgo/apg-stdin.input"))
-(assert (= "alpha\n" (string (slurp input-cache))) "stdin captured in cache")
-(spit "/tmp/apg-input.txt" "beta\n")
-(assert (= 0 (os/execute ["/bin/sh" "-c"
-  "./build/bender --aot /tmp/apg-stdin.janet --native -o /tmp/apg-stdin >/tmp/apg-stdin-auto.txt 2>&1"] :p))
-  "auto rebuild with changed caller stdin succeeds")
-(assert (string/find "parity ok" (string (slurp "/tmp/apg-stdin-auto.txt")))
-        "cached stdin snapshot gates automatically")
-(os/rm input-cache)
-(assert (= 0 (os/execute ["/bin/sh" "-c"
-  "./build/bender --aot /tmp/apg-stdin.janet --native -o /tmp/apg-stdin >/tmp/apg-stdin-missing.txt 2>&1"] :p))
-  "missing snapshot falls back")
-(assert (string/find "no replayable workload" (string (slurp "/tmp/apg-stdin-missing.txt")))
-        "missing snapshot rejects cached profile")
-
-# A held per-key transaction lock cannot authorize stale cached evidence.
-(def lockdir (string tmpcache "/janet/pgo/apg-pgo.lock"))
+# Stdin bytes live in the manifest, with an immutable output oracle.
+(spit (path "input.txt") "alpha\x00bytes\n")
+(spit (path "stdin.janet") "(print (file/read stdin :all))\n")
+(assert (= 0 (build "stdin.janet" "apg-stdin"
+                   ["--pgo" "" "--pgo-stdin" (path "input.txt")] "stdin.log")) "stdin training succeeds")
+(def input-meta (text (cache "apg-stdin.meta")))
+(def input-record ((get (parse input-meta) :workloads) 0))
+(assert (get input-record :has-stdin) "stdin presence recorded")
+(assert (= "alpha\x00bytes\n" (get input-record :stdin-bytes)) "stdin bytes captured exactly")
+(def input-oracle (get input-record :oracle))
+(def input-output (text input-oracle))
+(assert (= "alpha\x00bytes\n\n" input-output) "stdin oracle captures exact output")
+(spit (path "input.txt") "beta\n")
+(assert (= 0 (build "stdin.janet" "apg-stdin" [] "stdin-auto.log")) "changed caller stdin rebuilds")
+(assert (string/find "parity ok" (text (path "stdin-auto.log"))) "captured stdin gates automatically")
+(assert (= input-meta (text (cache "apg-stdin.meta"))) "captured stdin metadata immutable")
+(assert (= input-output (text input-oracle)) "captured stdin oracle immutable")
+# Missing replay evidence must fall back, just as a missing v2 input did.
+(os/rename input-oracle (path "saved-oracle.out"))
+(assert (= 0 (build "stdin.janet" "apg-stdin" [] "stdin-missing.log")) "missing oracle falls back")
+(assert (string/find "no replayable workload" (text (path "stdin-missing.log"))) "missing oracle rejects cache")
+(def lockdir (cache "apg-pgo.lock"))
 (assert (os/mkdir lockdir) "test acquires cache lock")
-(assert (= 0 (os/execute ["/bin/sh" "-c"
-  "./build/bender --aot /tmp/apg-demo.janet --native -o /tmp/apg-pgo >/tmp/apg-busy-log.txt 2>&1"] :p))
-  "busy cache falls back safely")
-(assert (string/find "cache busy" (string (slurp "/tmp/apg-busy-log.txt")))
-        "busy cache announces fallback")
+(assert (= 0 (build "demo.janet" "apg-pgo" [] "busy.log")) "busy cache falls back safely")
+(assert (string/find "cache busy" (text (path "busy.log"))) "busy cache announces fallback")
+(assert (nil? (string/find "cached workloads" (text (path "busy.log")))) "busy cache cannot authorize replay")
+(assert (nil? (string/find "parity ok" (text (path "busy.log")))) "busy cache installs no gated profile")
 (os/rmdir lockdir)
 (assert (nil? (os/stat lockdir)) "test releases cache lock")
-
 (end-suite)
