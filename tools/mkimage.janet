@@ -237,7 +237,12 @@
 
   (each nm (keys executor-names)
     (unless (get registered-executors nm)
-      (eprint "mkimage: executor target " nm " has no retained top-level defn; stays boxed")))
+      # Stage 2: imported/evaluated functions are not entry-file defns.
+      # Their actual runtime closures attach lazily from the descriptor
+      # registry after native_init publishes it; this is a diagnostic,
+      # not a refusal.
+      (eprint "mkimage: executor target " nm " has no retained top-level defn;"
+              " relying on lazy structural attachment at runtime")))
 
   # --- Residual-reference audit (fail-closed, B7.2 Part B, Piece 1c) ---
   # The whole-program gate in callgraph.janet reasons over BYTECODE. This
