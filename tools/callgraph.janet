@@ -889,7 +889,16 @@
     # VM-generated thunks/while closures are not source bindings and
     # cannot be selected for exported-definition retention.
     (when (> occurrences 0)
-      (if (and (= 1 (length bucket)) (= 1 occurrences))
+      # A merged home/worker profile has multiple observation rows for
+      # one function. Their paths were individually verified against file
+      # above; require the same line/name, not one row per function.
+      (def first (bucket 0))
+      (if (and (= 1 occurrences)
+               (every? (map (fn [identity]
+                              (and (= (identity 1) (first 1))
+                                   (= (identity 2) (first 2))
+                                   (profile-source-matches? file (identity 0))))
+                            bucket)))
         (put selected (symbol name) ((bucket 0) 1))
         (eprint "callgraph: profile retention refused for " file " " name
                 ": duplicate identity or definition"))))
@@ -1247,15 +1256,21 @@
 (when profile-index
   (each [nm bucket] (pairs profile-index)
     (def ids (get name-ids nm @[]))
-    (var valid (and (= 1 (length ids)) (= 1 (length bucket))))
+    (var valid (= 1 (length ids)))
     (when valid
       (def info (defs (ids 0)))
       (def sm (get (info :d) :sourcemap))
-      (def identity ((bucket 0) :identity))
+      # Keep all observations, including their distinct :from and
+      # :type-from provenance, only if EVERY row is the same verified
+      # source/line/name identity as the one registered FuncDef.
       (unless (and (indexed? sm) (> (length sm) 0)
-                   (= (get (sm 0) 0) (identity 1))
-                   (string? (identity 0))
-                   (profile-source-matches? (info :source) (identity 0)))
+                   (every? (map (fn [row]
+                                  (def identity (row :identity))
+                                  (and (= (identity 2) nm)
+                                       (= (get (sm 0) 0) (identity 1))
+                                       (string? (identity 0))
+                                       (profile-source-matches? (info :source) (identity 0))))
+                                bucket)))
         (set valid false)))
     (unless valid (put profile-index nm nil))))
 

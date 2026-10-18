@@ -40,6 +40,14 @@ grep -q '^def 4 hot ' "$scratch/profile"
 grep -q '^calls 1 4$' "$scratch/profile"
 ! grep -q '^contains 3 4$' "$scratch/profile"
 ./build/bender tools/callgraph.janet "$fixture/profile-module.janet" \
+  --profile "$fixture/profile-merged.jdn" > "$scratch/profile-merged" 2>&1
+grep -q '^def 1 hot ' "$scratch/profile-merged"
+grep -q '^profile-seed hot 0 number home,worker$' "$scratch/profile-merged"
+./build/bender tools/callgraph.janet "$fixture/profile-module.janet" \
+  --profile "$fixture/profile-merged-conflict.jdn" > "$scratch/profile-merged-conflict" 2>&1
+grep -q '^def 1 hot ' "$scratch/profile-merged-conflict"
+grep -q '^profile-conflict hot 0 number:home string:worker$' "$scratch/profile-merged-conflict"
+./build/bender tools/callgraph.janet "$fixture/profile-module.janet" \
   --profile "$fixture/profile-ambiguous.jdn" > "$scratch/profile-ambiguous" 2>&1
 grep -q 'profile retention refused for .*hot: duplicate identity or definition' "$scratch/profile-ambiguous"
 ! grep -q '^def 1 hot ' "$scratch/profile-ambiguous"
