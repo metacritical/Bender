@@ -1165,4 +1165,31 @@
                 (string "inim == in for " (type ds)))))))
 
 
+
+# JOP_BAND_IMMEDIATE (constant-mask `band` fusion). JINT_SSU, so the mask
+# immediate is UNSIGNED 0..255 -- 0xff must fuse, which a signed int8
+# cannot hold. Same hazard as JOP_IN_IMMEDIATE: a signed gate would hand a
+# negative mask to an unsigned opcode and read it back as 0..255.
+(do
+  (assert (= 0x0f (band 0xff 0x0f)) "bandim basic mask")
+  (assert (= 0xff (band 0x1ff 0xff)) "bandim 255 mask fuses and is correct")
+  (assert (= 128 (band 0x1ff 128)) "bandim mask 128 (past signed int8)")
+  (assert (= 255 (band -1 255)) "bandim on negative operand")
+  (assert (= 0 (band 0 255)) "bandim zero operand")
+  # negative mask must NOT alias into 0..255
+  (assert (= -2 (band -2 -1)) "negative mask falls back to band, not aliased")
+  (assert (= 2147483647 (band 2147483647 -1)) "int32 max with -1 mask")
+  # out-of-int32-range operand must still panic
+  (assert-error "bandim keeps the int32 range check" (band 4294967296 255))
+  # non-numeric operand takes the same method path
+  (assert-error "bandim non-numeric operand errors like band" (band :kw 255))
+  # bor / bxor share the same unsigned-immediate machinery
+  (assert (= 0xff (bor 0x0f 0xf0)) "borim basic")
+  (assert (= 255 (bor 0 255)) "borim 255 fuses")
+  (assert (= 0xf0 (bxor 0x0f 0xff)) "bxorim basic")
+  (assert (= 255 (bxor 0 255)) "bxorim 255 fuses")
+  (assert (= -1 (bor -1 255)) "borim on negative operand")
+  (assert-error "borim keeps int32 range check" (bor 4294967296 255))
+  (assert-error "bxorim keeps int32 range check" (bxor 4294967296 255)))
+
 (end-suite)

@@ -338,12 +338,56 @@ static JanetSlot do_remainder(JanetFopts opts, JanetSlot *args) {
     return opreduce(opts, args, JOP_REMAINDER, 0, janet_wrap_integer(0), janet_wrap_integer(1));
 }
 static JanetSlot do_band(JanetFopts opts, JanetSlot *args) {
+    /* Fuse a constant 0..255 mask into JOP_BAND_IMMEDIATE. Measured:
+     * load_integer -> band is 3.38% of all dispatches in ttfx matrix,
+     * because (band x 0xff) -- every limb mask -- spent a whole dispatch
+     * materializing 255. UNSIGNED because 255 does not fit a signed int8,
+     * which is precisely why band could not be fused alongside
+     * JOP_IN_IMMEDIATE. opim stays 0 in the fallback for the same reason
+     * as do_in: opreduce's gate is signed and would hand a negative mask
+     * to an unsigned opcode, reading it back as 0..255 -- a silent wrong
+     * answer. The unsigned gate below is the ONLY path to the opcode. */
+    if (janet_v_count(args) == 2) {
+        uint8_t uimm = 0;
+        if (can_slot_be_uimm(args[1], &uimm)) {
+            JanetCompiler *c = opts.compiler;
+            JanetSlot t = janetc_gettarget(opts);
+            janetc_emit_ssu(c, JOP_BAND_IMMEDIATE, t, args[0], uimm, 1);
+            return t;
+        }
+    }
     return opreduce(opts, args, JOP_BAND, 0, janet_wrap_integer(-1), janet_wrap_integer(-1));
 }
 static JanetSlot do_bor(JanetFopts opts, JanetSlot *args) {
+    /* Unsigned 0..255 constant operand fuses into JOP_BOR_IMMEDIATE;
+     * see do_band for the full rationale (unsigned so masks above
+     * 127 fit, and opim stays 0 so a negative constant can never
+     * reach an unsigned opcode). */
+    if (janet_v_count(args) == 2) {
+        uint8_t uimm = 0;
+        if (can_slot_be_uimm(args[1], &uimm)) {
+            JanetCompiler *c = opts.compiler;
+            JanetSlot t = janetc_gettarget(opts);
+            janetc_emit_ssu(c, JOP_BOR_IMMEDIATE, t, args[0], uimm, 1);
+            return t;
+        }
+    }
     return opreduce(opts, args, JOP_BOR, 0, janet_wrap_integer(0), janet_wrap_integer(0));
 }
 static JanetSlot do_bxor(JanetFopts opts, JanetSlot *args) {
+    /* Unsigned 0..255 constant operand fuses into JOP_BXOR_IMMEDIATE;
+     * see do_band for the full rationale (unsigned so masks above
+     * 127 fit, and opim stays 0 so a negative constant can never
+     * reach an unsigned opcode). */
+    if (janet_v_count(args) == 2) {
+        uint8_t uimm = 0;
+        if (can_slot_be_uimm(args[1], &uimm)) {
+            JanetCompiler *c = opts.compiler;
+            JanetSlot t = janetc_gettarget(opts);
+            janetc_emit_ssu(c, JOP_BXOR_IMMEDIATE, t, args[0], uimm, 1);
+            return t;
+        }
+    }
     return opreduce(opts, args, JOP_BXOR, 0, janet_wrap_integer(0), janet_wrap_integer(0));
 }
 static JanetSlot do_lshift(JanetFopts opts, JanetSlot *args) {

@@ -1659,6 +1659,17 @@ enum JanetOpCode {
      * Appended at the end of the enum so every existing opcode number,
      * and therefore marshalled bytecode, is unchanged. */
     JOP_IN_IMMEDIATE,
+    /* (band x <const 0..255>) fused: the mask is an UNSIGNED immediate
+     * instead of a preceding load_integer. Unsigned because the hot mask
+     * is 0xff = 255, which does NOT fit a signed int8 -- that is exactly
+     * why band could not be fused when JOP_IN_IMMEDIATE landed. Negative
+     * masks fall back to JOP_BAND. Appended at the end so existing
+     * opcode numbers and marshalled bytecode are unchanged. */
+    JOP_BAND_IMMEDIATE,
+    /* (bor x <const 0..255>) and (bxor x <const 0..255>): same
+     * unsigned-immediate rationale as JOP_BAND_IMMEDIATE above. */
+    JOP_BOR_IMMEDIATE,
+    JOP_BXOR_IMMEDIATE,
     JOP_INSTRUCTION_COUNT
 };
 

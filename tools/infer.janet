@@ -91,7 +91,10 @@
 (def bit-ops
   @{'band true 'bor true 'bxor true 'sl true 'sr true 'sru true})
 (def bit-im-ops
-  @{'slim true 'srim true 'sruim true})
+  @{'slim true 'srim true 'sruim true
+    # unsigned-immediate bitwise: same int-family join rule as the
+    # register forms above
+    'bandim true 'borim true 'bxorim true})
 # Pure core calls: math libm wrappers with exact C equivalents
 # (JANET_DEFINE_MATHOP applies the libm fn to the unwrapped double).
 # Callgraph records call sites by core name (ldc-loaded cfunctions);

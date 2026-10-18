@@ -1558,7 +1558,11 @@
 # see k_*32 definitions hoisted into each prelude).
 (def emit-bit-c @{'band "k_band32" 'bor "k_bor32" 'bxor "k_bxor32"
                    'sl "k_sl32" 'sr "k_sr32" 'sru "k_sru32"})
-(def emit-bit-im-c @{'slim "k_sl32" 'srim "k_sr32" 'sruim "k_sru32"})
+(def emit-bit-im-c @{'slim "k_sl32" 'srim "k_sr32" 'sruim "k_sru32"
+                      # unsigned-immediate bitwise (0..255); same int32
+                      # helpers as the register forms, so kernels and the
+                      # interpreter cannot disagree
+                      'bandim "k_band32" 'borim "k_bor32" 'bxorim "k_bxor32"})
 (def emit-cmp-c @{'lt "<" 'ltim "<" 'gt ">" 'gtim ">"
                   'lte "<=" 'gte ">="
                   'eq "==" 'eqim "==" 'neq "!=" 'neqim "!="})
@@ -1568,6 +1572,7 @@
     'divim 1
     'addim 1 'subim 1 'mulim 1
     'band 1 'bor 1 'bxor 1 'sl 1 'sr 1 'sru 1 'slim 1 'srim 1 'sruim 1
+    'bandim 1 'borim 1 'bxorim 1
     'lt 1 'ltim 1 'gt 1 'gtim 1 'lte 1 'gte 1
     'eq 1 'eqim 1 'neq 1 'neqim 1 'call 1 'movn 1 'movf 2
     'len 1 'get 1 'put 1 'puti 1})
@@ -3464,6 +3469,7 @@
     'mod true 'rem true 'addim true 'subim true 'mulim true
     'band true 'bor true 'bxor true 'sl true 'sr true 'sru true
     'slim true 'srim true 'sruim true
+    'bandim true 'borim true 'bxorim true
     'lt true 'ltim true 'gt true 'gtim true 'lte true 'gte true
     'eq true 'eqim true 'neq true 'neqim true 'ltu true 'gtu true
     'cmp true 'next true 'in true 'len true 'get true 'put true 'puti true
@@ -3482,6 +3488,7 @@
     'mod true 'rem true 'addim true 'subim true 'mulim true
     'band true 'bor true 'bxor true 'sl true 'sr true 'sru true
     'slim true 'srim true 'sruim true
+    'bandim true 'borim true 'bxorim true
     'lt true 'ltim true 'gt true 'gtim true 'lte true 'gte true
     'eq true 'eqim true 'neq true 'neqim true 'ltu true 'gtu true
     'cmp true 'next true 'in true 'len true 'get true

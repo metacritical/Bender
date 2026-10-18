@@ -127,7 +127,10 @@ const enum JanetInstructionType janet_instructions[JOP_INSTRUCTION_COUNT] = {
     JINT_SSS, /* JOP_NOT_EQUALS, */
     JINT_SSI, /* JOP_NOT_EQUALS_IMMEDIATE, */
     JINT_SSS, /* JOP_CANCEL, */
-    JINT_SSU /* JOP_IN_IMMEDIATE, */
+    JINT_SSU, /* JOP_IN_IMMEDIATE, */
+    JINT_SSU, /* JOP_BAND_IMMEDIATE, */
+    JINT_SSU, /* JOP_BOR_IMMEDIATE, */
+    JINT_SSU /* JOP_BXOR_IMMEDIATE, */
 };
 
 /* Keep track of how large corelib is. Useful
@@ -781,6 +784,9 @@ void janet_bytecode_local_value_numbering(JanetFuncDef *def, BytecodeBB *blocks,
                 case JOP_SHIFT_LEFT_IMMEDIATE:
                 case JOP_SHIFT_RIGHT_IMMEDIATE:
                 case JOP_SHIFT_RIGHT_UNSIGNED_IMMEDIATE:
+                case JOP_BAND_IMMEDIATE:
+                case JOP_BOR_IMMEDIATE:
+                case JOP_BXOR_IMMEDIATE:
                 case JOP_IN_IMMEDIATE:
                 case JOP_GET_INDEX: {
                     int32_t Bv = ctx.value_numbers[B];
@@ -1385,6 +1391,9 @@ static void janet_bytecode_movopt_basic_block(JanetFuncDef *def, BytecodeBB bb, 
             case JOP_LESS_THAN_IMMEDIATE:
             case JOP_EQUALS_IMMEDIATE:
             case JOP_NOT_EQUALS_IMMEDIATE:
+            case JOP_BAND_IMMEDIATE:
+            case JOP_BOR_IMMEDIATE:
+            case JOP_BXOR_IMMEDIATE:
             case JOP_IN_IMMEDIATE:
             case JOP_GET_INDEX:
                 out = Ia;

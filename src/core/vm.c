@@ -55,6 +55,10 @@
 
 /* Signed interpretations of registers */
 #define CS (*((int32_t *)pc) >> 24)
+/* Unsigned immediate: the C field as 0..255. JINT_SSU opcodes use this
+ * so a mask like 0xff (255) is representable, which a signed int8
+ * immediate cannot hold. */
+#define CU ((*pc) >> 24)
 #define DS (*((int32_t *)pc) >> 8)
 #define ES (*((int32_t *)pc) >> 16)
 
@@ -306,6 +310,31 @@ int janet_native_poll(int condition) {
             vm_pcnext();\
         }\
     }
+/* Unsigned-immediate bitop (JINT_SSU). Identical to
+ * _vm_bitop_immediate except the immediate is read via CU (0..255)
+ * instead of the sign-extended CS, so masks above 127 work. The
+ * non-number path still goes through janet_mcall with the same wrapped
+ * immediate, so a non-numeric operand behaves exactly as the register
+ * form does. */
+#define _vm_bitop_uimmediate(op, type1, rangecheck, msg)\
+    {\
+        Janet op1 = stack[B];\
+        if (JANET_UNLIKELY(!janet_checktype(op1, JANET_NUMBER))) {\
+            vm_commit();\
+            Janet _argv[2] = { op1, janet_wrap_number(CU) };\
+            Janet a = janet_mcall(#op, 2, _argv);\
+            stack = fiber->data + fiber->frame;\
+            stack[A] = a;\
+            vm_checkgc_pcnext();\
+        } else {\
+            double y1 = janet_unwrap_number(op1);\
+            if (!rangecheck(y1)) { vm_commit(); janet_panicf("value %v out of range for " msg, op1); }\
+            type1 x1 = (type1) y1;\
+            stack[A] = janet_wrap_number((type1) (x1 op (type1) CU));\
+            vm_pcnext();\
+        }\
+    }
+#define vm_bitop_uimmediate(op) _vm_bitop_uimmediate(op, int32_t, janet_checkintrange, "32-bit signed integers");
 #define vm_bitop_immediate(op) _vm_bitop_immediate(op, int32_t, janet_checkintrange, "32-bit signed integers");
 #define vm_bitopu_immediate(op) _vm_bitop_immediate(op, uint32_t, janet_checkuintrange, "32-bit unsigned integers");
 #define _vm_binop(op, wrap)\
@@ -1330,7 +1359,9 @@ static JanetSignal run_vm(JanetFiber *fiber, Janet in) {
         &&label_JOP_NOT_EQUALS_IMMEDIATE,
         &&label_JOP_CANCEL,
         &&label_JOP_IN_IMMEDIATE,
-        &&label_unknown_op,
+        &&label_JOP_BAND_IMMEDIATE,
+        &&label_JOP_BOR_IMMEDIATE,
+        &&label_JOP_BXOR_IMMEDIATE,
         &&label_unknown_op,
         &&label_unknown_op,
         &&label_unknown_op,
@@ -1689,6 +1720,18 @@ static JanetSignal run_vm(JanetFiber *fiber, Janet in) {
 
     VM_OP(JOP_BAND)
     vm_bitop(&);
+
+    /* Fused (band x <const 0..255>). Mirrors JOP_BAND exactly, including
+     * the int32-range check and the janet_mcall path for a non-numeric
+     * operand, with the mask taken from the unsigned immediate. */
+    VM_OP(JOP_BAND_IMMEDIATE)
+    vm_bitop_uimmediate(&);
+
+    VM_OP(JOP_BOR_IMMEDIATE)
+    vm_bitop_uimmediate(|);
+
+    VM_OP(JOP_BXOR_IMMEDIATE)
+    vm_bitop_uimmediate(^);
 
     VM_OP(JOP_BOR)
     vm_bitop( |);
