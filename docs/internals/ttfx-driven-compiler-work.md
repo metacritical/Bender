@@ -2,9 +2,10 @@
 
 Updated 2026-10-18. **This is the authoritative compiler work/status record.**
 The original repository is `/Users/pankajdoharey/Development/Projects/janet`.
-Application status belongs in the ttfx repository's
-`janet-port/docs/optimization-status.md`; measured results belong in its
-`bench-engines.md`. Temporary logs/binaries are supporting evidence only.
+All ongoing optimization design and status belong in this compiler repository.
+The ttfx port is an unchanged integration fixture, not an optimization target.
+Its existing `bench-engines.md` contains historical measurements; temporary
+logs/binaries are supporting evidence only.
 
 ## Goal and correctness contract
 
@@ -12,6 +13,12 @@ Optimize the general Janet compiler/VM, not effect-specific kernels. Unmodified
 ttfx is the workload: use its `ruby-port/logo.txt` Omarchy artwork (81×10), not
 hello or the historical repeated-fox input. Train with seeds 42/7/99/2026 and
 reserve 13/314159 for held-out parity when all four train PGO.
+
+Do not add custom kernels, benchmark-specific shortcuts, source reshapes, or
+optimization tracking documents to `janet-port`. Existing handwritten application
+kernels are historical inputs to the fixture, not templates to special-case in
+Bender. Any new mechanism must be tested with generic Janet programs first and
+must apply without changing the application's source.
 
 The requested goal is at least 1.10× Rust and Node on every comparable benchmark.
 **This goal is not achieved.** Match workload and semantics; preserve frame bytes,
@@ -39,8 +46,9 @@ dirty shared checkout. Branch `ttfx-native-array-call` is the integration branch
 
 Preserved checkpoint refs: `ttfx-compiler-verified-base`,
 `ttfx-compiler-phase2-verified`, `ttfx-compiler-dce-verified`.
-These commits are available in this repository's branch history but have **not**
-been merged into this shared master checkout or installed as the user's compiler.
+The completed commits are being merged into the original repository's `master`
+checkout at the user's request, preserving their component and merge history.
+Source integration does not imply that the installed compiler binary was rebuilt.
 
 ## Implemented and validated
 
@@ -103,7 +111,10 @@ Bounded Omarchy decrypt/fireworks six-seed parity passed. No speedup claim.
 
 ## Current work: mixed-operation native regions (stage 2)
 
-Implementation is in progress on the isolated integration branch; not validated:
+Stage 2 remains **unimplemented**. The attempted work added only emitted-constant
+round-trip tests (signed zero, extreme finite values and subnormals), which passed
+the six-configuration executor matrix. The following are the remaining tasks,
+not completed capabilities:
 
 1. Native arithmetic/control regions with calls, pushes, lookups, iteration,
    mutation, allocation and unsupported operations handed to the VM at original PCs.
