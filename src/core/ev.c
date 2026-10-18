@@ -1299,18 +1299,34 @@ static int janet_chanat_gcperthread(void *p, size_t s) {
 
 static void janet_chanat_mark_fq(JanetQueue *fq) {
     JanetChannelPending *pending = fq->data;
+/* A stale entry (its fiber was resumed some other way, e.g. by another
+ * clause of ev/select, so sched_id no longer matches) must not pin the
+ * fiber: nothing may ever visit this channel again, so the pin would be
+ * permanent (observed: 100/100 leaked fibers). Only skip the mark here —
+ * never claim/free the node from inside GC (the queue entry stays valid;
+ * a later pop or janet_chan_remove_stale reclaims it under the channel's
+ * normal discipline). Reading ->sched_id of a same-VM fiber is safe:
+ * plain-channel entries only ever reference this VM's fibers, and only
+ * this VM's scheduler mutates sched_id. */
+#define MARK_ONE(idx) do { \
+        JanetChannelPending *p = &pending[idx]; \
+        if (!(p->reg->dead)) { \
+            if (!(p->thread == &janet_vm && \
+                    p->fiber->sched_id != (uint32_t) p->sched_id)) { \
+                janet_mark(janet_wrap_fiber(p->fiber)); \
+            } \
+        } \
+    } while (0)
     if (fq->head <= fq->tail) {
         for (int32_t i = fq->head; i < fq->tail; i++)
-            if (!(pending[i].reg->dead))
-                janet_mark(janet_wrap_fiber(pending[i].fiber));
+            MARK_ONE(i);
     } else {
         for (int32_t i = fq->head; i < fq->capacity; i++)
-            if (!(pending[i].reg->dead))
-                janet_mark(janet_wrap_fiber(pending[i].fiber));
+            MARK_ONE(i);
         for (int32_t i = 0; i < fq->tail; i++)
-            if (!(pending[i].reg->dead))
-                janet_mark(janet_wrap_fiber(pending[i].fiber));
+            MARK_ONE(i);
     }
+#undef MARK_ONE
 }
 
 static int janet_chanat_mark(void *p, size_t s) {
