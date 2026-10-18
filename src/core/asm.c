@@ -87,6 +87,7 @@ static const JanetInstructionDef janet_ops[] = {
     {"gte", JOP_GREATER_THAN_EQUAL},
     {"gtim", JOP_GREATER_THAN_IMMEDIATE},
     {"in", JOP_IN},
+    {"inim", JOP_IN_IMMEDIATE},
     {"jmp", JOP_JUMP},
     {"jmpif", JOP_JUMP_IF},
     {"jmpni", JOP_JUMP_IF_NIL},

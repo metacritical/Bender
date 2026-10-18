@@ -1329,7 +1329,7 @@ static JanetSignal run_vm(JanetFiber *fiber, Janet in) {
         &&label_JOP_NOT_EQUALS,
         &&label_JOP_NOT_EQUALS_IMMEDIATE,
         &&label_JOP_CANCEL,
-        &&label_unknown_op,
+        &&label_JOP_IN_IMMEDIATE,
         &&label_unknown_op,
         &&label_unknown_op,
         &&label_unknown_op,
@@ -2164,6 +2164,21 @@ static JanetSignal run_vm(JanetFiber *fiber, Janet in) {
     vm_commit();
     {
         Janet a = janet_in(stack[B], stack[C]);
+        stack = fiber->data + fiber->frame;
+        stack[A] = a;
+    }
+    vm_pcnext();
+
+    /* Fused (in ds <const small int>): key comes from the UNSIGNED
+     * immediate rather than a preceding load_integer into a slot.
+     * Calls janet_in -- the SAME entry point as JOP_IN above -- so
+     * behavior is identical in every case, including the raise on an
+     * out-of-range string/symbol/keyword index where janet_getindex
+     * (and therefore JOP_GET_INDEX) would instead yield nil. */
+    VM_OP(JOP_IN_IMMEDIATE)
+    vm_commit();
+    {
+        Janet a = janet_in(stack[B], janet_wrap_integer((int32_t)(uint8_t) C));
         stack = fiber->data + fiber->frame;
         stack[A] = a;
     }

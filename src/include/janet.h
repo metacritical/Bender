@@ -1650,6 +1650,15 @@ enum JanetOpCode {
     JOP_NOT_EQUALS,
     JOP_NOT_EQUALS_IMMEDIATE,
     JOP_CANCEL,
+    /* (in ds <const small int>) fused: the key is an UNSIGNED immediate
+     * instead of a preceding load_integer into a slot. The handler calls
+     * janet_in with the wrapped immediate, so semantics are IDENTICAL to
+     * JOP_IN -- deliberately NOT reusing JOP_GET_INDEX, whose
+     * janet_getindex returns nil where janet_in RAISES for an
+     * out-of-range string/symbol/keyword index (verified by test).
+     * Appended at the end of the enum so every existing opcode number,
+     * and therefore marshalled bytecode, is unchanged. */
+    JOP_IN_IMMEDIATE,
     JOP_INSTRUCTION_COUNT
 };
 
