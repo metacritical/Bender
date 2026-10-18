@@ -93,6 +93,31 @@
         (union-types left right))))
   out)
 
+# Joint vectors are never reconstructed from marginal :params. Missing
+# historical evidence and overflow are both OPEN. Only exact vectors merge.
+(defn- signatures [value]
+  (when (or (nil? value) (= value :open)) (break :open))
+  (unless (indexed? value) (bad "invalid signatures"))
+  (def counts @{})
+  (def vectors @{})
+  (each entry value
+    (unless (and (indexed? entry) (= 2 (length entry))
+                 (indexed? (entry 0)) (<= (length (entry 0)) 8)
+                 (number? (entry 1)) (> (entry 1) 0)
+                 (= (entry 1) (math/trunc (entry 1))))
+      (bad "invalid signature entry"))
+    (each t (entry 0) (unless (keyword? t) (bad "invalid signature tag")))
+    (def key (string/format "%j" (entry 0)))
+    (put vectors key (entry 0))
+    (put counts key (+ (entry 1) (get counts key 0))))
+  (if (> (length (keys counts)) 8) :open
+      (seq [key :in (sorted (keys counts))] @[(get vectors key) (get counts key)])))
+
+(defn- merge-signatures [a b]
+  (def x (signatures a)) (def y (signatures b))
+  (if (or (= x :open) (= y :open)) :open
+      (signatures [;x ;y])))
+
 (defn- accumulate-info [a b]
   (def ca (get a :calls))
   (def cb (get b :calls))
@@ -126,7 +151,8 @@
     (array/push type-origins by-type))
   @{:calls (+ ca cb) :params ps :elems ea :mins mn :maxs mx
     :rets (union-types (get a :rets) (get b :rets)) :from from
-    :type-from type-origins})
+    :type-from type-origins
+    :signatures (merge-signatures (get a :signatures) (get b :signatures))})
 
 (defn main [& _args]
   # Script name arrives as args[0] (like tools/callgraph.janet, which
@@ -168,7 +194,8 @@
               (bad "invalid identity"))
             (def key (string/format "%j" id))
             (def pos (get positions key))
-            (def tagged (merge info {:from (origins (get info :from prov))}))
+            (def tagged (merge info {:from (origins (get info :from prov))
+                                     :signatures (signatures (get info :signatures))}))
             (unless (and (number? (get info :calls)) (>= (get info :calls) 0)
                          (= (get info :calls) (math/trunc (get info :calls))))
               (bad "invalid call count"))

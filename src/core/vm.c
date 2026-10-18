@@ -413,6 +413,7 @@ static void janet_suspend_swap(JanetFiber *fiber, JanetSignal sig, Janet payload
  * consumer must refuse closed-set reasoning for it), never a huge
  * set. */
 #define JANET_PROFILE_VALSAMPLE 8
+#define JANET_PROFILE_SIGSAMPLE 8
 
 /* Direct-mapped entry cache (auto-PGO): real programs alternate
  * between functions, so a last-entry cache thrashes (16x slowdown
@@ -437,6 +438,7 @@ typedef struct {
     JanetArray *mn;
     JanetArray *mx;
     JanetArray *va;
+    Janet sig;
 } JanetProfileCache;
 /* Phase C: the fast-path cache is per-thread. Worker VMs share this
  * translation unit across OS threads; a single global would let two
@@ -486,6 +488,7 @@ static void janet_profile_cache_fill(JanetTable *pt, JanetFuncDef *def, JanetTab
     c->mn = janet_unwrap_array(janet_table_get(e, janet_ckeywordv("mins")));
     c->mx = janet_unwrap_array(janet_table_get(e, janet_ckeywordv("maxs")));
     c->va = janet_unwrap_array(janet_table_get(e, janet_ckeywordv("vals")));
+    c->sig = janet_table_get(e, janet_ckeywordv("signatures"));
     c->live = 1;
 }
 
@@ -578,6 +581,14 @@ static JanetTable *janet_profile_entry(JanetFunction *func) {
             janet_gcunroot(janet_wrap_array(va));
         }
         janet_table_put_raw(e, janet_ckeywordv("rets"), janet_wrap_integer(0));
+        /* Joint, full-arity tag vectors; true denotes OPEN. The entry
+         * owns this array and every nested vector across GC. */
+        {
+            JanetArray *hist = janet_array(0);
+            janet_gcroot(janet_wrap_array(hist));
+            janet_table_put_raw(e, janet_ckeywordv("signatures"), janet_wrap_array(hist));
+            janet_gcunroot(janet_wrap_array(hist));
+        }
         /* P3.4 bookkeeping put: pt is the profiler's identity map
          * (function-pointer keyed), the same class as the marshal
          * memo and threaded registry. Under strict procs the plain
@@ -619,6 +630,48 @@ static void janet_profile_call(JanetFunction *func, const Janet *argv, int32_t a
         hit->calls++;
     }
     n = argc < JANET_PROFILE_MAXPARAMS ? argc : JANET_PROFILE_MAXPARAMS;
+    if (!janet_checktype(hit->sig, JANET_BOOLEAN)) {
+        if (argc < 0 || argc > JANET_PROFILE_MAXPARAMS) {
+            hit->sig = janet_wrap_true();
+            janet_table_put_raw(hit->e, janet_ckeywordv("signatures"), hit->sig);
+        } else {
+            JanetArray *hist = janet_unwrap_array(hit->sig);
+            int32_t k, found = 0;
+            for (k = 0; k < hist->count; k++) {
+                JanetArray *entry = janet_unwrap_array(hist->data[k]);
+                JanetArray *tags = janet_unwrap_array(entry->data[0]);
+                int32_t j;
+                if (tags->count != argc) continue;
+                for (j = 0; j < argc; j++)
+                    if ((uint32_t) janet_unwrap_integer(tags->data[j]) !=
+                        (uint32_t) janet_type(argv[j])) break;
+                if (j == argc) {
+                    entry->data[1] = janet_wrap_integer(janet_unwrap_integer(entry->data[1]) + 1);
+                    found = 1;
+                    break;
+                }
+            }
+            if (!found) {
+                if (hist->count >= JANET_PROFILE_SIGSAMPLE) {
+                    hit->sig = janet_wrap_true();
+                    janet_table_put_raw(hit->e, janet_ckeywordv("signatures"), hit->sig);
+                } else {
+                    JanetArray *entry = janet_array(2);
+                    JanetArray *tags;
+                    janet_gcroot(janet_wrap_array(entry));
+                    tags = janet_array(argc);
+                    janet_gcroot(janet_wrap_array(tags));
+                    for (k = 0; k < argc; k++)
+                        janet_array_push(tags, janet_wrap_integer(janet_type(argv[k])));
+                    janet_array_push(entry, janet_wrap_array(tags));
+                    janet_array_push(entry, janet_wrap_integer(1));
+                    janet_array_push(hist, janet_wrap_array(entry));
+                    janet_gcunroot(janet_wrap_array(tags));
+                    janet_gcunroot(janet_wrap_array(entry));
+                }
+            }
+        }
+    }
     /* Sample the expensive parts 1-in-8: type masks and call counts
      * stay exact every call (seeding unanimity must be exact), while
      * min/max ranges and element samples — heuristic evidence consumed
@@ -764,6 +817,7 @@ JanetArray *janet_profile_rows(void) {
     JanetArray *out = janet_array(0);
     janet_profile_flush();
     if (NULL == pt) return out;
+    janet_gcroot(janet_wrap_array(out));
     {
         const JanetKV *kvs;
         int32_t cap, count, i;
@@ -781,9 +835,11 @@ JanetArray *janet_profile_rows(void) {
             func = janet_unwrap_function(janet_table_get(e, janet_ckeywordv("func")));
             def = func->def;
             row = janet_array(2);
+            janet_gcroot(janet_wrap_array(row));
             {
                 JanetArray *id = janet_array(3);
                 int32_t defline = -1;
+                janet_gcroot(janet_wrap_array(id));
                 janet_array_push(id, NULL == def->source
                     ? janet_wrap_nil() : janet_wrap_string(def->source));
                 if (NULL != def->sourcemap && def->bytecode_length > 0)
@@ -792,13 +848,47 @@ JanetArray *janet_profile_rows(void) {
                 janet_array_push(id, NULL == def->name
                     ? janet_wrap_nil() : janet_wrap_string(def->name));
                 janet_array_push(row, janet_wrap_array(id));
+                janet_gcunroot(janet_wrap_array(id));
             }
             {
                 JanetTable *info = janet_table(3);
                 int64_t calls = janet_unwrap_integer(janet_table_get(e, janet_ckeywordv("calls")));
                 uint32_t rm = (uint32_t) janet_unwrap_integer(janet_table_get(e, janet_ckeywordv("rets")));
+                janet_gcroot(janet_wrap_table(info));
                 janet_table_put(info, janet_ckeywordv("calls"), janet_wrap_integer(calls));
+                {
+                    Janet sig = janet_table_get(e, janet_ckeywordv("signatures"));
+                    if (janet_checktype(sig, JANET_BOOLEAN)) {
+                        janet_table_put(info, janet_ckeywordv("signatures"), janet_ckeywordv("open"));
+                    } else {
+                        JanetArray *hist = janet_unwrap_array(sig);
+                        JanetArray *decoded = janet_array(hist->count);
+                        int32_t si;
+                        janet_gcroot(janet_wrap_array(decoded));
+                        for (si = 0; si < hist->count; si++) {
+                            JanetArray *raw = janet_unwrap_array(hist->data[si]);
+                            JanetArray *tags = janet_unwrap_array(raw->data[0]);
+                            JanetArray *types = janet_array(tags->count);
+                            JanetArray *pair;
+                            int32_t ti;
+                            janet_gcroot(janet_wrap_array(types));
+                            pair = janet_array(2);
+                            janet_gcroot(janet_wrap_array(pair));
+                            for (ti = 0; ti < tags->count; ti++)
+                                janet_array_push(types, janet_ckeywordv(
+                                    janet_type_names[janet_unwrap_integer(tags->data[ti])]));
+                            janet_array_push(pair, janet_wrap_array(types));
+                            janet_array_push(pair, raw->data[1]);
+                            janet_array_push(decoded, janet_wrap_array(pair));
+                            janet_gcunroot(janet_wrap_array(pair));
+                            janet_gcunroot(janet_wrap_array(types));
+                        }
+                        janet_table_put(info, janet_ckeywordv("signatures"), janet_wrap_array(decoded));
+                        janet_gcunroot(janet_wrap_array(decoded));
+                    }
+                }
                 params = janet_array(0);
+                janet_gcroot(janet_wrap_array(params));
                 pa = janet_unwrap_array(janet_table_get(e, janet_ckeywordv("params")));
                 n = pa->count;
                 for (j = 0; j < n; j++) {
@@ -806,6 +896,7 @@ JanetArray *janet_profile_rows(void) {
                     if (m) janet_array_push(params, janet_profile_mask_types(m));
                 }
                 janet_table_put(info, janet_ckeywordv("params"), janet_wrap_array(params));
+                janet_gcunroot(janet_wrap_array(params));
                 {
                     JanetArray *elems = janet_array(0);
                     JanetArray *ea = janet_unwrap_array(janet_table_get(e, janet_ckeywordv("elems")));
@@ -877,10 +968,13 @@ JanetArray *janet_profile_rows(void) {
                 }
                 janet_table_put(info, janet_ckeywordv("rets"), janet_profile_mask_types(rm));
                 janet_array_push(row, janet_wrap_table(info));
+                janet_gcunroot(janet_wrap_table(info));
             }
             janet_array_push(out, janet_wrap_array(row));
+            janet_gcunroot(janet_wrap_array(row));
         }
     }
+    janet_gcunroot(janet_wrap_array(out));
     return out;
 }
 

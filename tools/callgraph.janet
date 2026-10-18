@@ -113,11 +113,11 @@
 (var callsites 0)
 (var resolved 0)
 
-(defn register-def [d]
+(defn register-def [d source]
   (def id next-id)
   (++ next-id)
   (def name (string (or (d :name) (string "<anon-" id ">"))))
-  (array/push defs @{:d d :name name :hint nil})
+  (array/push defs @{:d d :name name :hint nil :source source})
   (def bucket (get name-ids name))
   (if bucket
     (array/push bucket id)
@@ -125,7 +125,7 @@
   # children pre-order, right after the parent: ids read top-down and
   # each subtree occupies one contiguous range
   (each child (or (d :defs) @[])
-    (register-def child))
+    (register-def child source))
   id)
 
 # Step 4 (type hints): optional Clojure-style annotations. Surface:
@@ -810,7 +810,7 @@
     (array/push edges ["uncompiled" f -1 (string (res 1))])
     (not= :function (type thunk))
     (array/push edges ["uncompiled" f -1 (string (get thunk :error))])
-    (register-def (disasm thunk))))
+    (register-def (disasm thunk) f)))
 
 # entry files first, then L2: drain transitively discovered import
 # source files (engine modules become analyzable: registration,
@@ -998,6 +998,26 @@
     (profile-invalid "invalid range bound"))
   value)
 
+(defn- profile-signatures [value calls]
+  (when (or (nil? value) (= value :open)) (break value))
+  (profile-sequence value :signatures)
+  (when (> (length value) 8) (profile-invalid "signature histogram over cap"))
+  (def seen @{})
+  (var total 0)
+  (each pair value
+    (unless (and (indexed? pair) (= 2 (length pair))
+                 (indexed? (pair 0)) (<= (length (pair 0)) 8)
+                 (number? (pair 1)) (> (pair 1) 0)
+                 (= (pair 1) (math/trunc (pair 1))))
+      (profile-invalid "invalid signature entry"))
+    (each tag (pair 0) (unless (keyword? tag) (profile-invalid "invalid signature tag")))
+    (def key (string/format "%j" (pair 0)))
+    (when (get seen key) (profile-invalid "duplicate signature"))
+    (put seen key true)
+    (+= total (pair 1)))
+  (unless (= total calls) (profile-invalid "signature counts do not match calls"))
+  value)
+
 (defn- profile-rows [path]
   (def text (slurp path))
   (unless text (profile-invalid "cannot read profile"))
@@ -1019,6 +1039,7 @@
     (def calls (get info :calls))
     (unless (and (number? calls) (>= calls 0) (= calls (math/trunc calls)))
       (profile-invalid "invalid call count"))
+    (profile-signatures (get info :signatures) calls)
     (each field [:params :elems]
       (def slots (profile-sequence (get info field @[]) field))
       (each slot slots (profile-types slot field)))
@@ -1054,7 +1075,8 @@
     (def nm (if (>= (length id) 3) (string (id 2)) nil))
     (when nm
       (def bucket (or (get profile-index nm) @[]))
-      (array/push bucket {:params (get info :params @[])
+      (array/push bucket {:identity id :signatures (get info :signatures)
+                          :params (get info :params @[])
                           :mins (map prof-bound (get info :mins @[]))
                           :maxs (map prof-bound (get info :maxs @[]))
                           :calls (get info :calls 0)
@@ -3194,6 +3216,31 @@
   (case t :number "JANET_NUMBER" :string "JANET_STRING"
     :keyword "JANET_KEYWORD" "JANET_SYMBOL"))
 
+(defn- dispatch-int-guard [t i]
+  # janet_unwrap_integer casts a double to int32_t (janet.h), EVEN when
+  # the kernel param is :long/:u64/:u32. Never enter that conversion
+  # outside the signed int32 domain; retain narrower width bounds too.
+  # All other values must reach the original boxed closure instead.
+  (def bound (case t :i8 "127" :u8 "255" :i16 "32767"
+               :u16 "65535" "2147483647"))
+  (def lower (if (get @{:u8 true :u16 true :u32 true :u64 true} t)
+               "0" (case t :i8 "-128" :i16 "-32768"
+                     "-2147483648")))
+  (string "isfinite(janet_unwrap_number(argv[" i "])) && "
+          "trunc(janet_unwrap_number(argv[" i "])) == janet_unwrap_number(argv[" i "]) && "
+          "janet_unwrap_number(argv[" i "]) >= " lower " && "
+          "janet_unwrap_number(argv[" i "]) <= " bound))
+
+(defn- dispatch-arg-guard [t i]
+  (def tag (cond (get infer/numeric-types t) "JANET_NUMBER"
+                 (= t :array) "JANET_ARRAY" (= t :tuple) "JANET_TUPLE"
+                 (= t :pointer) "JANET_POINTER"
+                 (= t :string) "JANET_STRING" (= t :keyword) "JANET_KEYWORD"
+                 (= t :symbol) "JANET_SYMBOL" nil))
+  (when tag (string "janet_type(argv[" i "]) == " tag
+                    (if (get int-hints t)
+                      (string " && " (dispatch-int-guard t i)) ""))))
+
 (defn dispatch-wrapper-for [nm slot branches pt rt telemetry-id]
   # branches: [{:obs :pt :cname}] ordered; each arm unboxes ALL args per
   # that branch's pt (the flip slot per its branch type, the rest per the
@@ -3213,6 +3260,9 @@
                         (native-unwrap-expr ((b :pt) i) i)) ", "))
         (string
           "    case " (dispatch-janet-type-tag (b :obs)) ": {\n"
+          (string/join
+            (seq [i :range [0 (length (b :pt))]]
+              (string "        if (!(" (dispatch-arg-guard ((b :pt) i) i) ")) break;\n")) "")
           "        " cn "_TELEMETRY_HIT();\n"
           (if (nil? rv)
             (string "        " (b :cname) "(" call-args ");\n"
@@ -3252,6 +3302,56 @@
           "}\n"
           "#undef " cn "_TELEMETRY_HIT\n#undef " cn "_TELEMETRY_FALLBACK\n"))
 
+(defn joint-wrapper-for [nm branches arity rt telemetry-id]
+  (def cn (emit-c-name nm))
+  (def tid (string/format "%08X" telemetry-id))
+  (def rv (cond (= rt :nil) nil (= rt :array) "janet_wrap_array"
+                (and (get int-hints rt) (not= int-policy :promote)) "janet_wrap_integer"
+                "janet_wrap_number"))
+  (def arms (string/join
+    (seq [b :in branches]
+      (def idx (b :index))
+      (def tests (string/join
+        (seq [i :range [0 arity]] (dispatch-arg-guard ((b :signature) i) i)) " && "))
+      (def args (string/join
+        (seq [i :range [0 arity]] (native-unwrap-expr ((b :pt) i) i)) ", "))
+      (string "    if (" tests ") {\n"
+              "        " cn "_VARIANT_" idx "();\n"
+              (if rv
+                (string "        return " rv "(" (b :cname) "(" args "));\n")
+                (string "        " (b :cname) "(" args ");\n"
+                        "        return janet_wrap_nil();\n"))
+              "    }\n")) ""))
+  (string "#ifndef JANET_NATIVE_TELEMETRY\n#define JANET_NATIVE_TELEMETRY 1\n#endif\n"
+          "#if JANET_NATIVE_TELEMETRY\n"
+          (string/join (seq [b :in branches]
+            (string "static JANET_THREAD_LOCAL unsigned long long " cn "_variant_" (b :index) ";\n")) "")
+          "static JANET_THREAD_LOCAL unsigned long long " cn "_telemetry_fallbacks;\n"
+          "static void " cn "_telemetry_report(void) {\n"
+          "    fprintf(stderr, \"native-telemetry id=" tid " name=" cn " boxed-fallbacks=%llu"
+          (string/join (seq [b :in branches]
+            (string " variant-" (b :index) "=%llu")) "")
+          "\\n\", " cn "_telemetry_fallbacks"
+          (string/join (seq [b :in branches]
+            (string ", " cn "_variant_" (b :index))) "") ");\n}\n"
+          (string/join (seq [b :in branches]
+            (string "#define " cn "_VARIANT_" (b :index) "() (++" cn "_variant_" (b :index) ")\n")) "")
+          "#define " cn "_FALLBACK() (++" cn "_telemetry_fallbacks)\n"
+          "#else\n#define " cn "_telemetry_report() ((void)0)\n"
+          (string/join (seq [b :in branches]
+            (string "#define " cn "_VARIANT_" (b :index) "() ((void)0)\n")) "")
+          "#define " cn "_FALLBACK() ((void)0)\n#endif\n"
+          "static Janet " cn "_wrapper(int32_t argc, Janet *argv) {\n"
+          "    if (argc != " arity ") { janet_panicf(\"native " cn
+          " called with %d arguments, expected " arity "\", argc); }\n"
+          arms
+          "    " cn "_FALLBACK();\n"
+          "    Janet fb = (NULL != n_disp_boxed) ? janet_table_get(n_disp_boxed, "
+          "janet_ckeywordv(\"" nm "\")) : janet_wrap_nil();\n"
+          "    if (!janet_checktype(fb, JANET_FUNCTION))\n"
+          "        janet_panicf(\"native " cn ": no boxed fallback registered\");\n"
+          "    return janet_call(janet_unwrap_function(fb), argc, argv);\n}\n"))
+
 (defn emit-native-lib [outdir]
   # Step 12: hybrid-binary flavor. Emits native.c with the kernels PLUS
   # janet-cfunction wrappers (unbox args -> kernel -> rebox result) and a
@@ -3273,6 +3373,7 @@
   # Phase 4: id -> {:slot j :types [observed keyword types]} for the
   # dispatch middle tier (filled by the classification loop below).
   (def disp-cand @{})
+  (def joint-cand @{})
   (def lib-skips @[])
   (each id (range (length defs))
     (def info (get defs id))
@@ -3347,8 +3448,39 @@
                   (set disp {:slot unk :types (sorted (keys types4))})))))
           (if disp
             (put disp-cand id disp)
-            (array/push lib-skips [id (string (or (d :name) "?"))
-                                   (string "types not proven: " (describe-types-lib pt rt))]))))))
+            (do
+              # Distinct complete vectors, never a Cartesian product of
+              # :params. Disasm lacks source lines; refuse duplicate names
+              # or multiple source-line identities outright.
+              (def nmj (string (or (d :name) "")))
+              (def rowsj (get profile-index nmj))
+              (var valid (and rowsj (= 1 (length (get name-ids nmj @[])))
+                              (<= 1 (length pt)) (<= (length pt) 8)
+                              (not (d :vararg))
+                              (or (= rt :double) (= rt :number) (= rt :nil))))
+              (def sigs @{})
+              (when valid
+                (def identity ((rowsj 0) :identity))
+                (each row rowsj
+                  (def idj (row :identity))
+                  (def hist (row :signatures))
+                  (unless (and (= identity idj) (= (idj 0) (info :source))
+                               (indexed? hist))
+                    (set valid false))
+                  (when (indexed? hist)
+                    (each pair hist
+                      (def sig (pair 0))
+                      (unless (= (length sig) (length pt))
+                        (set valid false))
+                      (each tag sig
+                        (unless (get dispatch-obs-types tag) (set valid false)))
+                      (when valid (put sigs (string/format "%j" sig) sig)))))
+                (def njs (length (keys sigs)))
+                (when (and valid (>= njs 2) (<= njs 8))
+                  (put joint-cand id (seq [key :in (sorted (keys sigs))] (get sigs key)))))
+              (unless (get joint-cand id)
+                (array/push lib-skips [id nmj
+                                       (string "types not proven: " (describe-types-lib pt rt))]))))))))
   (def emitted-names @{})
   (def kernels @[])
   (def lib-skip-reason @{})
@@ -3384,6 +3516,36 @@
   # name. All-or-nothing per function: one failed branch => the whole
   # function stays boxed.
   (def disp-names @[])
+  (each id (sort (keys joint-cand))
+    (def info (get defs id))
+    (def d (info :d))
+    (def nm (string (d :name)))
+    (def rt (rts id))
+    (def arity (length (get pts id)))
+    (var branches @[])
+    (var failure nil)
+    (var ix 0)
+    (each sig (get joint-cand id)
+      (def bname (string nm "%joint_" id "_" ix))
+      (def bpt (map dispatch-branch-type sig))
+      (def [res reason] (emit-fn-c id (merge d {:name bname}) rt bpt
+                                   call-map emitted-names rts))
+      (if res
+        (array/push branches {:index ix :signature sig :pt bpt
+                              :cname (emit-c-name bname) :code (res :code)
+                              :externs (res :externs)})
+        (do (set failure (string "joint variant " ix ": " reason)) (break)))
+      (++ ix))
+    (if failure
+      (array/push lib-skips [id nm failure])
+      (do
+        (array/push disp-names nm)
+        (array/push kernels {:name nm
+                             :code (string/join (map |($0 :code) branches) "\n")
+                             :externs (distinct (flatten (map |($0 :externs) branches)))
+                             :wrapper (joint-wrapper-for nm branches arity rt id)
+                             :dispatch true})
+        (print "native-joint-dispatch " id " " nm " " (length branches)))))
   (each id (sort (keys disp-cand))
     (def info (get defs id))
     (def d (info :d))
