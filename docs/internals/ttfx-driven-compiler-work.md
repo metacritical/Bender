@@ -123,25 +123,42 @@ Bounded Omarchy decrypt/fireworks six-seed parity passed. No speedup claim.
 
 ## Current work: mixed-operation native regions (stage 2)
 
-Stage 2 remains **unimplemented**. The attempted work added only emitted-constant
-round-trip tests (signed zero, extreme finite values and subnormals), which passed
-the six-configuration executor matrix. The following are the remaining tasks,
-not completed capabilities:
+Stage 2 is implemented on branch `ttfx-mixed-regions`, still **off by
+default** (same double opt-in: `-DJANET_NATIVE_EXECUTORS` runtime build
+plus `JANET_NATIVE_EXECUTORS=1` at emission). Mixed-op loop bodies are
+admitted with native arithmetic/control regions around explicit VM
+boundaries (`call`, `tcall`, `push*`, `get`, `in`, `len`, `next`,
+`put`, `mkarr`, `mkbuf`, `mktup`, the divide/modulo family) that exit
+before effects at their original unexecuted PCs. Opaque non-primitive
+constants load from the live pool into scanned slots; descriptors embed
+no GC pointers and primitives stay exact-matched. Attachment to actual
+runtime functions is lazy and structural: descriptors publish into a
+process registry at `native_init` and each definition tries the unique
+structurally matching descriptor once per registry generation at first
+dispatch (imports, unmarshaled closures and later-evaluated functions
+alike; ambiguous identity refuses). Whole-function entry validation is
+gated by a useful-region bitmap (>= 3 native ops ahead; small defs
+exempt) so boundaries do not pay validation per exit. Counters separate
+entries/backedges/guard-failures from native ops and VM-boundary exits,
+plus per-VM attach and exit-by-opcode statistics.
 
-1. Native arithmetic/control regions with calls, pushes, lookups, iteration,
-   mutation, allocation and unsupported operations handed to the VM at original PCs.
-2. Opaque constants loaded from the live runtime pool into scanned slots; no
-   compile-process addresses or assumptions about mutable contents in descriptors.
-3. Validated attachment to actual imported functions, distinguishing emitted,
-   registered and executed regions. No bare-name or hash-only attachment.
-4. Counters for actual native operations/regions and VM exits, not just entries.
-   Whole-function entry validation may overwhelm short regions; do not weaken
-   mutation/debug checks merely to produce a favorable timing result.
-
-Real fixture blockers include CALL/TCALL, collection operations, pushes and
-allocation in `ctx-update`, `ctx-frame-string`, `ctx-path-step` and Bezier work.
-These names identify test coverage, **not compiler special cases**. Exact poll
-semantics remain mandatory; budget1 currently repeats the same unexecuted backedge.
+Verification: the six-configuration executor matrix (budgets 1/2,
+portable dispatch, interrupts off, default-off, ASan+UBSan) now also
+runs `test/native-executor-mixed.c` — differential native-vs-boxed
+parity with exact-once side effects, paired interrupt parking, opaque
+constant liveness, GC across boundaries, breakpoint/step suppression,
+parked-marshal round trip with re-attachment, later-evaluated
+attachment, counters and ambiguity refusal. Bounded unmodified Omarchy
+decrypt+fireworks (40 frames, seeds 7, 13, 42, 99, 2026, 314159) are
+byte-identical between no-executor and mixed-executor builds of the
+same branch. Actual counter probes show native execution of
+`ctx-frame-string`, `ctx-update`, `geom-bezier-length` on decrypt, plus
+`geom-coord-on-bezier` and `ctx-path-step` on fireworks; the latter two
+are honestly unhit on decrypt (no path motion). A pre-existing marshal
+limitation was documented, not introduced: fibers parked at a call poll
+lose values between stackstart and stacktop (reproduced with native
+execution disabled). A few definitions refuse attachment as
+structurally ambiguous and stay boxed. No timing claim.
 
 ## Rejected experiments (preserved, not shipped)
 
