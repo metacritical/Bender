@@ -71,7 +71,7 @@
 /* How we dispatch instructions. By default, we use
  * a switch inside an infinite loop. For GCC/clang, we use
  * computed gotos. */
-#if defined(__GNUC__) && !defined(__EMSCRIPTEN__)
+#if defined(__GNUC__) && !defined(__EMSCRIPTEN__) && !defined(JANET_NO_COMPUTED_GOTOS)
 #define JANET_USE_COMPUTED_GOTOS
 #endif
 
@@ -80,14 +80,14 @@
 #define VM_END() }
 #define VM_OP(op) label_##op :
 #define VM_DEFAULT() label_unknown_op:
-#define vm_next() goto *op_lookup[*pc & 0xFF]
+#define vm_next() do { vm_native(); goto *op_lookup[*pc & 0xFF]; } while (0)
 #define opcode (*pc & 0xFF)
 #else
 #define VM_START() uint8_t opcode = first_opcode; for (;;) {switch(opcode) {
 #define VM_END() }}
 #define VM_OP(op) case op :
 #define VM_DEFAULT() default:
-#define vm_next() opcode = *pc & 0xFF; continue
+#define vm_next() vm_native(); opcode = *pc & 0xFF; continue
 #endif
 
 /* Commit and restore VM state before possible longjmp */
@@ -144,12 +144,45 @@
         janet_panicf("expected %T, got %v", (TS), (X)); \
     } \
 } while (0)
+#ifdef JANET_NATIVE_EXECUTORS
+static JANET_THREAD_LOCAL int native_stepping;
+#define vm_native() do { \
+    if (!native_stepping && func->def->native_code && \
+            janet_native_matches(func->def, func->def->native_code)) { \
+        uint32_t *npc = pc; \
+        vm_commit(); \
+        JanetNativeStep result = func->def->native_code->execute(fiber, func->def, &npc); \
+        pc = npc; \
+        stack = fiber->data + fiber->frame; \
+        vm_commit(); \
+        if (result == JANET_NATIVE_INTERRUPT) { \
+            fiber->flags |= JANET_FIBER_RESUME_NO_USEVAL | JANET_FIBER_RESUME_NO_SKIP; \
+            vm_return(JANET_SIGNAL_INTERRUPT, janet_wrap_nil()); \
+        } \
+    } \
+} while (0)
+#else
+#define vm_native() ((void)0)
+#endif
+
+/* Keep the disabled interpreter path inline and unchanged. Both paths use
+ * exactly this expression, including auto_suspend's short circuit. */
+#define vm_poll_condition(COND) ((COND) && (janet_atomic_load_relaxed(&janet_vm.auto_suspend) || \
+            (janet_vm.quantum && --janet_vm.quantum_remaining <= 0)))
+int janet_native_poll(int condition) {
+#ifdef JANET_NO_INTERPRETER_INTERRUPT
+    (void)condition;
+    return 0;
+#else
+    return vm_poll_condition(condition);
+#endif
+}
+
 #ifdef JANET_NO_INTERPRETER_INTERRUPT
 #define vm_maybe_auto_suspend(COND)
 #else
 #define vm_maybe_auto_suspend(COND) do { \
-    if ((COND) && (janet_atomic_load_relaxed(&janet_vm.auto_suspend) || \
-            (janet_vm.quantum && --janet_vm.quantum_remaining <= 0))) { \
+    if (vm_poll_condition(COND)) { \
         fiber->flags |= (JANET_FIBER_RESUME_NO_USEVAL | JANET_FIBER_RESUME_NO_SKIP); \
         vm_return(JANET_SIGNAL_INTERRUPT, janet_wrap_nil()); \
     } \
@@ -1303,7 +1336,16 @@ static JanetSignal run_vm(JanetFiber *fiber, Janet in) {
 
     uint8_t first_opcode = *pc & ((fiber->flags & JANET_FIBER_BREAKPOINT) ? 0x7F : 0xFF);
 
+#ifdef JANET_NATIVE_EXECUTORS
+    int native_debug_bypass = fiber->flags & JANET_FIBER_BREAKPOINT;
+#endif
     fiber->flags &= ~JANET_FIBER_FLAG_MASK;
+#ifdef JANET_NATIVE_EXECUTORS
+    if (!native_debug_bypass) {
+        vm_native();
+        first_opcode = *pc & 0xFF;
+    }
+#endif
 
     /* Main interpreter loop. Semantically is a switch on
      * (*pc & 0xFF) inside of an infinite loop. */
@@ -2069,7 +2111,13 @@ JanetSignal janet_step(JanetFiber *fiber, Janet in, Janet *out) {
     }
 
     /* Go */
+#ifdef JANET_NATIVE_EXECUTORS
+    native_stepping++;
+#endif
     JanetSignal signal = janet_continue(fiber, in, out);
+#ifdef JANET_NATIVE_EXECUTORS
+    native_stepping--;
+#endif
 
     /* Restore */
     if (nexta) *nexta = olda;

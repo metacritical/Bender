@@ -1054,6 +1054,11 @@ Janet janet_disasm(JanetFuncDef *def) {
     janet_table_put(ret, janet_ckeywordv("min-arity"), janet_disasm_min_arity(def));
     janet_table_put(ret, janet_ckeywordv("max-arity"), janet_disasm_max_arity(def));
     janet_table_put(ret, janet_ckeywordv("bytecode"), janet_disasm_bytecode(def));
+    JanetArray *words = janet_array(def->bytecode_length);
+    for (int32_t i = 0; i < def->bytecode_length; i++)
+        janet_array_push(words, janet_wrap_number(def->bytecode[i]));
+    janet_table_put(ret, janet_ckeywordv("bytecode-words"), janet_wrap_array(words));
+    janet_table_put(ret, janet_ckeywordv("flags"), janet_wrap_integer(def->flags));
     janet_table_put(ret, janet_ckeywordv("source"), janet_disasm_source(def));
     janet_table_put(ret, janet_ckeywordv("vararg"), janet_disasm_vararg(def));
     janet_table_put(ret, janet_ckeywordv("structarg"), janet_disasm_structarg(def));

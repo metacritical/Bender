@@ -1,7 +1,7 @@
 # Hybrid kernels must not erase the VM's resumable quantum boundaries.
 (import ./helper :prefix "" :exit true)
 (start-suite)
-(def root "/tmp/janet-aot-quantum-suite")
+(def root (string (os/getenv "JANET_AOT_TEST_ROOT" "/tmp") "/janet-aot-quantum-" (os/getpid)))
 (os/execute ["/bin/rm" "-rf" root] :p)
 (os/mkdir root)
 (def source (string root "/app.janet"))

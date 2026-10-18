@@ -365,7 +365,9 @@ void janet_profile_task_call(JanetFunction *func, const Janet *argv, int32_t arg
 /* M4b-2 quantum driver: back-edge/call polls granted per task run.
  * One poll ≈ one loop iteration or call; 200 keeps scheduling
  * overhead near 1% while preempting hogs within microseconds. */
+#ifndef JANET_QUANTUM_BUDGET
 #define JANET_QUANTUM_BUDGET 200
+#endif
 
 #ifdef JANET_NET
 void janet_net_init(void);

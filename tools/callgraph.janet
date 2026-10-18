@@ -33,6 +33,7 @@
 # public named functions retained solely for analysis are registered without
 # executable closure edges; ordinary image compilation still drops them.
 
+(import ./loop-executor :as loop-executor)
 (var args (tuple/slice (dyn :args) 1))
 # --emit-native DIR: also emit unboxed C for defs whose param/return
 # types are concrete (hinted contracts OR inference-proven)
@@ -3771,6 +3772,35 @@
   (each [id nm r] lib-skips (print "native-skip " id " " nm " " r))
   (def cout @"")
   (buffer/push-string cout "#include <janet.h>\n#include <inttypes.h>\n#include <math.h>\n#include <stdlib.h>\n\n")
+  # Independent tier: never insert executor ids into emitted-names/kernels.
+  (def executors @[])
+  (when (= "1" (os/getenv "JANET_NATIVE_EXECUTORS"))
+    (each id (range (length defs))
+      (def d ((get defs id) :d))
+      (when (and (loop-executor/eligible? d)
+                 (= 1 (length (get name-ids (string (d :name)) @[]))))
+        (array/push executors id)
+        (buffer/push-string cout (loop-executor/emit id d))
+        (print "native-executor " id " " (d :name)))))
+  (def manifest @"")
+  (each id executors
+    (buffer/push-string manifest (string id " " (((get defs id) :d) :name) "\n")))
+  (spit (string outdir "/native-executors.txt") manifest)
+  (when (not (empty? executors))
+    (buffer/push-string cout
+      "static Janet cfun_executor_register(int32_t argc, Janet *argv) {\n"
+      "janet_fixarity(argc,2); JanetFunction *f = janet_getfunction(argv,1);\n"
+      "int ok = 0; switch (janet_getinteger(argv,0)) {\n")
+    (each id executors
+      (buffer/push-string cout (string "case " id ": ok = janet_native_register(f, &nx_" id "_code); break;\n")))
+    (buffer/push-string cout
+      "default: break; } if (!ok) fprintf(stderr, \"native executor registration refused\\n\");\n"
+      "return janet_wrap_boolean(ok); }\n"
+      "static Janet cfun_executor_stats(int32_t argc, Janet *argv) {\n"
+      "janet_fixarity(argc,1); uint64_t a=0,b=0,c=0; switch(janet_getinteger(argv,0)) {\n")
+    (each id executors
+      (buffer/push-string cout (string "case " id ": a=nx_" id "_entries; b=nx_" id "_edges; c=nx_" id "_fallbacks; break;\n")))
+    (buffer/push-string cout "} Janet *t=janet_tuple_begin(3); t[0]=janet_wrap_number(a); t[1]=janet_wrap_number(b); t[2]=janet_wrap_number(c); return janet_wrap_tuple(janet_tuple_end(t)); }\n"))
   (buffer/push-string cout "/* int32-domain bitwise helpers: boxed Janet errors outside int32\n * (integral doubles accepted); results wrap int32; shift counts mask\n * to 5 bits. Callers range/integrality-check operands (fail loud). */\nstatic int32_t k_band32(int32_t a, int32_t b) { return a & b; }\nstatic int32_t k_bor32(int32_t a, int32_t b) { return a | b; }\nstatic int32_t k_bxor32(int32_t a, int32_t b) { return a ^ b; }\nstatic int32_t k_sl32(int32_t a, int32_t b) { return (int32_t)((uint32_t)a << ((uint32_t)b & 31u)); }\nstatic int32_t k_sr32(int32_t a, int32_t b) { uint32_t n = (uint32_t)b & 31u; int32_t r = (int32_t)((uint32_t)a >> n); if ((a < 0) && (n != 0)) { r |= (int32_t)(~0u << (32u - n)); } return r; }\nstatic int32_t k_sru32(int32_t a, int32_t b) { return (int32_t)((uint32_t)a >> ((uint32_t)b & 31u)); }\n\n")
   # Phase 2/3: one static slot per distinct string/keyword/symbol
   # literal referenced by any kernel in this build, declared here and
@@ -3824,6 +3854,8 @@
               "((const uint8_t*)\"" (emit-c-string-literal (key 1))
               "\", " (length (key 1)) ");\n")))
   (buffer/push-string cout "    static const JanetReg regs[] = {\n")
+  (when (not (empty? executors))
+    (buffer/push-string cout "    { \"executor-register\", cfun_executor_register, NULL },\n    { \"executor-stats\", cfun_executor_stats, NULL },\n"))
   (each k kernels
     (buffer/push-string cout
       (string "    { \"" (k :name) "\", " (emit-c-name (k :name)) "_wrapper, NULL },\n")))
@@ -3831,7 +3863,10 @@
     (buffer/push-string cout "    { \"dispatch-set-boxed\", cfun_disp_set_boxed, NULL },\n"))
   (buffer/push-string cout "    { NULL, NULL, NULL } };\n")
   (buffer/push-string cout "    janet_cfuns(env, \"native\", regs);\n")
-  (buffer/push-string cout "    if (sizeof(regs)/sizeof(regs[0]) > 1)\n        fprintf(stderr, \"native_init: registered %d wrappers\\n\", (int) (sizeof(regs)/sizeof(regs[0]) - 1));\n")
+  (when (not (empty? kernels))
+    (buffer/push-string cout (string "    fprintf(stderr, \"native_init: registered " (length kernels) " wrappers\\n\");\n")))
+  (when (not (empty? executors))
+    (buffer/push-string cout (string "    fprintf(stderr, \"native_init: available " (length executors) " frame executors\\n\");\n")))
   (buffer/push-string cout "}\n")
   (spit (string outdir "/native.c") cout)
   (def nl @"")

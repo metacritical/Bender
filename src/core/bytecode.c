@@ -1922,6 +1922,7 @@ JanetFuncDef *janet_funcdef_alloc(void) {
     def->environments = NULL;
     def->constants = NULL;
     def->bytecode = NULL;
+    def->native_code = NULL;
     def->closure_bitset = NULL;
     def->flags = 0;
     def->slotcount = 0;
@@ -1940,6 +1941,73 @@ JanetFuncDef *janet_funcdef_alloc(void) {
     def->symbolmap_length = 0;
     def->named_args_count = 0;
     return def;
+}
+
+/* Validate on entry, never on generated inner-loop label transitions. Native
+ * code cannot call, allocate, or expose control to code that can mutate a def. */
+int janet_native_matches(JanetFuncDef *d, const JanetNativeCode *n) {
+    if (!n || !n->execute || !n->words || n->length <= 0 ||
+            n->slotcount < 0 || n->arity < 0 || n->min_arity < 0 ||
+            n->max_arity < n->min_arity || n->constants_length < 0 ||
+            d->bytecode_length != n->length || d->slotcount != n->slotcount ||
+            d->arity != n->arity || d->min_arity != n->min_arity ||
+            d->max_arity != n->max_arity || d->flags != n->flags ||
+            d->constants_length != n->constants_length ||
+            d->environments_length || d->defs_length || d->named_args_count ||
+            (d->flags & (JANET_FUNCDEF_FLAG_VARARG | JANET_FUNCDEF_FLAG_NEEDSENV |
+                         JANET_FUNCDEF_FLAG_STRUCTARG | JANET_FUNCDEF_FLAG_NAMEDARGS))) return 0;
+    if (memcmp(d->bytecode, n->words, (size_t)n->length * sizeof(uint32_t))) return 0;
+    for (int32_t i = 0; i < n->constants_length; i++) {
+        if (!n->constants) return 0;
+        Janet x = d->constants[i];
+        const JanetNativeConstant *c = n->constants + i;
+        if (!janet_checktype(x, c->type)) return 0;
+        switch (c->type) {
+            case JANET_NUMBER: {
+                double v = janet_unwrap_number(x);
+                if (memcmp(&v, &c->number, sizeof(double))) return 0;
+                break;
+            }
+            case JANET_BOOLEAN:
+                if (janet_unwrap_boolean(x) != (c->number != 0)) return 0;
+                break;
+            case JANET_NIL: break;
+            default: return 0;
+        }
+    }
+    for (int32_t i = 0; i < n->length; i++) {
+        switch (n->words[i] & 0xFF) {
+            case JOP_NOOP: case JOP_RETURN: case JOP_RETURN_NIL:
+            case JOP_LOAD_NIL: case JOP_LOAD_TRUE: case JOP_LOAD_FALSE:
+            case JOP_LOAD_INTEGER: case JOP_LOAD_CONSTANT:
+            case JOP_MOVE_NEAR: case JOP_MOVE_FAR:
+            case JOP_ADD: case JOP_ADD_IMMEDIATE:
+            case JOP_SUBTRACT: case JOP_SUBTRACT_IMMEDIATE:
+            case JOP_MULTIPLY: case JOP_MULTIPLY_IMMEDIATE:
+            case JOP_LESS_THAN: case JOP_LESS_THAN_IMMEDIATE:
+            case JOP_GREATER_THAN: case JOP_GREATER_THAN_IMMEDIATE:
+            case JOP_LESS_THAN_EQUAL: case JOP_GREATER_THAN_EQUAL:
+            case JOP_EQUALS: case JOP_EQUALS_IMMEDIATE:
+            case JOP_NOT_EQUALS: case JOP_NOT_EQUALS_IMMEDIATE:
+            case JOP_JUMP: case JOP_JUMP_IF: case JOP_JUMP_IF_NOT:
+            case JOP_JUMP_IF_NIL: case JOP_JUMP_IF_NOT_NIL: break;
+            default: return 0; /* Includes every breakpoint bit. */
+        }
+    }
+    return janet_verify(d) == 0;
+}
+
+int janet_native_register(JanetFunction *f, const JanetNativeCode *n) {
+    f->def->native_code = NULL;
+#ifdef JANET_NATIVE_EXECUTORS
+    if (janet_native_matches(f->def, n)) {
+        f->def->native_code = n;
+        return 1;
+    }
+#else
+    (void)n;
+#endif
+    return 0;
 }
 
 /* Create a simple closure from a funcdef */
