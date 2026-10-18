@@ -46,9 +46,11 @@ dirty shared checkout. Branch `ttfx-native-array-call` is the integration branch
 
 Preserved checkpoint refs: `ttfx-compiler-verified-base`,
 `ttfx-compiler-phase2-verified`, `ttfx-compiler-dce-verified`.
-The completed commits are being merged into the original repository's `master`
-checkout at the user's request, preserving their component and merge history.
-Source integration does not imply that the installed compiler binary was rebuilt.
+The completed commits were merged into the original repository's `master`
+checkout as **`58268620`**, preserving component and merge history. The incoming
+files did not overlap the shared checkout's 12 pre-existing dirty/untracked files;
+SHA-256 checks confirmed all 12 were preserved byte-for-byte. Source integration
+does not imply that the installed compiler binary was rebuilt.
 
 ## Implemented and validated
 
