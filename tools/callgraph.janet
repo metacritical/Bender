@@ -2447,6 +2447,17 @@
             (when (and (or (= op 'call) (= op 'tcall))
                        (number? (get cmap pc)))
               (call-args-compatible? (get cmap pc) st d pc)))
+          # Optimizer level 1 (slot coalescing) aliasing snapshot for
+          # `get`: the register allocator reuses the index temp as the
+          # result slot (`get 3 2 3` -- dest == index), and the state
+          # update below has already written the RESULT type (:number)
+          # into that slot by the time the emission gate reads it, so
+          # the int-family proof would fail on its own output. Gate on
+          # what the instruction actually READS -- same pattern as
+          # sh-now/ta-now above, recorded for the emission arm below.
+          (def get-now
+            (when (= op 'get)
+              @[(get st (ins 2) :unknown) (get st (ins 3) :unknown)]))
           # keep the slot-type state current (mirrors flow-check)
           (cond
             (= op 'ldi) (put st (ins 1) :long)
@@ -2786,10 +2797,16 @@
                                           (string (emit-slot (ins 2) arity) "->count")) ";")))
             (= op 'get)
             (do
-              (def gbase (get st (ins 2) :unknown))
+              # Gate on the get-now snapshot (PRE-update operand types):
+              # level 1 coalesces the index temp into the dest slot, so
+              # st has already been overwritten with the result type.
+              # Mirrors the state rule above exactly -- :number indices
+              # accepted, with the integrality guard below.
+              (def gbase (get-now 0))
               (def gtup (= gbase :tuple))
               (unless (and (or (= gbase :array) gtup)
-                           (infer/int-family? (get st (ins 3) :unknown)))
+                           (or (infer/int-family? (get-now 1))
+                               (= :number (get-now 1))))
                 (set bad (if gtup "get requires tuple and int index"
                              "get requires array and int index"))
                 (break))
@@ -2805,7 +2822,7 @@
                              (string garr "->data[" gidx "]")))
               (def oobmsg (if gtup "tuple index out of bounds"
                               "array index out of bounds"))
-              (emit-index-check lines gidxd (= :number (get st (ins 3) :unknown)))
+              (emit-index-check lines gidxd (= :number (get-now 1)))
               (emit-oob-check lines gidx gbound oobmsg
                               (loop-elide-upper? d pc (ins 2) (ins 3) id st))
               (array/push lines

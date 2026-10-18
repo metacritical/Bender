@@ -751,6 +751,33 @@
 (assert (= 0 (os/execute ["/bin/sh" "-c"
   "cc -O2 -w -fwrapv -Isrc/include -Isrc/conf /tmp/cg-bit/native.c build/janet.o -lm -lpthread -ldl -o /tmp/cg-bit/native && /tmp/cg-bit/native > /tmp/cg-bit/actual.txt && cmp /tmp/cg-bit/expected.txt /tmp/cg-bit/actual.txt"] :p))
   "bitwise+puti+array-return parity")
+# Optimizer level 1 (slot coalescing) must not cost kernels: the same
+# k-xor8 shape, compiled with an in-file (setdyn :optimize 1) pin, makes
+# the register allocator fuse the index temp into the get DEST slot
+# (`get 3 2 3` -- dest == index). The emitter's state update writes the
+# RESULT type into that slot before the emission gate reads it, so the
+# gate must prove the index from the pre-update snapshot (get-now), not
+# from st. This fixture pins level 1 regardless of the process default,
+# so it keeps guarding the aliasing path even at default 0.
+(spit "/tmp/cg-opt1.janet" (string
+  "(setdyn :optimize 1)\n"
+  "(defn k-xor8o {:hint {:params [:array :array :array] :returns :array}} [r a b]\n"
+  "  (put r 0 (bxor (get a 0) (get b 0)))\n"
+  "  (put r 1 (bxor (get a 1) (get b 1)))\n"
+  "  (put r 2 (bxor (get a 2) (get b 2)))\n"
+  "  (put r 3 (bxor (get a 3) (get b 3)))\n"
+  "  (put r 4 (bxor (get a 4) (get b 4)))\n"
+  "  (put r 5 (bxor (get a 5) (get b 5)))\n"
+  "  (put r 6 (bxor (get a 6) (get b 6)))\n"
+  "  (put r 7 (bxor (get a 7) (get b 7)))\n"
+  "  r)\n"
+  "(defn main [] (print (k-xor8o @[0 0 0 0 0 0 0 0] @[1 2 3 4 5 6 7 8] @[8 7 6 5 4 3 2 1])))\n"))
+(assert (= 0 (os/execute ["/bin/sh" "-c"
+  "rm -rf /tmp/cg-opt1 && ./build/bender tools/callgraph.janet /tmp/cg-opt1.janet --emit-native /tmp/cg-opt1"] :p))
+  "level1 aliased-get emit run")
+(assert (= 0 (os/execute ["/bin/sh" "-c"
+  "cc -O2 -w -fwrapv -Isrc/include -Isrc/conf /tmp/cg-opt1/native.c build/janet.o -lm -lpthread -ldl -o /tmp/cg-opt1/native && /tmp/cg-opt1/native > /tmp/cg-opt1/actual.txt && cmp /tmp/cg-opt1/expected.txt /tmp/cg-opt1/actual.txt"] :p))
+  "level1 aliased-get parity")
 # DCE: unreachable hinted defns never reach the output
 (spit "/tmp/cg-dce.janet" (string
   "(defn used {:hint {:params [:long] :returns :long}} [x] (+ x 1))\n"
