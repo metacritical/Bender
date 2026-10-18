@@ -96,3 +96,27 @@ Raw comparison outputs, hashes, three-round timings and PGO logs are kept
 as scratch artifacts (`final-cli-compare.YWrCWg` in the approved run directory).
 This document records the reproducible conditions and conclusions independently
 of that temporary directory.
+
+## Subsequent GUI check (separate metric)
+
+The same compiler built the unchanged Janet GUI with AOT/native PGO training
+on Omarchy decrypt seeds 42/7 and verified release replay of both workloads;
+six kernels remain. An adjacent Janet/Rust comparison used two rounds with
+reversed engine order, windowed/uncapped, live FPS overlay, topmost 1458×400,
+same logo and seed42, 1-second warm-up and **8-second measurement** per run.
+Rust used its existing local release GUI, not a new source rebuild.
+
+| Effect | Janet median render FPS | Rust median render FPS | Rust/Janet |
+|---|---:|---:|---:|
+| wipe | 967 | 1405 | 1.45× |
+| fireworks | 1878 | 2101 | 1.12× |
+| decrypt | 1162 | 1652 | 1.42× |
+| beams | 849 | 1244 | 1.46× |
+| smoke | 915 | 1413 | 1.54× |
+
+All probes maintained 59–60 animation ticks/s. Absolute FPS varied noticeably
+between adjacent runs; this is a two-round comparison under current load, not
+a precise small-delta claim. Rust remains ahead on all five. These render FPS
+numbers cannot be compared to CLI throughput. Raw logs/results are in scratch
+run `gui-rust-paired-8_sawy44`; the single Janet GUI run preceding this paired
+check is not an A/B baseline.
