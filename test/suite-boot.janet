@@ -1137,4 +1137,32 @@
 (assert (deep= (interpose :goose (coro (yield :duck) (yield :duck)))
                @[:duck :goose :duck]))
 
+
+# JOP_IN_IMMEDIATE (constant-key `in` fusion). The opcode is JINT_SSU, so
+# its index immediate is UNSIGNED 0..255. A signed gate here miscompiled:
+# (in a -1) fused with imm -1, which the handler read back as uint8 255 --
+# silently returning element 255 instead of raising. Negative and >255
+# constants must fall back to plain JOP_IN.
+(do
+  (def small @[10 20 30])
+  (assert (= 10 (in small 0)) "inim index 0")
+  (assert (= 30 (in small 2)) "inim index 2")
+  (assert-error "inim negative constant still raises" (in small -1))
+  (assert-error "inim out-of-range still raises" (in small 99))
+  (def big (array/new-filled 256 :x))
+  (put big 255 :last)
+  (put big 128 :mid)
+  (assert (= :last (in big 255)) "inim reaches index 255 (unsigned range)")
+  (assert (= :mid (in big 128)) "inim reaches index 128 (past signed int8)")
+  (assert-error "negative index must NOT alias to 255" (in big -1))
+  # identical behavior to the register-key path
+  (each ds [@[1 2 3] [1 2 3] @{0 :a} {0 :a} "ab" @"ab" :kw 'sym]
+    (each i [0 1 5]
+      (def viaReg (try (in ds i) ([e] :ERR)))
+      (def viaImm (try ((fn [d] (in d 0)) ds) ([e] :ERR)))
+      (when (= i 0)
+        (assert (= (string/format "%M" viaReg) (string/format "%M" viaImm))
+                (string "inim == in for " (type ds)))))))
+
+
 (end-suite)

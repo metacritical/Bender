@@ -110,6 +110,25 @@ static int can_slot_be_imm(JanetSlot s, int8_t *out) {
     return can_be_imm(s.constant, out);
 }
 
+/* UNSIGNED immediate (0..255) for JINT_SSU-shaped opcodes. The C field of
+ * a 32-bit instruction is bits 24-31; signed ops must reserve half that
+ * range for negatives, but an index or a bitmask is never negative, so an
+ * SSU opcode gets the full byte. A 16-bit immediate is NOT possible here:
+ * the only 16-bit field (E, bits 16-31) overlaps the B slot, so any
+ * instruction carrying two slot operands has exactly 8 bits left. */
+static int can_be_uimm(Janet x, uint8_t *out) {
+    if (!janet_checkint(x)) return 0;
+    int32_t integer = janet_unwrap_integer(x);
+    if (integer < 0 || integer > UINT8_MAX) return 0;
+    *out = (uint8_t) integer;
+    return 1;
+}
+
+static int can_slot_be_uimm(JanetSlot s, uint8_t *out) {
+    if (!(s.flags & JANET_SLOT_CONSTANT)) return 0;
+    return can_be_uimm(s.constant, out);
+}
+
 /* Emit a series of instructions instead of a function call to a math op */
 static JanetSlot opreduce(
     JanetFopts opts,
@@ -179,7 +198,26 @@ static JanetSlot do_in(JanetFopts opts, JanetSlot *args) {
      * whenever can_slot_be_imm succeeds, so this is purely supplying the
      * variant. Non-constant or out-of-int8-range keys fall back to
      * JOP_IN unchanged. */
-    return opreduce(opts, args, JOP_IN, JOP_IN_IMMEDIATE,
+    /* Unsigned gate: JOP_IN_IMMEDIATE is JINT_SSU, so the index range is
+     * the full 0..255 rather than the signed 0..127 that opreduce's
+     * can_slot_be_imm would allow. Negative and oversized constants fall
+     * back to JOP_IN via opreduce below. */
+    if (janet_v_count(args) == 2) {
+        uint8_t uimm = 0;
+        if (can_slot_be_uimm(args[1], &uimm)) {
+            JanetCompiler *c = opts.compiler;
+            JanetSlot t = janetc_gettarget(opts);
+            janetc_emit_ssu(c, JOP_IN_IMMEDIATE, t, args[0], uimm, 1);
+            return t;
+        }
+    }
+    /* opim MUST stay 0 here: opreduce's gate is can_slot_be_imm, which is
+     * SIGNED, so it would hand a negative constant to this unsigned
+     * opcode. That is not merely imprecise, it MISCOMPILES -- (in a -1)
+     * became (in a 255), silently reading a valid element instead of
+     * raising. The unsigned gate above is the only path to
+     * JOP_IN_IMMEDIATE; everything else takes plain JOP_IN. */
+    return opreduce(opts, args, JOP_IN, 0,
                     janet_wrap_nil(), janet_wrap_nil());
 }
 static JanetSlot do_get(JanetFopts opts, JanetSlot *args) {
