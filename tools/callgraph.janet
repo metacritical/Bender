@@ -1652,13 +1652,14 @@
 # Native-to-native call argument check: each passed arg must convert
 # exactly into the callee param (same type, or int->float which is
 # exact for |v| <= 2^53 like all int kernels). float->int refuses
-# (truncation diverges from boxed). Unclear walks allow (legacy
-# behavior — the common direct-call patterns verify strictly).
+# (truncation diverges from boxed). In particular, an array argument
+# must be proven before bypassing the wrapper's type guard.
 (defn call-args-compatible? [tid st d pc]
   (def cpt (get pts tid))
-  (when (nil? cpt) (break true))
+  (when (nil? cpt) (break false))
   (def slots (call-arg-slots d pc))
-  (when (nil? slots) (break true))
+  (when (nil? slots)
+    (break (not (some (fn [t] (= t :array)) cpt))))
   (when (not= (length slots) (length cpt)) (break false))
   (var i 0)
   (var ok true)
@@ -2163,6 +2164,13 @@
           # the arg list first (same pattern as ta-now).
           (def mk-now
             (when (= op 'mktab) (array ;pending)))
+          # Check direct-call args against their PRE-call types. The VM
+          # may reuse an argument register for the call's destination;
+          # after the state update, that register has the return type.
+          (def args-now
+            (when (and (or (= op 'call) (= op 'tcall))
+                       (number? (get cmap pc)))
+              (call-args-compatible? (get cmap pc) st d pc)))
           # keep the slot-type state current (mirrors flow-check)
           (cond
             (= op 'ldi) (put st (ins 1) :long)
@@ -2709,15 +2717,20 @@
                       (break))))
                 (do (def cname (if tid (get emitted-names tid)))
                   (def trt (if tid (rts tid) :unknown))
-                  # Composition: numeric-returning callees compose into
-                  # any caller (the temp carries the callee type; int
-                  # callers refuse via purity fail-closed). Pointer
-                  # returns still require exact match (no unwrapping).
+                  # Numeric results compose as before. An exact array
+                  # result also composes when the destination is proven
+                  # array on this path AND every write to that C slot is
+                  # array-typed (the declaration join refuses mixed slots).
+                  # This does not unbox array elements.
                   # Args must convert exactly (int->float ok, float->int
                   # refuses). Tail calls keep exact match (returned as
                   # our own value; conversion could truncate).
                   (def ret-ok
-                    (or (= trt rt) (get infer/numeric-types trt)))
+                    (or (and (not= trt :array) (= trt rt))
+                        (get infer/numeric-types trt)
+                        (and (= trt :array)
+                             (= (get st (ins 1) :unknown) :array)
+                             (= (get decl-types (ins 1) :unknown) :array))))
                   # Phase 1: a :nil-returning callee produces no C value
                   # at all -- `sN = voidfn(args);` is invalid C, so a
                   # void callee can NEVER compose into an assignment
@@ -2727,19 +2740,19 @@
                   # (the whole-program lattice already fail-closes any
                   # attempt to use a :nil result as something concrete).
                   (if (and tid cname (= trt :nil) (not spread) (not= op 'tcall)
-                           (call-args-compatible? tid st d pc))
+                            args-now)
                     (do (array/push lines
                                     (string "    " (emit-c-name cname)
                                             "(" (string/join pending ", ") ");"))
                       (set pending @[]))
                   (if (and tid cname ret-ok (not spread) (not= op 'tcall)
-                           (call-args-compatible? tid st d pc))
+                            args-now)
                     (do (array/push lines
                                     (string "    s" (ins 1) " = "
                                             (emit-c-name cname) "(" (string/join pending ", ") ");"))
                       (set pending @[]))
                     (if (and tid cname (= trt rt) (not spread)
-                             (call-args-compatible? tid st d pc))
+                              args-now)
                       (do (array/push lines
                                       (string "    return " (emit-c-name cname)
                                               "(" (string/join pending ", ") ");"))
