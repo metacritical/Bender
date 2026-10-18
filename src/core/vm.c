@@ -75,12 +75,26 @@
 #define JANET_USE_COMPUTED_GOTOS
 #endif
 
+/* Opcode histogram (diagnostic only, -DJANET_OPCODE_HISTOGRAM). Counts
+ * dispatches per opcode and PAIRS of consecutive opcodes, so fusion /
+ * superinstruction candidates can be chosen from data rather than
+ * guessed. Dumped at exit. Adds two increments per dispatch, so it is
+ * never on in a normal build. */
+#ifdef JANET_OPCODE_HISTOGRAM
+extern uint64_t janet_oph[256];
+extern uint64_t janet_ophp[256][256];
+extern int janet_oph_prev;
+#define JANET_OPH_TICK() do { int o_ = (int)(*pc & 0xFF); janet_oph[o_]++;     if (janet_oph_prev >= 0) janet_ophp[janet_oph_prev][o_]++; janet_oph_prev = o_; } while (0)
+#else
+#define JANET_OPH_TICK() ((void)0)
+#endif
+
 #ifdef JANET_USE_COMPUTED_GOTOS
 #define VM_START() { goto *op_lookup[first_opcode];
 #define VM_END() }
 #define VM_OP(op) label_##op :
 #define VM_DEFAULT() label_unknown_op:
-#define vm_next() do { vm_native(); goto *op_lookup[*pc & 0xFF]; } while (0)
+#define vm_next() do { vm_native(); JANET_OPH_TICK(); goto *op_lookup[*pc & 0xFF]; } while (0)
 #define opcode (*pc & 0xFF)
 #else
 #define VM_START() uint8_t opcode = first_opcode; for (;;) {switch(opcode) {
@@ -88,6 +102,38 @@
 #define VM_OP(op) case op :
 #define VM_DEFAULT() default:
 #define vm_next() vm_native(); opcode = *pc & 0xFF; continue
+#endif
+
+#ifdef JANET_OPCODE_HISTOGRAM
+uint64_t janet_oph[256];
+uint64_t janet_ophp[256][256];
+int janet_oph_prev = -1;
+static void janet_oph_dump(void) {
+    uint64_t total = 0;
+    for (int i = 0; i < 256; i++) total += janet_oph[i];
+    if (!total) return;
+    fprintf(stderr, "opcode-histogram total=%llu\n", (unsigned long long) total);
+    /* singles, descending, top 24 */
+    for (int rank = 0; rank < 24; rank++) {
+        int best = -1; uint64_t bv = 0;
+        for (int i = 0; i < 256; i++) if (janet_oph[i] > bv) { bv = janet_oph[i]; best = i; }
+        if (best < 0 || !bv) break;
+        fprintf(stderr, "op %d count=%llu pct=%.2f\n", best,
+                (unsigned long long) bv, 100.0 * (double) bv / (double) total);
+        janet_oph[best] = 0;
+    }
+    /* consecutive PAIRS, descending, top 24 -- fusion candidates */
+    for (int rank = 0; rank < 24; rank++) {
+        int ba = -1, bb = -1; uint64_t bv = 0;
+        for (int a = 0; a < 256; a++)
+            for (int b = 0; b < 256; b++)
+                if (janet_ophp[a][b] > bv) { bv = janet_ophp[a][b]; ba = a; bb = b; }
+        if (ba < 0 || !bv) break;
+        fprintf(stderr, "pair %d,%d count=%llu pct=%.2f\n", ba, bb,
+                (unsigned long long) bv, 100.0 * (double) bv / (double) total);
+        janet_ophp[ba][bb] = 0;
+    }
+}
 #endif
 
 /* Commit and restore VM state before possible longjmp */
@@ -2955,6 +3001,9 @@ int janet_init(void) {
 
     /* Seed RNG */
     janet_rng_seed(janet_default_rng(), 0);
+#ifdef JANET_OPCODE_HISTOGRAM
+    atexit(janet_oph_dump);
+#endif
 
     /* Fibers */
     janet_vm.fiber = NULL;

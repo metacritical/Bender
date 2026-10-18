@@ -9,6 +9,24 @@
                   'ltim "<" 'gtim ">" 'eqim "==" 'neqim "!="})
 (def immediate {'addim true 'subim true 'mulim true 'ltim true 'gtim true 'eqim true 'neqim true})
 (def branches {'jmpif true 'jmpno true 'jmpni true 'jmpnn true})
+# Bitwise family. Janet's bitwise ops are INT32-DOMAIN: operands must be
+# integral and within int32 (integral doubles are accepted), results wrap
+# int32, and shift counts mask to 5 bits. The emitted C below reproduces
+# exactly that, mirroring the scalar-kernel helpers in callgraph.janet
+# (k_band32/k_sl32/k_sr32/k_sru32) so both tiers agree bit-for-bit.
+# Guarded by NX_INT32, which exits to the VM at the original PC whenever
+# an operand is outside the domain -- so the boxed path still raises the
+# same error in the same place rather than this tier inventing a result.
+(def bitwise {'band "&" 'bor "|" 'bxor "^"})
+# sru/sruim (brushift) are DELIBERATELY EXCLUDED: measured, their domain
+# is uint32, not int32 -- (brushift -1 1) raises "value -1 out of range
+# for 32-bit unsigned integers" while every op above accepts -1 happily.
+# Admitting them under the int32 guard would let this tier compute a
+# result where the boxed op raises. They need their own uint32 guard;
+# until then they stay VM-only. ttfx uses brushift once, in gui.janet,
+# never on a hot path, so the exclusion costs nothing measurable.
+(def shifts {'sl true 'sr true 'slim true 'srim true})
+(def shift-imm {'slim true 'srim true})
 (def simple {'noop true 'ret true 'retn true 'ldn true 'ldt true 'ldf true
              'ldi true 'ldc true 'movn true 'movf true 'jmp true})
 # Explicit VM boundaries: eligible in descriptors, never executed natively.
@@ -25,7 +43,8 @@
 
 (defn- allowed-op? [op]
   (or (get simple op) (get arithmetic op) (get comparisons op)
-      (get branches op) (get boundaries op)))
+      (get branches op) (get boundaries op)
+      (get bitwise op) (get shifts op) (= op 'bnot)))
 
 (defn eligible? [d]
   (and (d :bytecode-words) (not (d :vararg)) (not (d :structarg))
@@ -109,6 +128,14 @@
        "\n#define NX_NUM(S,K) do { if (!janet_checktype(s[S], JANET_NUMBER)) { " tag
        "_fallbacks++; NX_EXIT(K,JANET_NATIVE_VM); } } while (0)"
        "\n#define NX_BOUNDARY(K) do { " tag "_vmexits++; NX_EXIT(K,JANET_NATIVE_VM); } while (0)"
+       # int32-domain guard for the bitwise family: number, integral, and
+       # representable in int32. Integral doubles pass (Janet accepts
+       # them); anything else exits to the VM at the original PC so the
+       # boxed op raises identically.
+       "\n#define NX_INT32(S,K) do { if (!janet_checktype(s[S], JANET_NUMBER)) { " tag
+       "_fallbacks++; NX_EXIT(K,JANET_NATIVE_VM); } { double nxd_ = janet_unwrap_number(s[S]); "
+       "if (!(nxd_ >= -2147483648.0 && nxd_ <= 2147483647.0 && nxd_ == (double)(int32_t)nxd_)) { " tag
+       "_fallbacks++; NX_EXIT(K,JANET_NATIVE_VM); } } } while (0)"
        "\nswitch (*pc - d->bytecode) {")
   (each k (range (length (d :bytecode))) (out "case " (string k) ": goto L" (string k) ";"))
   (out "default: return JANET_NATIVE_VM; }")
@@ -130,6 +157,42 @@
              "(janet_unwrap_number(s[" (string c) "]) " (or (get arithmetic op) (get comparisons op))
              " " (if (get immediate op) (string "(double)(" z ")")
                     (string "janet_unwrap_number(s[" z "])") ) ");"))
+      # Bitwise: int32-domain, wrapping, shift counts masked to 5 bits --
+      # identical semantics to the scalar kernels' k_band32/k_sl32/
+      # k_sr32/k_sru32 helpers, so the two tiers cannot disagree.
+      (get bitwise op)
+      (do
+        (out tag "_ops++;")
+        (out "NX_INT32(" (string c) "," (string k) ");")
+        (out "NX_INT32(" (string z) "," (string k) ");")
+        (out "s[" (string a) "] = janet_wrap_number((double)(int32_t)("
+             "(int32_t)janet_unwrap_number(s[" (string c) "]) " (get bitwise op)
+             " (int32_t)janet_unwrap_number(s[" (string z) "])));"))
+      (= op 'bnot)
+      (do
+        (out tag "_ops++;")
+        (out "NX_INT32(" (string c) "," (string k) ");")
+        (out "s[" (string a) "] = janet_wrap_number((double)(int32_t)(~"
+             "(int32_t)janet_unwrap_number(s[" (string c) "])));"))
+      (get shifts op)
+      (do
+        (out tag "_ops++;")
+        (out "NX_INT32(" (string c) "," (string k) ");")
+        (unless (get shift-imm op) (out "NX_INT32(" (string z) "," (string k) ");"))
+        # Shift count: immediate forms carry it in the instruction; the
+        # register forms read it from a slot. Masked to 5 bits either way.
+        (def cnt (if (get shift-imm op)
+                   (string "(uint32_t)(" z ")")
+                   (string "(uint32_t)(int32_t)janet_unwrap_number(s[" z "])")))
+        (def av (string "(int32_t)janet_unwrap_number(s[" c "])"))
+        (out "{ uint32_t nxn_ = " cnt " & 31u; int32_t nxa_ = " av "; int32_t nxr_;")
+        (cond
+          (or (= op 'sl) (= op 'slim))
+          (out "nxr_ = (int32_t)((uint32_t)nxa_ << nxn_);")
+          # arithmetic right shift: sign-extend, matching k_sr32 exactly
+          (out "nxr_ = (int32_t)((uint32_t)nxa_ >> nxn_);"
+               " if ((nxa_ < 0) && (nxn_ != 0)) { nxr_ |= (int32_t)(~0u << (32u - nxn_)); }"))
+        (out "s[" (string a) "] = janet_wrap_number((double) nxr_); }"))
       (or (= op 'jmp) (get branches op))
       (do
         (def delta (if (= op 'jmp) a c))
