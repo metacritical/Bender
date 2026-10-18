@@ -19,8 +19,11 @@ definition retains the association is outside this ABI.
 `janet_native_register(actual_function, descriptor)` checks all words (including
 debug bits), primitive constant types and numeric bits, flags, shape, the opcode
 allowlist, and the normal bytecode verifier's operands/branch bounds. Failure
-clears the association. `janet_native_matches` repeats this validation at native
-entry/re-entry. It is not called on generated internal label transitions.
+clears the association. At native entry/re-entry the exact structural compare
+repeats, with the verdict cached per definition per validation epoch (bumped on
+resume entry, breakpoint writes and publication) and the verifier gate
+amortized per (definition, descriptor) pair — see stage 2. It is not called on
+generated internal label transitions.
 
 All original slots remain boxed and GC scanned. C temporaries live only within
 one operation. Executors cannot call Janet, allocate, or invoke overloaded
@@ -109,21 +112,54 @@ keeps whole-definition validation from running per boundary exit or per
 single instruction; consecutive VM-only instructions cost one bitmap
 check. Returns and unsupported operations also exit before effects.
 
+The whole-definition compare at a native entry is cached per definition:
+the descriptor whose exact match was last proven, plus the validation
+epoch at which it was proven. The epoch is bumped on every VM resume
+entry, every debugger breakpoint write, and every descriptor
+publication, so one long resume pays validation once per definition
+while any change made to a definition between resumes (a breakpoint
+bit, a raw constant/bytecode edit while parked) forces the compare
+again at the next region entry. At every epoch the exact structural
+compare runs in full — scalars, every bytecode word (including debug
+bits), primitive constant bits and the opcode allowlist. The
+`janet_verify` well-formedness gate is amortized to the first
+validation of a (definition, descriptor) pair: verify is deterministic
+over exactly the fields the structural compare already checks, with
+only debug symbolmap data falling outside them, and no supported path
+mutates a definition after creation. Registration and lazy attachment
+always run the full `janet_native_matches` (structure plus verify).
+The cache never replaces the compare; it only skips re-proving a
+verdict that nothing could have invalidated. Concurrent unsynchronized
+C mutation during a resume remains unsupported, as before.
+
 **Lazy structural attachment**: linked descriptors publish into a
-process registry at `native_init`. Every definition's first dispatch
-after publication tries the unique structurally matching descriptor
-once per registry generation (prefiltered on shape; full
-`janet_native_matches` decides). This covers imported image constants,
-unmarshaled closures, and functions evaluated later, with no heap graph
-traversal. Ambiguous matches (two descriptors matching one def) refuse;
-explicit `executor-register` remains authoritative. callgraph registers
-the real disassembly of imported module functions for emission — the
-one-thunk analysis copies compile cross-form references as environment
-captures and are not faithful descriptors — and dedupes descriptors
-structurally instead of by name. The registry is appended at module
-init and read on first dispatch; concurrent module loads from multiple
-threads publishing while other threads attach are not synchronized
-(the same class of limitation as stage 1's unsynchronized C mutation).
+process registry at `native_init`. The registry is indexed by a cheap
+exact key — the scalar shape fields plus a rolling hash over every
+bytecode word, computed once at publication. An attach attempt hashes
+the definition once and runs the full `janet_native_matches` compare
+only on a key hit; definitions with no key hit do zero verify work. A
+64-bit key collision costs one wasted exact compare (the key is a
+filter, never proof); the exact word compare decides. Constant entries
+are deliberately not part of the key: opaque descriptor entries assume
+nothing about the live pool value, so hashing a definition's actual
+constant bits could diverge from an exactly-matching opaque descriptor
+and could mask the primitive/opaque ambiguity the search must still
+detect. Every definition's first dispatch after publication tries the
+unique structurally-matching descriptor once per registry generation.
+This covers imported image constants, unmarshaled closures, and
+functions evaluated later, with no heap graph traversal. Ambiguous
+matches (two descriptors matching one def) refuse; explicit
+`executor-register` remains authoritative. `mkimage` additionally
+emits direct `executor-register` calls for retained top-level defns,
+skipping the search for those; the lazy path serves everything else.
+callgraph registers the real disassembly of imported module functions
+for emission — the one-thunk analysis copies compile cross-form
+references as environment captures and are not faithful descriptors —
+and dedupes descriptors structurally instead of by name. The registry
+is appended at module init and read on first dispatch; concurrent
+module loads from multiple threads publishing while other threads
+attach are not synchronized (the same class of limitation as stage 1's
+unsynchronized C mutation).
 
 **Counters**: per executor entries/backedges/fallbacks plus `ops`
 (native instructions executed) and `vmexits` (boundary/return exits);
