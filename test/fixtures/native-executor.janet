@@ -11,20 +11,55 @@
 (defn unsupported-loop [n]
   (var i 0) (var a @[])
   (while (< i n) (array/push a i) (++ i)) (length a))
+# Stage 2: mixed-op bodies live in an imported module (like ttfx's scene),
+# so their intra-module references compile to constants without environments.
+(import ./native-executor-mixed :as mixed)
 (assert (= 45 (boxed-caller 10)))
 (assert (= 870 (numeric-nested 10)))
 (assert (= 3 (unsupported-loop 3)))
+(mixed/reset)
+(def mixed-result-1 (mixed/boundary 4))
+(def mixed-snap-1 (mixed/snapshot))
+(mixed/reset)
+(def mixed-result-2 (mixed/boundary 4))
+(def mixed-snap-2 (mixed/snapshot))
+(assert (and (number? mixed-result-1) (> mixed-result-1 0)))
+(assert (= mixed-result-1 mixed-result-2))
+(assert (deep= mixed-snap-1 mixed-snap-2))
+(assert (> (mixed/iterate-table mixed/shared) 0))
+(assert (= 8 (mixed/tail-boundary 4)))
+(assert (= 4 (mixed/build-buffer 4)))
+(assert (= 8 (mixed/unsupported-bit 7)))
 (defn numeric-fraction [n]
   (var s 0.5) (var i 0)
   (while (< i n) (+= s 0.25) (++ i)) s)
 (assert (= 3 (numeric-fraction 10)))
 (when (get (curenv) 'executor-stats)
   (def stats ((get (curenv) 'executor-stats) :value))
-  (each id [1 2 5]
+  # ids: 1 boundary, 3 tail-boundary, 6 build-buffer, 7 iterate-table,
+  # 9 numeric-sum, 10 numeric-nested, 12 unsupported-loop, 13 numeric-fraction
+  (each id [9 10 13]
     (def counts (stats id))
     (assert (> (counts 0) 0))
     (assert (> (counts 1) 0))
     (print "image-executor " id " entries=" (counts 0) " backedges=" (counts 1) " guards=" (counts 2)))
+  (def gstats-entry (get (curenv) 'executor-global-stats))
+  (def gstats (if (function? gstats-entry) gstats-entry (gstats-entry :value)))
+  (def gs (gstats))
+  (print "image-executor attach attempts=" (gs 0) " attached=" (gs 1)
+         " ambiguous=" (gs 2) " nomatch=" (gs 3) " vmexits=" (gs 4)
+         " registry=" (gs 5))
+  (assert (> (gs 0) 0) "lazy attachment never attempted")
+  (assert (> (gs 1) 0) "lazy attachment never succeeded")
+  # Mixed-op imported functions: native ops executed AND VM boundary exits.
+  # Mixed-op imported functions: native ops executed AND VM boundary exits.
+  (each id [1 3 6 7 12]
+    (def counts (stats id))
+    (assert (> (counts 0) 0) (string "mixed executor " id " never entered"))
+    (assert (> (counts 3) 0) (string "mixed executor " id " executed no native ops"))
+    (print "image-executor " id " entries=" (counts 0) " backedges=" (counts 1)
+           " guards=" (counts 2) " ops=" (counts 3) " vmexits=" (counts 4)))
+  (assert (> (gs 4) 0) "no VM boundary exits recorded")
   # Real event-loop shared-stack resumes, without sleeps or timing assertions.
   (ev/timeslice true)
   (def results (ev/chan 2))
@@ -34,7 +69,7 @@
   (assert (= 16815 (answers 0)))
   (assert (= 499500 (answers 1)))
   (ev/timeslice false)
-  (assert (> ((stats 1) 0) 2))
-  (assert (> ((stats 2) 0) 2))
-  (print "image shared-stack resumes: passed; sum entries=" ((stats 1) 0)
-         " nested entries=" ((stats 2) 0)))
+  (assert (> ((stats 9) 0) 2))
+  (assert (> ((stats 10) 0) 2))
+  (print "image shared-stack resumes: passed; sum entries=" ((stats 9) 0)
+         " nested entries=" ((stats 10) 0)))

@@ -146,18 +146,35 @@
 } while (0)
 #ifdef JANET_NATIVE_EXECUTORS
 static JANET_THREAD_LOCAL int native_stepping;
+/* Region gating and lazy structural attachment. Whole-definition
+ * validation (janet_native_matches) only runs at useful native region
+ * starts recorded in the descriptor mask; consecutive VM-only
+ * instructions after a boundary exit cost one bitmap check. Lazy
+ * attachment tries the unique structurally-matching registered
+ * descriptor once per registry generation per definition. */
 #define vm_native() do { \
-    if (!native_stepping && func->def->native_code && \
-            janet_native_matches(func->def, func->def->native_code)) { \
-        uint32_t *npc = pc; \
-        vm_commit(); \
-        JanetNativeStep result = func->def->native_code->execute(fiber, func->def, &npc); \
-        pc = npc; \
-        stack = fiber->data + fiber->frame; \
-        vm_commit(); \
-        if (result == JANET_NATIVE_INTERRUPT) { \
-            fiber->flags |= JANET_FIBER_RESUME_NO_USEVAL | JANET_FIBER_RESUME_NO_SKIP; \
-            vm_return(JANET_SIGNAL_INTERRUPT, janet_wrap_nil()); \
+    if (!native_stepping) { \
+        JanetFuncDef *ndef_ = func->def; \
+        if (NULL != ndef_->native_code) { \
+            if (janet_native_region_allowed(ndef_->native_code, (uint32_t)(pc - ndef_->bytecode)) && \
+                    janet_native_matches(ndef_, ndef_->native_code)) { \
+                uint32_t *npc = pc; \
+                vm_commit(); \
+                JanetNativeStep result = ndef_->native_code->execute(fiber, ndef_, &npc); \
+                pc = npc; \
+                stack = fiber->data + fiber->frame; \
+                vm_commit(); \
+                if (result == JANET_NATIVE_VM) { \
+                    janet_vm.native_vm_exits++; \
+                    janet_vm.native_exit_opcodes[*pc & 0xFF]++; \
+                } else { \
+                    fiber->flags |= JANET_FIBER_RESUME_NO_USEVAL | JANET_FIBER_RESUME_NO_SKIP; \
+                    vm_return(JANET_SIGNAL_INTERRUPT, janet_wrap_nil()); \
+                } \
+            } \
+        } else if (janet_native_registry_count() && \
+                ndef_->native_attach_gen != janet_native_registry_generation()) { \
+            janet_native_try_attach(ndef_); \
         } \
     } \
 } while (0)

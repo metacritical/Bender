@@ -115,6 +115,15 @@ struct JanetVM {
     int32_t quantum;
     int32_t quantum_remaining;
 
+    /* Native executor stage 2 counters (per VM/thread). Lazy structural
+     * attachment to actual runtime functions and VM-boundary exits. */
+    uint64_t native_attach_attempts;
+    uint64_t native_attach_attached;
+    uint64_t native_attach_ambiguous;
+    uint64_t native_attach_nomatch;
+    uint64_t native_vm_exits;
+    uint64_t native_exit_opcodes[256];
+
     /* The current running fiber on the current thread.
      * Set and unset by functions in vm.c */
     JanetFiber *fiber;

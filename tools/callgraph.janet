@@ -765,6 +765,29 @@
 # applies :as/:prefix/:only/:export exactly like import*. Runtime requires
 # inside functions are out of scope (same as the one-thunk model).
 # Keep in sync between tools/callgraph.janet and tools/mkimage.janet.
+# Real imported function definitions: the one-thunk analysis copies of an
+# imported unit compile cross-form references as environment captures (and
+# may be filtered by retention), so they are NOT faithful descriptors for
+# the stage-2 executor tier. The actual functions exist in the loaded module
+# table; register their real disassembly under qualified binding names.
+# Runtime attachment still validates structurally; names only select
+# candidates and diagnostics.
+(var real-import-registered @{})
+(defn register-real-import-functions [source modenv pfx only]
+  (when (and source (string? source) (string/has-suffix? ".janet" source))
+    (each k (keys modenv)
+      (when (and (symbol? k) (not (get (get modenv k) :private))
+                 (or (nil? only)
+                     (some (fn [v] (and (symbol? v) (= (string v) (string k)))) only)))
+        (def entry (get modenv k))
+        (def f (if (table? entry) (get entry :value) entry))
+        (when (= :function (type f))
+          (def key (string source "\x00" k))
+          (unless (get real-import-registered key)
+            (put real-import-registered key true)
+            (def d (try (disasm f) ([_] nil)))
+            (when d (register-def d source (string "real/" pfx k)))))))))
+
 (defn preimport-unit-imports [env unitfile forms]
   (def prev-current-file (dyn :current-file))
   (setdyn :current-file unitfile)
@@ -800,6 +823,8 @@
               (def pfx (or (and as (string as "/")) prefix
                            (string (first (string/split "." (last (string/split "/" (string path))))) "/")))
               (merge-module env modenv pfx ep only)
+              (try (register-real-import-functions source modenv pfx only)
+                ([e] (eprint "callgraph: real import registration failed for " (form 1) ": " e)))
               (def origins (or (get import-origins unitfile)
                                (do (def o @{}) (put import-origins unitfile o) o)))
               (each k (keys modenv)
@@ -3773,15 +3798,32 @@
   (def cout @"")
   (buffer/push-string cout "#include <janet.h>\n#include <inttypes.h>\n#include <math.h>\n#include <stdlib.h>\n\n")
   # Independent tier: never insert executor ids into emitted-names/kernels.
+  # Distinct definitions may share a name (an imported module's real function
+  # and its one-thunk analysis copy). Identity for this tier is structural:
+  # exact duplicate descriptors are emitted once, and the runtime registry
+  # resolves attachment by exact validation, never by name.
   (def executors @[])
+  (def emitted-descriptors @{})
   (when (= "1" (os/getenv "JANET_NATIVE_EXECUTORS"))
     (each id (range (length defs))
       (def d ((get defs id) :d))
-      (when (and (loop-executor/eligible? d)
-                 (= 1 (length (get name-ids (string (d :name)) @[]))))
-        (array/push executors id)
-        (buffer/push-string cout (loop-executor/emit id d))
-        (print "native-executor " id " " (d :name)))))
+      (when (= "1" (os/getenv "JANET_EXEC_DEBUG"))
+        (print "exec-debug " id " " (d :name) " src=" ((get defs id) :source) " eligible=" (loop-executor/eligible? d)
+               " namebucket=" (length (get name-ids (string (d :name)) @[]))
+               " envs=" (length (or (d :environments) [])) " defs=" (length (or (d :defs) []))
+               " words=" (if (d :bytecode-words) "y" "n") " vararg=" (d :vararg)))
+      (when (loop-executor/eligible? d)
+        (def key [(d :flags) (d :arity) (d :min-arity) (d :max-arity) (d :slotcount)
+                  (map (fn [x] (if (loop-executor/primitive-constant? x)
+                                (tuple (type x) x)
+                                :opaque))
+                       (or (d :constants) []))
+                  (d :bytecode-words)])
+        (unless (get emitted-descriptors key)
+          (put emitted-descriptors key true)
+          (array/push executors id)
+          (buffer/push-string cout (loop-executor/emit id d))
+          (print "native-executor " id " " (d :name))))))
   (def manifest @"")
   (each id executors
     (buffer/push-string manifest (string id " " (((get defs id) :d) :name) "\n")))
@@ -3797,10 +3839,24 @@
       "default: break; } if (!ok) fprintf(stderr, \"native executor registration refused\\n\");\n"
       "return janet_wrap_boolean(ok); }\n"
       "static Janet cfun_executor_stats(int32_t argc, Janet *argv) {\n"
-      "janet_fixarity(argc,1); uint64_t a=0,b=0,c=0; switch(janet_getinteger(argv,0)) {\n")
+      "janet_fixarity(argc,1); uint64_t a=0,b=0,c=0,d=0,e=0; switch(janet_getinteger(argv,0)) {\n")
     (each id executors
-      (buffer/push-string cout (string "case " id ": a=nx_" id "_entries; b=nx_" id "_edges; c=nx_" id "_fallbacks; break;\n")))
-    (buffer/push-string cout "} Janet *t=janet_tuple_begin(3); t[0]=janet_wrap_number(a); t[1]=janet_wrap_number(b); t[2]=janet_wrap_number(c); return janet_wrap_tuple(janet_tuple_end(t)); }\n"))
+      (buffer/push-string cout (string "case " id ": a=nx_" id "_entries; b=nx_" id "_edges; c=nx_" id "_fallbacks; d=nx_" id "_ops; e=nx_" id "_vmexits; break;\n")))
+    (buffer/push-string cout
+      "} Janet *t=janet_tuple_begin(5); t[0]=janet_wrap_number(a); t[1]=janet_wrap_number(b); t[2]=janet_wrap_number(c); t[3]=janet_wrap_number(d); t[4]=janet_wrap_number(e); return janet_wrap_tuple(janet_tuple_end(t)); }\n"
+      "static Janet cfun_executor_global_stats(int32_t argc, Janet *argv) {\n"
+      "(void)argv; janet_fixarity(argc,0);\n"
+      "Janet *t=janet_tuple_begin(6);\n"
+      "t[0]=janet_wrap_number(janet_native_stat(JANET_NATIVE_STAT_ATTACH_ATTEMPTS));\n"
+      "t[1]=janet_wrap_number(janet_native_stat(JANET_NATIVE_STAT_ATTACH_ATTACHED));\n"
+      "t[2]=janet_wrap_number(janet_native_stat(JANET_NATIVE_STAT_ATTACH_AMBIGUOUS));\n"
+      "t[3]=janet_wrap_number(janet_native_stat(JANET_NATIVE_STAT_ATTACH_NOMATCH));\n"
+      "t[4]=janet_wrap_number(janet_native_stat(JANET_NATIVE_STAT_VM_EXITS));\n"
+      "t[5]=janet_wrap_number(janet_native_registry_count());\n"
+      "return janet_wrap_tuple(janet_tuple_end(t)); }\n"
+      "static Janet cfun_executor_exit_stat(int32_t argc, Janet *argv) {\n"
+      "janet_fixarity(argc,1); int32_t op=janet_getinteger(argv,0);\n"
+      "return janet_wrap_number(janet_native_exit_stat(op)); }\n"))
   (buffer/push-string cout "/* int32-domain bitwise helpers: boxed Janet errors outside int32\n * (integral doubles accepted); results wrap int32; shift counts mask\n * to 5 bits. Callers range/integrality-check operands (fail loud). */\nstatic int32_t k_band32(int32_t a, int32_t b) { return a & b; }\nstatic int32_t k_bor32(int32_t a, int32_t b) { return a | b; }\nstatic int32_t k_bxor32(int32_t a, int32_t b) { return a ^ b; }\nstatic int32_t k_sl32(int32_t a, int32_t b) { return (int32_t)((uint32_t)a << ((uint32_t)b & 31u)); }\nstatic int32_t k_sr32(int32_t a, int32_t b) { uint32_t n = (uint32_t)b & 31u; int32_t r = (int32_t)((uint32_t)a >> n); if ((a < 0) && (n != 0)) { r |= (int32_t)(~0u << (32u - n)); } return r; }\nstatic int32_t k_sru32(int32_t a, int32_t b) { return (int32_t)((uint32_t)a >> ((uint32_t)b & 31u)); }\n\n")
   # Phase 2/3: one static slot per distinct string/keyword/symbol
   # literal referenced by any kernel in this build, declared here and
@@ -3855,7 +3911,7 @@
               "\", " (length (key 1)) ");\n")))
   (buffer/push-string cout "    static const JanetReg regs[] = {\n")
   (when (not (empty? executors))
-    (buffer/push-string cout "    { \"executor-register\", cfun_executor_register, NULL },\n    { \"executor-stats\", cfun_executor_stats, NULL },\n"))
+    (buffer/push-string cout "    { \"executor-register\", cfun_executor_register, NULL },\n    { \"executor-stats\", cfun_executor_stats, NULL },\n    { \"executor-global-stats\", cfun_executor_global_stats, NULL },\n    { \"executor-exit-stat\", cfun_executor_exit_stat, NULL },\n"))
   (each k kernels
     (buffer/push-string cout
       (string "    { \"" (k :name) "\", " (emit-c-name (k :name)) "_wrapper, NULL },\n")))
@@ -3863,6 +3919,10 @@
     (buffer/push-string cout "    { \"dispatch-set-boxed\", cfun_disp_set_boxed, NULL },\n"))
   (buffer/push-string cout "    { NULL, NULL, NULL } };\n")
   (buffer/push-string cout "    janet_cfuns(env, \"native\", regs);\n")
+  # Stage 2: publish linked descriptors so the VM's lazy structural
+  # attachment can find actual imported/unmarshaled/evaluated functions.
+  (each id executors
+    (buffer/push-string cout (string "    janet_native_registry_add(&nx_" id "_code);\n")))
   (when (not (empty? kernels))
     (buffer/push-string cout (string "    fprintf(stderr, \"native_init: registered " (length kernels) " wrappers\\n\");\n")))
   (when (not (empty? executors))

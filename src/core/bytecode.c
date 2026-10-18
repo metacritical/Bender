@@ -1923,6 +1923,7 @@ JanetFuncDef *janet_funcdef_alloc(void) {
     def->constants = NULL;
     def->bytecode = NULL;
     def->native_code = NULL;
+    def->native_attach_gen = 0;
     def->closure_bitset = NULL;
     def->flags = 0;
     def->slotcount = 0;
@@ -1944,7 +1945,13 @@ JanetFuncDef *janet_funcdef_alloc(void) {
 }
 
 /* Validate on entry, never on generated inner-loop label transitions. Native
- * code cannot call, allocate, or expose control to code that can mutate a def. */
+ * code cannot call, allocate, or expose control to code that can mutate a def.
+ * Stage 2 admits explicit VM-boundary opcodes (calls, pushes, collection
+ * access/mutation, allocation, division): the generated code exits to the
+ * VM at the boundary's original unexecuted PC, so boundaries are never
+ * executed natively but their words are still compared exactly. Opaque
+ * constant entries only assert that a pool index exists; the live value is
+ * loaded at execution time and never assumed. */
 int janet_native_matches(JanetFuncDef *d, const JanetNativeCode *n) {
     if (!n || !n->execute || !n->words || n->length <= 0 ||
             n->slotcount < 0 || n->arity < 0 || n->min_arity < 0 ||
@@ -1956,11 +1963,13 @@ int janet_native_matches(JanetFuncDef *d, const JanetNativeCode *n) {
             d->environments_length || d->defs_length || d->named_args_count ||
             (d->flags & (JANET_FUNCDEF_FLAG_VARARG | JANET_FUNCDEF_FLAG_NEEDSENV |
                          JANET_FUNCDEF_FLAG_STRUCTARG | JANET_FUNCDEF_FLAG_NAMEDARGS))) return 0;
+    if (!n->region_mask || n->region_mask_words != (n->length + 63) / 64) return 0;
     if (memcmp(d->bytecode, n->words, (size_t)n->length * sizeof(uint32_t))) return 0;
     for (int32_t i = 0; i < n->constants_length; i++) {
         if (!n->constants) return 0;
-        Janet x = d->constants[i];
         const JanetNativeConstant *c = n->constants + i;
+        if (c->type == (JanetType)JANET_NATIVE_OPAQUE) continue; /* live pool load; no identity assumed */
+        Janet x = d->constants[i];
         if (!janet_checktype(x, c->type)) return 0;
         switch (c->type) {
             case JANET_NUMBER: {
@@ -1990,7 +1999,15 @@ int janet_native_matches(JanetFuncDef *d, const JanetNativeCode *n) {
             case JOP_EQUALS: case JOP_EQUALS_IMMEDIATE:
             case JOP_NOT_EQUALS: case JOP_NOT_EQUALS_IMMEDIATE:
             case JOP_JUMP: case JOP_JUMP_IF: case JOP_JUMP_IF_NOT:
-            case JOP_JUMP_IF_NIL: case JOP_JUMP_IF_NOT_NIL: break;
+            case JOP_JUMP_IF_NIL: case JOP_JUMP_IF_NOT_NIL:
+            /* Stage 2 explicit VM boundaries: never executed natively. */
+            case JOP_CALL: case JOP_TAILCALL:
+            case JOP_PUSH: case JOP_PUSH_2: case JOP_PUSH_3:
+            case JOP_GET: case JOP_IN: case JOP_LENGTH: case JOP_NEXT:
+            case JOP_PUT:
+            case JOP_MAKE_ARRAY: case JOP_MAKE_BUFFER: case JOP_MAKE_TUPLE:
+            case JOP_DIVIDE: case JOP_DIVIDE_IMMEDIATE: case JOP_DIVIDE_FLOOR:
+            case JOP_MODULO: case JOP_REMAINDER: break;
             default: return 0; /* Includes every breakpoint bit. */
         }
     }
@@ -2008,6 +2025,128 @@ int janet_native_register(JanetFunction *f, const JanetNativeCode *n) {
     (void)n;
 #endif
     return 0;
+}
+
+/* ---- Stage 2: descriptor registry and lazy structural attachment ----
+ * Linked descriptors are published once at module init. Definitions
+ * encountered by the VM (imported image constants, unmarshaled closures,
+ * later evaluation) attach lazily: the first dispatch after publication
+ * tries the unique structurally-matching descriptor once per generation.
+ * Names and hashes never decide attachment; janet_native_matches does. */
+
+#define JANET_NATIVE_REGISTRY_MAX 256
+
+#ifdef JANET_NATIVE_EXECUTORS
+static const JanetNativeCode *native_registry[JANET_NATIVE_REGISTRY_MAX];
+static int32_t native_registry_len;
+static uint32_t native_registry_gen;
+#endif
+
+int janet_native_region_allowed(const JanetNativeCode *n, uint32_t pc) {
+    return n && n->region_mask && pc < (uint32_t)n->length &&
+           (n->region_mask[pc >> 6] & (1ull << (pc & 63)));
+}
+
+void janet_native_registry_add(const JanetNativeCode *n) {
+#ifdef JANET_NATIVE_EXECUTORS
+    if (!n || !n->execute) return;
+    if (native_registry_len < JANET_NATIVE_REGISTRY_MAX)
+        native_registry[native_registry_len++] = n;
+    native_registry_gen++;
+#endif
+}
+
+int janet_native_registry_count(void) {
+#ifdef JANET_NATIVE_EXECUTORS
+    return native_registry_len;
+#else
+    return 0;
+#endif
+}
+
+uint32_t janet_native_registry_generation(void) {
+#ifdef JANET_NATIVE_EXECUTORS
+    return native_registry_gen;
+#else
+    return 0;
+#endif
+}
+
+/* Cheap prefilter before whole-definition validation. */
+static int native_shape_prefilter(const JanetFuncDef *d, const JanetNativeCode *n) {
+    return d->bytecode_length == n->length && d->slotcount == n->slotcount &&
+           d->arity == n->arity && d->min_arity == n->min_arity &&
+           d->max_arity == n->max_arity && d->flags == n->flags &&
+           d->constants_length == n->constants_length;
+}
+
+int janet_native_try_attach(JanetFuncDef *d) {
+#ifdef JANET_NATIVE_EXECUTORS
+    d->native_attach_gen = native_registry_gen;
+    if (d->native_code) return 1; /* explicit registration already won */
+    janet_vm.native_attach_attempts++;
+    const JanetNativeCode *unique = NULL;
+    int ambiguous = 0, prehits = 0;
+    for (int32_t i = 0; i < native_registry_len && !ambiguous; i++) {
+        const JanetNativeCode *n = native_registry[i];
+        if (!native_shape_prefilter(d, n)) continue;
+        prehits++;
+        if (janet_native_matches(d, n)) {
+            if (unique) ambiguous = 1;
+            else unique = n;
+        }
+    }
+    if (ambiguous) {
+        janet_vm.native_attach_ambiguous++;
+        return 0;
+    }
+    if (!unique) {
+        janet_vm.native_attach_nomatch++;
+#ifdef JANET_NATIVE_ATTACH_DEBUG
+        fprintf(stderr, "native-attach: no descriptor for def name=%s len=%d slots=%d "
+                "arity=%d/%d/%d consts=%d flags=%x envs=%d prehits=%d\n",
+                d->name ? (const char *)d->name : "?", d->bytecode_length, d->slotcount,
+                d->arity, d->min_arity, d->max_arity, d->constants_length,
+                (unsigned)d->flags, d->environments_length, prehits);
+#endif
+        return 0;
+    }
+    d->native_code = unique;
+    janet_vm.native_attach_attached++;
+#ifdef JANET_NATIVE_ATTACH_DEBUG
+    fprintf(stderr, "native-attach: attached def name=%s len=%d\n",
+            d->name ? (const char *)d->name : "?", d->bytecode_length);
+#endif
+    return 1;
+#else
+    (void)d;
+    return 0;
+#endif
+}
+
+uint64_t janet_native_stat(int which) {
+#ifdef JANET_NATIVE_EXECUTORS
+    switch (which) {
+        case JANET_NATIVE_STAT_ATTACH_ATTEMPTS: return janet_vm.native_attach_attempts;
+        case JANET_NATIVE_STAT_ATTACH_ATTACHED: return janet_vm.native_attach_attached;
+        case JANET_NATIVE_STAT_ATTACH_AMBIGUOUS: return janet_vm.native_attach_ambiguous;
+        case JANET_NATIVE_STAT_ATTACH_NOMATCH: return janet_vm.native_attach_nomatch;
+        case JANET_NATIVE_STAT_VM_EXITS: return janet_vm.native_vm_exits;
+        default: return 0;
+    }
+#else
+    (void)which;
+    return 0;
+#endif
+}
+
+uint64_t janet_native_exit_stat(int opcode) {
+#ifdef JANET_NATIVE_EXECUTORS
+    return (opcode >= 0 && opcode < 256) ? janet_vm.native_exit_opcodes[opcode] : 0;
+#else
+    (void)opcode;
+    return 0;
+#endif
 }
 
 /* Create a simple closure from a funcdef */

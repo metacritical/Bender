@@ -1271,6 +1271,10 @@ struct JanetSymbolMap {
  * built with JANET_NATIVE_EXECUTORS. */
 typedef enum { JANET_NATIVE_VM, JANET_NATIVE_INTERRUPT } JanetNativeStep;
 typedef JanetNativeStep (*JanetNativeExecutor)(JanetFiber *, JanetFuncDef *, uint32_t **);
+/* Stage 2: opaque entries describe a live pool load only. They assume
+ * nothing about the boxed value at that index beyond it being a valid
+ * indexed constant; the runtime pool is read at execution time. */
+#define JANET_NATIVE_OPAQUE ((JanetType)100)
 typedef struct {
     JanetType type;
     double number; /* numeric value or boolean 0/1; no boxed pointers */
@@ -1279,11 +1283,31 @@ typedef struct JanetNativeCode {
     JanetNativeExecutor execute;
     const uint32_t *words;
     const JanetNativeConstant *constants;
+    const uint64_t *region_mask; /* bit per instruction PC: native entry allowed */
     int32_t length, slotcount, arity, min_arity, max_arity, flags, constants_length;
+    int32_t region_mask_words; /* == (length + 63) / 64 when length > 0 */
 } JanetNativeCode;
 JANET_API int janet_native_register(JanetFunction *, const JanetNativeCode *);
 JANET_API int janet_native_matches(JanetFuncDef *, const JanetNativeCode *);
 JANET_API int janet_native_poll(int condition);
+/* Stage 2: VM-boundary regions. region_allowed gates whole-definition
+ * validation to useful native starts (>= 3 native operations ahead).
+ * registry_add publishes a linked descriptor; try_attach performs the
+ * unique-candidate structural match against a definition (ambiguous
+ * identity refuses). Both are no-ops without JANET_NATIVE_EXECUTORS. */
+JANET_API int janet_native_region_allowed(const JanetNativeCode *n, uint32_t pc);
+JANET_API void janet_native_registry_add(const JanetNativeCode *n);
+JANET_API int janet_native_registry_count(void);
+JANET_API uint32_t janet_native_registry_generation(void);
+JANET_API int janet_native_try_attach(JanetFuncDef *d);
+JANET_API uint64_t janet_native_stat(int which);
+JANET_API uint64_t janet_native_exit_stat(int opcode);
+/* janet_native_stat indexes */
+#define JANET_NATIVE_STAT_ATTACH_ATTEMPTS 0
+#define JANET_NATIVE_STAT_ATTACH_ATTACHED 1
+#define JANET_NATIVE_STAT_ATTACH_AMBIGUOUS 2
+#define JANET_NATIVE_STAT_ATTACH_NOMATCH 3
+#define JANET_NATIVE_STAT_VM_EXITS 4
 
 /* A function definition. Contains information needed to instantiate closures. */
 struct JanetFuncDef {
@@ -1293,6 +1317,7 @@ struct JanetFuncDef {
     JanetFuncDef **defs;
     uint32_t *bytecode;
     const JanetNativeCode *native_code;
+    uint32_t native_attach_gen; /* lazy attach already tried at this registry generation */
     uint32_t *closure_bitset; /* Bit set indicating which slots can be referenced by closures. */
 
     /* Various debug information */
