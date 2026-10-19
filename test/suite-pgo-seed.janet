@@ -68,4 +68,18 @@
 (assert (= :unknown ((get (r7 :pts) 0) 0))
         "non-keyword evidence never seeds")
 
+# 8. Diagnostic selector: "1"/"all" enables every profiled function;
+#    any other value is a comma-separated name list (spaces trimmed).
+#    The selector is read only by the eprint path, never by seeding.
+(os/setenv "JANET_SEED_DEBUG" "1")
+(assert (infer/seed-debug? "anything") "'1' selects every function")
+(os/setenv "JANET_SEED_DEBUG" "all")
+(assert (infer/seed-debug? "anything") "'all' selects every function")
+(os/setenv "JANET_SEED_DEBUG" "ctx-anim, scene-empty?")
+(assert (infer/seed-debug? "ctx-anim") "name list matches a member")
+(assert (infer/seed-debug? "scene-empty?") "name list trims spaces")
+(assert (not (infer/seed-debug? "ctx-step-animation")) "name list rejects others")
+(os/setenv "JANET_SEED_DEBUG" nil)
+(assert (not (infer/seed-debug? "ctx-anim")) "diagnostic is off by default")
+
 (end-suite)

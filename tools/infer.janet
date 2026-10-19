@@ -260,6 +260,18 @@
         # are normalized at the seed below.
         (if (= :boolean (type c)) :bool (type c))))))
 
+# PGO seed diagnostic, off unless JANET_SEED_DEBUG is set. "1"/"all"
+# selects every profiled function; anything else is a comma-separated
+# list of function names, e.g. JANET_SEED_DEBUG=ctx-anim,scene-empty?.
+# Printing happens AFTER the seed decision and reads no extra evidence,
+# so it can never change what seeds.
+(defn seed-debug? [name]
+  (def spec (os/getenv "JANET_SEED_DEBUG"))
+  (when spec
+    (or (= spec "1") (= spec "all")
+        (index-of (string name)
+                  (map string/trim (string/split "," spec))))))
+
 (defn analyze [defs call-map &opt profile coremap]
   # defs: array of @{:d disasm :hint ...}; call-map: id -> {pc -> tid};
   # profile: @{name -> [{:params [...] :mins [...] :maxs [...] :calls n}]}
@@ -356,6 +368,19 @@
             (def mns (get row :mins @[]))
             (def mn (if (< i (length mns)) (mns i) nil))
             (unless (and (number? mn) (>= mn 0)) (set nonneg false)))
+          (when (seed-debug? ((get defs id) :name))
+            (eprint "seed-debug fn=" ((get defs id) :name)
+                    " slot=" i " rows=" (length rows)
+                    " hint=" (if hp (string (get hp i)) "-")
+                    " agree=" (if (nil? agree) "-" (string agree))
+                    " ok=" (if ok "yes" "no")
+                    " observed="
+                    (string/format
+                      "%j"
+                      (map (fn [row]
+                             (def ps (get row :params @[]))
+                             (if (< i (length ps)) (get ps i) nil))
+                           rows))))
           (when (and (nil? hp) ok (not (nil? agree)))
             (put parr i agree)
             # Phase C provenance: unanimous rows' origins (deduped, sorted).
