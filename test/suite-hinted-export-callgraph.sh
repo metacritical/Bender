@@ -9,22 +9,35 @@ export JANET_NO_PROFILE=1
 grep -Eq '^def [0-9]+ hot ' "$scratch/caller"
 ! grep -Eq '^def [0-9]+ (cold|secret) ' "$scratch/caller"
 hot=$(awk '$1 == "def" && $3 == "hot" {print $2}' "$scratch/caller")
+inv=$(awk '$1 == "def" && $3 == "invoke" {print $2}' "$scratch/caller")
 grep -q "^hint $hot " "$scratch/caller"
-grep -q "^calls 1 $hot$" "$scratch/caller"
-! grep -q "^contains 2 $hot$" "$scratch/caller"
+# the fixture routes through an invoke wrapper: hot must have exactly one
+# resolved in-edge, and it must be the wrapper's direct call -- the
+# imported function is never re-registered as a closure `contains` edge
+[ "$(awk -v h="$hot" '$1 == "calls" && $3 == h' "$scratch/caller" | wc -l)" -eq 1 ]
+grep -q "^calls $inv $hot$" "$scratch/caller"
+! grep -q "^contains $inv $hot$" "$scratch/caller"
 ./build/bender tools/callgraph.janet "$fixture/prefix.janet" > "$scratch/prefix" 2>&1
-grep -q '^calls 1 3$' "$scratch/prefix"
+hot=$(awk '$1 == "def" && $3 == "hot" {print $2}' "$scratch/prefix")
+inv=$(awk '$1 == "def" && $3 == "invoke" {print $2}' "$scratch/prefix")
+grep -q "^calls $inv $hot$" "$scratch/prefix"
+[ "$(awk -v h="$hot" '$1 == "calls" && $3 == h' "$scratch/prefix" | wc -l)" -eq 1 ]
 ./build/bender tools/callgraph.janet "$fixture/direct.janet" > "$scratch/direct" 2>&1
 grep -q '^def 1 direct ' "$scratch/direct"
 grep -q '^hint 1 long -> long$' "$scratch/direct"
 ! grep -q '^contains 0 1$' "$scratch/direct"
 
 ./build/bender tools/callgraph.janet "$fixture/duplicate.janet" > "$scratch/duplicate" 2>&1
-grep -q '^calls 1 3$' "$scratch/duplicate"
-! grep -q '^calls 1 5$' "$scratch/duplicate"
+first=$(awk '$1 == "def" && $3 == "hot" {print $2; exit}' "$scratch/duplicate")
+inv=$(awk '$1 == "def" && $3 == "invoke" {print $2}' "$scratch/duplicate")
+# the call resolves to the first registered hot; it never fans out to the
+# later same-named registration (nor to any third id)
+grep -q "^calls $inv $first$" "$scratch/duplicate"
+[ "$(awk -v i="$inv" '$1 == "calls" && $2 == i' "$scratch/duplicate" | wc -l)" -eq 1 ]
 ./build/bender tools/callgraph.janet "$fixture/alias-collision.janet" > "$scratch/alias" 2>&1
-grep -q '^ambiguous 1 hot$' "$scratch/alias"
-! grep -q '^calls 1 3$' "$scratch/alias"
+inv=$(awk '$1 == "def" && $3 == "invoke" {print $2}' "$scratch/alias")
+grep -q "^ambiguous $inv hot$" "$scratch/alias"
+! grep -Eq "^calls $inv [0-9]+$" "$scratch/alias"
 ./build/bender tools/callgraph.janet "$fixture/malformed.janet" > "$scratch/malformed" 2>&1
 grep -q 'malformed hinted export:.*broken' "$scratch/malformed"
 ! grep -Eq '^hint [0-9]+ ' "$scratch/malformed"
@@ -35,10 +48,17 @@ grep -q 'hinted export not registered unambiguously:.*hot' "$scratch/collision"
 
 ./build/bender tools/callgraph.janet "$fixture/profile-caller.janet" \
   "$fixture/profile-duplicate.janet" --profile "$fixture/profile-positive.jdn" > "$scratch/profile" 2>&1
-grep -q '^def 4 hot ' "$scratch/profile"
+# profile-duplicate.janet defines a second, zero-call hot: the
+# positive-call retention rule keeps it out (no second def), and the
+# caller's import edge must resolve to the one retained hot
+hot=$(awk '$1 == "def" && $3 == "hot" {print $2}' "$scratch/profile")
+inv=$(awk '$1 == "def" && $3 == "invoke" {print $2}' "$scratch/profile")
+[ -n "$hot" ] && [ -n "$inv" ]
+[ "$(awk '$1 == "def" && $3 == "hot"' "$scratch/profile" | wc -l)" -eq 1 ]
 ! grep -Eq '^def [0-9]+ (cold|secret) ' "$scratch/profile"
-grep -q '^calls 1 4$' "$scratch/profile"
-! grep -q '^contains 3 4$' "$scratch/profile"
+[ "$(awk -v h="$hot" '$1 == "calls" && $3 == h' "$scratch/profile" | wc -l)" -eq 1 ]
+grep -q "^calls $inv $hot$" "$scratch/profile"
+! grep -q "^contains $inv $hot$" "$scratch/profile"
 ./build/bender tools/callgraph.janet "$fixture/profile-module.janet" \
   --profile "$fixture/profile-merged.jdn" > "$scratch/profile-merged" 2>&1
 grep -q '^def 1 hot ' "$scratch/profile-merged"
