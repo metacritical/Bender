@@ -239,7 +239,13 @@
     (do (def c (consts cidx))
       (if (= :number (type c))
         (if (= c (math/trunc c)) :long :double)
-        (type c)))))
+        # `(type true)` is :boolean, but the lattice (and the emitter's
+        # ABI / declaration tables) spell the leaf :bool -- the same
+        # leaf 'ldt/'ldf and every comparison write. Normalize here so a
+        # constant true and a comparison result JOIN instead of widening
+        # to :any; PGO masks use janet_type_names ("boolean") too and
+        # are normalized at the seed below.
+        (if (= :boolean (type c)) :bool (type c))))))
 
 (defn analyze [defs call-map &opt profile coremap]
   # defs: array of @{:d disasm :hint ...}; call-map: id -> {pc -> tid};
@@ -309,18 +315,32 @@
             (def type-from (get (get row :type-from @[]) i))
             (def ps (get row :params @[]))
             (def slot (if (< i (length ps)) (ps i) nil))
-            (if (and (indexed? slot) (= 1 (length slot)) (keyword? (slot 0)))
-              (do (def t (slot 0))
-                (each origin (or (get type-from t) row-froms)
+            # Seed only on exactly one DISTINCT observed type. A row may
+            # legitimately list the same type more than once: the mask is
+            # assembled from per-origin observations and ttfx's hot rows
+            # are e.g. @[:table :table] / @[:number :number]. Duplicates
+            # carry no extra type information, so dedup before deciding
+            # (a duplicated leaf is one observation, not a conflict).
+            # Two or more DISTINCT types in a row are a genuine flip and
+            # still refuse to seed ONE type; the dispatch/joint tiers
+            # consume the complete observed signatures instead of forcing
+            # a wrong lattice type. A malformed (non-keyword) entry keeps
+            # the historical silence.
+            (def ts (if (and (indexed? slot) (all keyword? slot))
+                        (distinct slot)
+                        @[]))
+            (def norm (fn [t] (if (= t :boolean) :bool t)))
+            (if (= 1 (length ts))
+              (do (def t (norm (ts 0)))
+                (each origin (or (get type-from (ts 0)) row-froms)
                   (array/push (or (get seen t) (do (def a @[]) (put seen t a) a)) origin))
                 (if (nil? agree) (set agree t)
                   (when (not= agree t) (set ok false))))
               (do (set ok false)
-                 (when (indexed? slot)
-                   (each t slot
-                     (when (keyword? t)
-                       (each origin (or (get type-from t) row-froms)
-                        (array/push (or (get seen t) (do (def a @[]) (put seen t a) a)) origin)))))))
+                 (each t ts
+                   (def nt (norm t))
+                   (each origin (or (get type-from t) row-froms)
+                     (array/push (or (get seen nt) (do (def a @[]) (put seen nt a) a)) origin)))))
             (def mns (get row :mins @[]))
             (def mn (if (< i (length mns)) (mns i) nil))
             (unless (and (number? mn) (>= mn 0)) (set nonneg false)))
