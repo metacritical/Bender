@@ -1105,14 +1105,60 @@
 # validate hints (after the walk: hint-bad lines join the edge stream)
 (var nbad-hints (check-hints))
 
-# Print nodes.
+# Duplicate-channel call-site unification. A dup def (analysis-unit copy)
+# resolved its internal calls in the MODULE's namespace -- the canonical
+# real-channel copy, registered from the importing unit's preimport,
+# cannot see module-private callees (they resolve as `extern`). Without
+# this pass the canonical has incoming edges but unresolvable outgoing
+# ones, and the dup has outgoing edges but no incoming ones: widening
+# deadlocks and kernels are refused as unproven (the 6->4 ttfx
+# regression). Unify by (a) adopting each dup's call-map as the
+# canonical's (its resolution context is the def's own module) and (b)
+# redirecting every edge endpoint from the dup to its canonical, both
+# directions, so reachability/taint/caller-sets see one node.
+(var canonical-redirect @{})
+(each id (range (length defs))
+  (def dup-of (get (defs id) :name-duplicate))
+  (when dup-of (put canonical-redirect id dup-of)))
+(when (not (empty? canonical-redirect))
+  (defn- canon-id [id] (or (get canonical-redirect id) id))
+  (each [dup canon] (pairs canonical-redirect)
+    (when (get call-map dup)
+      (put call-map canon (get call-map dup))))
+  (each [caller cmap] (pairs call-map)
+    (def updates @[])
+    (each [pc target] (pairs cmap)
+      (when (and (number? target) (get canonical-redirect target))
+        (array/push updates [pc (canon-id target)])))
+    (each [pc nt] updates (put cmap pc nt)))
+  (def redirected @[])
+  (each e edges
+    (def kind (e 0))
+    (if (and (number? (e 1)) (get canonical-redirect (e 1)))
+      (array/push redirected [kind (canon-id (e 1)) ;(tuple/slice e 2)])
+      (array/push redirected e)))
+  (def fixed @[])
+  (each e redirected
+    (if (and (or (= (e 0) "calls") (= (e 0) "contains"))
+             (>= (length e) 3)
+             (number? (e 2))
+             (get canonical-redirect (e 2)))
+      (array/push fixed [(e 0) (e 1) (canon-id (e 2)) ;(tuple/slice e 3)])
+      (array/push fixed e)))
+  (array/clear edges)
+  (each e fixed (array/push edges e)))
+
+# Print nodes. Duplicate-channel copies are omitted from the node list:
+# they occupy a defs slot for tree contiguity but are never analysis
+# targets (no name-ids entry, no hint, edges redirected to canonical).
 (var j 0)
 (each info defs
   (def d (info :d))
-  (print "def " j " " (info :name)
-         " arity " (or (d :arity) "?")
-         " slots " (or (d :slotcount) "?")
-         " instrs " (length (or (d :bytecode) @[])))
+  (unless (info :name-duplicate)
+    (print "def " j " " (info :name)
+           " arity " (or (d :arity) "?")
+           " slots " (or (d :slotcount) "?")
+           " instrs " (length (or (d :bytecode) @[]))))
   (++ j))
 
 # Print edges.
