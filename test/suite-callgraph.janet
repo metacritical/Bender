@@ -964,4 +964,36 @@
   "cc -O2 -w -fwrapv -Isrc/include -Isrc/conf /tmp/cg-in/native.c build/janet.o -lm -lpthread -ldl -o /tmp/cg-in/native && /tmp/cg-in/native > /tmp/cg-in/actual.txt && cmp /tmp/cg-in/expected.txt /tmp/cg-in/actual.txt"] :p))
   "in/inim kernel parity")
 
+
+# ---- Stream F: u64 kernel arithmetic domain ----
+# The limb-emulation blocker was the int32 bitwise domain. This adds a
+# u64 domain internal to kernels: enter via (int/u64 n), leave via
+# (int/to-number v); band/bor/bxor on u64s, shifts masked & 63, wrapping
+# +. The boxed oracle is the int/u64 abstract (exact, verified). Guards
+# abort exactly where boxed errors (negative/fractional cast input,
+# to-number above 2^53). u64 never crosses the kernel ABI.
+(spit "/tmp/cg-u64.janet" (string
+  "(defn k-u64 {:hint {:params [:array :array] :returns :number}} [a b]\n"
+  "  (def x (bor (blshift (int/u64 (in a 0)) 56) (int/u64 (in a 1))))\n"
+  "  (def y (int/u64 (in b 0)))\n"
+  "  (def z (bxor (+ x y) (brshift x 41)))\n"
+  "  (int/to-number (band z (int/u64 255))))\n"
+  "(defn main [] (print (k-u64 @[255 1] @[7])))\n"))
+(assert (= 0 (os/execute ["/bin/sh" "-c"
+  "rm -rf /tmp/cg-u64 && ./build/bender tools/callgraph.janet /tmp/cg-u64.janet --emit-native /tmp/cg-u64"] :p))
+  "u64 kernel emit run")
+(def u64text (slurp "/tmp/cg-u64/native.c"))
+(assert (string/find "uint64_t" u64text) "u64 kernel declares uint64_t")
+(assert (string/find "u64 cast domain error" u64text) "u64 cast guard emitted")
+(assert (string/find "u64 to-number out of range" u64text) "u64 to-number guard emitted")
+(assert (= 0 (os/execute ["/bin/sh" "-c"
+  "cc -O2 -w -fwrapv -Isrc/include -Isrc/conf /tmp/cg-u64/native.c build/janet.o -lm -lpthread -ldl -o /tmp/cg-u64/native && /tmp/cg-u64/native > /tmp/cg-u64/actual.txt && cmp /tmp/cg-u64/expected.txt /tmp/cg-u64/actual.txt"] :p))
+  "u64 kernel parity vs boxed oracle")
+# negative guards: u64 must NOT be hintable as a param or return
+(spit "/tmp/cg-u64bad.janet" (string
+  "(defn k-bad {:hint {:params [:u64] :returns :number}} [a] a)\n"))
+(assert (= 0 (os/execute ["/bin/sh" "-c"
+  "rm -rf /tmp/cg-u64bad && ./build/bender tools/callgraph.janet /tmp/cg-u64bad.janet --emit-native /tmp/cg-u64bad 2>&1 | grep -q 'native-skip 1'"] :p))
+  "u64 param hint refused (internal domain only)")
+
 (end-suite)

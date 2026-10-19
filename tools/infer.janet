@@ -30,6 +30,19 @@
 (defn int-family? [t] (or (= t :long) (= :long (get width-family t))))
 
 (defn type-join [a0 b0]
+  # Stream F: :u64 is its OWN domain, tested on the RAW types BEFORE
+  # width normalization (width-family maps :u64 -> :long, so a later
+  # check never sees it; that ordering bug silently turned u64+u64 into
+  # :long). u64/u64 stays u64; u64+unknown adopts u64; any other u64 mix
+  # refuses. The boxed oracle for u64 is the int/u64 ABSTRACT (exact
+  # 64-bit; verified: wrapping +, logical shifts, count masked & 63),
+  # not doubles, so no double-based join is ever sound for it.
+  (cond
+    (and (= a0 :u64) (= b0 :u64)) :u64
+    (and (= a0 :u64) (= b0 :unknown)) :u64
+    (and (= b0 :u64) (= a0 :unknown)) :u64
+    (or (= a0 :u64) (= b0 :u64)) :unknown
+    (do
   # widths normalize to their family before joining
   (def a (get width-family a0 a0))
   (def b (get width-family b0 b0))
@@ -41,7 +54,7 @@
     (if (or (= a :number) (= b :number))
       :number
       (if (or (= a :double) (= b :double)) :double :long))
-    :unknown))
+    :unknown))))
 
 (defn arith-join [t1 t2]
   (if (and (get numeric-types t1) (get numeric-types t2))
@@ -52,9 +65,30 @@
   # int32-domain: both sides numeric gives :long. :number operands are
   # sound because emission inserts integrality + int32-range checks
   # that abort exactly where boxed errors (fail loud, like OOB).
-  (if (and (get numeric-types t1) (get numeric-types t2))
-    :long
+  # u64 operands never fall into the int32 domain (op-aware joins below).
+  (cond
+    (or (= t1 :u64) (= t2 :u64)) :unknown
+    (and (get numeric-types t1) (get numeric-types t2)) :long
     :unknown))
+
+# Stream F op-aware bitwise joins for the u64 kernel domain (boxed
+# oracle: the int/u64 abstract; semantics measured and matched):
+#   band/bor/bxor u64xu64 -> u64; shifts u64 by int-family -> u64 with
+#   count masked & 63 (negative count aborts at emission, like boxed
+#   erroring); brushift has no boxed u64 semantics -> refuse; any other
+#   u64 mix -> refuse.
+(defn bit-join-reg [t1 t2 op]
+  (cond
+    (and (= t1 :u64) (= t2 :u64))
+    (if (or (= op 'band) (= op 'bor) (= op 'bxor)) :u64 :unknown)
+    (and (= t1 :u64) (int-family? t2))
+    (if (or (= op 'sl) (= op 'sr)) :u64 :unknown)
+    (bit-join t1 t2)))
+
+(defn bit-join-im [t op]
+  (cond
+    (= t :u64) (if (= op 'sruim) :unknown :u64)
+    (bit-join t :long)))
 
 # intersection-style slot_take: refine cur toward new; disagreement on
 # concrete widths widens to :number; non-numeric involvement gives up
@@ -103,7 +137,14 @@
 # for |v| <= 2^53 like all int kernels; beyond that the documented
 # int-width caveat applies.
 (def pure-calls
-  @{"math/floor" {:c "floor" :params [:double] :returns :double}
+  @{# Stream F u64 boundary casts (dispatched specially in emission).
+    # Boxed semantics matched exactly (verified): int/u64 errors on
+    # negative/fractional/>=2^64 input; int/to-number errors above 2^53.
+    # Wide u64 constants via the string form are NOT kernel-supported
+    # (string arg fails the numeric check -> kernel refuses, fail closed).
+    "int/u64" {:c :u64-cast :params [:number] :returns :u64}
+    "int/to-number" {:c :u64-to-num :params [:u64] :returns :number}
+    "math/floor" {:c "floor" :params [:double] :returns :double}
     "math/ceil" {:c "ceil" :params [:double] :returns :double}
     "math/sqrt" {:c "sqrt" :params [:double] :returns :double}
     "math/abs" {:c "fabs" :params [:double] :returns :double}
@@ -480,10 +521,10 @@
         (put st (ins 1)
              (arith-join (get st (ins 2) :unknown) (get st (ins 3) :unknown)))
         (get bit-im-ops op)
-        (put st (ins 1) (bit-join (get st (ins 2) :unknown) :long))
+        (put st (ins 1) (bit-join-im (get st (ins 2) :unknown) op))
         (get bit-ops op)
         (put st (ins 1)
-             (bit-join (get st (ins 2) :unknown) (get st (ins 3) :unknown)))
+             (bit-join-reg (get st (ins 2) :unknown) (get st (ins 3) :unknown) op))
         (get cmp-ops op) (put st (ins 1) :bool)
         # literal constructors: arrays/tuples precise; the rest :unknown
         # (always sound -- kills stale slot types that otherwise leak

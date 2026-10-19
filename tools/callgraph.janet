@@ -741,7 +741,9 @@
 (var arity-unknown 0)
 (def load-ops
   @{'ldc true 'clo true 'lds true 'ldu true 'ldi true 'ldn true
-    'ldt true 'ldf true 'get true 'in true 'movn true 'movf true
+    'ldt true 'ldf true 'get true 'in true 'inim true 'movn true 'movf true
+    'band true 'bor true 'bxor true 'sl true 'sr true 'sru true
+    'slim true 'srim true 'sruim true 'bandim true 'borim true 'bxorim true
     'geti true 'add true 'sub true 'mul true 'div true 'divf true
     'mod true 'rem true 'divim true 'addim true
     'subim true 'mulim true 'len true 'equ true 'lt true 'gt true
@@ -1694,7 +1696,10 @@
 # keep exact types (foreign signatures are fixed).
 (defn emit-kernel-type [t &opt fb]
   (default fb "double")
-  (if (and (= int-policy :promote) (get int-hints t))
+  # :u64 is EXEMPT from int-promotion: its values exceed 2^53, so a
+  # double declaration would silently round. Its boxed oracle is the
+  # int/u64 abstract, not doubles.
+  (if (and (= int-policy :promote) (get int-hints t) (not= t :u64))
     "double"
     (get emit-c-type-map t fb)))
 (def emit-c-reserved
@@ -1876,11 +1881,11 @@
                  (infer/arith-join (get st (ins 2) :unknown)
                                    (get st (ins 3) :unknown)))
             (get infer/bit-im-ops op)
-            (put st (ins 1) (infer/bit-join (get st (ins 2) :unknown) :long))
+            (put st (ins 1) (infer/bit-join-im (get st (ins 2) :unknown) op))
             (get infer/bit-ops op)
             (put st (ins 1)
-                 (infer/bit-join (get st (ins 2) :unknown)
-                                 (get st (ins 3) :unknown)))
+                 (infer/bit-join-reg (get st (ins 2) :unknown)
+                                     (get st (ins 3) :unknown) op))
             (get infer/cmp-ops op) (put st (ins 1) :bool)
             (or (= op 'mkarr))
             (do (put st (ins 1) :array))
@@ -2365,7 +2370,17 @@
   (each ins code
     (def wop (ins 0))
     (cond
-      (= wop 'ldi) (wput (ins 1) :long)
+      # Stream F: a NONNEGATIVE integer immediate is exact in uint64_t,
+      # so it must not force a u64-reusing slot to refuse. The flow type
+      # stays :long (joins are unchanged); only the declaration-evidence
+      # set records :u64ok, consumed solely by decl-kind below. A
+      # negative immediate records plain :long and still refuses a u64
+      # mix -- assigning a negative into uint64_t would wrap silently.
+      (= wop 'ldi)
+      (do (put wtypes (ins 1) :long)
+        (def st0 (or (get wsets (ins 1)) @{}))
+        (put st0 (if (>= (ins 2) 0) :u64ok :long) true)
+        (put wsets (ins 1) st0))
       (= wop 'ldc)
       # ldc-loaded functions are dead callee values (calls resolve by
       # position, never by slot type), so they must not poison the
@@ -2400,11 +2415,11 @@
            (infer/arith-join (get wtypes (ins 2) :unknown)
                              (get wtypes (ins 3) :unknown)))
       (get infer/bit-im-ops wop)
-      (wput (ins 1) (infer/bit-join (get wtypes (ins 2) :unknown) :long))
+      (wput (ins 1) (infer/bit-join-im (get wtypes (ins 2) :unknown) wop))
       (get infer/bit-ops wop)
       (wput (ins 1)
-           (infer/bit-join (get wtypes (ins 2) :unknown)
-                           (get wtypes (ins 3) :unknown)))
+           (infer/bit-join-reg (get wtypes (ins 2) :unknown)
+                               (get wtypes (ins 3) :unknown) wop))
       (get infer/cmp-ops wop) (wput (ins 1) :bool)
       (or (= wop 'mkarr)) (wput (ins 1) :array)
       (or (= wop 'mktup) (= wop 'mkbtp)) (wput (ins 1) :tuple)
@@ -2430,6 +2445,27 @@
                     (or (infer/int-family? (get wtypes (ins 3) :unknown))
                         (= :number (get wtypes (ins 3) :unknown))))
              :number :unknown))
+      # in/inim: same :number result as `get`, but the declaration
+      # evidence records :u64load rather than :number. Rationale
+      # (Stream F): when such a slot is ALSO reused for u64 temps, the
+      # mix may declare uint64_t ONLY because the in/inim emission
+      # commits to a GUARDED load into u64-declared slots (unwrap into a
+      # double scratch, abort unless nonneg + integral + < 2^64, then
+      # cast) -- the guard runs BEFORE any lossy conversion, matching
+      # where boxed int/u64 errors. Without this evidence split, in/inim
+      # writes were invisible to declarations entirely (consumer site
+      # #10 of the new-opcode lesson), and the double store into a
+      # uint64_t slot happened UNGUARDED -- UB on a negative input.
+      (or (= wop 'in) (= wop 'inim))
+      (do (put wtypes (ins 1)
+               (if (or (= :array (get wtypes (ins 2) :unknown))
+                       (= :tuple (get wtypes (ins 2) :unknown)))
+                 :number :unknown))
+        (def st0 (or (get wsets (ins 1)) @{}))
+        (put st0 (if (or (= :array (get wtypes (ins 2) :unknown))
+                         (= :tuple (get wtypes (ins 2) :unknown)))
+                   :u64load :unknown) true)
+        (put wsets (ins 1) st0))
       (= wop 'call)
       (do (def wta (get (get taccs id) wpc))
         (if (and wta (= (wta :kind) :pread))
@@ -2471,6 +2507,39 @@
           (and (> (length kinds) 1)
                (some (fn [t] (= t :unknown)) kinds))
           :bad-unknown
+          # Stream F: a u64 slot may mix ONLY with :u64ok (nonneg ldi
+          # immediates, exact in uint64_t) and :u64load (in/inim loads,
+          # which EMIT GUARDED into u64-declared slots). Everything in
+          # the set is then exact-or-aborting in uint64_t.
+          (and (some (fn [t] (= t :u64)) kinds)
+               (all (fn [t] (or (= t :u64) (= t :u64ok) (= t :u64load))) kinds))
+          :u64
+          # :u64load without u64 involvement is an ordinary numeric load
+          (some (fn [t] (= t :u64load)) kinds)
+          (if (some (fn [t] (or (= t :unknown) (= t :array) (= t :tuple)
+                                (= t :string) (= t :keyword) (= t :symbol)
+                                (= t :nil) (= t :struct))) kinds)
+            :bad-unknown
+            :double)
+          # Stream F: :u64ok is declaration evidence from `ldi` of a
+          # NONNEGATIVE immediate -- exact in uint64_t AND in int64/double,
+          # so it is compatible with whichever concrete kind the slot's
+          # other writes need. Resolve it first: alongside u64 it
+          # declares uint64_t; otherwise it behaves as :long.
+          (and (some (fn [t] (= t :u64ok)) kinds)
+               (all (fn [t] (or (= t :u64ok) (= t :u64))) kinds))
+          :u64
+          # a u64-holding slot must otherwise hold ONLY u64s (folding
+          # {:number :u64} to :double silently rounds above 2^53).
+          (and (some (fn [t] (= t :u64)) kinds) (> (length kinds) 1))
+          :bad-sign
+          # :u64ok without any u64 present is just a nonneg long
+          (some (fn [t] (= t :u64ok)) kinds)
+          (if (all (fn [t] (or (= t :u64ok) (= t :long) (get int-hints t))) kinds)
+            :long
+            (if (some (fn [t] (or (= t :double) (= t :float) (= t :number))) kinds)
+              :double
+              :long))
           (some (fn [t] (or (= t :double) (= t :float) (= t :number))) kinds)
           :double
           (and (some (fn [t] (= t :long)) kinds)
@@ -2491,7 +2560,7 @@
             (set slotbad (string "slot s" slot " mixes unanalyzable "
                                  (string/join (map string kinds) "/")))
             (= dk :bad-sign)
-            (set slotbad (string "slot s" slot " mixes signed/unsigned 64-bit"))
+            (set slotbad (string "slot s" slot " mixes u64 with non-u64: " (string/join (map string kinds) "/")))
             (and (> (length kinds) 1)
                  (some (fn [t] (or (= t :array) (= t :tuple) (= t :struct)
                                    (= t :nil) (= t :string)
@@ -2600,11 +2669,11 @@
                  (infer/arith-join (get st (ins 2) :unknown)
                                    (get st (ins 3) :unknown)))
             (get infer/bit-im-ops op)
-            (put st (ins 1) (infer/bit-join (get st (ins 2) :unknown) :long))
+            (put st (ins 1) (infer/bit-join-im (get st (ins 2) :unknown) op))
             (get infer/bit-ops op)
             (put st (ins 1)
-                 (infer/bit-join (get st (ins 2) :unknown)
-                                 (get st (ins 3) :unknown)))
+                 (infer/bit-join-reg (get st (ins 2) :unknown)
+                                     (get st (ins 3) :unknown) op))
             (get infer/cmp-ops op) (put st (ins 1) :bool)
             (or (= op 'mkarr))
             (do (put st (ins 1) :array) (set pending @[]))
@@ -2961,8 +3030,24 @@
               (emit-index-check lines gidxd (= :number (get-now 1)))
               (emit-oob-check lines gidx gbound oobmsg
                               (loop-elide-upper? d pc (ins 2) (ins 3) id st))
-              (array/push lines
-                          (string "    s" (ins 1) " = janet_unwrap_number(" gdata ");")))
+              # Stream F: when this slot is DECLARED uint64_t (a
+              # u64 temp the allocator reused for the load), unwrap into
+              # a double scratch FIRST and guard nonneg+integral+<2^64
+              # BEFORE any conversion to uint64_t -- a negative or
+              # fractional value would otherwise convert (UB / wrap)
+              # before the check, diverging from where boxed int/u64
+              # errors. Bare statement: branches push their own lines
+              # (an earlier nesting bug pushed the do's VALUE -- the
+              # lines array itself -- into lines, and string/join then
+              # hit a non-byte item).
+              (if (= :u64 (get decl-types (ins 1)))
+                            (do
+                              (array/push lines (string "    { double nxu_ = janet_unwrap_number(" gdata ");"))
+                              (array/push lines (string "      if (!(nxu_ >= 0.0 && nxu_ == floor(nxu_) && nxu_ < 18446744073709551616.0)) { fprintf(stderr, \"u64 load domain error\\n\"); abort(); }"))
+                              (array/push lines (string "      s" (ins 1) " = (uint64_t)nxu_; }"))
+                              nil)
+                            (array/push lines
+                                        (string "    s" (ins 1) " = janet_unwrap_number(" gdata ");"))))
             # `in` is emitted exactly like `get`: same array/tuple gate,
             # same integrality and bounds checks. Semantically it is a
             # BETTER match than get -- the emitted code aborts on an
@@ -2993,8 +3078,24 @@
               (emit-index-check lines gidxd (= :number (get-now 1)))
               (emit-oob-check lines gidx gbound oobmsg
                               (loop-elide-upper? d pc (ins 2) (ins 3) id st))
-              (array/push lines
-                          (string "    s" (ins 1) " = janet_unwrap_number(" gdata ");")))
+              # Stream F: when this slot is DECLARED uint64_t (a
+              # u64 temp the allocator reused for the load), unwrap into
+              # a double scratch FIRST and guard nonneg+integral+<2^64
+              # BEFORE any conversion to uint64_t -- a negative or
+              # fractional value would otherwise convert (UB / wrap)
+              # before the check, diverging from where boxed int/u64
+              # errors. Bare statement: branches push their own lines
+              # (an earlier nesting bug pushed the do's VALUE -- the
+              # lines array itself -- into lines, and string/join then
+              # hit a non-byte item).
+              (if (= :u64 (get decl-types (ins 1)))
+                            (do
+                              (array/push lines (string "    { double nxu_ = janet_unwrap_number(" gdata ");"))
+                              (array/push lines (string "      if (!(nxu_ >= 0.0 && nxu_ == floor(nxu_) && nxu_ < 18446744073709551616.0)) { fprintf(stderr, \"u64 load domain error\\n\"); abort(); }"))
+                              (array/push lines (string "      s" (ins 1) " = (uint64_t)nxu_; }"))
+                              nil)
+                            (array/push lines
+                                        (string "    s" (ins 1) " = janet_unwrap_number(" gdata ");"))))
             # `inim`: the index is an UNSIGNED IMMEDIATE (0..255) carried
             # in the instruction, so there is no index slot to type-check
             # and no integrality check to emit -- it is a known
@@ -3015,8 +3116,24 @@
               (def oobmsg (if gtup "tuple index out of bounds"
                               "array index out of bounds"))
               (emit-oob-check lines gidx gbound oobmsg false)
-              (array/push lines
-                          (string "    s" (ins 1) " = janet_unwrap_number(" gdata ");")))
+              # Stream F: when this slot is DECLARED uint64_t (a
+              # u64 temp the allocator reused for the load), unwrap into
+              # a double scratch FIRST and guard nonneg+integral+<2^64
+              # BEFORE any conversion to uint64_t -- a negative or
+              # fractional value would otherwise convert (UB / wrap)
+              # before the check, diverging from where boxed int/u64
+              # errors. Bare statement: branches push their own lines
+              # (an earlier nesting bug pushed the do's VALUE -- the
+              # lines array itself -- into lines, and string/join then
+              # hit a non-byte item).
+              (if (= :u64 (get decl-types (ins 1)))
+                            (do
+                              (array/push lines (string "    { double nxu_ = janet_unwrap_number(" gdata ");"))
+                              (array/push lines (string "      if (!(nxu_ >= 0.0 && nxu_ == floor(nxu_) && nxu_ < 18446744073709551616.0)) { fprintf(stderr, \"u64 load domain error\\n\"); abort(); }"))
+                              (array/push lines (string "      s" (ins 1) " = (uint64_t)nxu_; }"))
+                              nil)
+                            (array/push lines
+                                        (string "    s" (ins 1) " = janet_unwrap_number(" gdata ");"))))
             (= op 'put)
             # Phase 5 first: a VALIDATED constant-key table write (infer
             # taccs) lowers to a direct member store into the flat
@@ -3083,6 +3200,51 @@
                           (string "    s" (ins 1) " = "
                                   (emit-slot (ins 2) arity) " " (emit-arith-im-c op) " "
                                   (ins 3) ";")))
+            # Stream F: u64-domain bitwise (int/u64 abstract semantics:
+            # band/bor/bxor both-u64; shifts mask count & 63; negative
+            # count aborts, fail loud like OOB).
+            (and (get emit-bit-c op)
+                 (or (= :u64 (bit-operand-type st pt arity (ins 2)))
+                     (= :u64 (bit-operand-type st pt arity (ins 3)))))
+            (do (set pending @[])
+              (def u2 (= :u64 (bit-operand-type st pt arity (ins 2))))
+              (def u3 (= :u64 (bit-operand-type st pt arity (ins 3))))
+              (cond
+                (and (or (= op 'band) (= op 'bor) (= op 'bxor)) u2 u3)
+                (array/push lines
+                            (string "    s" (ins 1) " = "
+                                    (emit-slot (ins 2) arity)
+                                    (case op 'band " & " 'bor " | " " ^ ")
+                                    (emit-slot (ins 3) arity) ";"))
+                (and (or (= op 'sl) (= op 'sr)) u2 (not u3))
+                (do (array/push lines
+                                (string "    if (" (emit-slot (ins 3) arity)
+                                        " < 0) { fprintf(stderr, \"u64 shift count negative\\n\"); abort(); }"))
+                  (array/push lines
+                              (string "    s" (ins 1) " = "
+                                      (emit-slot (ins 2) arity)
+                                      (if (= op 'sl) " << " " >> ")
+                                      "(((uint64_t)" (emit-slot (ins 3) arity) ") & 63);")))
+                (do (set bad (string "u64 bitwise shape unsupported: " op))
+                  (break))))
+            (and (get emit-bit-im-c op)
+                 (= :u64 (bit-operand-type st pt arity (ins 2))))
+            (do (set pending @[])
+              (cond
+                (and (or (= op 'slim) (= op 'srim)) (>= (ins 3) 0))
+                (array/push lines
+                            (string "    s" (ins 1) " = "
+                                    (emit-slot (ins 2) arity)
+                                    (if (= op 'slim) " << " " >> ")
+                                    "(" (ins 3) " & 63);"))
+                (or (= op 'bandim) (= op 'borim) (= op 'bxorim))
+                (array/push lines
+                            (string "    s" (ins 1) " = "
+                                    (emit-slot (ins 2) arity)
+                                    (case op 'bandim " & " 'borim " | " " ^ ")
+                                    "(uint64_t)" (ins 3) "ULL;"))
+                (do (set bad (string "u64 immediate bitwise shape unsupported: " op))
+                  (break))))
             (get emit-bit-c op)
             (do (set pending @[])
               (def bt2 (bit-operand-type st pt arity (ins 2)))
@@ -3157,13 +3319,39 @@
             (do (def pres (pure-call-shape id pc st d))
               (def pspec (pres 0))
               (def pslots (pres 1))
-              (def pargs (seq [s :in pslots]
-                           (string "(double)(" (emit-slot s arity) ")")))
-              (def pcall (string (pspec :c) "(" (string/join pargs ", ") ")"))
-              (if (= op 'tcall)
-                (array/push lines (string "    return " pcall ";"))
-                (array/push lines (string "    s" (ins 1) " = " pcall ";")))
-              (set pending @[]))
+              (cond
+                # Stream F boundary casts; domains match boxed int/u64 /
+                # int/to-number errors exactly (abort = fail loud).
+                (= :u64-cast (pspec :c))
+                (do (def aslot (pslots 0))
+                  (def aty (get st aslot :unknown))
+                  (def ae (emit-slot aslot arity))
+                  (if (= :u64 aty)
+                    (array/push lines (string "    s" (ins 1) " = " ae ";"))
+                    (do
+                      (array/push lines
+                                  (string "    if (!((double)(" ae ") >= 0.0 && (double)(" ae
+                                          ") == floor((double)(" ae ")) && (double)(" ae
+                                          ") < 18446744073709551616.0)) { fprintf(stderr, \"u64 cast domain error\\n\"); abort(); }"))
+                      (array/push lines
+                                  (string "    s" (ins 1) " = (uint64_t)(double)(" ae ");"))))
+                  (set pending @[]))
+                (= :u64-to-num (pspec :c))
+                (do (def ae (emit-slot (pslots 0) arity))
+                  (array/push lines
+                              (string "    if ((" ae ") > 9007199254740992ULL) { fprintf(stderr, \"u64 to-number out of range\\n\"); abort(); }"))
+                  (if (= op 'tcall)
+                    (array/push lines (string "    return (double)(" ae ");"))
+                    (array/push lines (string "    s" (ins 1) " = (double)(" ae ");")))
+                  (set pending @[]))
+                (do
+                  (def pargs (seq [s :in pslots]
+                               (string "(double)(" (emit-slot s arity) ")")))
+                  (def pcall (string (pspec :c) "(" (string/join pargs ", ") ")"))
+                  (if (= op 'tcall)
+                    (array/push lines (string "    return " pcall ";"))
+                    (array/push lines (string "    s" (ins 1) " = " pcall ";")))
+                  (set pending @[]))))
             (or (= op 'call) (= op 'tcall))
             (do (def tid (get cmap pc))
               # Path 2 struct intrinsic: a call to a def carrying
@@ -3289,6 +3477,11 @@
     # Step 11: :array params are opaque-but-emittable (pointer temps);
     # :array returns are the (in-place) array itself
     (each t pt (unless (or (get infer/numeric-types t) (= t :array) (= t :tuple) (= t :pointer) (= t :string) (= t :keyword) (= t :symbol)) (set concrete false)))
+    # Stream F: :u64 is an INTERNAL kernel domain only (wrapper boxes
+    # through double; >2^53 would silently round). Enter via int/u64,
+    # leave via int/to-number, never the ABI.
+    (each t pt (when (= t :u64) (set concrete false)))
+    (when (= rt :u64) (set concrete false))
     # Phase 1: :nil is concrete -- a whole-program-proven-always-nil
     # return is a legitimate void kernel, not an unproven boxed value.
     (unless (or (get infer/numeric-types rt) (= rt :array) (= rt :nil)) (set concrete false))
@@ -4225,6 +4418,11 @@
     # Step 11: :array params are opaque-but-emittable (pointer temps);
     # :array returns are the (in-place) array itself
     (each t pt (unless (or (get infer/numeric-types t) (= t :array) (= t :tuple) (= t :pointer) (= t :string) (= t :keyword) (= t :symbol)) (set concrete false)))
+    # Stream F: :u64 is an INTERNAL kernel domain only (wrapper boxes
+    # through double; >2^53 would silently round). Enter via int/u64,
+    # leave via int/to-number, never the ABI.
+    (each t pt (when (= t :u64) (set concrete false)))
+    (when (= rt :u64) (set concrete false))
     # Phase 1: :nil is concrete -- a whole-program-proven-always-nil
     # return is a legitimate void kernel, not an unproven boxed value.
     (unless (or (get infer/numeric-types rt) (= rt :array) (= rt :nil)) (set concrete false))
