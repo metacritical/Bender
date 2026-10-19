@@ -355,3 +355,80 @@ The js port draws block cells as 1-3 filled rects instead of glyphs, and
 That is still the plausible win for block-heavy effects, and unlike
 batching it needs no sort — a rect draw is per-cell, same order, just a
 cheaper call. Untested here.
+
+## D. Why GUI draw-call batching cannot work: the GUI is PER-CELL bound
+
+Retested batching properly — release binary, 3 PGO passes per side, as
+the interpreter result was rightly distrusted. Rewrote the
+implementation first to remove every objection to the original attempt:
+
+- zero per-frame allocation (persistent grid, reused buffer and
+  touched-list in the gui table) instead of ~700 allocations/frame
+- NO per-frame sort: a dense row-major grid gives ordered traversal free
+- overlap order preserved by last-write-wins into the grid
+
+Both sides: 3x `--pgo` then `--release`, "pgo parity ok", 5 kernels,
+1,695,424-byte binaries.
+
+| effect | baseline | batched | delta |
+|--------|---------:|--------:|------:|
+| wipe | 861.7 | 853.9 | -0.9% |
+| beams | 912.7 | 790.1 | -13.4% |
+| smoke | 778.2 | 713.0 | -8.4% |
+| decrypt | 1540.6 | 1104.3 | -28.3% |
+| fireworks | 2274.0 | 2132.5 | -6.2% |
+
+Still slower everywhere, though much less than the interpreter's ~-50%
+— so PGO did recover most of the overhead, just not enough.
+
+**The reason, and it closes the question.** Multiply cells drawn per
+frame by baseline fps:
+
+| effect | cells | fps | cells x fps |
+|--------|------:|----:|------------:|
+| beams | 382 | 912.7 | 348,651 |
+| wipe | 401 | 861.7 | 345,542 |
+| smoke | 439 | 778.2 | 341,630 |
+
+**Constant at 345,274 +/- 2.0%** across three effects with different cell
+counts AND different batching ratios (1.91x-3.61x). That is the
+signature of being bound by PER-CELL work, not by call count. Frame time
+is proportional to the number of glyphs rasterized, and batching draws
+exactly the same glyphs in fewer calls — so there is nothing to save,
+and the bookkeeping is pure loss.
+
+decrypt sits lower (286,552) despite drawing text rather than solid
+blocks, consistent with varied glyphs costing more per cell than one
+repeated block glyph (atlas locality), and it is hurt worst by batching
+(-28.3%) because it has both the lowest occupancy (186 of 810 grid
+slots) and the shortest runs (1.27x) — so it pays the full fixed cost of
+scanning the grid for almost no batching benefit.
+
+This also explains finding A: removing 2.4M FFI lazy-thunk calls changed
+nothing because the FFI boundary is not the cost either. Per-cell GPU
+fill and glyph sampling are.
+
+### Consequence: the only real GUI lever is cheaper or fewer CELLS
+
+Reducing draw CALLS is proven worthless. What remains:
+
+1. **`--blocks=rects`** (named as unimplemented in bench-engines.md, and
+   what the js port does): draw block cells as 1-3 filled rectangles
+   instead of anti-aliased textured glyphs. This attacks per-cell cost
+   directly — a solid rect needs no atlas sample — and needs no sort, no
+   grid, and no reordering. This is the one worth trying.
+2. Draw fewer cells (skip occluded//unchanged cells; a dirty-rect scheme).
+
+### Also recorded: a correctness result and a gate limitation
+
+Batching was pixel-IDENTICAL on wipe but genuinely DIFFERENT on decrypt,
+even with last-write-wins ordering — overlapping anti-aliased glyphs
+blend when drawn individually, and keeping only the last occupant loses
+that blend.
+
+And the screenshot gate is only valid for SOME effects: baseline hashes
+for smoke and beams changed between two identical baseline runs
+(5aefa0a6 -> 8f71c2d1, 25b3a428 -> bdbb16bd) while decrypt and wipe were
+stable across runs. So `--probe-shot` is a usable gate for decrypt and
+wipe only; smoke/beams animation state is not reproducible at a fixed
+probe duration.
