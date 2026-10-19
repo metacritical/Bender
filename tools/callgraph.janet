@@ -117,23 +117,81 @@
 (var callsites 0)
 (var resolved 0)
 
-(defn register-def [d source path]
+# Site identity: a source definition is (file, def name, def line). A
+# function imported into an analyzed unit is registered through TWO
+# channels -- its own module's one-thunk analysis copy (this unit's def
+# tree, registered when the module file is analyzed) and the real module
+# table (register-real-import-functions, registered while the importing
+# unit pre-executes its imports). Both channels describe the SAME source
+# definition, so a cross-channel registration with one site collapses
+# onto the first one: without this, name-ids holds two ids for one
+# function, every importer's call site turns "ambiguous", the profile
+# identity gate drops the evidence, and hinted exports refuse as
+# ambiguous (the ttfx kernel regression: 6 kernels -> 4).
+# The channel is part of the pairing rule on purpose: two registrations
+# from the SAME channel with one site are two distinct source forms that
+# happen to share a line (e.g. two defns on one line) and must stay
+# ambiguous. Same-named functions from different files never share a
+# site key, so cross-module name collisions still refuse exactly as
+# before. Duplicates still occupy a defs slot -- walk-def-at requires a
+# parent's children to sit contiguously after it -- but they never join
+# name-ids and never emit; their compiler-attached contract metadata
+# (hint / profiled retention, which the analysis channel is what
+# carries) merges onto the surviving registration.
+(var def-site-ids @{}) # "source\0name\0line" -> {:real id :analysis id}
+
+(defn- def-site-key [d source]
+  (def sm (get d :sourcemap))
+  (def nm (get d :name))
+  (when (and nm (string? source)
+             (indexed? sm) (> (length sm) 0)
+             (indexed? (sm 0)) (number? (get (sm 0) 0)))
+    (string source "\x00" (string nm) "\x00" (get (sm 0) 0))))
+
+(defn- same-arity-shape? [a b]
+  # same source form -> same signature under either compilation; a
+  # same-line redefinition with a different signature must not collapse
+  (and (= (get a :arity) (get b :arity))
+       (= (get a :min-arity) (get b :min-arity))
+       (= (get a :max-arity) (get b :max-arity))
+       (= (get a :vararg) (get b :vararg))))
+
+(defn register-def [d source path &opt real-channel]
   (def id next-id)
   (++ next-id)
   (def name (string (or (d :name) (string "<anon-" id ">"))))
+  (def hint (get (get unit-hint-paths source) path))
+  (def profiled (get (get unit-profile-paths source) path))
+  (var dup-of nil)
+  (def key (def-site-key d source))
+  (when key
+    (def entry (or (get def-site-ids key)
+                   (do (def e @{}) (put def-site-ids key e) e)))
+    (def mine (if real-channel :real :analysis))
+    (def other (get entry (if real-channel :analysis :real)))
+    (if (and other (same-arity-shape? ((defs other) :d) d))
+      (set dup-of other)
+      (unless (get entry mine) (put entry mine id))))
   (array/push defs @{:d d :name name
-                     :hint (get (get unit-hint-paths source) path)
-                     :profiled (get (get unit-profile-paths source) path)
-                     :source source})
-  (def bucket (get name-ids name))
-  (if bucket
-    (array/push bucket id)
-    (put name-ids name @[id]))
+                     :hint (if dup-of nil hint)
+                     :profiled (if dup-of nil profiled)
+                     :source source
+                     :name-duplicate dup-of})
+  (when dup-of
+    (def canon (get defs dup-of))
+    (when (and hint (nil? (get canon :hint))) (put canon :hint hint))
+    (when (and profiled (nil? (get canon :profiled)))
+      (put canon :profiled profiled)))
+  (unless dup-of
+    (def bucket (get name-ids name))
+    (if bucket
+      (array/push bucket id)
+      (put name-ids name @[id])))
   # children pre-order, right after the parent: ids read top-down and
   # each subtree occupies one contiguous range
   (var childidx 0)
   (each child (or (d :defs) @[])
-    (register-def child source (string path "/" childidx))
+    (register-def child source (string path "/" childidx) real-channel)
     (++ childidx))
   id)
 
@@ -807,7 +865,7 @@
           (unless (get real-import-registered key)
             (put real-import-registered key true)
             (def d (try (disasm f) ([_] nil)))
-            (when d (register-def d source (string "real/" pfx k)))))))))
+            (when d (register-def d source (string "real/" pfx k) true))))))))
 
 (defn preimport-unit-imports [env unitfile forms]
   (def prev-current-file (dyn :current-file))
@@ -1390,6 +1448,10 @@
   (cond
     (= op 'len) @[(ins 2)]
     (= op 'get) @[(ins 2) (ins 3)]
+    # `in` shares get's layout; `inim` carries the index as an UNSIGNED
+    # IMMEDIATE so only the container operand is a slot read.
+    (= op 'in) @[(ins 2) (ins 3)]
+    (= op 'inim) @[(ins 2)]
     (= op 'put) @[(ins 2) (ins 3)]
     (= op 'push) @[(ins 1)]
     (= op 'push2) @[(ins 1) (ins 2)]
@@ -1575,7 +1637,7 @@
     'bandim 1 'borim 1 'bxorim 1
     'lt 1 'ltim 1 'gt 1 'gtim 1 'lte 1 'gte 1
     'eq 1 'eqim 1 'neq 1 'neqim 1 'call 1 'movn 1 'movf 2
-    'len 1 'get 1 'put 1 'puti 1})
+    'len 1 'get 1 'in 1 'inim 1 'put 1 'puti 1})
 (def emit-cmp-im @{'ltim true 'gtim true 'eqim true 'neqim true})
 (def emit-term-ops @{'ret true 'retn true 'err true})
 (def emit-cond-jumps @{'jmpif true 'jmpno true})
@@ -1791,6 +1853,18 @@
                               (= :tuple (get st (ins 2) :unknown)))
                           (or (infer/int-family? (get st (ins 3) :unknown))
                               (= :number (get st (ins 3) :unknown))))
+                   :number :unknown))
+            (= op 'in)
+            (put st (ins 1)
+                 (if (and (or (= :array (get st (ins 2) :unknown))
+                              (= :tuple (get st (ins 2) :unknown)))
+                          (or (infer/int-family? (get st (ins 3) :unknown))
+                              (= :number (get st (ins 3) :unknown))))
+                   :number :unknown))
+            (= op 'inim)
+            (put st (ins 1)
+                 (if (or (= :array (get st (ins 2) :unknown))
+                         (= :tuple (get st (ins 2) :unknown)))
                    :number :unknown))
             (= op 'call)
             (do (def fta (get (get taccs id) pc))
@@ -2456,8 +2530,12 @@
           # what the instruction actually READS -- same pattern as
           # sh-now/ta-now above, recorded for the emission arm below.
           (def get-now
-            (when (= op 'get)
+            (when (or (= op 'get) (= op 'in))
               @[(get st (ins 2) :unknown) (get st (ins 3) :unknown)]))
+          # inim: container type only; the index is a compile-time
+          # unsigned immediate, never a slot.
+          (def inim-now
+            (when (= op 'inim) (get st (ins 2) :unknown)))
           # keep the slot-type state current (mirrors flow-check)
           (cond
             (= op 'ldi) (put st (ins 1) :long)
@@ -2499,6 +2577,18 @@
                               (= :tuple (get st (ins 2) :unknown)))
                           (or (infer/int-family? (get st (ins 3) :unknown))
                               (= :number (get st (ins 3) :unknown))))
+                   :number :unknown))
+            (= op 'in)
+            (put st (ins 1)
+                 (if (and (or (= :array (get st (ins 2) :unknown))
+                              (= :tuple (get st (ins 2) :unknown)))
+                          (or (infer/int-family? (get st (ins 3) :unknown))
+                              (= :number (get st (ins 3) :unknown))))
+                   :number :unknown))
+            (= op 'inim)
+            (put st (ins 1)
+                 (if (or (= :array (get st (ins 2) :unknown))
+                         (= :tuple (get st (ins 2) :unknown)))
                    :number :unknown))
             (= op 'call)
             (if ta-now
@@ -2827,6 +2917,60 @@
                               (loop-elide-upper? d pc (ins 2) (ins 3) id st))
               (array/push lines
                           (string "    s" (ins 1) " = janet_unwrap_number(" gdata ");")))
+            # `in` is emitted exactly like `get`: same array/tuple gate,
+            # same integrality and bounds checks. Semantically it is a
+            # BETTER match than get -- the emitted code aborts on an
+            # out-of-range index, which is what `in` does (get would
+            # return nil, which has no unboxed representation). Needed
+            # because ttfx now indexes limb arrays with (in a i) rather
+            # than call syntax, which previously made kernels fail with
+            # "unhandled op in"/"unhandled op inim".
+            (= op 'in)
+            (do
+              (def gbase (get-now 0))
+              (def gtup (= gbase :tuple))
+              (unless (and (or (= gbase :array) gtup)
+                           (or (infer/int-family? (get-now 1))
+                               (= :number (get-now 1))))
+                (set bad (if gtup "in requires tuple and int index"
+                             "in requires array and int index"))
+                (break))
+              (def garr (emit-slot (ins 2) arity))
+              (def gidxd (emit-slot (ins 3) arity))
+              (def gidx (string "(int64_t)(" gidxd ")"))
+              (def gbound (if gtup (string "janet_tuple_head(" garr ")->length")
+                              (string garr "->count")))
+              (def gdata (if gtup (string garr "[" gidx "]")
+                             (string garr "->data[" gidx "]")))
+              (def oobmsg (if gtup "tuple index out of bounds"
+                              "array index out of bounds"))
+              (emit-index-check lines gidxd (= :number (get-now 1)))
+              (emit-oob-check lines gidx gbound oobmsg
+                              (loop-elide-upper? d pc (ins 2) (ins 3) id st))
+              (array/push lines
+                          (string "    s" (ins 1) " = janet_unwrap_number(" gdata ");")))
+            # `inim`: the index is an UNSIGNED IMMEDIATE (0..255) carried
+            # in the instruction, so there is no index slot to type-check
+            # and no integrality check to emit -- it is a known
+            # non-negative integer by construction. Only the bounds check
+            # remains.
+            (= op 'inim)
+            (do
+              (def gtup (= inim-now :tuple))
+              (unless (or (= inim-now :array) gtup)
+                (set bad "inim requires array or tuple")
+                (break))
+              (def garr (emit-slot (ins 2) arity))
+              (def gidx (string "(int64_t)" (ins 3)))
+              (def gbound (if gtup (string "janet_tuple_head(" garr ")->length")
+                              (string garr "->count")))
+              (def gdata (if gtup (string garr "[" gidx "]")
+                             (string garr "->data[" gidx "]")))
+              (def oobmsg (if gtup "tuple index out of bounds"
+                              "array index out of bounds"))
+              (emit-oob-check lines gidx gbound oobmsg false)
+              (array/push lines
+                          (string "    s" (ins 1) " = janet_unwrap_number(" gdata ");")))
             (= op 'put)
             # Phase 5 first: a VALIDATED constant-key table write (infer
             # taccs) lowers to a direct member store into the flat
@@ -3105,7 +3249,15 @@
     # a def named like a declared extern is the compiled fallback
     # artifact — the real implementation lives in C
     (when (get externs (string (or (d :name) "?"))) (set concrete false))
-    (if concrete
+    # one site, one kernel: a duplicate registration of an imported
+    # function never emits — the surviving registration owns the name,
+    # the C symbol and the profile/hint identity
+    (cond
+      (get info :name-duplicate)
+      (array/push skips [id (string (or (d :name) "?"))
+                         (string "duplicate registration of site, canonical def "
+                                 (get info :name-duplicate))])
+      concrete
       (put cand id true)
       (array/push skips [id (string (or (d :name) "?"))
                           (string "types not proven: " (describe-types pt rt))])))
@@ -3652,6 +3804,16 @@
     # Whole program cleared: the existing reachability computation is
     # trustworthy for computing the concrete reachable set.
     (def dce-reach (reachable-from roots))
+    # A site duplicate IS the same function as its canonical def: alive
+    # through either registration means alive. The duplicate sits under
+    # its unit's thunk root (contains edges) while the canonical real
+    # import is reachable only through resolved call edges, so propagate
+    # the duplicate's reachability -- otherwise kernel candidacy and the
+    # mkimage name-exclusion check below could delete a function that is
+    # alive through its other registration.
+    (each dup-id (range (length defs))
+      (def dup (get (defs dup-id) :name-duplicate))
+      (when (and dup (get dce-reach dup-id)) (put dce-reach dup true)))
     (def dce-excluded @[])
     (var dce-ri 0)
     (each info defs
@@ -4030,12 +4192,20 @@
                       (or (and (= op 'jmp) (<= (ins 1) 0))
                           (and (get emit-cond-jumps op) (<= (ins 2) 0))))
                     (or (d :bytecode) @[])))
-    (if loops
+    # one site, one kernel: a duplicate registration of an imported
+    # function never emits in any tier — the surviving registration
+    # owns the name, the C symbol and the profile/hint identity
+    (cond
+      (get info :name-duplicate)
+      (array/push lib-skips [id (string (or (d :name) "?"))
+                             (string "duplicate registration of site, canonical def "
+                                     (get info :name-duplicate))])
+      loops
       (array/push lib-skips [id (string (or (d :name) "?"))
                              "loop requires resumable VM quantum polls"])
-      (if concrete
-        (put cand id true)
-        (do
+      concrete
+      (put cand id true)
+      (do
           # Phase 4 middle tier: a function whose params are all
           # concrete EXCEPT exactly one slot, whose PGO-observed type
           # set is a closed, small set of scalar atom types, becomes a
@@ -4113,7 +4283,7 @@
                   (put joint-cand id (seq [key :in (sorted (keys sigs))] (get sigs key)))))
               (unless (get joint-cand id)
                 (array/push lib-skips [id nmj
-                                       (string "types not proven: " (describe-types-lib pt rt))]))))))))
+                                       (string "types not proven: " (describe-types-lib pt rt))])))))))
   (def emitted-names @{})
   (def kernels @[])
   (def lib-skip-reason @{})
@@ -4230,7 +4400,8 @@
                " namebucket=" (length (get name-ids (string (d :name)) @[]))
                " envs=" (length (or (d :environments) [])) " defs=" (length (or (d :defs) []))
                " words=" (if (d :bytecode-words) "y" "n") " vararg=" (d :vararg)))
-      (when (loop-executor/eligible? d)
+      (when (and (nil? ((get defs id) :name-duplicate))
+                 (loop-executor/eligible? d))
         (def key [(d :flags) (d :arity) (d :min-arity) (d :max-arity) (d :slotcount)
                   (map (fn [x] (if (loop-executor/primitive-constant? x)
                                 (tuple (type x) x)

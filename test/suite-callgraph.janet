@@ -940,4 +940,28 @@
 (assert (not (nil? (string/find "PGO PARITY FAILED" pgofaillog))) "pgo failure says why")
 (assert (nil? (os/stat "/tmp/cg-pgofail-app")) "broken binary never installs")
 
+
+# ---- `in` / `inim` in kernels ----
+# ttfx indexes limb arrays with (in a i) rather than call syntax, and a
+# constant index compiles to JOP_IN_IMMEDIATE. The kernel emitter knew
+# only `get`, so such functions failed with "unhandled op in"/"unhandled
+# op inim" and silently lost kernels. Both must emit like `get`, which is
+# semantically the closer match: the emitted code ABORTS on a bad index,
+# matching `in` raising, where `get` would return nil (no unboxed form).
+(spit "/tmp/cg-in.janet" (string
+  "(defn k-sum3 {:hint {:params [:array] :returns :double}} [a]\n"
+  "  (+ (in a 0) (in a 1) (in a 2)))\n"          # constant -> inim
+  "(defn k-sumv {:hint {:params [:array :long] :returns :double}} [a i]\n"
+  "  (+ (in a i) (in a 0)))\n"                    # variable -> in, plus inim
+  "(defn main [&] (print (k-sum3 @[1 2 3]) \" \" (k-sumv @[4 5 6] 1)))\n"))
+(assert (= 0 (os/execute ["/bin/sh" "-c"
+  "rm -rf /tmp/cg-in && ./build/bender tools/callgraph.janet /tmp/cg-in.janet --emit-native /tmp/cg-in"] :p))
+  "in/inim kernel emit run")
+(def intext (slurp "/tmp/cg-in/native.c"))
+(assert (string/find "k_sum3" intext) "inim kernel emitted")
+(assert (string/find "k_sumv" intext) "in kernel emitted")
+(assert (= 0 (os/execute ["/bin/sh" "-c"
+  "cc -O2 -w -fwrapv -Isrc/include -Isrc/conf /tmp/cg-in/native.c build/janet.o -lm -lpthread -ldl -o /tmp/cg-in/native && /tmp/cg-in/native > /tmp/cg-in/actual.txt && cmp /tmp/cg-in/expected.txt /tmp/cg-in/actual.txt"] :p))
+  "in/inim kernel parity")
+
 (end-suite)

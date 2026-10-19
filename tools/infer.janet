@@ -162,7 +162,7 @@
 # dst-slot position per op (mirrors callgraph's emit-writers, plus the
 # loads/constructors it omits). Ops absent here write nothing.
 (def shape-dst-ops
-  @{'ldi 1 'ldc 1 'ldn 1 'ldt 1 'ldf 1 'len 1 'get 1 'put 1 'puti 1
+  @{'ldi 1 'ldc 1 'ldn 1 'ldt 1 'ldf 1 'len 1 'get 1 'in 1 'inim 1 'put 1 'puti 1
     'call 1 'movn 1 'movf 2 'ldu 1
     'mkarr 1 'mktup 1 'mkbtp 1 'mkbuf 1 'mkstr 1 'mkstu 1 'mktab 1})
 
@@ -173,6 +173,10 @@
   (cond
     (= op 'len) @[(ins 2)]
     (= op 'get) @[(ins 2) (ins 3)]
+    # `in` has get's operand layout; `inim` carries the index as an
+    # UNSIGNED IMMEDIATE, so only the container is a slot read.
+    (= op 'in) @[(ins 2) (ins 3)]
+    (= op 'inim) @[(ins 2)]
     (= op 'put) @[(ins 2) (ins 3)]
     (= op 'push) @[(ins 1)]
     (= op 'push2) @[(ins 1) (ins 2)]
@@ -511,6 +515,19 @@
                       (or (int-family? (get st (ins 3) :unknown))
                           (= :number (get st (ins 3) :unknown))))
                :number :unknown))
+        # `in` mirrors `get` exactly for array reads (both abort on a bad
+        # index at emission; `in` raising is closer to that than `get`
+        # returning nil). `inim`'s index is a compile-time unsigned
+        # immediate, so no index-slot type is consulted.
+        (= op 'in)
+        (put st (ins 1)
+             (if (and (= :array (get st (ins 2) :unknown))
+                      (or (int-family? (get st (ins 3) :unknown))
+                          (= :number (get st (ins 3) :unknown))))
+               :number :unknown))
+        (= op 'inim)
+        (put st (ins 1)
+             (if (= :array (get st (ins 2) :unknown)) :number :unknown))
         (= op 'push)
         (do (array/push pending (get st (ins 1) :unknown))
           (array/push pending-kw (get kconst (ins 1))))
