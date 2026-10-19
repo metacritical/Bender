@@ -432,3 +432,59 @@ for smoke and beams changed between two identical baseline runs
 stable across runs. So `--probe-shot` is a usable gate for decrypt and
 wipe only; smoke/beams animation state is not reproducible at a fixed
 probe duration.
+
+## E. `--blocks=rects` also measured NULL -- the GUI is PIXEL-FILL bound
+
+Implemented the one remaining GUI lever from section D: bind
+`DrawRectangle` and draw block-element glyphs as filled rectangles
+instead of font glyphs, behind an opt-in `--blocks=rects` flag. This is
+what the js port does, and `bench-engines.md` named it as unimplemented.
+
+First measured the glyph mix to confirm the opportunity was real (new
+`TTFX_SYM_PROBE` instrumentation, one frame of each effect):
+
+| effect | full block `U+2588` | other blocks | rect-replaceable |
+|--------|--------------------:|-------------|-----------------:|
+| wipe | 337 of 401 (84%) | half-blocks 64 | **100%** |
+| beams | 208 of 382 (54%) | eighths/halves 111 | ~84% |
+| smoke | 279 of 464 (60%) | halves 54 (shades 131 cannot) | ~72% |
+
+Shade blocks (U+2591-2593) are deliberately excluded: they are DITHERED
+patterns, not solid, so a flat rect would render them wrongly.
+
+Release binary, 3 PGO passes, `--show-fps --uncapped`, 3s probe. First
+round looked promising -- wipe +5.0%, beams +2.3%. Repeats did not hold:
+
+| effect | glyphs (4 runs, mean) | rects (4 runs, mean) | verdict |
+|--------|----------------------:|---------------------:|---------|
+| wipe | 1038.3 | 1069.3 | +3.0%, ranges overlap |
+| beams | 977.9 | 939.4 | **-3.9%, SIGN FLIPPED** |
+
+No reliable win. The first round was noise, and beams reversed direction
+between rounds.
+
+**The reason, obvious in hindsight and the final piece of the GUI
+picture:** `U+2588` FILLS THE ENTIRE CELL with solid colour. A rect over
+that same cell fills exactly the same pixels in the same colour. The GPU
+does identical fill work either way; the only thing saved is one texture
+atlas sample, which is negligible against the fill. wipe is 84%
+full-blocks, so there was essentially nothing to save -- and effects with
+few blocks (fireworks -4.0%) pay a per-cell table lookup for nothing.
+
+### The GUI is now fully characterised, by elimination
+
+| hypothesis | test | result |
+|------------|------|--------|
+| Janet-call bound | removed 2.4M FFI lazy thunks (-37.9% calls/draw) | **0%** |
+| draw-call bound | run batching (1.9-3.6x fewer calls) | **slower** |
+| atlas-sampling bound | rects instead of glyphs | **0%** |
+| **per-cell pixel-fill bound** | cells x fps constant at 345,274 +/- 2.0% | **confirmed** |
+
+Frame time is proportional to cells rasterized, and every strategy
+tested rasterizes the same pixels. There is no Janet-side or
+draw-strategy win available in this GUI. Any real improvement must
+reduce the NUMBER of cells filled (dirty-rect / occlusion culling, i.e.
+skip cells unchanged since the last frame) or change resolution.
+
+Reverted; ttfx tree clean. The `TTFX_SYM_PROBE` approach is worth
+re-adding temporarily if anyone needs a glyph-mix census again.
