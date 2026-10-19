@@ -3571,7 +3571,18 @@
                                       (string "    return " (emit-c-name cname)
                                               "(" (string/join pending ", ") ");"))
                         (set pending @[]))
-                      (do (set bad "call to non-native or type mismatch")
+                      (do (when (os/getenv "JANET_CALL_DEBUG")
+                            (eprint "call-debug pc=" pc
+                                    " core=" (string/format "%j" (get (get core-call-map id) pc))
+                                    " shape=" (string/format "%j" (pure-call-shape id pc st d))
+                                    " operand=" (string/format "%j" (get st (ins 2)))
+                                    " tid=" (string/format "%j" tid)
+                                    " native=" (string/format "%j" cname)
+                                    " target-rt=" (string/format "%j" trt)
+                                    " want-rt=" (string/format "%j" rt)
+                                    " args-now=" (if args-now "yes" "no")
+                                    " spread=" (if spread "yes" "no")))
+                        (set bad "call to non-native or type mismatch")
                         (break)))))))))
             # ldu (load upvalue) is dead in emitted code: static calls
             # resolve by name, and any live use of the loaded value
