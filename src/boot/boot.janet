@@ -5742,7 +5742,15 @@
 
 # v3 stores a manifest and independently replayable raw observations. v2 is
 # read as a single workload, with its oracle regenerated at replay time.
-(defn- aot-cache-load [cdir key sources]
+#
+# allow-legacy admits a v3 record without an oracle. That shape is produced
+# when a v2 record is promoted: the gate regenerates the oracle but older
+# manifests persisted the record before the oracle was attached. Rejecting
+# the whole manifest would strand every cache written by that version. The
+# collection path therefore accepts it and repairs it on the next store;
+# the automatic path stays strict, because it replays oracles and must not
+# treat an unverifiable observation as evidence.
+(defn- aot-cache-load [cdir key sources &opt allow-legacy]
   (def base (string cdir "/" key))
   (def meta (try (parse (slurp (string base ".meta"))) ([_] nil)))
   (def identity (aot-source-identity sources))
@@ -5777,14 +5785,15 @@
                  (string? (get rec :profile))
                  (= :file (os/stat (get rec :profile) :mode))
                  (if (= 3 (get meta :version))
-                   (and (string? (get rec :oracle))
-                        (= :file (os/stat (get rec :oracle) :mode)))
+                   (or (and allow-legacy (nil? (get rec :oracle)))
+                        (and (string? (get rec :oracle))
+                        (= :file (os/stat (get rec :oracle) :mode))))
                    (nil? (get rec :oracle))))
       (set valid false)))
   (unless valid (break nil))
   records)
 
-(defn- aot-cache-store [out ndir workload stdin sources captured-input previous-meta]
+(defn- aot-cache-store [out ndir workload stdin sources captured-input prior-oracles previous-meta]
   # Publish immutable generation files before atomically switching the
   # manifest. Never modify a file referenced by the previous manifest.
   (try
@@ -5798,7 +5807,7 @@
           (error "PGO cache changed during collection; retry training"))
         (def identity (aot-source-identity sources))
         (unless identity (error "missing PGO source identity"))
-        (def prior (or (aot-cache-load cdir key sources) @[]))
+        (def prior (or (aot-cache-load cdir key sources true) @[]))
         (def records @[])
         (each r prior (array/push records r))
         (def pos (find-index (fn [r] (and (= workload (get r :args))
@@ -5812,6 +5821,24 @@
           (def trial (string cdir "/" key ".rev-" (os/getpid) "-" serial))
           (if (os/mkdir trial) (set generation trial) (++ serial)))
         (unless generation (error "could not reserve PGO cache generation"))
+        # A v2 record promoted into v3 has no stored oracle. The gate just
+        # regenerated one; attach it to the promoted record so the manifest
+        # stays replay-verifiable (a v3 record without an oracle is refused
+        # by the strict load used when applying the cache).
+        (for i 0 (length prior)
+          (def r (records i))
+          (when (nil? (get r :oracle))
+            (def regenerated (get prior-oracles i))
+            (unless (and regenerated (= :file (os/stat regenerated :mode)))
+              (error "legacy PGO record has no regenerated oracle"))
+            (def dest (string generation "/legacy-oracle-" i ".out"))
+            (spit dest (slurp regenerated))
+            # Manifest records parse as structs; rebuild as a table to
+            # attach the oracle without mutating the parsed value.
+            (def promoted @{})
+            (eachp [k v] r (put promoted k v))
+            (put promoted :oracle dest)
+            (put records i promoted)))
         (def raw (string generation "/profile.jdn"))
         (def oracle (string generation "/oracle.out"))
         (if pos
@@ -6043,6 +6070,7 @@
       (var gate-stdin "")
       (var gate-records @[])
       (var prior-cache-meta nil)
+      (var prior-oracles @[])
       (var captured-stdin nil)
       (when pgo
         # phase 0 (collect): interpreter under the type collector;
@@ -6087,7 +6115,7 @@
             (aot-cache-transaction cdir key (fn []
               (when (os/stat meta-path)
                 (set prior-cache-meta (string (slurp meta-path))))
-              (set prior (aot-cache-load cdir key [src ;includes ;extrac]))))
+              (set prior (aot-cache-load cdir key [src ;includes ;extrac] true))))
             ([e] (aot-die (string "PGO cache busy or unreadable: " e) 1)))
           (def recorded (try (parse prior-cache-meta) ([_] nil)))
           (when (and (= 3 (get recorded :version))
@@ -6120,6 +6148,7 @@
                 (when oin (file/close oin))
                 (unless (= 0 ocode)
                   (aot-die "legacy PGO oracle regeneration failed" 1)))
+              (array/push prior-oracles oracle)
               (array/push gate-records {:args (get r :args) :stdin replay-stdin
                                         :oracle oracle}))
             (aot-report-divergence [;(map (fn [r] (get r :profile)) prior)
@@ -6338,7 +6367,7 @@
                       (when pgo
                         (unless (aot-cache-store out ndir gate-workload pgo-stdin
                                                  [src ;includes ;extrac] captured-stdin
-                                                 prior-cache-meta)
+                                                 prior-oracles prior-cache-meta)
                           (aot-die "PGO cache publication failed; no binary installed" 1)))
                       (os/rename candidate out)
                       (eprint "bender --aot: pgo parity ok, installed " out)))))
