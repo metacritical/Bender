@@ -536,7 +536,15 @@
 (defn- ffi-prim-desc [kw]
   (def cp (get ffi-prim-alias kw))
   (when (and cp (not= cp :void))
-    {:kind :prim :prim cp :c (get ffi-prim-c cp)
+    # :conv is the CANONICAL decode this platform's marshaller actually
+    # uses for :size/:ssize (uint64/int64 on 64-bit, uint32/int32 on
+    # 32-bit -- decode_ffi_prim picks by word size). Conversions must
+    # mirror that prim exactly, not the source spelling's C type.
+    (def conv (cond
+                (= cp :size) (if (= 8 (ffi/size :size)) :uint64 :uint32)
+                (= cp :ssize) (if (= 8 (ffi/size :ssize)) :int64 :int32)
+                cp))
+    {:kind :prim :prim cp :conv conv :c (get ffi-prim-c cp)
      :size (ffi/size cp) :align (ffi/align cp)
      :key (string (get ffi-prim-c cp))}))
 
@@ -4804,6 +4812,304 @@
           "        janet_panicf(\"native " cn ": no boxed fallback registered\");\n"
           "    return janet_call(janet_unwrap_function(fb), argc, argv);\n}\n"))
 
+# ---------------------------------------------------------------------------
+# FFI alias tier -- native emission (see the extraction section above).
+#
+# One cfunction wrapper per extracted alias: boxed arguments are converted
+# with exactly the public getters the boxed marshaller uses (same coercion
+# rules, same panics), the C function is called through a statically typed
+# pointer, and the result is boxed with the marshaller's read rules.
+#
+# Reaching module call sites: a module's calls to a defn defined earlier in
+# the same unit bake the function VALUE into the caller's constant pool, so
+# the kernel tier's name-rebinding prelude cannot reach them (verified:
+# module-internal calls never hit kernel wrappers; only entry-file call
+# sites do). The wrapper is therefore installed ON the definition:
+# native-ffi-aliases.txt lists <id> <name> <argcount> <source basename>,
+# mkimage appends one install form per matching env binding, and
+# janet_ffi_alias_install rewrites that definition's body in place into a
+# tail call to the wrapper. Every call site -- baked constants, table
+# fields, closures -- then dispatches straight to generated C.
+# ---------------------------------------------------------------------------
+
+(defn- ffi-desc-c [d names]
+  (case (d :kind)
+    :void "void"
+    :struct (get names (d :key))
+    (d :c)))
+
+(defn- path-basename [s]
+  (def slashes (string/find-all "/" (string s)))
+  (if (empty? slashes) (string s) (string/slice (string s) (inc (last slashes)))))
+
+(defn- ffi-desc-prims [d]
+  (if (= (d :kind) :struct)
+    (flatten (map ffi-desc-prims (d :fields)))
+    [(d :conv)]))
+
+(defn- ffi-struct-plan
+  # Post-order (nested structs before their containers) so every typedef is
+  # complete before it is used as a field; structural dedup by layout key
+  # (equal keys are ABI-identical and share one typedef).
+  [aliases]
+  (def order @[])
+  (def seen @{})
+  (defn walk [d]
+    (when (and d (= (d :kind) :struct) (not (get seen (d :key))))
+      (put seen (d :key) true)
+      (each f (d :fields) (walk f))
+      (array/push order d)))
+  (each a aliases
+    (walk (a :ret))
+    (each p (a :params) (walk p)))
+  (def names @{})
+  (eachp [i d] order (put names (d :key) (string "ffi_s" i)))
+  [order names])
+
+(defn- ffi-write-c
+  "C expression converting boxed value arr[n] to desc d's C type, mirroring
+  janet_ffi_write_one exactly: same getters, same truncations (the declared
+  C local supplies the narrowing for the signed cases, exactly as the
+  marshaller's typed store does)."
+  [d arr n]
+  (def a (string "(" arr ")[" n "]"))
+  (case (d :conv)
+    :bool (string "janet_getboolean(" arr ", " n ")")
+    :ptr (string "janet_ffi_pointer_value(" a ")")
+    :string (string "janet_getcstring(" arr ", " n ")")
+    :float (string "(float) janet_getnumber(" arr ", " n ")")
+    :double (string "janet_getnumber(" arr ", " n ")")
+    :int8 (string "janet_getinteger(" arr ", " n ")")
+    :int16 (string "janet_getinteger(" arr ", " n ")")
+    :int32 (string "janet_getinteger(" arr ", " n ")")
+    :int64 (string "janet_getinteger64(" arr ", " n ")")
+    :uint8 (string "(uint8_t) janet_getuinteger64(" arr ", " n ")")
+    :uint16 (string "(uint16_t) janet_getuinteger64(" arr ", " n ")")
+    :uint32 (string "(uint32_t) janet_getuinteger64(" arr ", " n ")")
+    :uint64 (string "janet_getuinteger64(" arr ", " n ")")
+    (error (string "ffi alias tier: no write conversion for " (d :conv)))))
+
+(defn- ffi-read-c
+  "C expression boxing the C value expr of desc d, mirroring
+  janet_ffi_read_one exactly (including the JANET_INT_TYPES guard for the
+  64-bit prims)."
+  [d expr]
+  (case (d :conv)
+    :bool (string "janet_wrap_boolean(" expr ")")
+    :ptr (string "((" expr ") ? janet_wrap_pointer(" expr ") : janet_wrap_nil())")
+    :string (string "janet_cstringv(" expr ")")
+    :float (string "janet_wrap_number((double) (" expr "))")
+    :double (string "janet_wrap_number(" expr ")")
+    :int8 (string "janet_wrap_number((double) (" expr "))")
+    :int16 (string "janet_wrap_number((double) (" expr "))")
+    :int32 (string "janet_wrap_number((double) (" expr "))")
+    :uint8 (string "janet_wrap_number((double) (" expr "))")
+    :uint16 (string "janet_wrap_number((double) (" expr "))")
+    :uint32 (string "janet_wrap_number((double) (" expr "))")
+    :int64 (string "ffi_box_i64(" expr ")")
+    :uint64 (string "ffi_box_u64(" expr ")")
+    (error (string "ffi alias tier: no read conversion for " (d :conv)))))
+
+(defn- ffi-alias-shape
+  "Verify that a compiled def is exactly the ffi/defbind-alias body and
+  return {:thunk-index k} naming the pointer-lookup thunk constant; nil for
+  any other shape (the alias then stays boxed). Mirrors the runtime re-check
+  in janet_ffi_alias_install, which is the authority -- this one only
+  decides whether to emit, so refusing is always safe."
+  [d]
+  (def code (or (d :bytecode) @[]))
+  (def consts (or (d :constants) @[]))
+  (def arity (d :arity))
+  (var res nil)
+  (def ops (map (fn [ins] (get ins 0)) code))
+  (when (and (not (d :vararg))
+             (int? arity) (>= arity 0) (<= arity 200)
+             (>= (length code) 6)
+             (= (ops 0) 'ldc) (= (ops 1) 'call)
+             (= (ops 2) 'ldc) (= (ops 3) 'call))
+    (def ptr-slot ((code 0) 1))
+    (def ptr-const ((code 0) 2))
+    (def sig-slot ((code 2) 1))
+    (def sig-const ((code 2) 2))
+    (when (and (= ((code 1) 2) ptr-slot)
+               (= ((code 3) 2) sig-slot)
+               (function? (get consts ptr-const))
+               (function? (get consts sig-const)))
+      # Pushed arguments must be exactly the pointer, the signature, then
+      # the alias's own parameters in order.
+      (def want @[((code 1) 1) ((code 3) 1)])
+      (for i 0 arity (array/push want i))
+      (var i 4)
+      (var seen 0)
+      (var ok true)
+      (while (and ok (< i (length code)) (not= (get (code i) 0) 'ldc))
+        (def ins (code i))
+        (def vals (case (get ins 0)
+                    'push [(ins 1)]
+                    'push2 [(ins 1) (ins 2)]
+                    'push3 [(ins 1) (ins 2) (ins 3)]
+                    nil))
+        (if (nil? vals)
+          (set ok false)
+          (do
+            (each v vals
+              (if (or (>= seen (length want)) (not= v (get want seen)))
+                (set ok false)
+                (++ seen)))
+            (++ i))))
+      (when (and ok (= seen (length want)) (= i (- (length code) 2)))
+        (def cins (code i))
+        (def tins (code (inc i)))
+        (when (and (= (cins 0) 'ldc) (= (tins 0) 'tcall)
+                   (= (cins 1) (tins 1))
+                   (cfunction? (get consts (cins 2))))
+          (set res {:thunk-index ptr-const})))))
+  res)
+
+(defn- ffi-emit-alias-section
+  "Emit the whole alias tier section: 64-bit box helpers, structural
+  typedefs, struct read/write helpers, one wrapper per alias, and the
+  install cfunction the image prelude calls once per binding."
+  [cout plans order names]
+  (buffer/push-string cout
+    "/* Native FFI aliases (ffi/defbind-alias). Wrappers convert arguments\n"
+    " * with the boxed marshaller's own getters, call the C function through\n"
+    " * a statically typed pointer, and box the result with the marshaller's\n"
+    " * read rules. The pointer is resolved lazily through the alias's\n"
+    " * original lookup thunk, so the library still loads only at first use. */\n"
+    "static Janet ffi_box_i64(int64_t v) {\n"
+    "#ifdef JANET_INT_TYPES\n    return janet_wrap_s64(v);\n#else\n    return janet_wrap_number((double) v);\n#endif\n}\n"
+    "static Janet ffi_box_u64(uint64_t v) {\n"
+    "#ifdef JANET_INT_TYPES\n    return janet_wrap_u64(v);\n#else\n    return janet_wrap_number((double) v);\n#endif\n}\n\n"
+    "/* Identity guard for install: the manifest is keyed by source name, so\n"
+    " * two modules may declare the same alias name. The defining file's\n"
+    " * basename disambiguates (paths differ between analysis and image\n"
+    " * builds; basenames do not). */\n"
+    "static int ffi_alias_source_is(JanetString src, const char *want) {\n"
+    "    if (NULL == src) return 0;\n"
+    "    int32_t n = janet_string_length(src);\n"
+    "    const char *s = (const char *) src;\n"
+    "    int32_t base = 0;\n"
+    "    for (int32_t i = 0; i < n; i++)\n"
+    "        if (s[i] == '/' || s[i] == '\\\\') base = i + 1;\n"
+    "    int32_t wl = (int32_t) strlen(want);\n"
+    "    return (n - base == wl) && !memcmp(s + base, want, (size_t) wl);\n"
+    "}\n\n")
+  (each d order
+    (def nm (get names (d :key)))
+    (buffer/push-string cout (string "typedef struct { "))
+    (eachp [j f] (d :fields)
+      (buffer/push-string cout (string (ffi-desc-c f names) " f" j "; ")))
+    (buffer/push-string cout (string "} " nm ";\n")))
+  (when (not (empty? order)) (buffer/push-string cout "\n"))
+  (each d order
+    (def nm (get names (d :key)))
+    (def nf (length (d :fields)))
+    (buffer/push-string cout (string
+      "static void " nm "_write(" nm " *out, Janet v) {\n"
+      "    JanetView els = janet_getindexed(&v, 0);\n"
+      "    if ((int32_t) els.len != " nf
+      ") janet_panicf(\"wrong number of fields in struct, expected " nf
+      ", got %d\", (int32_t) els.len);\n"))
+    (eachp [j f] (d :fields)
+      (if (= (f :kind) :struct)
+        (buffer/push-string cout (string "    " (get names (f :key))
+                                       "_write(&out->f" j ", els.items[" j "]);\n"))
+        (buffer/push-string cout (string "    out->f" j " = "
+                                       (ffi-write-c f "els.items" j) ";\n"))))
+    (buffer/push-string cout "}\n")
+    (buffer/push-string cout (string
+      "static Janet " nm "_read(const " nm " *in) {\n"
+      "    Janet *tup = janet_tuple_begin(" nf ");\n"))
+    (eachp [j f] (d :fields)
+      (if (= (f :kind) :struct)
+        (buffer/push-string cout (string "    tup[" j "] = " (get names (f :key))
+                                       "_read(&in->f" j ");\n"))
+        (buffer/push-string cout (string "    tup[" j "] = "
+                                       (ffi-read-c f (string "in->f" j)) ";\n"))))
+    (buffer/push-string cout
+      "    return janet_wrap_tuple(janet_tuple_end(tup));\n}\n\n"))
+  (eachp [id p] plans
+    (def a (p :a))
+    (def args (a :params))
+    (def argc (length args))
+    (def jname (emit-c-string-literal (a :janet)))
+    (buffer/push-string cout (string "/* " (a :janet) " (" (a :cname) "): "
+                                     (a :sig) " */\n"))
+    (buffer/push-string cout (string "static void *ffi_alias_ptr_" id ";\n"))
+    (buffer/push-string cout (string "static int ffi_alias_installed_" id ";\n"))
+    (buffer/push-string cout (string "static Janet ffi_alias_wrap_" id
+                                     "(int32_t argc, Janet *argv) {\n"))
+    (buffer/push-string cout
+      (string "    if (argc != " argc ") janet_panicf(\"native " jname
+             " called with %d arguments, expected " argc "\", argc);\n"))
+    (eachp [i d] args
+      (if (= (d :kind) :struct)
+        (do
+          (buffer/push-string cout (string "    " (get names (d :key)) " a" i ";\n"))
+          (buffer/push-string cout (string "    " (get names (d :key))
+                                         "_write(&a" i ", argv[" i "]);\n")))
+        (buffer/push-string cout (string "    " (d :c) " a" i " = "
+                                       (ffi-write-c d "argv" i) ";\n"))))
+    (buffer/push-string cout (string
+      "    if (!ffi_alias_installed_" id ")\n"
+      "        janet_panic(\"native " jname " is not installed\");\n"
+      "    void *fn = ffi_alias_ptr_" id ";\n"))
+    (def argts (if (= argc 0) "void"
+                  (string/join (map (fn [d] (ffi-desc-c d names)) args) ", ")))
+    (def argvs (string/join (map (fn [i] (string "a" i)) (range argc)) ", "))
+    (def call (string "((" (ffi-desc-c (a :ret) names) " (*)(" argts ")) fn)("
+                      argvs ")"))
+    (case ((a :ret) :kind)
+      :void
+      (buffer/push-string cout (string "    " call ";\n    return janet_wrap_nil();\n"))
+      :prim
+      (do
+        (buffer/push-string cout (string "    " ((a :ret) :c) " r = " call ";\n"))
+        (buffer/push-string cout (string "    return " (ffi-read-c (a :ret) "r") ";\n")))
+      :struct
+      (do
+        (def tn (get names ((a :ret) :key)))
+        (buffer/push-string cout (string "    " tn " r = " call ";\n"))
+        (buffer/push-string cout (string "    return " tn "_read(&r);\n"))))
+    (buffer/push-string cout "}\n\n"))
+  (buffer/push-string cout
+    "static Janet cfun_ffi_alias_install(int32_t argc, Janet *argv) {\n"
+    "    janet_fixarity(argc, 2);\n"
+    "    if (!janet_checktype(argv[0], JANET_FUNCTION)) return janet_wrap_nil();\n"
+    "    JanetFunction *f = janet_unwrap_function(argv[0]);\n"
+    "    switch (janet_getinteger(argv, 1)) {\n")
+  (eachp [id p] plans
+    (def a (p :a))
+    (buffer/push-string cout (string
+      "    case " id ": {\n"
+      "        if (ffi_alias_installed_" id ") break;\n"
+      "        if ((f->def->arity != " (a :argcount) ") ||\n"
+      "                !ffi_alias_source_is(f->def->source, \""
+      (emit-c-string-literal (p :source-base)) "\")) {\n"
+      "            fprintf(stderr, \"native ffi alias " (emit-c-string-literal (a :janet))
+      ": not the expected definition; staying boxed\\n\");\n"
+      "            break;\n"
+      "        }\n"
+      "        void *ptr = NULL;\n"
+      "        int st = janet_ffi_alias_install(f, " ((p :shape) :thunk-index)
+      ",\n"
+      "                janet_wrap_cfunction(ffi_alias_wrap_" id "), \""
+      (emit-c-string-literal (a :cname)) "\", &ptr);\n"
+      "        if (st == 0) {\n"
+      "            ffi_alias_ptr_" id " = ptr;\n"
+      "            ffi_alias_installed_" id " = 1;\n"
+      "        } else if (st == 1) {\n"
+      "            fprintf(stderr, \"native ffi alias " (emit-c-string-literal (a :janet))
+      ": definition shape check refused; staying boxed\\n\");\n"
+      "        } else {\n"
+      "            fprintf(stderr, \"native ffi alias " (emit-c-string-literal (a :janet))
+      ": native lookup refused; staying boxed\\n\");\n"
+      "        }\n"
+      "        break;\n"
+      "    }\n")))
+  (buffer/push-string cout "    default: break;\n    }\n    return janet_wrap_nil();\n}\n\n"))
+
 (defn emit-native-lib [outdir]
   # Step 12: hybrid-binary flavor. Emits native.c with the kernels PLUS
   # janet-cfunction wrappers (unbox args -> kernel -> rebox result) and a
@@ -5064,7 +5370,7 @@
   (each s ffi-alias-skips
     (print "ffi-alias-skip " (s 0) " " (s 1)))
   (def cout @"")
-  (buffer/push-string cout "#include <janet.h>\n#include <inttypes.h>\n#include <math.h>\n#include <stdlib.h>\n\n")
+  (buffer/push-string cout "#include <janet.h>\n#include <inttypes.h>\n#include <math.h>\n#include <stdbool.h>\n#include <stdlib.h>\n\n")
   # Independent tier: never insert executor ids into emitted-names/kernels.
   # Distinct definitions may share a name (an imported module's real function
   # and its one-thunk analysis copy). Identity for this tier is structural:
@@ -5167,6 +5473,41 @@
     (buffer/push-string cout "\n")
     (buffer/push-string cout (k :wrapper))
     (buffer/push-string cout "\n"))
+  # --- FFI alias tier: plan, emit, manifest ------------------------------
+  # The census above is the static contract; emit only where THIS image
+  # actually contains a definition with the verified body shape (a refusal
+  # always falls back to the boxed body). The manifest is keyed by
+  # <id> <name> <argcount> <source basename>: mkimage matches env bindings by
+  # name and the runtime install re-checks arity, defining file and shape.
+  (def alias-plans @[])
+  (each a ffi-aliases
+    (def nm (a :janet))
+    (var hit nil)
+    (each id (get name-ids nm @[])
+      (def info (get defs id))
+      (def d (info :d))
+      (when (and (nil? hit)
+                 (not (info :name-duplicate))
+                 (= (string (d :name)) nm)
+                 (= (d :arity) (a :argcount))
+                 (not (d :vararg)))
+        (def shape (ffi-alias-shape d))
+        (when shape (set hit {:def-id id :shape shape}))))
+    (if hit
+      (array/push alias-plans {:a a :shape (hit :shape) :def-id (hit :def-id)
+                               :source-base (path-basename (a :file))})
+      (print "ffi-alias-unemitted " nm " no verified definition in this image")))
+  (when (not (empty? alias-plans))
+    (def [order names] (ffi-struct-plan (map |($0 :a) alias-plans)))
+    (ffi-emit-alias-section cout alias-plans order names)
+    (eachp [id p] alias-plans
+      (print "ffi-alias-native " id " " ((p :a) :janet) " " ((p :a) :sig)))
+    (def am @"")
+    (eachp [id p] alias-plans
+      (def a (p :a))
+      (buffer/push-string am (string id " " (a :janet) " " (a :argcount) " "
+                                     (p :source-base) "\n")))
+    (spit (string outdir "/native-ffi-aliases.txt") am))
   (buffer/push-string cout "#if JANET_NATIVE_TELEMETRY\nstatic void native_telemetry_report_all(void) {\n")
   (each k kernels (buffer/push-string cout (string "    " (emit-c-name (k :name)) "_telemetry_report();\n")))
   (buffer/push-string cout "}\n#endif\n\n")
@@ -5186,12 +5527,21 @@
       (string "    { \"" (k :name) "\", " (emit-c-name (k :name)) "_wrapper, NULL },\n")))
   (when (not (empty? (filter |(get $0 :dispatch) kernels)))
     (buffer/push-string cout "    { \"dispatch-set-boxed\", cfun_disp_set_boxed, NULL },\n"))
+  (when (not (empty? alias-plans))
+    (buffer/push-string cout "    { \"ffi-alias-install\", cfun_ffi_alias_install, NULL },\n"))
   (buffer/push-string cout "    { NULL, NULL, NULL } };\n")
   (buffer/push-string cout "    janet_cfuns(env, \"native\", regs);\n")
   # Stage 2: publish linked descriptors so the VM's lazy structural
   # attachment can find actual imported/unmarshaled/evaluated functions.
   (each id executors
     (buffer/push-string cout (string "    janet_native_registry_add(&nx_" id "_code);\n")))
+  (eachp [id p] alias-plans
+    (buffer/push-string cout (string "    ffi_alias_installed_" id " = 0;\n"
+                                     "    ffi_alias_ptr_" id " = NULL;\n")))
+  (when (not (empty? alias-plans))
+    (buffer/push-string cout (string "    fprintf(stderr, \"native_init: "
+                                     (length alias-plans)
+                                     " ffi aliases installable\\n\");\n")))
   (when (not (empty? kernels))
     (buffer/push-string cout (string "    fprintf(stderr, \"native_init: registered " (length kernels) " wrappers\\n\");\n")))
   (when (not (empty? executors))

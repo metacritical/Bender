@@ -151,6 +151,29 @@
     (each l (string/split "\n" (slurp df))
       (when (> (length l) 0) (put dispatch-names (symbol l) true)))))
 
+# FFI alias tier: "<id> <name> <argcount> <source basename>" lines written by
+# callgraph.janet when native.c contains alias wrappers. Unlike
+# native-names.txt these defns are NOT stripped and NOT rebound: module
+# call sites bake the function VALUE as a constant, so only a rewrite of the
+# definition itself can reach them. mkimage prepends one install form per
+# matching env binding (a runtime (curenv) lookup of the native
+# ffi-alias-install, exactly the executor-registration idiom); the install
+# captures the pointer-lookup thunk out of the original body and replaces
+# the body with a tail call to the generated wrapper.
+(var ffi-alias-entries @[])
+(when native-names-file
+  (def af (string/replace-all "native-names.txt" "native-ffi-aliases.txt" native-names-file))
+  (when (and (not= af native-names-file) (= :file (os/stat af :mode)))
+    (each l (string/split "\n" (slurp af))
+      (when (> (length l) 0)
+        (def parts (string/split " " l))
+        (when (>= (length parts) 3)
+          (array/push ffi-alias-entries
+                      {:id (scan-number (parts 0))
+                       :name (parts 1)
+                       :argc (scan-number (parts 2))
+                       :source (if (>= (length parts) 4) (parts 3) "")}))))))
+
 # B7.2 Part B, Piece 1c: the dce-reachable exclusion set. Only written
 # by callgraph.janet under --dce AND a :safe whole-program verdict, so
 # reaching this point with a non-empty set already means the paranoid
@@ -336,6 +359,51 @@
       nil
       (array/push kept2 f)))
   (set forms kept2))
+
+# FFI alias install forms (see the manifest parse above). PREPENDED: the
+# install argument is a build-time constant (module bindings bake in as
+# constants), so no source form needs to run first -- and scripts commonly
+# end with `(os/exit (main))`, which would make anything appended after the
+# last source form unreachable. Prepending also runs the installs before
+# `:aot-main` is exported below. Binding matching is by name (bare or
+# "<prefix>/name", both surfaces exist), narrowed to functions whose arity
+# and defining-file basename match the manifest -- the same three facts the
+# runtime install re-checks before rewriting anything.
+(when (next ffi-alias-entries)
+  (defn env-binding-value [entry]
+    (if (and (table? entry) (get entry :value)) (get entry :value) entry))
+  (defn basename [s]
+    (def slashes (string/find-all "/" (string s)))
+    (if (empty? slashes) (string s) (string/slice (string s) (inc (last slashes)))))
+  (def installed @{})
+  (var ninstalled 0)
+  (def install-forms @[])
+  (each entry ffi-alias-entries
+    (def nm (entry :name))
+    (def suffix (string "/" nm))
+    (each k (keys env)
+      (def ks (string k))
+      (when (and (symbol? k)
+                 (not (get installed ks))
+                 (or (= ks nm)
+                     (and (>= (length ks) (length suffix))
+                          (= suffix (string/slice ks (- (length ks) (length suffix)))))))
+        (def v (env-binding-value (get env k)))
+        (when (function? v)
+          (def dd (disasm v))
+          (when (and (= (dd :arity) (entry :argc))
+                     (or (= (entry :source) "")
+                         (= (basename (or (dd :source) "")) (entry :source))))
+            (put installed ks true)
+            (++ ninstalled)
+            (array/push install-forms
+                        (tuple (tuple 'get
+                                      (tuple 'get '(curenv)
+                                             (tuple 'quote 'ffi-alias-install))
+                                      ':value)
+                               k (entry :id))))))))
+  (set forms (tuple/slice @[;install-forms ;forms] 0))
+  (eprint "mkimage: ffi aliases: " ninstalled " install form(s) prepended"))
 
 # run-main parity: if the script defines a top-level main, append an
 # explicit export of it onto the fiber env — AOT chunks are one do-form,
