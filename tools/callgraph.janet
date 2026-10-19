@@ -206,7 +206,12 @@
   @{:long true :double true :number true :float true
     :i32 true :i16 true :i8 true
     :u64 true :u32 true :u16 true :u8 true
-    :array true})
+    :array true
+    # Phase 6: opaque/raw ABI types (see infer/abi-hint-type?). A hint
+    # is a contract; the emitted wrapper guards it and panics loudly.
+    :tuple true :pointer true :string true :keyword true :symbol true
+    :bool true :table true :struct true :buffer true :fiber true
+    :function true :cfunction true :abstract true})
 # Full C primitive width set (step 13/width): 64-bit is the default
 # integer (:long); narrower widths are opt-in contracts honored at the
 # FFI boundary; casts are automatic (C implicit conversion).
@@ -267,7 +272,45 @@
     # path) is already correct and NO content-equality kernel is
     # needed, unlike Phase 2's non-interned strings.
     :keyword "JanetKeyword"
-    :symbol "JanetSymbol"})
+    :symbol "JanetSymbol"
+    # Phase 6 (type-generator plan): opaque Janet value types. Each is
+    # already a flat C value at the ABI (pointer or JanetCFunction), so
+    # a kernel can take one, pass it to another kernel, store it in an
+    # array/tuple slot, or return it unchanged without boxing. The
+    # wrapper still GUARDS the Janet type at the boundary (fail-closed),
+    # and body ops that are not explicitly lowered for the type refuse.
+    :table "JanetTable*"
+    :struct "JanetStruct"
+    :buffer "JanetBuffer*"
+    :fiber "JanetFiber*"
+    :function "JanetFunction*"
+    :cfunction "JanetCFunction"
+    :abstract "JanetAbstract"
+    # :value is a BOXED, statically-unknown Janet value (a `Janet`).
+    # Produced only by ops that read an arbitrary value out of a
+    # container (table/struct field, element of an untyped container,
+    # ...); every use is either lowered through the exact Janet C API
+    # or refused. It is a representation leaf, never a user hint.
+    :value "Janet"})
+
+# Phase 6: types with a complete boundary conversion in wrapper-for
+# (type guard + unbox on entry, box on return). Every one of these is a
+# flat C value at the ABI, so kernels can pass them through without
+# touching the boxed representation. :nil parameters are deliberately
+# NOT here: a void C parameter would require call-site argument elision
+# plus read-site nil materialization, which is a separate design (the
+# :nil RETURN exists because a call's destination slot can simply be
+# skipped).
+(def abi-param-types
+  @{:array true :tuple true :pointer true :string true :keyword true
+    :symbol true :bool true :value true :table true :struct true
+    :buffer true :fiber true :function true :cfunction true
+    :abstract true})
+(def abi-return-types
+  @{:array true :nil true :bool true :value true :tuple true
+    :string true :keyword true :symbol true :table true :struct true
+    :buffer true :fiber true :function true :cfunction true
+    :abstract true :pointer true})
 
 # Phase 2/3: atom (string/keyword/symbol) literal constants used
 # inside a kernel body (e.g. a `case`/`=` dispatch against "linear" /
@@ -1687,7 +1730,7 @@
                   'eq "==" 'eqim "==" 'neq "!=" 'neqim "!="})
 # dest slot operand position per writing op (params excluded from decls)
 (def emit-writers
-  @{'ldi 1 'ldc 1 'add 1 'sub 1 'mul 1 'div 1 'divf 1 'mod 1 'rem 1
+  @{'ldi 1 'ldc 1 'ldt 1 'ldf 1 'add 1 'sub 1 'mul 1 'div 1 'divf 1 'mod 1 'rem 1
     'divim 1
     'addim 1 'subim 1 'mulim 1
     'band 1 'bor 1 'bxor 1 'sl 1 'sr 1 'sru 1 'slim 1 'srim 1 'sruim 1
@@ -2359,7 +2402,7 @@
   # whose whole-program return type resolved to :nil genuinely returns
   # nil (type-join widens away from :nil the instant any other return
   # value appears, so rt=:nil here is sound, not a stale default).
-  (unless (or (get infer/numeric-types rt) (= rt :array) (= rt :nil))
+  (unless (or (get infer/numeric-types rt) (get abi-return-types rt))
     (break [nil "return not concrete"]))
   # Step 14b: polymorphic :number returns code-gen as :double. Sound:
   # boxed arithmetic IS double arithmetic, int-domain ops carry their
@@ -2578,14 +2621,21 @@
           # :u64tonum without u64 involvement is an ordinary double
           (some (fn [t] (= t :u64tonum)) kinds)
           (if (some (fn [t] (or (= t :unknown) (= t :nil) (= t :array)
-                                (= t :tuple) (= t :string) (= t :struct))) kinds)
+                                (= t :tuple) (= t :string) (= t :struct)
+                                (= t :keyword) (= t :symbol) (= t :value)
+                                (= t :table) (= t :buffer) (= t :fiber)
+                                (= t :function) (= t :cfunction)
+                                (= t :abstract) (= t :pointer))) kinds)
             :bad-unknown
             :double)
           # :u64load without u64 involvement is an ordinary numeric load
           (some (fn [t] (= t :u64load)) kinds)
           (if (some (fn [t] (or (= t :unknown) (= t :array) (= t :tuple)
                                 (= t :string) (= t :keyword) (= t :symbol)
-                                (= t :nil) (= t :struct))) kinds)
+                                (= t :nil) (= t :struct) (= t :value)
+                                (= t :table) (= t :buffer) (= t :fiber)
+                                (= t :function) (= t :cfunction)
+                                (= t :abstract) (= t :pointer))) kinds)
             :bad-unknown
             :double)
           # Stream F: :u64ok is declaration evidence from `ldi` of a
@@ -2631,7 +2681,11 @@
             (and (> (length kinds) 1)
                  (some (fn [t] (or (= t :array) (= t :tuple) (= t :struct)
                                    (= t :nil) (= t :string)
-                                   (= t :keyword) (= t :symbol))) kinds))
+                                   (= t :keyword) (= t :symbol)
+                                   (= t :value) (= t :table) (= t :buffer)
+                                   (= t :fiber) (= t :function)
+                                   (= t :cfunction) (= t :abstract)
+                                   (= t :pointer))) kinds))
             # Phase 2: a slot reused by the register allocator for both
             # a string value and anything else (e.g. a comparison's
             # bool result reusing the same temp a later branch no
@@ -2786,6 +2840,12 @@
           (cond
             (= op 'ldi)
             (array/push lines (string "    s" (ins 1) " = " (ins 2) ";"))
+            # Phase 6: boolean literals. ldt/ldf were write-swept (:bool)
+            # and flow-typed but never emitted, so ANY function whose
+            # body returns or branches on true/false stayed boxed.
+            (or (= op 'ldt) (= op 'ldf))
+            (array/push lines (string "    s" (ins 1) " = "
+                                      (if (= op 'ldt) "1" "0") ";"))
             (= op 'ldc)
             (do (def cval ((or (d :constants) @[]) (ins 2)))
               (cond
@@ -2795,6 +2855,11 @@
                 # carries :unknown through flow, refusing at the use site
                 # (same discipline as the ldu skip below).
                 nil
+                # A literal boolean stored in the constant table (e.g.
+                # a quoted/quoted-in value) is the same :bool leaf.
+                (= :boolean (type cval))
+                (array/push lines (string "    s" (ins 1) " = "
+                                          (if cval "1" "0") ";"))
                 # Phase 5 carve-out: a keyword constant that feeds only
                 # a closed-shape table key never emits at all -- field
                 # indices resolve statically, and its slot may be
@@ -2822,9 +2887,18 @@
               (def ok (cond
                         (= rt :array) (= rvt :array)
                         (= rt :nil) (= rvt :nil)
+                        (= rt :bool) (= rvt :bool)
+                        (= rt :value) (= rvt :value)
                         (get int-hints rt) (get int-hints rvt)
                         (get float-hints rt)
                         (or (get infer/numeric-types rvt) (= rvt :bool))
+                        # Phase 6: opaque/raw ABI returns pass the value
+                        # through unchanged; the slot must have resolved
+                        # to exactly the same concrete type (the wrapper
+                        # boxes it once at the boundary).
+                        (and (get abi-return-types rt)
+                             (not (get infer/numeric-types rt)))
+                        (= rt rvt)
                         nil))
               (unless ok
                 (set bad (string "ret slot is " rvt " not " rt))
@@ -3545,7 +3619,7 @@
     (when (get dce-dead-ids id) (set concrete false))
     # Step 11: :array params are opaque-but-emittable (pointer temps);
     # :array returns are the (in-place) array itself
-    (each t pt (unless (or (get infer/numeric-types t) (= t :array) (= t :tuple) (= t :pointer) (= t :string) (= t :keyword) (= t :symbol)) (set concrete false)))
+    (each t pt (unless (or (get infer/numeric-types t) (get abi-param-types t)) (set concrete false)))
     # Stream F: :u64 is an INTERNAL kernel domain only (wrapper boxes
     # through double; >2^53 would silently round). Enter via int/u64,
     # leave via int/to-number, never the ABI.
@@ -3553,7 +3627,7 @@
     (when (= rt :u64) (set concrete false))
     # Phase 1: :nil is concrete -- a whole-program-proven-always-nil
     # return is a legitimate void kernel, not an unproven boxed value.
-    (unless (or (get infer/numeric-types rt) (= rt :array) (= rt :nil)) (set concrete false))
+    (unless (or (get infer/numeric-types rt) (get abi-return-types rt)) (set concrete false))
     # a def named like a declared extern is the compiled fallback
     # artifact — the real implementation lives in C
     (when (get externs (string (or (d :name) "?"))) (set concrete false))
@@ -3840,6 +3914,16 @@
           (= t :string) "JANET_STRING"
           (= t :keyword) "JANET_KEYWORD"
           (= t :symbol) "JANET_SYMBOL"
+          # Phase 6 opaque/raw ABI types. :value is already a Janet and
+          # accepts anything (the slot type is the proof obligation).
+          (= t :bool) "JANET_BOOLEAN"
+          (= t :table) "JANET_TABLE"
+          (= t :struct) "JANET_STRUCT"
+          (= t :buffer) "JANET_BUFFER"
+          (= t :fiber) "JANET_FIBER"
+          (= t :function) "JANET_FUNCTION"
+          (= t :cfunction) "JANET_CFUNCTION"
+          (= t :abstract) "JANET_ABSTRACT"
           nil))
         (when expected
           (string "    if (janet_type(argv[" i "]) != " expected ") { " cn "_TELEMETRY_TYPE_GUARD(); janet_panicf(\"native " cn " argument " i " has wrong Janet type\"); }\n")))
@@ -3863,13 +3947,48 @@
                            (string "janet_unwrap_keyword(argv[" i "])")
                            (= t :symbol)
                            (string "janet_unwrap_symbol(argv[" i "])")
+                           # Phase 6 opaque/raw and boxed ABI types.
+                           (= t :bool)
+                           (string "janet_unwrap_boolean(argv[" i "])")
+                           (= t :table)
+                           (string "(JanetTable *)janet_unwrap_table(argv[" i "])")
+                           (= t :struct)
+                           (string "janet_unwrap_struct(argv[" i "])")
+                           (= t :buffer)
+                           (string "(JanetBuffer *)janet_unwrap_buffer(argv[" i "])")
+                           (= t :fiber)
+                           (string "(JanetFiber *)janet_unwrap_fiber(argv[" i "])")
+                           (= t :function)
+                           (string "(JanetFunction *)janet_unwrap_function(argv[" i "])")
+                           (= t :cfunction)
+                           (string "janet_unwrap_cfunction(argv[" i "])")
+                           (= t :abstract)
+                           (string "janet_unwrap_abstract(argv[" i "])")
+                           (= t :value)
+                           (string "argv[" i "]")
                            (string "janet_unwrap_number(argv[" i "])")))
                   ", "))
   # Phase 1: a void kernel produces no C value at all -- rv stays nil as
   # a sentinel; the final-line emission below special-cases it to call
   # the kernel as a bare statement, then separately return nil.
+  # Phase 6: every opaque/raw return boxes exactly once here. :value is
+  # already a Janet, so :identity passes it through untouched.
   (def rv (cond (= rt :nil) nil
                 (= rt :array) "janet_wrap_array"
+                (= rt :value) :identity
+                (= rt :bool) "janet_wrap_boolean"
+                (= rt :tuple) "janet_wrap_tuple"
+                (= rt :string) "janet_wrap_string"
+                (= rt :keyword) "janet_wrap_keyword"
+                (= rt :symbol) "janet_wrap_symbol"
+                (= rt :table) "janet_wrap_table"
+                (= rt :struct) "janet_wrap_struct"
+                (= rt :buffer) "janet_wrap_buffer"
+                (= rt :fiber) "janet_wrap_fiber"
+                (= rt :function) "janet_wrap_function"
+                (= rt :cfunction) "janet_wrap_cfunction"
+                (= rt :abstract) "janet_wrap_abstract"
+                (= rt :pointer) "janet_wrap_pointer"
                 (and (get int-hints rt) (not= int-policy :promote))
                 "janet_wrap_integer"
                 "janet_wrap_number"))
@@ -3893,7 +4012,9 @@
           "    " cn "_TELEMETRY_HIT();\n"
           (if (nil? rv)
             (string "    " cn "(" ps ");\n    return janet_wrap_nil();\n}\n")
-            (string "    return " rv "(" cn "(" ps "));\n}\n"))
+            (if (= rv :identity)
+              (string "    return " cn "(" ps ");\n}\n")
+              (string "    return " rv "(" cn "(" ps "));\n}\n")))
           "#undef " cn "_TELEMETRY_HIT\n#undef " cn "_TELEMETRY_ARITY_GUARD\n#undef " cn "_TELEMETRY_TYPE_GUARD\n"))
 
 # ---------------------------------------------------------------------------
@@ -4486,7 +4607,7 @@
     (when (get dce-dead-ids id) (set concrete false))
     # Step 11: :array params are opaque-but-emittable (pointer temps);
     # :array returns are the (in-place) array itself
-    (each t pt (unless (or (get infer/numeric-types t) (= t :array) (= t :tuple) (= t :pointer) (= t :string) (= t :keyword) (= t :symbol)) (set concrete false)))
+    (each t pt (unless (or (get infer/numeric-types t) (get abi-param-types t)) (set concrete false)))
     # Stream F: :u64 is an INTERNAL kernel domain only (wrapper boxes
     # through double; >2^53 would silently round). Enter via int/u64,
     # leave via int/to-number, never the ABI.
@@ -4494,7 +4615,7 @@
     (when (= rt :u64) (set concrete false))
     # Phase 1: :nil is concrete -- a whole-program-proven-always-nil
     # return is a legitimate void kernel, not an unproven boxed value.
-    (unless (or (get infer/numeric-types rt) (= rt :array) (= rt :nil)) (set concrete false))
+    (unless (or (get infer/numeric-types rt) (get abi-return-types rt)) (set concrete false))
     # Hybrid wrappers replace the bytecode definition entirely. A C loop
     # cannot yield a VM quantum and later resume its native stack/locals.
     # Keep loops boxed until native continuations exist; callers also stay

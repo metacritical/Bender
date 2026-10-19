@@ -25,6 +25,19 @@
     :u64 :long :u32 :long :u16 :long :u8 :long
     :float :double})
 
+# Phase 6: hint-visible types with a complete native ABI (mirrors
+# callgraph.janet's abi-param-types/abi-return-types). A hint is a user
+# contract: the wrapper guards the Janet type at the boundary and
+# panics on a violation, exactly like the pre-existing :array contract.
+# :value is an internal boxed representation, never a user hint; :nil
+# params need call-site elision and read-site materialization, so they
+# stay out until that design lands.
+(def abi-hint-types
+  @{:array true :tuple true :pointer true :string true :keyword true
+    :symbol true :bool true :table true :struct true :buffer true
+    :fiber true :function true :cfunction true :abstract true})
+(defn abi-hint-type? [t] (or (get numeric-types t) (get abi-hint-types t)))
+
 # int-family predicate (mirrors callgraph's int-hints table; :number
 # is deliberately excluded — unknown int-or-float stays fail-closed)
 (defn int-family? [t] (or (= t :long) (= :long (get width-family t))))
@@ -286,8 +299,7 @@
         # :tuple (fixed positional struct-thing) and :pointer (native
         # memory, never arithmetized) are opaque the same way.
         (when (< i arity)
-          (put parr i (if (or (get numeric-types p) (= p :array)
-                              (= p :tuple) (= p :pointer)) p :unknown)))
+          (put parr i (if (abi-hint-type? p) p :unknown)))
         (++ i))
       (put pfixed id true))
     (put pts id parr)
@@ -365,8 +377,8 @@
       (put pprov id prov))
     (put nnp id nnarr)
     (def hr (if h (get h :returns) nil))
-    (array/push rts (if (or (get numeric-types hr) (= hr :array)) hr :unknown))
-    (when (or (get numeric-types hr) (= hr :array)) (put rfixed id true)))
+    (array/push rts (if (abi-hint-type? hr) hr :unknown))
+    (when (abi-hint-type? hr) (put rfixed id true)))
   (def box @{:changed true})
   (defn scan-def [id]
     # single forward pass; returns ret candidate; applies param binds
