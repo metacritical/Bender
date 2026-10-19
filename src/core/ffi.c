@@ -576,6 +576,73 @@ JANET_CORE_FN(cfun_ffi_align,
     return janet_wrap_number((double) size);
 }
 
+/* Canonical keyword spelling of an ffi prim. The mapping is many-to-one
+ * (int/char/s16/... all decode to one prim), so the name is reconstructed
+ * from the prim, never echoed back from user input. */
+static const char *janet_ffi_prim_name(JanetFFIPrimType prim) {
+    switch (prim) {
+        default:
+        case JANET_FFI_TYPE_VOID: return "void";
+        case JANET_FFI_TYPE_BOOL: return "bool";
+        case JANET_FFI_TYPE_PTR: return "ptr";
+        case JANET_FFI_TYPE_STRING: return "string";
+        case JANET_FFI_TYPE_FLOAT: return "float";
+        case JANET_FFI_TYPE_DOUBLE: return "double";
+        case JANET_FFI_TYPE_INT8: return "int8";
+        case JANET_FFI_TYPE_UINT8: return "uint8";
+        case JANET_FFI_TYPE_INT16: return "int16";
+        case JANET_FFI_TYPE_UINT16: return "uint16";
+        case JANET_FFI_TYPE_INT32: return "int32";
+        case JANET_FFI_TYPE_UINT32: return "uint32";
+        case JANET_FFI_TYPE_INT64: return "int64";
+        case JANET_FFI_TYPE_UINT64: return "uint64";
+        case JANET_FFI_TYPE_STRUCT: return "struct";
+    }
+}
+
+/* Structural description of one JanetFFIType as a plain Janet table.
+ * `:struct` carries a nested struct abstract; `:prim` is the canonical
+ * keyword spelling of the primitive (or nil for a struct). */
+static Janet janet_ffi_type_desc(JanetFFIType t) {
+    JanetTable *out = janet_table(3);
+    janet_table_put(out, janet_ckeywordv("array-count"), janet_wrap_integer(t.array_count));
+    if (t.prim == JANET_FFI_TYPE_STRUCT) {
+        janet_table_put(out, janet_ckeywordv("prim"), janet_wrap_nil());
+        janet_table_put(out, janet_ckeywordv("struct"), janet_wrap_abstract(t.st));
+    } else {
+        janet_table_put(out, janet_ckeywordv("prim"), janet_ckeywordv(janet_ffi_prim_name(t.prim)));
+        janet_table_put(out, janet_ckeywordv("struct"), janet_wrap_nil());
+    }
+    return janet_wrap_table(out);
+}
+
+JANET_CORE_FN(cfun_ffi_struct_info,
+              "(ffi/struct-info ffi-type)",
+              "Describe a struct type created by `ffi/struct`: returns a table\n"
+              "with `:size`, `:align`, `:is-aligned`, and `:fields` -- an array of\n"
+              "tables with `:offset`, `:array-count`, `:prim` (canonical keyword, or\n"
+              "nil for a nested struct), and `:struct` (nested struct abstract).\n"
+              "Returns nil for any type that is not a struct type. This is a pure\n"
+              "read of the layout the FFI marshaller itself uses.") {
+    janet_fixarity(argc, 1);
+    Janet x = argv[0];
+    if (!janet_checkabstract(x, &janet_struct_type)) return janet_wrap_nil();
+    JanetFFIStruct *st = janet_unwrap_abstract(x);
+    JanetTable *out = janet_table(5);
+    janet_table_put(out, janet_ckeywordv("size"), janet_wrap_integer((int32_t) st->size));
+    janet_table_put(out, janet_ckeywordv("align"), janet_wrap_integer((int32_t) st->align));
+    janet_table_put(out, janet_ckeywordv("is-aligned"), janet_wrap_boolean(st->is_aligned ? 1 : 0));
+    JanetArray *fields = janet_array(st->field_count);
+    for (uint32_t i = 0; i < st->field_count; i++) {
+        JanetTable *f = janet_table(4);
+        janet_table_put(f, janet_ckeywordv("offset"), janet_wrap_integer((int32_t) st->fields[i].offset));
+        janet_table_put(f, janet_ckeywordv("type"), janet_ffi_type_desc(st->fields[i].type));
+        janet_array_push(fields, janet_wrap_table(f));
+    }
+    janet_table_put(out, janet_ckeywordv("fields"), janet_wrap_array(fields));
+    return janet_wrap_table(out);
+}
+
 static void *janet_ffi_getpointer(const Janet *argv, int32_t n) {
     switch (janet_type(argv[n])) {
         default:
@@ -598,6 +665,43 @@ static void *janet_ffi_getpointer(const Janet *argv, int32_t n) {
         case JANET_NIL:
             return NULL;
     }
+}
+
+/* Coerce one boxed value to a raw pointer with exactly the rules the FFI
+ * argument marshaller uses (janet_ffi_getpointer). Generated native alias
+ * wrappers call this so :ptr arguments keep boxed-path semantics (and
+ * boxed-path panics). */
+JANET_API void *janet_ffi_pointer_value(Janet x) {
+    return janet_ffi_getpointer(&x, 0);
+}
+
+/* Native FFI alias tier support (see tools/callgraph.janet). An
+ * ffi/defbind-alias binding is an ordinary defn whose body closes over a
+ * macro-expansion-created memoized thunk that performs
+ * `(ffi/lookup <library> <C symbol>)`. AOT builds may replace the boxed
+ * body with a generated C wrapper; to preserve the lazy FFI context
+ * semantics (the library is dlopen'd at first use, never at image init)
+ * that wrapper resolves through the same thunk, at the constant index the
+ * alias tier determined statically.
+ *
+ * Requires a current fiber: the wrapper entry always has one, and the
+ * thunk call is an ordinary C-to-Janet call. Callers must not touch their
+ * own `argv` after this returns (janet_call may grow the fiber stack). */
+JANET_API void *janet_ffi_alias_pointer(JanetFunction *f, int32_t index) {
+    if (NULL == f) janet_panic("native ffi alias: no function to resolve");
+    JanetFuncDef *d = f->def;
+    if ((index < 0) || (index >= d->constants_length)) {
+        janet_panicf("native ffi alias: pointer thunk index %d out of range", index);
+    }
+    Janet thunk = d->constants[index];
+    if (!janet_checktype(thunk, JANET_FUNCTION)) {
+        janet_panicf("native ffi alias: constant %d is not a function", index);
+    }
+    Janet ret = janet_call(janet_unwrap_function(thunk), 0, NULL);
+    if (!janet_checktype(ret, JANET_POINTER)) {
+        janet_panicf("native ffi alias: pointer thunk did not return a raw pointer, got %v", ret);
+    }
+    return janet_unwrap_pointer(ret);
 }
 
 static void *janet_ffi_get_callable_pointer(const Janet *argv, int32_t n) {
@@ -2187,6 +2291,7 @@ void janet_lib_ffi(JanetTable *env) {
         JANET_CORE_REG("ffi/read", cfun_ffi_buffer_read),
         JANET_CORE_REG("ffi/size", cfun_ffi_size),
         JANET_CORE_REG("ffi/align", cfun_ffi_align),
+        JANET_CORE_REG("ffi/struct-info", cfun_ffi_struct_info),
         JANET_CORE_REG("unsafe/trampoline", cfun_ffi_get_callback_trampoline),
         JANET_CORE_REG("unsafe/jitfn", cfun_ffi_jitfn),
         JANET_CORE_REG("unsafe/malloc", cfun_ffi_malloc),

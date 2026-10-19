@@ -1298,6 +1298,15 @@ JANET_API int janet_native_poll(int condition);
 JANET_API int janet_native_region_allowed(const JanetNativeCode *n, uint32_t pc);
 JANET_API void janet_native_registry_add(const JanetNativeCode *n);
 JANET_API int janet_native_registry_count(void);
+/* Native FFI alias tier support. `janet_ffi_pointer_value` coerces one
+ * boxed value to a raw pointer with the FFI argument marshaller's rules;
+ * `janet_ffi_alias_pointer` resolves a defbind-alias binding's raw C
+ * function pointer by calling the memoized lookup thunk at `index`
+ * (requires a current fiber; do not touch the caller's argv afterwards).
+ * Both panic on misuse -- callers are generated native wrappers whose
+ * static signature already proved the shape. */
+JANET_API void *janet_ffi_pointer_value(Janet x);
+JANET_API void *janet_ffi_alias_pointer(JanetFunction *f, int32_t index);
 JANET_API uint32_t janet_native_registry_generation(void);
 JANET_API int janet_native_try_attach(JanetFuncDef *d);
 /* VM region re-entry validation for d->native_code: exact structural

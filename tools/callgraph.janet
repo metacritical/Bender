@@ -390,6 +390,12 @@
 # file -> macroexpanded top-level forms (macro-generating-defns, notably
 # ffi/defstruct, must be visible to registration and the source scans)
 (var unit-forms @{})
+# file -> RAW parsed top-level forms, before the selective top-level
+# macroexpansion above. The ffi alias tier needs these: ffi/defbind-alias
+# is expanded (to a defn whose body closes over freshly created thunk
+# closures) and the declaration shape -- C symbol name, return type,
+# parameter types -- survives only in the raw form.
+(var unit-raw-forms @{})
 (var unit-import-files @[])
 (var analyzed-files @{})
 (var unit-envs @{})
@@ -424,6 +430,226 @@
               (put kernel-intrinsics (string (form 1))
                    [(get kk 0) (get kv 0) (get kv 1)])
               (++ n)))))))
+  n)
+
+# ---------------------------------------------------------------------------
+# FFI alias tier -- static extraction of ffi/defbind-alias signatures.
+#
+# (ffi/defbind-alias CName janet-name ret-type [p1 t1 p2 t2 ...]) expands to
+# an ordinary defn whose body is
+#
+#   (ffi/call (<ptr-thunk>) (<sig-thunk>) p1 p2 ...)
+#
+# with both thunks created at macroexpansion time and baked into the defn's
+# constant pool. The declaration itself (C symbol name, return and parameter
+# types) survives only in the RAW form, so this pass reads unit-raw-forms and
+# resolves every type expression against the unit's analysis env -- the same
+# env the forms compiled in, so `vec2-type` resolves to the ffi/struct value
+# it was bound to and inline (ffi/struct ...) forms evaluate directly.
+#
+# Type model (`desc` tables; nil means unsupported and the alias stays boxed):
+#   {:kind :prim   :prim <canonical kw> :c "int32_t" :size 4 :align 4}
+#   {:kind :void}
+#   {:kind :struct :abs <ffi/struct abstract> :size 48 :align 8
+#    :fields [{<field desc> :offset n} ...] :key "layout key"}
+# :key is a structural layout key: structs with equal keys are ABI-identical
+# and share one generated C typedef. Layout always comes from ffi/struct-info
+# (the marshaller's own view) and is cross-checked against a natural C
+# align-up walk; any disagreement (packed layouts, exotic prims) refuses the
+# alias fail-closed instead of guessing.
+# ---------------------------------------------------------------------------
+(def ffi-prim-alias
+  # ffi prim DECODE spelling -> canonical prim (mirrors decode_ffi_prim,
+  # src/core/ffi.c). C spellings are chosen from the CANONICAL decode, never
+  # from the alias spelling: `:long` is int64 in janet even where C long is
+  # 32-bit, and `:size` tracks the platform word (size_t).
+  @{:void :void :bool :bool :ptr :ptr :pointer :ptr :string :string
+    :float :float :r32 :float :double :double :r64 :double
+    :int8 :int8 :s8 :int8 :char :int8
+    :uint8 :uint8 :u8 :uint8 :byte :uint8 :uchar :uint8
+    :int16 :int16 :s16 :int16 :short :int16
+    :uint16 :uint16 :u16 :uint16 :ushort :uint16
+    :int32 :int32 :s32 :int32 :int :int32
+    :uint32 :uint32 :u32 :uint32 :uint :uint32
+    :int64 :int64 :s64 :int64 :long :int64
+    :uint64 :uint64 :u64 :uint64 :ulong :uint64
+    :size :size :ssize :ssize})
+(def ffi-prim-c
+  @{:bool "bool" :ptr "void*" :string "const char*"
+    :float "float" :double "double"
+    :int8 "int8_t" :uint8 "uint8_t" :int16 "int16_t" :uint16 "uint16_t"
+    :int32 "int32_t" :uint32 "uint32_t" :int64 "int64_t" :uint64 "uint64_t"
+    :size "size_t" :ssize "ptrdiff_t"})
+(var ffi-aliases @[])      # ordered descriptors, one per extracted declaration
+(var ffi-alias-skips @[])  # [name reason] diagnostics (emit mode only)
+
+(defn- unit-env-value [env sym]
+  (def entry (get env sym))
+  (if (and (table? entry) (get entry :value)) (get entry :value) entry))
+
+(defn- ffi-type-resolver
+  # Resolve ffi type EXPRESSIONS statically, without running module code.
+  # Definitions like (def vec2-type (ffi/struct :float :float)) never
+  # execute during analysis, so the unit env has no value for them; this
+  # walks the raw (def sym <init>) initializers instead. Only
+  # type-expression shapes are accepted -- keywords, symbol references
+  # (resolved recursively, cycle-guarded), and (ffi/struct <type> ...)
+  # calls -- so no arbitrary code can run at analysis time. Imported
+  # modules WERE executed by preimport, so their env values are the
+  # secondary source. Anything else resolves to nil and the alias stays
+  # boxed.
+  [def-forms env]
+  (def seen @{})
+  (defn- resolve [expr]
+    (cond
+      (keyword? expr) expr
+      (symbol? expr)
+      (do
+        (when (get seen expr) (break nil))
+        (put seen expr true)
+        (def r
+          (if (has-key? def-forms expr)
+            (resolve (get def-forms expr))
+            (unit-env-value env expr)))
+        (put seen expr nil)
+        r)
+      (and (tuple? expr) (= (get expr 0) 'ffi/struct))
+      (do
+        (def parts @[])
+        (var ok true)
+        (each a (tuple/slice expr 1)
+          (def r (resolve a))
+          (if (nil? r) (set ok false) (array/push parts r)))
+        (if ok (try (ffi/struct ;parts) ([_] nil)) nil))
+      nil))
+  resolve)
+
+(defn- unit-def-forms [forms]
+  # sym -> initializer form for plain top-level (def sym <init>) forms
+  (def m @{})
+  (each form forms
+    (when (and (tuple? form) (= 3 (length form))
+               (= (form 0) 'def) (symbol? (form 1)))
+      (put m (form 1) (form 2))))
+  m)
+
+(defn- ffi-prim-desc [kw]
+  (def cp (get ffi-prim-alias kw))
+  (when (and cp (not= cp :void))
+    {:kind :prim :prim cp :c (get ffi-prim-c cp)
+     :size (ffi/size cp) :align (ffi/align cp)
+     :key (string (get ffi-prim-c cp))}))
+
+(defn- desc-key [d]
+  (if (= (d :kind) :struct) (d :key) (d :key)))
+
+(defn- ffi-struct-desc
+  # nil when the struct has any layout or field type this tier cannot
+  # reproduce as plain C: packed layout, array fields, exotic prims,
+  # nested structs that themselves refuse.
+  [abs]
+  (def info (ffi/struct-info abs))
+  (when (nil? info) (break nil))
+  (when (not (info :is-aligned)) (break nil))
+  (def fields @[])
+  (var cur 0)
+  (var maxalign 1)
+  (var ok true)
+  (each f (info :fields)
+    (def t (f :type))
+    (def d (if (t :struct)
+              (ffi-struct-desc (t :struct))
+              (ffi-prim-desc (t :prim))))
+    (if (or (nil? d) (>= (t :array-count) 0))
+      (set ok false)
+      (do
+        (def al (d :align))
+        (set cur (+ cur (% (- al (% cur al)) al)))
+        (when (not= cur (f :offset)) (set ok false))
+        (when (> al maxalign) (set maxalign al))
+        (set cur (+ cur (d :size)))
+        (array/push fields (merge d {:offset (f :offset)})))))
+  (when (not ok) (break nil))
+  (def size (+ cur (% (- maxalign (% cur maxalign)) maxalign)))
+  (when (or (not= size (info :size)) (not= maxalign (info :align))) (break nil))
+  {:kind :struct :abs abs :size size :align maxalign :fields fields
+   :key (string size "/" maxalign "/"
+                (string/join (map (fn [f] (string (f :offset) ":" (desc-key f)))
+                                  fields)
+                             ","))})
+
+(defn- ffi-type-desc [resolve expr &opt allow-void]
+  (def v (resolve expr))
+  (cond
+    (keyword? v) (if (and allow-void (= v :void)) {:kind :void} (ffi-prim-desc v))
+    (and v (abstract? v)) (ffi-struct-desc v)
+    nil))
+
+(defn- desc-brief [d]
+  (cond
+    (nil? d) "?"
+    (= (d :kind) :void) ":void"
+    (= (d :kind) :prim) (string ":" (d :prim))
+    (get d :fields) (string "struct" (d :size) "[" (string/join (map desc-brief (d :fields)) " ") "]")
+    (string "struct" (d :size))))
+
+(defn- ffi-alias-cname [ctx head name jname]
+  (def ms (if (and (table? ctx) (function? (ctx :map-symbols)))
+            (ctx :map-symbols)
+            (fn [n] (string/replace-all "-" "_" n))))
+  (def src (if (= head "ffi/defbind") jname name))
+  (when (or (symbol? src) (string? src))
+    (string (ms (string src)))))
+
+(defn extract-ffi-aliases []
+  (var n 0)
+  (each f (array/concat @[] args unit-import-files)
+    (def env (get unit-envs f))
+    (def ctx (unit-env-value env '*ffi-context*))
+    (def raw (or (get unit-raw-forms f) @[]))
+    (def resolve (ffi-type-resolver (unit-def-forms raw) env))
+    (each form raw
+      (when (and (tuple? form) (>= (length form) 5) (symbol? (form 0)))
+        (def head (string (form 0)))
+        (when (or (= head "ffi/defbind-alias") (= head "ffi/defbind"))
+          (def cname-src (form 1))
+          (def jname (form 2))
+          (def parms (last form))
+          (def jname-s (if (symbol? jname) (string jname) nil))
+          (def cname (ffi-alias-cname ctx head cname-src jname))
+          (var reason nil)
+          (when (nil? jname-s) (set reason "janet binding name is not a symbol"))
+          (when (and (nil? reason) (nil? cname)) (set reason "cannot resolve the C symbol name"))
+          (when (and (nil? reason) (not (indexed? parms)))
+            (set reason "parameter list is not a vector"))
+          (when (and (nil? reason) (not= 0 (% (length parms) 2)))
+            (set reason "parameter list is not name/type pairs"))
+          (var col nil)
+          (when (nil? reason)
+            (def retd (ffi-type-desc resolve (form 3) true))
+            (def pdescs @[])
+            (var i 0)
+            (while (and (nil? reason) (< i (length parms)))
+              (def d (ffi-type-desc resolve (parms (+ i 1))))
+              (if (nil? d)
+                (set reason (string "unsupported parameter type at index " (/ i 2)
+                                    " (" (describe (resolve (parms (+ i 1)))) ")"))
+                (array/push pdescs d))
+              (+= i 2))
+            (when (nil? retd)
+              (set reason (string "unsupported return type ("
+                                  (describe (resolve (form 3))) ")")))
+            (when (nil? reason)
+              (set col {:janet jname-s :cname (string cname) :ret retd
+                        :params pdescs :argcount (length pdescs)
+                        :sig (string "[" (string/join (map desc-brief pdescs) " ") "] -> "
+                                     (desc-brief retd))
+                        :file f})))
+          (cond
+            col
+            (do (++ n) (array/push ffi-aliases col))
+            (do (when jname-s
+                  (array/push ffi-alias-skips [jname-s (or reason "unsupported")]))))))))
   n)
 
 (defn extract-hints []
@@ -1068,6 +1294,7 @@
   (put analyzed-files f true)
   (def text (slurp f))
   (def forms (parse-all text))
+  (put unit-raw-forms f forms)
   (def env (make-env))
   (put env :retain-hinted-exports-for-analysis true)
   (put env :analysis-retain-profiled-defs (profile-selections-for-unit f forms))
@@ -1149,6 +1376,7 @@
 # Step 4: extract type hints BEFORE the walk so audit-site sees them.
 (var nhints (extract-hints))
 (var nintrinsics (extract-intrinsics))
+(var nffi-aliases (extract-ffi-aliases))
 
 # Pass 2: walk every def exactly once (ids are dense 0..n-1).
 (var i 0)
@@ -4828,6 +5056,13 @@
         (print "native-dispatch " id " " nm " slot " slot " "
                (string/join (map string (disp :types)) " ")))))
   (each [id nm r] lib-skips (print "native-skip " id " " nm " " r))
+  # FFI alias tier census: extracted declarations and fail-closed refusals
+  # (the extraction runs in every mode; these lines only print when a native
+  # lib is being emitted, same contract as native-skip).
+  (each a ffi-aliases
+    (print "ffi-alias " (a :janet) " " (a :cname) " " (a :sig)))
+  (each s ffi-alias-skips
+    (print "ffi-alias-skip " (s 0) " " (s 1)))
   (def cout @"")
   (buffer/push-string cout "#include <janet.h>\n#include <inttypes.h>\n#include <math.h>\n#include <stdlib.h>\n\n")
   # Independent tier: never insert executor ids into emitted-names/kernels.
