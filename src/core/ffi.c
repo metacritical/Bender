@@ -38,6 +38,10 @@
 #define alloca __builtin_alloca
 #endif
 
+#ifndef JANET_WINDOWS
+#include <dlfcn.h>
+#endif
+
 /* FFI jit includes */
 #ifdef JANET_FFI_JIT
 #ifndef JANET_WINDOWS
@@ -676,32 +680,180 @@ JANET_API void *janet_ffi_pointer_value(Janet x) {
 }
 
 /* Native FFI alias tier support (see tools/callgraph.janet). An
- * ffi/defbind-alias binding is an ordinary defn whose body closes over a
- * macro-expansion-created memoized thunk that performs
- * `(ffi/lookup <library> <C symbol>)`. AOT builds may replace the boxed
- * body with a generated C wrapper; to preserve the lazy FFI context
- * semantics (the library is dlopen'd at first use, never at image init)
- * that wrapper resolves through the same thunk, at the constant index the
- * alias tier determined statically.
+ * ffi/defbind-alias binding is an ordinary defn whose body calls a
+ * macro-expansion-created memoized lookup thunk: for a lazy ffi/context
+ * that thunk runs `(ffi/lookup <library> <C symbol>)` on first use, which
+ * keeps the library dlopen lazy. The thunk is a constant closure whose
+ * captured environment is detached and rebuilt by the image marshaler,
+ * so calling it later (from a generated wrapper, after the frame it was
+ * written against is gone) is not sound: a stale captured slot surfaces
+ * as a garbage function or value. Resolve the pointer exactly once, here,
+ * while installing, and fail closed at every step. */
+
+#define JANET_FFI_ALIAS_OK 0
+#define JANET_FFI_ALIAS_BAD_SHAPE 1
+#define JANET_FFI_ALIAS_BAD_POINTER 2
+
+/* Bytecode word layout shared with emit.c / vm.c. */
+#define JANET_ALIAS_INSTR(op, a, b, c) \
+    ((uint32_t) (op) | ((uint32_t) (a) << 8) | ((uint32_t) (b) << 16) | ((uint32_t) (c) << 24))
+#define JANET_ALIAS_OP(w) ((int32_t) ((w) & 0xFF))
+#define JANET_ALIAS_A(w) ((int32_t) (((w) >> 8) & 0xFF))
+#define JANET_ALIAS_B(w) ((int32_t) (((w) >> 16) & 0xFF))
+#define JANET_ALIAS_C(w) ((int32_t) ((w) >> 24))
+#define JANET_ALIAS_E(w) ((int32_t) ((w) >> 16))
+
+/* Rewrite an ffi/defbind-alias definition in place so that every call
+ * site, including call sites whose constant pool already baked the boxed
+ * function value (module-internal calls -- the common case), ends up
+ * tail-calling a generated cfunction wrapper instead of running the
+ * boxed body.
  *
- * Requires a current fiber: the wrapper entry always has one, and the
- * thunk call is an ordinary C-to-Janet call. Callers must not touch their
- * own `argv` after this returns (janet_call may grow the fiber stack). */
-JANET_API void *janet_ffi_alias_pointer(JanetFunction *f, int32_t index) {
-    if (NULL == f) janet_panic("native ffi alias: no function to resolve");
+ * The shape is re-verified here rather than trusted from the manifest:
+ * the manifest is keyed by source name, and installing a wrapper on a
+ * different function of the same name would call a C function with
+ * unconverted arguments. Refusal is always safe: the boxed body runs.
+ *
+ * The lookup thunk is called under janet_pcall, so a thunk that errors
+ * is a refusal instead of a panic at image init, and the resolved
+ * pointer is checked with dladdr against `symbol`, so only the symbol
+ * the generated wrapper was emitted for can ever be installed.
+ *
+ * Rewritten body (arity n; slot n is a scratch slot):
+ *   push/push2/push3 0 1 .. n-1   ; the alias's own arguments
+ *   ldc n 0                       ; the wrapper cfunction
+ *   tcall n
+ * This is byte-for-byte the shape the compiler emits for
+ * `(g a b ...)` in tail position, so argument passing, error propagation
+ * and fiber stack growth are the VM's ordinary paths.
+ *
+ * Returns JANET_FFI_ALIAS_OK after rewriting and stores the validated
+ * pointer in *out_ptr. Any other return leaves the definition untouched. */
+JANET_API int janet_ffi_alias_install(JanetFunction *f, int32_t thunk_index, Janet wrapper,
+                                      const char *symbol, void **out_ptr) {
+    if (NULL == f) return JANET_FFI_ALIAS_BAD_SHAPE;
     JanetFuncDef *d = f->def;
-    if ((index < 0) || (index >= d->constants_length)) {
-        janet_panicf("native ffi alias: pointer thunk index %d out of range", index);
+    if (NULL == d) return JANET_FFI_ALIAS_BAD_SHAPE;
+    if (d->flags & JANET_FUNCDEF_FLAG_VARARG) return JANET_FFI_ALIAS_BAD_SHAPE;
+    if (d->named_args_count != 0) return JANET_FFI_ALIAS_BAD_SHAPE;
+    if (!janet_checktype(wrapper, JANET_CFUNCTION)) return JANET_FFI_ALIAS_BAD_SHAPE;
+    int32_t arity = d->arity;
+    if (arity < 0 || arity > 200) return JANET_FFI_ALIAS_BAD_SHAPE;
+    if (d->slotcount < arity + 1) return JANET_FFI_ALIAS_BAD_SHAPE;
+    if ((thunk_index < 0) || (thunk_index >= d->constants_length)) return JANET_FFI_ALIAS_BAD_SHAPE;
+    uint32_t *bc = d->bytecode;
+    int32_t len = d->bytecode_length;
+    if (NULL == bc || len < 6) return JANET_FFI_ALIAS_BAD_SHAPE;
+    Janet *consts = d->constants;
+    /* ldc <slot> <const>; call <dst> <slot> -- twice (pointer, signature) */
+    if (JANET_ALIAS_OP(bc[0]) != JOP_LOAD_CONSTANT) return JANET_FFI_ALIAS_BAD_SHAPE;
+    if (JANET_ALIAS_OP(bc[1]) != JOP_CALL) return JANET_FFI_ALIAS_BAD_SHAPE;
+    if (JANET_ALIAS_OP(bc[2]) != JOP_LOAD_CONSTANT) return JANET_FFI_ALIAS_BAD_SHAPE;
+    if (JANET_ALIAS_OP(bc[3]) != JOP_CALL) return JANET_FFI_ALIAS_BAD_SHAPE;
+    int32_t ptr_slot = JANET_ALIAS_A(bc[0]);
+    int32_t ptr_const = JANET_ALIAS_E(bc[0]);
+    int32_t ptr_dst = JANET_ALIAS_A(bc[1]);
+    int32_t ptr_callee = JANET_ALIAS_E(bc[1]);
+    int32_t sig_slot = JANET_ALIAS_A(bc[2]);
+    int32_t sig_const = JANET_ALIAS_E(bc[2]);
+    int32_t sig_dst = JANET_ALIAS_A(bc[3]);
+    int32_t sig_callee = JANET_ALIAS_E(bc[3]);
+    if (ptr_callee != ptr_slot || sig_callee != sig_slot) return JANET_FFI_ALIAS_BAD_SHAPE;
+    if ((ptr_const < 0) || (ptr_const >= d->constants_length)) return JANET_FFI_ALIAS_BAD_SHAPE;
+    if ((sig_const < 0) || (sig_const >= d->constants_length)) return JANET_FFI_ALIAS_BAD_SHAPE;
+    if (!janet_checktype(consts[ptr_const], JANET_FUNCTION)) return JANET_FFI_ALIAS_BAD_SHAPE;
+    if (!janet_checktype(consts[sig_const], JANET_FUNCTION)) return JANET_FFI_ALIAS_BAD_SHAPE;
+    if (thunk_index != ptr_const) return JANET_FFI_ALIAS_BAD_SHAPE;
+    /* pushes: exactly the pointer, the signature, then the arguments */
+    int32_t i = 4;
+    int32_t pushed = 0;
+    int32_t want[258];
+    want[pushed++] = ptr_dst;
+    want[pushed++] = sig_dst;
+    for (int32_t k = 0; k < arity; k++) want[pushed++] = k;
+    int32_t seen = 0;
+    while ((i < len) && (JANET_ALIAS_OP(bc[i]) != JOP_LOAD_CONSTANT)) {
+        int32_t op = JANET_ALIAS_OP(bc[i]);
+        int32_t cnt = (op == JOP_PUSH) ? 1 : (op == JOP_PUSH_2) ? 2 : (op == JOP_PUSH_3) ? 3 : 0;
+        if (cnt == 0) return JANET_FFI_ALIAS_BAD_SHAPE;
+        int32_t vals[3];
+        vals[0] = JANET_ALIAS_A(bc[i]);
+        vals[1] = (op == JOP_PUSH_3) ? JANET_ALIAS_B(bc[i]) : JANET_ALIAS_E(bc[i]);
+        vals[2] = JANET_ALIAS_C(bc[i]);
+        for (int32_t k = 0; k < cnt; k++) {
+            if (seen >= pushed || want[seen] != vals[k]) return JANET_FFI_ALIAS_BAD_SHAPE;
+            seen++;
+        }
+        i++;
     }
-    Janet thunk = d->constants[index];
-    if (!janet_checktype(thunk, JANET_FUNCTION)) {
-        janet_panicf("native ffi alias: constant %d is not a function", index);
+    if (seen != pushed) return JANET_FFI_ALIAS_BAD_SHAPE;
+    /* ldc <slot> <cfunction>; tcall <slot> */
+    if (i + 1 != len - 1) return JANET_FFI_ALIAS_BAD_SHAPE;
+    if (JANET_ALIAS_OP(bc[i]) != JOP_LOAD_CONSTANT) return JANET_FFI_ALIAS_BAD_SHAPE;
+    if (JANET_ALIAS_OP(bc[i + 1]) != JOP_TAILCALL) return JANET_FFI_ALIAS_BAD_SHAPE;
+    int32_t cfun_slot = JANET_ALIAS_A(bc[i]);
+    int32_t cfun_const = JANET_ALIAS_E(bc[i]);
+    if (JANET_ALIAS_A(bc[i + 1]) != cfun_slot) return JANET_FFI_ALIAS_BAD_SHAPE;
+    if ((cfun_const < 0) || (cfun_const >= d->constants_length)) return JANET_FFI_ALIAS_BAD_SHAPE;
+    if (!janet_checktype(consts[cfun_const], JANET_CFUNCTION)) return JANET_FFI_ALIAS_BAD_SHAPE;
+    /* rewrite (never grows: push groups + 2 <= the boxed body's length) */
+    int32_t nops = ((arity + 2) / 3) + 2;
+    if (nops > len) return JANET_FFI_ALIAS_BAD_SHAPE;
+    /* Resolve the pointer before rewriting so a refusal leaves the boxed
+     * body exactly as it was. janet_pcall turns a thunk error (a stale
+     * captured slot can make the thunk raise) into a refusal. */
+    Janet thunkv = consts[thunk_index];
+    if (!janet_checktype(thunkv, JANET_FUNCTION)) return JANET_FFI_ALIAS_BAD_POINTER;
+    Janet resolved;
+    JanetFiber *resume = NULL;
+    if (JANET_SIGNAL_OK != janet_pcall(janet_unwrap_function(thunkv), 0, NULL, &resolved, &resume))
+        return JANET_FFI_ALIAS_BAD_POINTER;
+    if (!janet_checktype(resolved, JANET_POINTER)) return JANET_FFI_ALIAS_BAD_POINTER;
+    void *ptr = janet_unwrap_pointer(resolved);
+    if (NULL == ptr || NULL == symbol) return JANET_FFI_ALIAS_BAD_POINTER;
+#ifndef JANET_WINDOWS
+    /* A stale captured slot can yield a pointer-typed value; dladdr
+     * proves the address really is an exported definition of `symbol`. */
+    Dl_info info;
+    if (0 == dladdr(ptr, &info) || NULL == info.dli_sname ||
+            0 != strcmp(info.dli_sname, symbol)) return JANET_FFI_ALIAS_BAD_POINTER;
+#endif
+    /* Any compiled native code or validation cache for this def describes
+     * the boxed body, which no longer exists. Drop both; the lazy-attach
+     * generation is left alone so the next call does not re-match (the
+     * shim cannot match a descriptor anyway). */
+    d->native_code = NULL;
+    d->native_verified = NULL;
+    d->native_verified_epoch = 0;
+    int32_t w = 0;
+    int32_t off = 0;
+    while (off < arity) {
+        int32_t n = arity - off;
+        if (n > 3) n = 3;
+        if (n == 3) {
+            bc[w++] = JANET_ALIAS_INSTR(JOP_PUSH_3, off, off + 1, off + 2);
+        } else if (n == 2) {
+            bc[w++] = JANET_ALIAS_INSTR(JOP_PUSH_2, off, off + 1, 0);
+        } else {
+            bc[w++] = JANET_ALIAS_INSTR(JOP_PUSH, off, 0, 0);
+        }
+        off += n;
     }
-    Janet ret = janet_call(janet_unwrap_function(thunk), 0, NULL);
-    if (!janet_checktype(ret, JANET_POINTER)) {
-        janet_panicf("native ffi alias: pointer thunk did not return a raw pointer, got %v", ret);
-    }
-    return janet_unwrap_pointer(ret);
+    bc[w++] = JANET_ALIAS_INSTR(JOP_LOAD_CONSTANT, arity, 0, 0);
+    bc[w++] = JANET_ALIAS_INSTR(JOP_TAILCALL, arity, 0, 0);
+    d->bytecode_length = w;
+    /* The shim uses one scratch slot above the argument slots, and
+     * slotcount bounds every slot the verifier (and the frame) may touch.
+     * Compiled defbind-alias bodies already reserve temporaries, so this
+     * is a no-op for the shape this function accepts; it keeps the shim
+     * in bounds if a def with slotcount == arity ever reaches here. */
+    if (d->slotcount < arity + 1) d->slotcount = arity + 1;
+    d->constants[0] = wrapper;
+    d->constants_length = 1;
+    d->defs_length = 0;
+    d->environments_length = 0;
+    *out_ptr = ptr;
+    return JANET_FFI_ALIAS_OK;
 }
 
 static void *janet_ffi_get_callable_pointer(const Janet *argv, int32_t n) {
