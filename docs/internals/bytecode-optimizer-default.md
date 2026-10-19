@@ -250,3 +250,108 @@ compilation level, the free static-size win, and the now-removed
 aliasing trap — NOT on a ttfx speedup, because there is none (and
 matrix gives ~1% back, reproducibly). §6's caution against levels 2
 and 3 is unchanged.
+
+---
+
+# Appendix: the ttfx GUI path (2026-10-18)
+
+Profiled the GUI because the CLI engine gap is 33-159x while the GUI
+collapses to ~3.5x. Three findings, two of them negative, all measured.
+
+## A. The GUI is raylib-draw bound — confirmed, with a number
+
+The GUI PGO profile's top TWO entries were not ttfx code: two anonymous
+`boot.janet:4768` thunks at 1,238,657 calls each, **40.6% of all calls**.
+That is `ffi/defbind-alias`'s lazy branch re-forcing a memoized pointer
+and signature on every FFI call:
+
+```
+lazy  -> ldc call ldc call push3 ldc tcall
+eager -> ldc      ldc      push3 ldc tcall
+```
+
+ttfx set `:lazy true` but only `bin/ttfx-gui.janet` imports `gui.janet`,
+and that entry requires raylib anyway, so lazy bought nothing. Dropping
+it (ttfx commit `4b8edc3`) gave, same workload:
+
+| mode | total calls | draws | lazy thunks | calls/draw |
+|------|------------:|------:|------------:|-----------:|
+| lazy | 5,962,634 | 1,161,656 | 2,400,610 | 5.13 |
+| eager | 3,494,034 | 1,096,642 | **0** | **3.19** |
+
+37.9% fewer Janet calls per draw, and **fps UNCHANGED** (eager mean
+1653.6 vs lazy 1671.6 across 4 probes, inside a +/-10% band).
+
+**Removing 2.4 MILLION Janet calls per 3-second probe moved nothing.**
+That is the cleanest possible proof the GUI is not Janet-bound. Kept
+anyway: it removes pointless work and unmasks the profile, where those
+thunks were crowding out real application work.
+
+## B. Draw-call batching: 2-3.6x fewer draws, and 2x SLOWER
+
+ttfx issues one `DrawTextEx` per visible cell. Measured the batching
+opportunity (maximal runs of horizontally adjacent same-colour cells):
+
+| effect | cells | runs | reduction |
+|--------|------:|-----:|----------:|
+| wipe | 401 | 111 | 3.61x |
+| beams | 382 | 192 | 1.99x |
+| smoke | 439 | 230 | 1.91x |
+| decrypt | 186 | 147 | 1.27x |
+
+Largest exactly on the block-heavy effects where this port loses worst.
+Implemented it, and it was **~2x slower**:
+
+| effect | per-cell | batched | |
+|--------|---------:|--------:|---|
+| wipe | 1054.6 | 489.2 | -54% |
+| beams | 995.6 | 396.7 | -60% |
+| smoke | 812.6 | 390.5 | -52% |
+| decrypt | 1556.2 | 765.1 | -51% |
+| fireworks | 2039.4 | 1705.5 | -16% |
+
+Cause: `cells` arrives in character-creation order (it is built by
+walking `(ctx :chars)`, whose entries move independently), so batching
+requires a per-frame sort. That sort — a Janet comparator closure over
+~400 tuples, plus building the intermediate array and per-run buffers —
+costs far more than the saved FFI draw calls.
+
+**The correct lesson, which contradicts the naive reading of finding A:**
+raylib-bound means *removing* Janet work does not help. It does NOT mean
+Janet work is free. Adding Janet work hurts immediately and heavily.
+
+Reverted. Any real version of this must produce cells in row-major order
+at the SOURCE (in `ctx-frame-cells`, or by maintaining a row-indexed
+grid) so no per-frame sort is needed — not by sorting in the draw path.
+
+### Two correctness traps found while doing it (keep these)
+
+1. **Glyph advance is fractional.** `cell-w` is `floor(advance)`: measured
+   21.6 vs cell-w 21. A multi-char `DrawTextEx` therefore drifts 0.6px
+   per character — over half a cell after 20 chars. Passing
+   `spacing = cell-w - advance` fixes it exactly.
+2. **Draw order is load-bearing.** `(ctx :chars)` can hold several
+   characters on the SAME (row,col) — overlapping particles — and the
+   per-cell path draws them in creation order, so the last created wins.
+   Any reorder changes which is visible. Colour-only batching, then
+   same-symbol batching, then a stable sort with a creation-order
+   tiebreaker ALL still rendered decrypt and smoke differently from the
+   per-cell path (wipe and beams matched throughout, having no overlaps),
+   so this was not fully solved even with the tiebreaker.
+
+### The pixel gate that caught it
+
+`--probe-shot FILE` (relative path; raylib prepends CWD) is deterministic
+across runs at a fixed `--probe-seconds` — verified by hashing two
+identical runs. That makes screenshot hashing a usable automated gate for
+GUI rendering changes, which the test suite otherwise lacks entirely
+(`--dump-frames` tests the CLI ANSI path, so GUI regressions are
+invisible to it). Use it for any future GUI draw change.
+
+## C. Remaining GUI lever
+
+The js port draws block cells as 1-3 filled rects instead of glyphs, and
+`bench-engines.md` already names a `--blocks=rects` mode as unimplemented.
+That is still the plausible win for block-heavy effects, and unlike
+batching it needs no sort — a rect draw is per-cell, same order, just a
+cheaper call. Untested here.
