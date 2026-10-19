@@ -996,4 +996,85 @@
   "rm -rf /tmp/cg-u64bad && ./build/bender tools/callgraph.janet /tmp/cg-u64bad.janet --emit-native /tmp/cg-u64bad 2>&1 | grep -q 'native-skip 1'"] :p))
   "u64 param hint refused (internal domain only)")
 
+
+# ---- Stream F step 2: u64 xoshiro step (limb-emulation replacement) ----
+# The real target of the u64 domain: a 64-bit RNG step over native
+# uint64_t instead of 8 emulated limbs. Four intermediate failures had
+# to be fixed for this to emit, each now regression-covered:
+#   (a) :u64tonum evidence -- an (int/to-number v) result is exact in
+#       both representations (the emission guards 2^53), so it must not
+#       force a u64-reusing slot to refuse;
+#   (b) decl-kind -- u64 writes WIN the declaration over :u64tonum
+#       (resolving to double emitted `s24 | s25` with a double, a C
+#       type error, and a double declared for a u64-written slot);
+#   (c) :number admitted as in-domain FLOW evidence alongside real u64
+#       writes (it is a flow type, not a concrete kind);
+#   (d) store-ops in the backward arg walk -- (put r 0 (int/to-number
+#       ...)) between pushes made the walk fail-closed on puti and
+#       refuse a call whose arguments were perfectly provable.
+(spit "/tmp/cg-xor64.janet" (string
+  "(defn k-x64 {:hint {:params [:array :array] :returns :array}} [r s]\n"
+  "  (def w0 (bor (int/u64 (in s 0)) (blshift (int/u64 (in s 1)) 8)\n"
+  "              (blshift (int/u64 (in s 2)) 16) (blshift (int/u64 (in s 3)) 24)\n"
+  "              (blshift (int/u64 (in s 4)) 32) (blshift (int/u64 (in s 5)) 40)\n"
+  "              (blshift (int/u64 (in s 6)) 48) (blshift (int/u64 (in s 7)) 56)))\n"
+  "  (def rot (bor (blshift w0 23) (brshift w0 41)))\n"
+  "  (def res (+ rot w0))\n"
+  "  (put r 0 (int/to-number (band res (int/u64 255))))\n"
+  "  (put r 1 (int/to-number (band (brshift res 8) (int/u64 255))))\n"
+  "  (put r 2 (int/to-number (band (brshift res 16) (int/u64 255))))\n"
+  "  (put r 3 (int/to-number (band (brshift res 24) (int/u64 255))))\n"
+  "  (put r 4 (int/to-number (band (brshift res 32) (int/u64 255))))\n"
+  "  (put r 5 (int/to-number (band (brshift res 40) (int/u64 255))))\n"
+  "  (put r 6 (int/to-number (band (brshift res 48) (int/u64 255))))\n"
+  "  (put r 7 (int/to-number (band (brshift res 56) (int/u64 255))))\n"
+  "  r)\n"
+  "(defn main [] (print (k-x64 @[0 0 0 0 0 0 0 0] @[9 8 7 6 5 4 3 2])))\n"))
+(assert (= 0 (os/execute ["/bin/sh" "-c"
+  "rm -rf /tmp/cg-xor64 && ./build/bender tools/callgraph.janet /tmp/cg-xor64.janet --emit-native /tmp/cg-xor64"] :p))
+  "u64 xoshiro-shaped kernel emits")
+(def x64c (slurp "/tmp/cg-xor64/native.c"))
+# (a)/(b)/(c): the rotl-shaped slot and the to-number results compile as
+# uint64_t / double with no cross-type bitwise expression
+(assert (string/find "uint64_t" x64c) "u64 kernel declares uint64_t")
+# every bitwise operand must be a uint64_t slot (the u64 domain), never
+# a double -- a double in a bitwise expression is a C type error, which
+# the compile assertion below would catch, but assert it structurally
+# too so the failure names the real cause.
+# collect "double sNN;" declarations by plain scanning (the slot number
+# follows "double s" and ends at ';')
+(defn x64-double-slot [line]
+  (def at (string/find "double s" line))
+  (when at
+    (var i (+ at 8))
+    (var num "")
+    (def digs "0123456789")
+    (while (and (< i (length line)) (string/find (string (line i)) digs))
+      (set num (string num (line i)))
+      (++ i))
+    (when (> (length num) 0) (string "s" num))))
+(var x64-double-slots @[])
+(each line (string/split "\n" x64c)
+  (def ds (x64-double-slot line))
+  (when ds (array/push x64-double-slots ds)))
+(var x64-bad 0)
+(each line (string/split "\n" x64c)
+  (each ds x64-double-slots
+    (when (or (string/find (string " " ds " | ") line)
+              (string/find (string " " ds " & ") line)
+              (string/find (string " " ds " ^ ") line)
+              (string/find (string "| " ds ";") line)
+              (string/find (string "& " ds ";") line)
+              (string/find (string "^ " ds ";") line))
+      (++ x64-bad))))
+(assert (= 0 x64-bad) "no double slot used as a bitwise operand")
+# (d): emission succeeded at all, which requires the store-skipping walk
+(assert (= 0 (os/execute ["/bin/sh" "-c"
+  "cc -O2 -w -fwrapv -Isrc/include -Isrc/conf /tmp/cg-xor64/native.c build/janet.o -lm -lpthread -ldl -o /tmp/cg-xor64/native"] :p))
+  "u64 xoshiro-shaped kernel compiles")
+# and the emitted code agrees with the boxed oracle on its samples
+(assert (= 0 (os/execute ["/bin/sh" "-c"
+  "cd /tmp/cg-xor64 && ./native > actual.txt && cmp expected.txt actual.txt"] :p))
+  "u64 xoshiro-shaped kernel parity vs boxed oracle")
+
 (end-suite)

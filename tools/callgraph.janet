@@ -748,6 +748,15 @@
     'mod true 'rem true 'divim true 'addim true
     'subim true 'mulim true 'len true 'equ true 'lt true 'gt true
     'ltu true 'gtu true 'equim true 'ltim true 'gtim true})
+# Pure STORES: they write a container but never produce the value a
+# later push reads, so a backward argument walk may step over them
+# (consumer site #11 of the new-opcode lesson). Found by the u64
+# xoshiro kernel: (put r 0 (int/to-number ...)) followed by more
+# int/u64 calls made the walk trip on the intervening puti and
+# fail-closed, refusing a call whose arguments were perfectly provable.
+(def store-ops-argwalk
+  @{'put true 'puti true 'putin true})
+
 (defn call-arity [d pc slot]
   (def code (or (d :bytecode) @[]))
   (var n 0)
@@ -1971,6 +1980,28 @@
 # st: flow slot types; pt: hinted param types; slot: operand index.
 (defn bit-operand-type [st pt arity slot]
   (if (< slot arity) (get pt slot :unknown) (get st slot :unknown)))
+
+# Stream F: emit a value that is usable as a uint64_t operand. A slot
+# already in the u64 domain passes through; any other NUMERIC slot is
+# converted with the SAME guarded cast boxed int/u64 uses (abort on
+# negative, fractional, or >= 2^64), because boxed band/bor/bxor with a
+# plain number operand converts it to u64 exactly that way -- a raw
+# double in the bitwise expression is a C type error AND a silent
+# semantic divergence (negative double would wrap instead of erroring).
+(defn emit-u64-operand [lines st arity slot]
+  (def e (emit-slot slot arity))
+  (def t (get st slot :unknown))
+  (if (= :u64 t)
+    e
+    # Guarded conversion in a statement (an expression cast would wrap
+    # on a negative double instead of erroring like boxed int/u64).
+    (let [tmp (string "u64c_" slot)]
+      (array/push lines
+                  (string "    if (!((double)(" e ") >= 0.0 && (double)(" e
+                          ") == floor((double)(" e ")) && (double)(" e
+                          ") < 18446744073709551616.0)) { fprintf(stderr, \"u64 operand domain error\\n\"); abort(); }"))
+      (array/push lines (string "    uint64_t " tmp " = (uint64_t)(double)(" e ");"))
+      tmp)))
 (defn emit-bit-check [expr t]
   (if (get int-hints t)
     (string "    if (" expr " < -2147483647LL - 1 || " expr
@@ -2030,6 +2061,7 @@
       (= op 'call) (set ok false)
       (= op 'pusha) (set ok nil)
       (get load-ops op) nil
+      (get store-ops-argwalk op) nil
       (set ok nil))
     (-- j))
   (if (or (< j 0) (= ok false)) slots nil))
@@ -2477,7 +2509,20 @@
               (wput (ins 1) (rts wtid))
               (do (def wpdt (pure-dest-type id wpc))
                 (if wpdt
-                  (wput (ins 1) wpdt)
+                  (do (wput (ins 1) wpdt)
+                    # Stream F: an (int/to-number v) result is a double
+                    # that the emission GUARDS at 2^53 before converting
+                    # out of uint64_t -- exact in BOTH representations,
+                    # so it must not force a u64-reusing slot to refuse.
+                    # Recorded as :u64tonum evidence; decl-kind resolves
+                    # it to whichever concrete kind the slot's other
+                    # writes need (see the u64 purity rule below).
+                    (def wcn (get (get core-call-map id) wpc))
+                    (when (and wcn (= :u64-to-num (get (get infer/pure-calls wcn) :c)))
+                      (def st0 (or (get wsets (ins 1)) @{}))
+                      (put st0 :u64tonum true)
+                      (put wsets (ins 1) st0)
+                      (put wtypes (ins 1) :number)))
                   # call-shaped access declares a numeric dst (wtypes stands in
                   # for st in this linear sweep; same rule as flow-check)
                   (do (def wsh (call-shape-idx d wpc wtypes))
@@ -2511,9 +2556,31 @@
           # immediates, exact in uint64_t) and :u64load (in/inim loads,
           # which EMIT GUARDED into u64-declared slots). Everything in
           # the set is then exact-or-aborting in uint64_t.
+          # :u64tonum is an (int/to-number v) result. It is exact in
+          # double, and exact in uint64_t ONLY because the emission
+          # guards 2^53 -- but the value IS a double at that point, so a
+          # slot holding real u64 temps must still declare uint64_t and
+          # the conversion must happen at the assignment. Resolving this
+          # slot to :double while u64 arm writes land in it produced
+          # `s24 | s25` with s25 a double (a C type error) -- the
+          # declaration must follow the u64 writes, and the u64-tonumber
+          # store is the one that converts.
+          # :number here is a write whose value came from within the
+          # u64 domain itself (a u64-arm result stored back). It is a
+          # FLOW type, not a concrete kind -- the same reason :u64ok is
+          # admitted -- and admitting it only matters when real u64
+          # writes are also present, which is exactly when uint64_t is
+          # the correct declaration.
           (and (some (fn [t] (= t :u64)) kinds)
-               (all (fn [t] (or (= t :u64) (= t :u64ok) (= t :u64load))) kinds))
+               (all (fn [t] (or (= t :u64) (= t :u64ok) (= t :u64load)
+                                (= t :u64tonum) (= t :number))) kinds))
           :u64
+          # :u64tonum without u64 involvement is an ordinary double
+          (some (fn [t] (= t :u64tonum)) kinds)
+          (if (some (fn [t] (or (= t :unknown) (= t :nil) (= t :array)
+                                (= t :tuple) (= t :string) (= t :struct))) kinds)
+            :bad-unknown
+            :double)
           # :u64load without u64 involvement is an ordinary numeric load
           (some (fn [t] (= t :u64load)) kinds)
           (if (some (fn [t] (or (= t :unknown) (= t :array) (= t :tuple)
@@ -3211,11 +3278,13 @@
               (def u3 (= :u64 (bit-operand-type st pt arity (ins 3))))
               (cond
                 (and (or (= op 'band) (= op 'bor) (= op 'bxor)) u2 u3)
-                (array/push lines
-                            (string "    s" (ins 1) " = "
-                                    (emit-slot (ins 2) arity)
-                                    (case op 'band " & " 'bor " | " " ^ ")
-                                    (emit-slot (ins 3) arity) ";"))
+                (do
+                  (def ua (emit-u64-operand lines st arity (ins 2)))
+                  (def ub (emit-u64-operand lines st arity (ins 3)))
+                  (array/push lines
+                              (string "    s" (ins 1) " = " ua
+                                      (case op 'band " & " 'bor " | " " ^ ")
+                                      ub ";")))
                 (and (or (= op 'sl) (= op 'sr)) u2 (not u3))
                 (do (array/push lines
                                 (string "    if (" (emit-slot (ins 3) arity)
