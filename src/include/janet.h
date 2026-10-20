@@ -1255,6 +1255,12 @@ struct JanetAbstractHead {
  * runtime by the installer; the compiler never emits it. Lets the VM
  * call the wrapper cfunction directly without entering the shim frame. */
 #define JANET_FUNCDEF_FLAG_FFI_ALIAS 0x8000000
+/* Compile-time-only marker set by ffi/defbind-alias. The native alias
+ * install flag above is set at image runtime; this one is present from
+ * the moment the definition is compiled, so call sites compiled later
+ * can recognize alias functions and reuse scratch arrays for tuple
+ * literal arguments. */
+#define JANET_FUNCDEF_FLAG_FFI_ALIAS_DECL 0x10000000
 #define JANET_FUNCDEF_FLAG_TAG 0xFFFF
 
 /* Source mapping structure for a bytecode instruction */
@@ -1687,6 +1693,14 @@ enum JanetOpCode {
      * unsigned-immediate rationale as JOP_BAND_IMMEDIATE above. */
     JOP_BOR_IMMEDIATE,
     JOP_BXOR_IMMEDIATE,
+    /* make-scratch-tuple: A = destination (near), E = persistent scratch
+     * slot (far); the element count is implicit in the push stack, exactly
+     * like JOP_MAKE_TUPLE. The scratch slot holds a mutable array reused
+     * for every execution of this call site in the current frame. Emitted
+     * only for tuple literals passed directly to an FFI alias, which reads
+     * the array synchronously and never retains it. Appended at the end so
+     * existing opcode numbers and marshalled bytecode are unchanged. */
+    JOP_MAKE_SCRATCH_TUPLE,
     JOP_INSTRUCTION_COUNT
 };
 

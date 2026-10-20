@@ -130,7 +130,8 @@ const enum JanetInstructionType janet_instructions[JOP_INSTRUCTION_COUNT] = {
     JINT_SSU, /* JOP_IN_IMMEDIATE, */
     JINT_SSU, /* JOP_BAND_IMMEDIATE, */
     JINT_SSU, /* JOP_BOR_IMMEDIATE, */
-    JINT_SSU /* JOP_BXOR_IMMEDIATE, */
+    JINT_SSU, /* JOP_BXOR_IMMEDIATE, */
+    JINT_SS /* JOP_MAKE_SCRATCH_TUPLE, */
 };
 
 /* Keep track of how large corelib is. Useful
@@ -704,6 +705,7 @@ void janet_bytecode_local_value_numbering(JanetFuncDef *def, BytecodeBB *blocks,
                 case JOP_MAKE_TABLE:
                 case JOP_MAKE_TUPLE:
                 case JOP_MAKE_BRACKET_TUPLE:
+                case JOP_MAKE_SCRATCH_TUPLE:
                 case JOP_CLOSURE: {
                     ctx.value_numbers[A] = nextv++;
                     continue;
@@ -1289,6 +1291,7 @@ static void janet_bytecode_movopt_basic_block(JanetFuncDef *def, BytecodeBB bb, 
             case JOP_MAKE_TABLE:
             case JOP_MAKE_TUPLE:
             case JOP_MAKE_BRACKET_TUPLE:
+            case JOP_MAKE_SCRATCH_TUPLE:
                 out = Ia;
                 pin = 1; /* TODO - we need an instruction (or psuedo instruction) that can clear the stack but do nothing */
                 break;

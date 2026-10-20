@@ -1362,8 +1362,7 @@ static JanetSignal run_vm(JanetFiber *fiber, Janet in) {
         &&label_JOP_BAND_IMMEDIATE,
         &&label_JOP_BOR_IMMEDIATE,
         &&label_JOP_BXOR_IMMEDIATE,
-        &&label_unknown_op,
-        &&label_unknown_op,
+        &&label_JOP_MAKE_SCRATCH_TUPLE,
         &&label_unknown_op,
         &&label_unknown_op,
         &&label_unknown_op,
@@ -2299,6 +2298,28 @@ static JanetSignal run_vm(JanetFiber *fiber, Janet in) {
         if (opcode == JOP_MAKE_BRACKET_TUPLE)
             janet_tuple_flag(tup) |= JANET_TUPLE_FLAG_BRACKETCTOR;
         stack[D] = janet_wrap_tuple(tup);
+        fiber->stacktop = fiber->stackstart;
+        vm_checkgc_pcnext();
+    }
+
+    VM_OP(JOP_MAKE_SCRATCH_TUPLE) {
+        int32_t count = fiber->stacktop - fiber->stackstart;
+        Janet *mem = fiber->data + fiber->stackstart;
+        Janet scratch = stack[E];
+        JanetArray *arr;
+        if (janet_checktype(scratch, JANET_ARRAY)) {
+            arr = janet_unwrap_array(scratch);
+            if (arr->capacity < count)
+                janet_array_ensure(arr, count, 1);
+            if (count)
+                memcpy(arr->data, mem, sizeof(Janet) * (size_t) count);
+            arr->count = count;
+        } else {
+            arr = janet_array_n(mem, count);
+            scratch = janet_wrap_array(arr);
+            stack[E] = scratch;
+        }
+        stack[A] = scratch;
         fiber->stacktop = fiber->stackstart;
         vm_checkgc_pcnext();
     }

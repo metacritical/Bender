@@ -78,6 +78,33 @@ table only needs its EndDrawing floor and total prep.
    bouncyballs +1.5%, laseretch +1.1% (two of three rounds; the middle
    round was a cold outlier). Real, safe, and not the lever.
 
+## Scratch-tuple FFI arguments (landed 2026-10-20)
+
+Finding 3's per-call tuple allocation is addressed by a generic
+compiler/VM change, not a ttfx kernel. When a tuple literal is passed
+directly to an FFI alias (`ffi/defbind-alias`), the compiler now emits
+`JOP_MAKE_SCRATCH_TUPLE` into a persistent hidden frame slot instead of
+allocating a fresh tuple. The alias reads the array synchronously and
+never retains it. The rewrite is only allowed when every argument after
+the tuple is scratch-safe (constant, symbol, or another direct tuple
+literal), so a later call/array/table/struct cannot force a GC that
+retains or invalidates the scratch slot. The slot is reserved above the
+scope's high-water mark (`ra.max + 1`, then `ra.max` is raised), survives
+loop iterations, and is remapped by bytecode slot compaction like any
+other slot. The new opcode is appended after all existing opcodes, so
+existing images keep their numbering.
+
+Measured effect (same compiler, scratch enabled vs disabled): non-PGO
+pair blackhole **+34.0%**, scattered **+28.9%**; canonical release pair
+`rel2` vs `rel` blackhole **+32.9%**, scattered **+34.4%**. Full
+37-effect paired release vs Rust: geomean **0.866** (from 0.681),
+median 0.847, 37/37 within 2x, 29/37 >= 0.8; worst `synthgrid` 0.740,
+best `print` 0.998. `gui-draw-cells` now has two scratch ops and zero
+tuple allocations for its FFI alias arguments. The remaining draw-text
+marshal cost is decoding the boxed Vector2/Color values per call (the
+values vary, so struct caching does not apply) and the scene-cell tuples
+built by the effects.
+
 ## Consequence for the 97% target
 
 Reaching ~0.97x Rust on the laggards needs roughly a 2-2.3x cut in prep:
@@ -92,10 +119,10 @@ the shared swap floor alone. The staged plan:
   effects replayed, so preemption semantics are preserved. This is the
   only sound route to kernelize the tick loops and the largest single
   win available. Gate on the preemption suites and byte parity.
-- **Alias call-site fusion.** With the alias manifest available at
-  compile time, fuse `[x y]` / `[r g b 255]` tuple literals into the C
-  ABI structs at the call site: no per-cell tuple allocation, no
-  wrapper-side decode. Targets the 15-31% draw-text share.
+- **Alias call-site fusion (partly landed).** Tuple allocation is gone
+  (scratch tuples, above); the remaining half is decoding the boxed
+  Vector2/Color fields in the wrapper without a separate marshal pass.
+  Targets the 15-31% draw-text share.
 - **PGO-guided unboxing** for the remaining boxed hot ops, as
   incremental VM wins behind the existing 2x hard gate.
 

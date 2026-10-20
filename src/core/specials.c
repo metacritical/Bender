@@ -789,6 +789,23 @@ static JanetSlot janetc_def(JanetFopts opts, int32_t argn, const Janet *argv) {
         janet_v_free(into);
         return janetc_cslot(janet_wrap_nil());
     }
+    /* ffi/defbind-alias adds {:ffi-alias true} metadata. Mark the direct
+     * named function literal's FuncDef so calls compiled later can
+     * recognize it without depending on any runtime registration. */
+    if (janet_truthy(janet_table_get_keyword(attr_table, "ffi-alias")) &&
+            fn_scope && janet_checktype(argv[0], JANET_SYMBOL) &&
+            janet_v_count(into) == 1 &&
+            janet_v_count(fn_scope->defs) == defs_before + 1) {
+        Janet rhs = argv[argn - 1];
+        if (janet_checktype(rhs, JANET_TUPLE)) {
+            JanetTuple form = janet_unwrap_tuple(rhs);
+            if (janet_tuple_length(form) >= 3 && janet_symeq(form[0], "fn") &&
+                    janet_checktype(form[1], JANET_SYMBOL) &&
+                    janet_equals(form[1], argv[0])) {
+                fn_scope->defs[defs_before]->flags |= JANET_FUNCDEF_FLAG_FFI_ALIAS_DECL;
+            }
+        }
+    }
     if (retain) {
         int matched = 0;
         JanetFuncDef *child = NULL;

@@ -4764,9 +4764,9 @@
     (defn make-ptr []
       (assertf (ffi/lookup (if lazy (llib) lib) raw-symbol) "failed to find ffi symbol %v" raw-symbol))
     (if lazy
-      ~(as-macro ,defn ,alias ,;meta [,;formal-args]
+      ~(as-macro ,defn ,alias ,;meta {:ffi-alias true} [,;formal-args]
                  (,ffi/call (,(delay (make-ptr))) (,(delay (make-sig))) ,;formal-args))
-      ~(as-macro ,defn ,alias ,;meta [,;formal-args]
+      ~(as-macro ,defn ,alias ,;meta {:ffi-alias true} [,;formal-args]
                  (,ffi/call ,(make-ptr) ,(make-sig) ,;formal-args))))
 
   (defmacro ffi/defbind :flycheck

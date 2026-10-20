@@ -110,6 +110,7 @@ static const JanetInstructionDef janet_ops[] = {
     {"mkarr", JOP_MAKE_ARRAY},
     {"mkbtp", JOP_MAKE_BRACKET_TUPLE},
     {"mkbuf", JOP_MAKE_BUFFER},
+    {"mkscr", JOP_MAKE_SCRATCH_TUPLE},
     {"mkstr", JOP_MAKE_STRING},
     {"mkstu", JOP_MAKE_STRUCT},
     {"mktab", JOP_MAKE_TABLE},
