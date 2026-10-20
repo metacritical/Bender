@@ -5038,6 +5038,22 @@
                                      (a :sig) " */\n"))
     (buffer/push-string cout (string "static void *ffi_alias_ptr_" id ";\n"))
     (buffer/push-string cout (string "static int ffi_alias_installed_" id ";\n"))
+    # Large struct arguments (fonts, cameras, ...) are usually the same
+    # immutable Janet tuple on every call. Decoding all fields each time is
+    # a measurable share of a draw-heavy frame, so cache the decoded bytes
+    # by tuple identity. The cache is thread-local (one Janet VM per
+    # thread) and roots the key tuple, which makes pointer identity safe
+    # against GC reuse. Small structs (colors, vectors) change every call
+    # and would only thrash, hence the size floor.
+    (eachp [i d] args
+      (when (and (= (d :kind) :struct) (>= (d :size) 32))
+        (buffer/push-string cout (string "static JANET_THREAD_LOCAL int ffi_alias_cache_v_"
+                                         id "_" i ";\n"))
+        (buffer/push-string cout (string "static JANET_THREAD_LOCAL JanetTuple *ffi_alias_cache_k_"
+                                         id "_" i ";\n"))
+        (buffer/push-string cout (string "static JANET_THREAD_LOCAL "
+                                         (get names (d :key)) " ffi_alias_cache_d_"
+                                         id "_" i ";\n"))))
     (buffer/push-string cout (string "static Janet ffi_alias_wrap_" id
                                      "(int32_t argc, Janet *argv) {\n"))
     (buffer/push-string cout
@@ -5046,9 +5062,30 @@
     (eachp [i d] args
       (if (= (d :kind) :struct)
         (do
-          (buffer/push-string cout (string "    " (get names (d :key)) " a" i ";\n"))
-          (buffer/push-string cout (string "    " (get names (d :key))
-                                         "_write(&a" i ", argv[" i "]);\n")))
+          (def tn (get names (d :key)))
+          (buffer/push-string cout (string "    " tn " a" i ";\n"))
+          (if (>= (d :size) 32)
+            (do
+              (def v (string "ffi_alias_cache_v_" id "_" i))
+              (def k (string "ffi_alias_cache_k_" id "_" i))
+              (def c (string "ffi_alias_cache_d_" id "_" i))
+              (buffer/push-string cout
+                (string
+                  "    if (janet_checktype(argv[" i "], JANET_TUPLE) && " v
+                  " && janet_unwrap_tuple(argv[" i "]) == " k ") {\n"
+                  "        a" i " = " c ";\n"
+                  "    } else {\n"
+                  "        " tn "_write(&a" i ", argv[" i "]);\n"
+                  "        if (janet_checktype(argv[" i "], JANET_TUPLE)) {\n"
+                  "            if (" v ") janet_gcunroot(janet_wrap_tuple(" k "));\n"
+                  "            " k " = janet_unwrap_tuple(argv[" i "]);\n"
+                  "            " c " = a" i ";\n"
+                  "            " v " = 1;\n"
+                  "            janet_gcroot(argv[" i "]);\n"
+                  "        }\n"
+                  "    }\n")))
+            (buffer/push-string cout (string "    " tn
+                                           "_write(&a" i ", argv[" i "]);\n"))))
         (buffer/push-string cout (string "    " (d :c) " a" i " = "
                                        (ffi-write-c d "argv" i) ";\n"))))
     (buffer/push-string cout (string
@@ -5081,8 +5118,13 @@
     "    switch (janet_getinteger(argv, 1)) {\n")
   (eachp [id p] plans
     (def a (p :a))
+    (buffer/push-string cout (string "    case " id ": {\n"))
+    # A fresh VM may reuse this thread; drop any decode cache left by a
+    # previous VM before deciding whether the install is already done.
+    (eachp [i d] (a :params)
+      (when (and (= (d :kind) :struct) (>= (d :size) 32))
+        (buffer/push-string cout (string "        ffi_alias_cache_v_" id "_" i " = 0;\n"))))
     (buffer/push-string cout (string
-      "    case " id ": {\n"
       "        if (ffi_alias_installed_" id ") break;\n"
       "        if ((f->def->arity != " (a :argcount) ") ||\n"
       "                !ffi_alias_source_is(f->def->source, \""
