@@ -852,6 +852,10 @@ JANET_API int janet_ffi_alias_install(JanetFunction *f, int32_t thunk_index, Jan
     d->constants_length = 1;
     d->defs_length = 0;
     d->environments_length = 0;
+    /* Runtime-only marker for the JOP_CALL fast path: the body above is
+     * exactly `push args; ldc wrapper; tcall`, so the VM may invoke the
+     * wrapper cfunction directly instead of entering this frame. */
+    d->flags |= JANET_FUNCDEF_FLAG_FFI_ALIAS;
     *out_ptr = ptr;
     return JANET_FFI_ALIAS_OK;
 }

@@ -1250,6 +1250,11 @@ struct JanetAbstractHead {
 #define JANET_FUNCDEF_FLAG_STRUCTARG 0x1000000
 #define JANET_FUNCDEF_FLAG_HASCLOBITSET 0x2000000
 #define JANET_FUNCDEF_FLAG_NAMEDARGS 0x4000000
+/* Runtime-only: this def's body is the ffi alias shim installed by
+ * janet_ffi_alias_install (push args; ldc wrapper; tcall). Set only at
+ * runtime by the installer; the compiler never emits it. Lets the VM
+ * call the wrapper cfunction directly without entering the shim frame. */
+#define JANET_FUNCDEF_FLAG_FFI_ALIAS 0x8000000
 #define JANET_FUNCDEF_FLAG_TAG 0xFFFF
 
 /* Source mapping structure for a bytecode instruction */

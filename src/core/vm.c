@@ -2004,7 +2004,35 @@ static JanetSignal run_vm(JanetFiber *fiber, Janet in) {
             callee = resolve_method(callee, fiber);
         }
         if (janet_checktype(callee, JANET_FUNCTION)) {
-            func = janet_unwrap_function(callee);
+            JanetFunction *callee_func = janet_unwrap_function(callee);
+            /* FFI alias shim fast path (janet_ffi_alias_install): the
+             * installed body is exactly `push args; ldc wrapper; tcall`,
+             * so calling the wrapper directly is the same call minus the
+             * intermediate frame and tailcall. Only the exact installed
+             * shape carries the runtime-only flag; arity mismatches,
+             * traced runs and profiled runs fall through to the ordinary
+             * path. The generated wrapper never mutates argv, so passing
+             * the caller's argument slots is equivalent to the shim's
+             * pushes. */
+            if ((callee_func->def->flags & JANET_FUNCDEF_FLAG_FFI_ALIAS) &&
+                    (NULL == janet_vm.profile_table) &&
+                    !(callee_func->gc.flags & JANET_FUNCFLAG_TRACE) &&
+                    ((fiber->stacktop - fiber->stackstart) == callee_func->def->arity) &&
+                    (callee_func->def->constants_length == 1) &&
+                    janet_checktype(callee_func->def->constants[0], JANET_CFUNCTION)) {
+                JanetCFunction alias_cfun = janet_unwrap_cfunction(callee_func->def->constants[0]);
+                int32_t alias_argc = fiber->stacktop - fiber->stackstart;
+                vm_commit();
+                janet_fiber_cframe(fiber, alias_cfun);
+                Janet ret = alias_cfun(alias_argc, fiber->data + fiber->frame);
+                janet_fiber_popframe(fiber);
+                /* `func` still names the CALLER here; the ordinary
+                 * function path is what rebinds it to the callee. */
+                stack = fiber->data + fiber->frame;
+                stack[A] = ret;
+                vm_checkgc_pcnext();
+            }
+            func = callee_func;
             if (func->gc.flags & JANET_FUNCFLAG_TRACE) {
                 vm_do_trace(func, fiber->stacktop - fiber->stackstart, fiber->data + fiber->stackstart);
             }
