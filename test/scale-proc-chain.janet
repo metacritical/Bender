@@ -79,3 +79,15 @@
 # Recorded baseline (master 520cd378 + 84c7a149): 100k = 9.3 s PASS,
 # 92.7 us/hop; 10k = 0.4 s. See bench/agents.janet for the spawn/park
 # density split.
+#
+# 2026-10-20 re-measure, JANET_NO_PROFILE=1 (mandatory: the runtime PGO
+# collector costs 2.9x on the walk and ~2000x on kill; release builds
+# compile it out). Machine under memory pressure (swap 6.8-8.0 GB used,
+# load 1.8-9); the 84c7a149 checkout reproduces today's numbers, so the
+# absolute values are an environment lower bound, not a regression:
+# 1k = 0.09 s / 88 us/hop, 10k = 1.79 s / 179 us/hop,
+# 20k = 5.23 s / 261 us/hop, 100k = 87.7 s / 877 us/hop. Per-hop grows
+# with the live set; the walk samples in janet_channel_push_with_lock
+# and janet_fiber_shared_prime, with registry marking below them.
+# Live-chain footprint ~27-36 KB/proc, so an unsegmented 1M chain needs
+# ~27 GB. See docs/internals/proc-lanes.md, "Measured 2026-10-20".

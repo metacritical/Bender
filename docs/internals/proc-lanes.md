@@ -1992,3 +1992,94 @@ GC tuning (this session's four fixes) was necessary just to make the
 current cooperative, one-VM-per-thread model functionally correct at
 scale; it was never going to close a 200x gap on its own. Added to the
 standing todo tree as the explicitly reinforced next priority.
+
+## Measured 2026-10-20: serial chain, spawn, kill — and the profiling trap
+
+**Method note (read first): all proc/GC benchmarks must run with
+`JANET_NO_PROFILE=1`, or from a release binary (release defines
+`-DJANET_NO_PGO`).** The interpreter and non-release AOT builds carry the
+runtime PGO type collector, and on proc workloads it is not a small tax:
+
+| workload | profiling on | off | ratio |
+|---|---|---|---|
+| chain 10k walk | 5.20 s | 1.78 s | 2.9x |
+| kill (10k live) | ~2.3 ms/proc | ~1.1 us/proc | ~2000x |
+| 1M spawn | 428.9 s | 460.1 s | ~1.0x |
+
+The first measurements this session were taken without the flag and were
+dominated by the collector, not the engine: macOS `sample` showed 100%
+of the profiled exit phase in `janet_collect_fiber_minor` ->
+`janet_mark` -> `janet_mark_table` -> `janet_procat_mark`, i.e. the
+collector forcing a minor per death. With the flag off that path drops
+out of the profile. This is the strongest argument for benchmarking
+release builds: `--release` compiles the collector out.
+
+Machine caveat: swap 6.8-8.0 GB used, load 1.8-9 (other agents active).
+A raw arithmetic loop is at normal speed (20M increments / 0.35 s). The
+recorded 2026-10-17 baselines are 4.4-9.5x faster than this machine
+today, and the baseline checkout (84c7a149) reproduces today's numbers
+exactly, so the absolute values are a lower bound, not a regression.
+
+### 1. Serial chain (test/scale-proc-chain.janet, NO_PROFILE=1)
+
+| N | walk | us/hop | peak RSS |
+|---|---|---|---|
+| 1,000 | 0.09 s | 88 | 43 MB |
+| 2,000 | 0.22 s | 109 | 78 MB |
+| 5,000 | 0.69 s | 139 | 183 MB |
+| 10,000 | 1.79 s | 179 | 361 MB |
+| 20,000 | 5.23 s | 261 | 712 MB |
+| 100,000 | 87.7 s | 877 | 2.71 GB |
+
+- Exact-once accounting holds at every size (final == N): no lost or
+  reordered wakeup.
+- Per-hop grows with the live set (88 -> 877 us from 1k to 100k), so the
+  walk is superlinear, not flat like BEAM (~1-2 us/hop).
+- Recorded baseline with the same flag: 10k 0.4 s / 40 us, 100k 9.3 s /
+  92.7 us — the same growth shape, 4.4-9.5x faster on the recording
+  machine. Today's HEAD and the 84c7a149 checkout agree with each other,
+  so re-measure quiet before calling any of it a regression.
+- Footprint is ~27-36 KB/proc, not the file's "~1 KB+": an unsegmented
+  1M chain needs ~27 GB, more than this 17 GB machine has. Segmented 1M
+  is the only feasible shape here.
+- `sample` during the walk (collector off) puts the time in
+  `janet_channel_push_with_lock` (mailbox delivery, gc.c:3112+) and
+  `janet_fiber_shared_prime` (fiber.c:624), with GC marking below them:
+  every hop allocates (boxed increment + send envelope) and pays
+  live-set-dependent costs.
+
+### 2. Spawn and kill (bench/spawn-exit-scaling.janet, NO_PROFILE=1)
+
+| live | per-spawn | per-kill |
+|---|---|---|
+| 5,000 | 2.91 us | 1.14 us |
+| 10,000 | 2.99 us | 1.09 us |
+| 15,000 | 2.86 us | 1.25 us |
+| 20,000 | 3.14 us | 1.19 us |
+
+Spawn and kill are both flat and cheap at these sizes (~4.2 us per proc
+round trip). Kill is NOT the blocker once the collector is off.
+
+Spawn does not stay flat to 1M: two spawn-only runs (profiling on and
+off) both produced 1,000,000 parked procs in 429 s / 460 s, i.e. ~460
+us/proc average, with raw CPU at normal speed. The 20k -> 1M curve is
+not monotone on this machine (two 200k spawn-only runs stalled for
+>15 min under memory pressure), so the mid-range needs a quiet machine.
+Established: "start a million" currently costs 7-8 minutes, not
+milliseconds; BEAM spawn is ~0.3-1 us/proc.
+
+### 3. What this pins down
+
+- The chain's per-hop cost, not spawn, is the serial-parity blocker:
+  88 us/hop at 1k, 877 us/hop at 100k, ~27 KB/proc live footprint.
+- 1M spawn is ~460 us/proc average: EITHER a superlinear spawn path OR
+  collector/pressure interaction (profiling off did not change it, so
+  it is not the runtime collector; 200k runs stalling but 1M finishing
+  means this machine cannot characterize the curve).
+- Both remaining costs are live-set/allocation paths: the target is the
+  design-only per-proc GC independence plan
+  (docs/internals/per-proc-gc-independence.md) — per-owner heaps and
+  narrow sweeps, so a spawn or a hop costs O(own heap), not O(all live
+  procs).
+- M:N scheduling helps parallel spawn throughput, not the serial chain's
+  per-hop latency; the chain is inherently serial.
