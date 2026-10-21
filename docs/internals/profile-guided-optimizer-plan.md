@@ -246,6 +246,28 @@ Require executor-enabled sanitizer/preemption, all-effect and held-out
 frame parity, and two-PGO paired verified-release CLI+GUI A/B before any
 performance claim. None of these steps is yet proven to reach Rust parity.
 
+**Bounded verified executor increment (`c748bb45`):** The opt-in
+whole-function frame executor now executes the VM `get` opcode directly for
+array/tuple receivers with integral int32 keys, including invalid/out-of-range
+keys returning nil. Any other receiver exits **before** the original PC, so
+table/struct/abstract getters and their callbacks remain VM-owned. The live
+fiber slot holds each receiver and key (GC-scanned); this fast path allocates
+nothing, and existing backedge/call VM polls and structural revalidation remain
+unchanged. It is not a scalar-replaced record or an effectful-call region.
+A generic register-key loop fixture asserts bytecode `get` was emitted, runs
+array, tuple and table receivers (20 result across each), and matches a boxed
+image while an executor-enabled archive reports four attached functions and
+1,299 VM boundary exits. Exact-PC mixed differential at quantum budget 1
+passed four interrupted workloads plus parked slot/PC comparisons. Budget-2
+ASan/UBSan executor and mixed-effects harnesses passed, with the known macOS
+alternate-stack ASan caveat. The default `test/suite-native-executor.sh`
+**still fails at its image step** when it links the ordinary macro-free
+`build/libjanet.a`; an isolated executor-enabled archive and image passes.
+This is an opt-in semantic slice, not a ttfx speed claim. The 313-PC ttfx
+renderer still fails executor eligibility on other operations; independent
+verified-release parity/performance gates remain pending for any larger
+lowering.
+
 ### 3. Lower effectful loops as a single native region
 
 Build an SSA-like representation with typed values, effects, liveness and
