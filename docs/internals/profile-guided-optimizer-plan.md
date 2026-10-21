@@ -119,6 +119,33 @@ runtime. Preserve the existing source/replay parity gate and test held-out
 inputs to prevent profile-dependent answers. Feedback must enable a
 specialization decision, not merely count how often a wrapper ran.
 
+**First feedback slice (`74c687fb`, 2026-10-21):** With VM profiling active,
+small definitions (at most 256 bytecode words) collect bounded per-original-PC
+fallthrough/taken successor counts for the five jump opcodes. Unconditional
+jumps count only the taken successor. Backedge counts increment **after** the
+original interrupt poll, so an interrupted edge is not reported as executed.
+There is no collection or allocation inside the branch hook; the profiler
+entry owns a GC-scanned counter array, and profiling-off builds retain only a
+predictable inactive check. Dump and accumulating merge preserve compatible
+counter arrays; absent or incompatible history becomes `:open`, not invented
+zero-count evidence. The callgraph loader validates the optional field but
+**does not consume it to specialize code**. No shape, receiver, call-target or
+allocation-site feedback exists yet, and no runtime performance claim follows
+from this diagnostic slice.
+
+Narrow checks: rebuilt interpreter profile 57/57, merge 55/55, native joint
+dispatch 28/28, source-qualified callgraph and GC trace pass. Representative
+CLI value/math/array/table/I/O/interrupt suites pass 273/273. The native
+executor suite still stops at its AOT image's `native executor registration
+refused` and zero entry count, before the budget-1/2 and sanitizer lanes; the
+image links the ordinary macro-free `build/libjanet.a` unless an executor-enabled
+library is built, so this is **not** a passing executor safety gate or a
+verified regression attribution. A standalone `bench/run.janet` native image
+runs and preserves numeric results, but its single noisy microbench timings
+are not a paired release speed measurement. The CLI frame-stream, held-out
+seed and paired same-compiler GUI/CLI release gates remain pending for this
+slice. Executor stays opt-in.
+
 ### 3. Lower effectful loops as a single native region
 
 Build an SSA-like representation with typed values, effects, liveness and
