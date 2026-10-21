@@ -353,7 +353,9 @@ The committed default-off build is `1.43.0-dev-0178fd1f`. Its
 PGO-collected, verified `--release` CLI image matches the previous
 `rel2` image byte-for-byte on 37 bounded effect dumps and 25 held-out
 effect/seed runs. Seven paired rounds give **1.006×** `rel2` throughput
-(noise), not a speed claim. The new windowed GUI release remains
-unverified because PGO's direct interpreter launch crashes after the
-hidden-window/font stage; the old `rel2` binary reproduces it under the
-same direct launch. Do not infer GUI performance from that failed run.
+(noise), not a speed claim. The new default-off windowed GUI release
+was subsequently verified after waking/holding the macOS display with
+`caffeinate -d -u` for two **real** GUI PGO collections and `--release`.
+An old `rel2` binary reproduced the earlier crash without that display
+hold. This is not an executor speed measurement; executor emission
+remains double opt-in.

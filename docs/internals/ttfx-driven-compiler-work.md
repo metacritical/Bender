@@ -31,15 +31,14 @@ correctness foundations, **not an achieved speedup**. Compiling executor
 support but publishing no descriptors had cost ~6–7%; the new dormant
 dispatch gate recovered **1.067×** on that macro-enabled control.
 
-The newly rebuilt GUI cannot yet be called a verified `--release`:
-its required windowed PGO collection currently exits 139 from an
-interpreter-launched macOS window, after the hidden-window/font stage.
-The old `rel2` binary reproduces the same crash when launched directly;
-app-bundle launches succeeded in the paired GUI benchmarks. This is a
-**PGO launch-environment blocker**, not a measured compiler regression.
-Do not replace the GUI workload with `--list` and claim representative
-PGO evidence. The last complete Bender/Rust 37-effect GUI comparison
-remains the earlier paired `rel2` record.
+Windowed PGO collection initially exited 139 from a direct interpreter
+launch after the hidden-window/font stage; the old `rel2` control also
+crashed under the same idle-display conditions. A long-lived
+`caffeinate -d -u` before collection restored the original real-GUI
+workload: two scattered/windowed/uncapped collections and verified
+`--release` now pass. No dummy `--list` workload or parity bypass was
+used. The last complete Bender/Rust **37-effect** GUI comparison still
+belongs to the earlier paired `rel2` record.
 
 The sustained single-process **release** profile and first measured
 runtime fix are recorded in the execution plan. Commit `5e3f2740`
@@ -54,8 +53,10 @@ with 37/37 bounded frame dumps and 25/25 held-out effect/seed cases
 byte-identical to `rel2`. GC-minor, GC-stress, proc (99/99), ev
 (776/776), and the enabled executor/ASan matrix pass. This is an
 incremental VM result; the GUI release PGO launch blocker above is
-unchanged and the effectful-loop AOT compiler remains the next major
-piece.
+resolved, but the effectful-loop AOT compiler remains the next major
+piece. With the same compiler, same real GUI PGO workload and paired
+five-round windowed probes, the pre-GC and cached-flag release builds
+are **1.005×** (noise). No broad GUI speedup is claimed.
 
 ## Goal and correctness contract
 

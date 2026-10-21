@@ -34,10 +34,12 @@ The default macro-free runtime and CLI were rebuilt from the feature
 commits: two isolated PGO collections, verified `--release`, 37/37
 bounded frame streams at seed 42 and 25/25 held-out effect/seed cases
 match `rel2`; seven paired CLI rounds gave **1.006×** `rel2` (noise).
-GUI PGO collection still needs a robust macOS app-bundle launcher:
-direct interpreter runs currently crash in the hidden-window path,
-including an old `rel2` control binary. Do not substitute a non-GUI
-profile or benchmark a non-release candidate as the GUI result.
+Windowed GUI PGO collection initially crashed after the hidden-window
+stage when launched directly on an idle display, also with an old
+`rel2` control. A long-lived `caffeinate -d -u` before collection
+allowed the **real** scattered GUI workload to collect twice and
+verify `--release`. Do not substitute a non-GUI profile or benchmark a
+non-release candidate as the GUI result.
 
 ## Invariants for every stage
 
@@ -88,6 +90,11 @@ release CLI sweep was **1.001×** (noise). Full frame parity is 37/37 at
 seed 42 and 25/25 held-out effect/seed cases. This is a small measured
 workload win, **not** Rust-class whole-program throughput. Profile other
 effects before ranking table layout against dispatch/GC work.
+With the same compiler and same real-GUI PGO workload on both sides,
+five paired windowed rounds yielded **1.005×** cached/pre-cache GUI
+FPS on the five effects (noise). A separate comparison against the
+older `rel2` GUI artifact was confounded by other compiler/PGO changes;
+it cannot be attributed to this diagnostic-flag cache.
 
 ### 1. Sound effectful safepoints (first feature, default-off)
 
