@@ -150,11 +150,11 @@
 (spit "/tmp/pmg-acc-a.jdn" (string/format "%j"
   @[@[@["/tmp/pmg-fix.janet" 1 "wseed"]
       @{:calls 2 :params @[@[:number]] :mins @[2] :maxs @[9]
-        :elems @[] :rets @[:number] :from :home}]]))
+        :elems @[] :rets @[:number] :from :home :edges @[0 2 3 1]}]]))
 (spit "/tmp/pmg-acc-b.jdn" (string/format "%j"
   @[@[@["/tmp/pmg-fix.janet" 1 "wseed"]
       @{:calls 3 :params @[@[:string]] :mins @[-4] :maxs @["inf"]
-        :elems @[] :rets @[:string] :from :worker}]]))
+        :elems @[] :rets @[:string] :from :worker :edges @[1 4 2 0]}]]))
 (assert (run-ok "./build/bender" "tools/profile-merge.janet" "--accumulate"
                 "--out" "/tmp/pmg-acc-out.jdn"
                 "cached=/tmp/pmg-acc-a.jdn" "run=/tmp/pmg-acc-b.jdn")
@@ -163,6 +163,7 @@
 (def ai ((accumulated 0) 1))
 (assert (= 1 (length accumulated)) "same identity coalesces")
 (assert (= 5 (get ai :calls)) "counts add")
+(assert (deep= @[1 6 5 1] (get ai :edges)) "per-PC successors add")
 (assert (deep= @[:number :string] ((get ai :params) 0)) "types union")
 (assert (deep= @[-4] (get ai :mins)) "range min expands")
 (assert (deep= @["inf"] (get ai :maxs)) "range max expands")
@@ -180,6 +181,8 @@
         "reaccumulation runs")
 (def twice (parse (slurp "/tmp/pmg-acc-twice.jdn")))
 (assert (= 7 (get ((twice 0) 1) :calls)) "third-run calls add")
+(assert (deep= @[1 8 8 2] (get ((twice 0) 1) :edges))
+        "reaccumulation preserves PC counts")
 (assert (deep= @[:home] (get ((get ((twice 0) 1) :type-from) 0) :number))
         "third-run provenance preserved")
 
@@ -194,6 +197,8 @@
         "missing-slot merge runs")
 (def missing-slot ((get ((parse (slurp "/tmp/pmg-unknown.jdn")) 0) 1) :params))
 (assert (nil? (missing-slot 0)) "missing evidence remains unknown")
+(assert (= :open (get (((parse (slurp "/tmp/pmg-unknown.jdn")) 0) 1) :edges))
+        "missing edge history cannot imply unobserved successors")
 (def [unknown-code unknown-log]
   (run-out "./build/bender" "tools/callgraph.janet" "/tmp/pmg-fix.janet"
            "--profile" "/tmp/pmg-unknown.jdn"))

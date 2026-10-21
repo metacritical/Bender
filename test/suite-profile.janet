@@ -90,6 +90,45 @@
     (assert (= 1 (get info :calls)) "dumped calls")))
 (assert saw-add "prof-add in dump")
 
+# Per-PC edge evidence is opt-in and keyed by the original bytecode index.
+# Each pair is [fallthrough taken]; a loop must observe both successors
+# somewhere, and resetting the collector must discard the previous counts.
+(def prof-edges (eval '(fn prof-edges [n]
+  (var sum 0)
+  (var i 0)
+  (while (< i n)
+    (if (zero? (mod i 2)) (set sum (+ sum i)) (set sum (- sum i)))
+    (++ i))
+  sum)))
+(debug/profile-start)
+(assert (= -2 (prof-edges 4)) "profile edge fixture result")
+(assert (= 0 (prof-edges 0)) "profile edge fixture empty loop")
+(def edge-table (debug/profile-stop))
+(var edge-entry nil)
+(eachk key edge-table
+  (def value (get edge-table key))
+  (when (= prof-edges (get value :func)) (set edge-entry value)))
+(assert edge-entry "profile edge entry exists")
+(def edge-counts (get edge-entry :edges))
+(assert (indexed? edge-counts) "small function has bounded edge slots")
+(assert (zero? (mod (length edge-counts) 2)) "edge pairs match bytecode PCs")
+(var saw-taken false)
+(var saw-fallthrough false)
+(for pc 0 (div (length edge-counts) 2)
+  (when (> (edge-counts (+ (* pc 2) 1)) 0) (set saw-taken true))
+  (when (> (edge-counts (* pc 2)) 0) (set saw-fallthrough true)))
+(assert (and saw-taken saw-fallthrough) "both branch outcomes observed")
+(debug/profile-start)
+(prof-edges 0)
+(debug/profile-dump "/tmp/suite-profile-edges.jdn")
+(def edge-dump (parse (slurp "/tmp/suite-profile-edges.jdn")))
+(var saw-edge-dump false)
+(each [id info] edge-dump
+  (when (= (id 2) "prof-edges")
+    (set saw-edge-dump true)
+    (assert (indexed? (get info :edges)) "edge counts survive dump")))
+(assert saw-edge-dump "edge dump contains function")
+
 # reset clears: old entries must not survive, even though the loader's
 # own evaluate/eval1 calls (one per top-level form) legitimately record
 (debug/profile-reset)

@@ -1658,6 +1658,15 @@
     (unless (and (number? calls) (>= calls 0) (= calls (math/trunc calls)))
       (profile-invalid "invalid call count"))
     (profile-signatures (get info :signatures) calls)
+    # Edge evidence is advisory until an IR consumer guards the original
+    # bytecode shape. Reject malformed cache data rather than trusting it.
+    (def edges (get info :edges))
+    (unless (or (nil? edges) (= edges :open)
+                (and (indexed? edges) (<= (length edges) 512)
+                     (zero? (mod (length edges) 2))
+                     (every? (map |(and (number? $) (>= $ 0)
+                                        (= $ (math/trunc $))) edges))))
+      (profile-invalid "invalid edge counters"))
     (each field [:params :elems]
       (def slots (profile-sequence (get info field @[]) field))
       (each slot slots (profile-types slot field)))

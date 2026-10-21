@@ -118,6 +118,26 @@
   (if (or (= x :open) (= y :open)) :open
       (signatures [;x ;y])))
 
+# Branch successor pairs indexed by original bytecode PC. Missing or
+# incompatible profiles cannot assert a closed edge history.
+(defn- edges [value]
+  (when (nil? value) (break nil))
+  (when (= value :open) (break :open))
+  (unless (and (indexed? value) (<= (length value) 512)
+               (zero? (mod (length value) 2)))
+    (bad "invalid edge counters"))
+  (each count value
+    (unless (and (number? count) (>= count 0)
+                 (= count (math/trunc count)))
+      (bad "invalid edge count")))
+  value)
+
+(defn- merge-edges [a b]
+  (def x (edges a)) (def y (edges b))
+  (if (or (nil? x) (nil? y) (= x :open) (= y :open)
+          (not= (length x) (length y))) :open
+      (map + x y)))
+
 (defn- accumulate-info [a b]
   (def ca (get a :calls))
   (def cb (get b :calls))
@@ -152,7 +172,8 @@
   @{:calls (+ ca cb) :params ps :elems ea :mins mn :maxs mx
     :rets (union-types (get a :rets) (get b :rets)) :from from
     :type-from type-origins
-    :signatures (merge-signatures (get a :signatures) (get b :signatures))})
+    :signatures (merge-signatures (get a :signatures) (get b :signatures))
+    :edges (merge-edges (get a :edges) (get b :edges))})
 
 (defn main [& _args]
   # Script name arrives as args[0] (like tools/callgraph.janet, which
@@ -195,7 +216,8 @@
             (def key (string/format "%j" id))
             (def pos (get positions key))
             (def tagged (merge info {:from (origins (get info :from prov))
-                                     :signatures (signatures (get info :signatures))}))
+                                     :signatures (signatures (get info :signatures))
+                                     :edges (edges (get info :edges))}))
             (unless (and (number? (get info :calls)) (>= (get info :calls) 0)
                          (= (get info :calls) (math/trunc (get info :calls))))
               (bad "invalid call count"))

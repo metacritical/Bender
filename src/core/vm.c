@@ -612,6 +612,8 @@ static void janet_suspend_swap(JanetFiber *fiber, JanetSignal sig, Janet payload
  * non-moving collector keeps cached pointers valid while their table
  * is current, which the pt-identity check enforces. */
 #define JANET_PROFILE_CACHELINES 64
+/* Bounded diagnostic branch evidence: no allocation or collection in a jump. */
+#define JANET_PROFILE_EDGE_MAXPC 256
 typedef struct {
     JanetTable *pt;
     JanetFuncDef *def;
@@ -627,6 +629,7 @@ typedef struct {
     JanetArray *va;
     JanetArray *sh;
     Janet sig;
+    JanetArray *edges;
 } JanetProfileCache;
 /* Phase C: the fast-path cache is per-thread. Worker VMs share this
  * translation unit across OS threads; a single global would let two
@@ -678,6 +681,10 @@ static void janet_profile_cache_fill(JanetTable *pt, JanetFuncDef *def, JanetTab
     c->va = janet_unwrap_array(janet_table_get(e, janet_ckeywordv("vals")));
     c->sh = janet_unwrap_array(janet_table_get(e, janet_ckeywordv("shapes")));
     c->sig = janet_table_get(e, janet_ckeywordv("signatures"));
+    {
+        Janet edge = janet_table_get(e, janet_ckeywordv("edges"));
+        c->edges = janet_checktype(edge, JANET_ARRAY) ? janet_unwrap_array(edge) : NULL;
+    }
     c->live = 1;
 }
 
@@ -787,6 +794,17 @@ static JanetTable *janet_profile_entry(JanetFunction *func) {
             janet_gcunroot(janet_wrap_array(sh));
         }
         janet_table_put_raw(e, janet_ckeywordv("rets"), janet_wrap_integer(0));
+        /* Allocate once per profiled definition, never at a branch or poll.
+         * Large definitions remain explicitly unobserved rather than having
+         * their PCs aliased to unrelated sites. */
+        if (func->def->bytecode_length <= JANET_PROFILE_EDGE_MAXPC) {
+            JanetArray *edges = janet_array(func->def->bytecode_length * 2);
+            janet_gcroot(janet_wrap_array(edges));
+            for (i = 0; i < func->def->bytecode_length * 2; i++)
+                janet_array_push(edges, janet_wrap_integer(0));
+            janet_table_put_raw(e, janet_ckeywordv("edges"), janet_wrap_array(edges));
+            janet_gcunroot(janet_wrap_array(edges));
+        }
         /* Joint, full-arity tag vectors; true denotes OPEN. The entry
          * owns this array and every nested vector across GC. */
         {
@@ -1042,6 +1060,37 @@ void janet_profile_task_call(JanetFunction *func, const Janet *argv, int32_t arg
         janet_profile_call(func, argv, argc);
 }
 
+/* Record the executed successor after the original quantum poll. The frame
+ * already has a profile entry from its call; cache misses only look up that
+ * entry and never allocate or trigger a collection at the branch. */
+static void janet_profile_edge(JanetFunction *func, int32_t pc, int taken) {
+    if (pc < 0 || pc >= JANET_PROFILE_EDGE_MAXPC ||
+        func->def->bytecode_length > JANET_PROFILE_EDGE_MAXPC) return;
+    JanetProfileCache *hit = janet_profile_hit(func);
+    JanetArray *edges = NULL;
+    if (NULL != hit) {
+        edges = hit->edges;
+    } else {
+        Janet value = janet_table_get(janet_vm.profile_table, janet_wrap_pointer(func->def));
+        if (janet_checktype(value, JANET_TABLE)) {
+            Janet edge = janet_table_get(janet_unwrap_table(value), janet_ckeywordv("edges"));
+            if (janet_checktype(edge, JANET_ARRAY)) edges = janet_unwrap_array(edge);
+        }
+    }
+    if (NULL != edges && pc < func->def->bytecode_length &&
+        edges->count == func->def->bytecode_length * 2) {
+        int32_t index = pc * 2 + !!taken;
+        int64_t count = janet_unwrap_integer(edges->data[index]);
+        if (count < INT32_MAX)
+            edges->data[index] = janet_wrap_integer(count + 1);
+    }
+}
+
+#define vm_profile_edge(taken) do { \
+    if (JANET_UNLIKELY(NULL != janet_vm.profile_table)) \
+        janet_profile_edge(func, (int32_t)(pc - func->def->bytecode), (taken)); \
+} while (0)
+
 static void janet_profile_return(JanetFunction *func, Janet retval) {
     JanetProfileCache *hit = janet_profile_hit(func);
     if (NULL == hit) {
@@ -1147,6 +1196,11 @@ JanetArray *janet_profile_rows(void) {
                 uint32_t rm = (uint32_t) janet_unwrap_integer(janet_table_get(e, janet_ckeywordv("rets")));
                 janet_gcroot(janet_wrap_table(info));
                 janet_table_put(info, janet_ckeywordv("calls"), janet_wrap_integer(calls));
+                {
+                    Janet edges = janet_table_get(e, janet_ckeywordv("edges"));
+                    if (janet_checktype(edges, JANET_ARRAY))
+                        janet_table_put(info, janet_ckeywordv("edges"), edges);
+                }
                 {
                     Janet sig = janet_table_get(e, janet_ckeywordv("signatures"));
                     if (janet_checktype(sig, JANET_BOOLEAN)) {
@@ -1820,23 +1874,28 @@ static JanetSignal run_vm(JanetFiber *fiber, Janet in) {
 
     VM_OP(JOP_JUMP)
     vm_maybe_auto_suspend(DS <= 0);
+    vm_profile_edge(1);
     pc += DS;
     vm_next();
 
     VM_OP(JOP_JUMP_IF)
     if (janet_truthy(stack[A])) {
         vm_maybe_auto_suspend(ES <= 0);
+        vm_profile_edge(1);
         pc += ES;
     } else {
+        vm_profile_edge(0);
         pc++;
     }
     vm_next();
 
     VM_OP(JOP_JUMP_IF_NOT)
     if (janet_truthy(stack[A])) {
+        vm_profile_edge(0);
         pc++;
     } else {
         vm_maybe_auto_suspend(ES <= 0);
+        vm_profile_edge(1);
         pc += ES;
     }
     vm_next();
@@ -1844,17 +1903,21 @@ static JanetSignal run_vm(JanetFiber *fiber, Janet in) {
     VM_OP(JOP_JUMP_IF_NIL)
     if (janet_checktype(stack[A], JANET_NIL)) {
         vm_maybe_auto_suspend(ES <= 0);
+        vm_profile_edge(1);
         pc += ES;
     } else {
+        vm_profile_edge(0);
         pc++;
     }
     vm_next();
 
     VM_OP(JOP_JUMP_IF_NOT_NIL)
     if (janet_checktype(stack[A], JANET_NIL)) {
+        vm_profile_edge(0);
         pc++;
     } else {
         vm_maybe_auto_suspend(ES <= 0);
+        vm_profile_edge(1);
         pc += ES;
     }
     vm_next();
