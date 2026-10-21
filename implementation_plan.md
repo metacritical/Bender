@@ -1,5 +1,7 @@
-# Resume Janet Phase 1
-1. Preserve the verified interpreter battery and committed dual-target marshal, proc teardown, AOT inference, quantum, profile, and event fixes.
-2. Resolve the remaining Phase 1 AOT failures and intermittent runtime gates with focused diagnosis, narrow dual-target checks, and atomic commits. Keep each original assertion visible; classify any genuine target-specific gate explicitly rather than silently skipping it.
-3. Re-run the required AOT battery with honest build, assertion, and process-exit results, including proc/event liveness and full-density lanes; reconcile unrelated working-tree artifacts without conflating them with fixes.
-4. Mark Phase 1 complete only when every required AOT suite passes. Stop at that milestone and review the completed work with the user before starting Phase 2b, Erlang parity, or any later roadmap item.
+# Janet compiler-to-Rust parity continuation
+
+1. Establish the clean baseline and read the existing optimizer plan, current compiler/runtime layout, and CLI benchmark harness. Preserve the executor opt-in and treat CLI number tower, container, allocation, call, and I/O workloads as first-class alongside GUI FPS.
+2. In parallel, delegate independent audits of (a) per-PC feedback and VM profiling hooks, (b) effect-aware AOT IR/GC/deoptimization architecture, (c) representative CLI benchmarking and correctness coverage, and (d) native call/state and record traffic. Reconcile findings into a small, implementable first compiler slice.
+3. Implement the first measured, semantics-preserving compiler slice with narrow tests and precise GC/preemption safeguards. Keep changes atomic and commit each verified feature immediately.
+4. Run differential correctness, sanitizer/GC/preemption checks as applicable, and paired CLI+GUI performance measurements against an unchanged control. Report regressions and speedups honestly; do not default-enable an unproven executor.
+5. Update the standing optimizer plan with evidence, commit documentation separately, and leave remaining compiler phases explicitly pending if parity is not achieved in this round.
