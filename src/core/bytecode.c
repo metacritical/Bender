@@ -2027,12 +2027,14 @@ static int native_structure_matches(JanetFuncDef *d, const JanetNativeCode *n) {
             case JOP_NOT_EQUALS: case JOP_NOT_EQUALS_IMMEDIATE:
             case JOP_JUMP: case JOP_JUMP_IF: case JOP_JUMP_IF_NOT:
             case JOP_JUMP_IF_NIL: case JOP_JUMP_IF_NOT_NIL:
-            /* Stage 2 explicit VM boundaries: never executed natively. */
+            /* Stage 2: exact words for guarded native ops and VM boundaries. */
             case JOP_CALL: case JOP_TAILCALL:
             case JOP_PUSH: case JOP_PUSH_2: case JOP_PUSH_3:
-            case JOP_GET: case JOP_IN: case JOP_LENGTH: case JOP_NEXT:
+            case JOP_GET: case JOP_IN: case JOP_GET_INDEX:
+            case JOP_LENGTH: case JOP_NEXT:
             case JOP_PUT:
-            case JOP_MAKE_ARRAY: case JOP_MAKE_BUFFER: case JOP_MAKE_TUPLE:
+            case JOP_MAKE_ARRAY: case JOP_MAKE_BUFFER:
+            case JOP_MAKE_TUPLE: case JOP_MAKE_SCRATCH_TUPLE:
             case JOP_DIVIDE: case JOP_DIVIDE_IMMEDIATE: case JOP_DIVIDE_FLOOR:
             case JOP_MODULO: case JOP_REMAINDER: break;
             default: return 0; /* Includes every breakpoint bit. */
@@ -2067,6 +2069,7 @@ int janet_native_register(JanetFunction *f, const JanetNativeCode *n) {
 #ifdef JANET_NATIVE_EXECUTORS
     if (janet_native_matches(f->def, n)) {
         f->def->native_code = n;
+        janet_vm.native_possible = 1;
         /* Validation just ran; seed the re-entry cache at this epoch. */
         f->def->native_verified = n;
         f->def->native_verified_epoch = janet_vm.native_epoch;
@@ -2162,6 +2165,7 @@ void janet_native_registry_add(const JanetNativeCode *n) {
         native_registry_buckets[b] = idx + 1;
     }
     native_registry_gen++;
+    janet_vm.native_possible = 1;
     janet_vm.native_epoch++; /* conservative: publication can enable attachment */
 #else
     (void)n;

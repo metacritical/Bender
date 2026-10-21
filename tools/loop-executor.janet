@@ -28,10 +28,13 @@
 (def shifts {'sl true 'sr true 'slim true 'srim true})
 (def shift-imm {'slim true 'srim true})
 (def simple {'noop true 'ret true 'retn true 'ldn true 'ldt true 'ldf true
-             'ldi true 'ldc true 'movn true 'movf true 'jmp true})
+             'ldi true 'ldc true 'movn true 'movf true 'jmp true 'geti true})
 # Explicit VM boundaries: eligible in descriptors, never executed natively.
-# The whole divide/modulo family stays in the VM alongside calls, argument
-# pushes, collection access/mutation and allocation.
+# The whole divide/modulo family stays in the VM alongside collection
+# mutation and allocation. Calls, argument pushes, reusable scratch tuples,
+# `next` iteration, `geti`, and primitive equality are handled by
+# `native-control` / explicit emitters below; they fall back to their own PC
+# when their fast path does not apply.
 # `in` is handled natively below (see NX_IN): it is a PURE READ, so
 # unlike `put` it cannot allocate, cannot need a GC write barrier, and
 # cannot trigger a collection. `put` deliberately stays a boundary --
@@ -39,10 +42,17 @@
 # (allocation), and ends with vm_checkgc, none of which an executor is
 # permitted to do. `get` also stays: it returns nil for a missing key
 # where `in` raises, and its nil-default path is compiled as a branch.
-(def boundaries {'call true 'tcall true 'push true 'push2 true 'push3 true
-                 'get true 'len true 'next true 'put true
+(def boundaries {'tcall true
+                 'get true 'len true 'put true
                  'mkarr true 'mkbuf true 'mktup true
                  'div true 'divim true 'divf true 'mod true 'rem true})
+# Native control/data operations. These used to be hard VM boundaries; the
+# stage-2 executor now executes them directly when it can prove the fast path
+# (alias cfunction call, fiber-stack push, reusable scratch array, array/tuple
+# iteration). Each op falls back to its original PC before any effect when the
+# fast path does not apply, so the VM remains the semantic authority.
+(def native-control {'call true 'push true 'push2 true 'push3 true
+                     'mkscr true 'next true})
 
 (defn primitive-constant? [x]
   (or (nil? x) (boolean? x)
@@ -50,7 +60,7 @@
 
 (defn- allowed-op? [op]
   (or (get simple op) (get arithmetic op) (get comparisons op)
-      (get branches op) (get boundaries op)
+      (get branches op) (get boundaries op) (get native-control op)
       (get bitwise op) (get shifts op) (= op 'bnot)
       (= op 'in) (= op 'inim)))
 
@@ -72,7 +82,7 @@
   (while (>= i 0)
     (def op ((bytecode i) 0))
     (set (runs i) (cond
-                    (get boundaries op) 0
+                    (or (get boundaries op) (= op 'call)) 0
                     (or (= op 'ret) (= op 'retn)) 0
                     (= i (- n 1)) 1
                     (+ 1 (runs (+ i 1)))))
@@ -131,19 +141,27 @@
     (out "static const uint64_t " tag "_mask[] = {"
          (string/join mask ",") "};"))
   (out "static JanetNativeStep " tag "(JanetFiber *f, JanetFuncDef *d, uint32_t **pc) {"
-       "\nJanet *s = f->data + f->frame;\n" tag "_entries++;"
+       "\nJanet *s = f->data + f->frame;\n"
+       "#ifndef JANET_NATIVE_TELEMETRY\n#define JANET_NATIVE_TELEMETRY 1\n#endif\n"
+       "#if JANET_NATIVE_TELEMETRY\n"
+       "#define NX_ENTRY() (" tag "_entries++)\n"
+       "#define NX_EDGE() (" tag "_edges++)\n"
+       "#define NX_TICK() (" tag "_ops++)\n"
+       "#define NX_FALLBACK() (" tag "_fallbacks++)\n"
+       "#define NX_VMEXIT() (" tag "_vmexits++)\n"
+       "#else\n#define NX_ENTRY() ((void)0)\n#define NX_EDGE() ((void)0)\n"
+       "#define NX_TICK() ((void)0)\n#define NX_FALLBACK() ((void)0)\n"
+       "#define NX_VMEXIT() ((void)0)\n#endif\n"
+       "NX_ENTRY();"
        "\n#define NX_EXIT(K,R) do { *pc = d->bytecode + (K); return (R); } while (0)"
-       "\n#define NX_NUM(S,K) do { if (!janet_checktype(s[S], JANET_NUMBER)) { " tag
-       "_fallbacks++; NX_EXIT(K,JANET_NATIVE_VM); } } while (0)"
-       "\n#define NX_BOUNDARY(K) do { " tag "_vmexits++; NX_EXIT(K,JANET_NATIVE_VM); } while (0)"
+       "\n#define NX_NUM(S,K) do { if (!janet_checktype(s[S], JANET_NUMBER)) { NX_FALLBACK(); NX_EXIT(K,JANET_NATIVE_VM); } } while (0)"
+       "\n#define NX_BOUNDARY(K) do { NX_VMEXIT(); NX_EXIT(K,JANET_NATIVE_VM); } while (0)"
        # int32-domain guard for the bitwise family: number, integral, and
        # representable in int32. Integral doubles pass (Janet accepts
        # them); anything else exits to the VM at the original PC so the
        # boxed op raises identically.
-       "\n#define NX_INT32(S,K) do { if (!janet_checktype(s[S], JANET_NUMBER)) { " tag
-       "_fallbacks++; NX_EXIT(K,JANET_NATIVE_VM); } { double nxd_ = janet_unwrap_number(s[S]); "
-       "if (!(nxd_ >= -2147483648.0 && nxd_ <= 2147483647.0 && nxd_ == (double)(int32_t)nxd_)) { " tag
-       "_fallbacks++; NX_EXIT(K,JANET_NATIVE_VM); } } } while (0)"
+       "\n#define NX_INT32(S,K) do { if (!janet_checktype(s[S], JANET_NUMBER)) { NX_FALLBACK(); NX_EXIT(K,JANET_NATIVE_VM); } { double nxd_ = janet_unwrap_number(s[S]); "
+       "if (!(nxd_ >= -2147483648.0 && nxd_ <= 2147483647.0 && nxd_ == (double)(int32_t)nxd_)) { NX_FALLBACK(); NX_EXIT(K,JANET_NATIVE_VM); } } } while (0)"
        "\nswitch (*pc - d->bytecode) {")
   (each k (range (length (d :bytecode))) (out "case " (string k) ": goto L" (string k) ";"))
   (out "default: return JANET_NATIVE_VM; }")
@@ -168,7 +186,7 @@
       # each re-entry re-running the structural compare).
       (or (= op 'in) (= op 'inim))
       (do
-        (out tag "_ops++;")
+        (out "NX_TICK();")
         (def keyexpr (if (= op 'inim)
                        (string "(double)(uint32_t)(" z ")")
                        (string "janet_unwrap_number(s[" z "])")))
@@ -187,10 +205,137 @@
         (out "  s[" (string a) "] = nxt_[nxi_];")
         (out "} else { NX_BOUNDARY(" (string k) "); } }"))
 
+      # Native `geti`: immediate-index read with janet_getindex semantics.
+      # Arrays, tuples, strings/symbols/keywords, and buffers are read
+      # directly, including the out-of-range -> nil rule. Every other
+      # type exits to the VM at this PC so table/struct/abstract getters
+      # and panics happen exactly once.
+      (= op 'geti)
+      (do
+        (out "NX_TICK();")
+        (out "{ Janet nxds_ = s[" (string c) "];")
+        (out "if (janet_checktype(nxds_, JANET_ARRAY)) {")
+        (out "  JanetArray *nxa_ = janet_unwrap_array(nxds_);")
+        (out "  s[" (string a) "] = ((uint32_t)(" (string z) ") < (uint32_t)nxa_->count) ? nxa_->data[" (string z) "] : janet_wrap_nil();")
+        (out "} else if (janet_checktype(nxds_, JANET_TUPLE)) {")
+        (out "  const Janet *nxt_ = janet_unwrap_tuple(nxds_);")
+        (out "  s[" (string a) "] = ((uint32_t)(" (string z) ") < (uint32_t)janet_tuple_length(nxt_)) ? nxt_[" (string z) "] : janet_wrap_nil();")
+        (out "} else if (janet_checktype(nxds_, JANET_STRING) ||")
+        (out "           janet_checktype(nxds_, JANET_SYMBOL) ||")
+        (out "           janet_checktype(nxds_, JANET_KEYWORD)) {")
+        (out "  JanetString nxs_ = janet_unwrap_string(nxds_);")
+        (out "  s[" (string a) "] = ((uint32_t)(" (string z) ") < (uint32_t)janet_string_length(nxs_)) ? janet_wrap_integer(nxs_[" (string z) "]) : janet_wrap_nil();")
+        (out "} else if (janet_checktype(nxds_, JANET_BUFFER)) {")
+        (out "  JanetBuffer *nxb_ = janet_unwrap_buffer(nxds_);")
+        (out "  s[" (string a) "] = ((uint32_t)(" (string z) ") < (uint32_t)nxb_->count) ? janet_wrap_integer(nxb_->data[" (string z) "]) : janet_wrap_nil();")
+        (out "} else { NX_BOUNDARY(" (string k) "); } }"))
+
+      # Native argument pushes. Values go directly to the fiber argument
+      # stack, exactly where the bytecode would put them. Capacity and
+      # maxstack are checked before every write; on failure we exit at this
+      # push PC so the VM grows or reports overflow, with any earlier pushes
+      # already visible.
+      (or (= op 'push) (= op 'push2) (= op 'push3))
+      (do
+        (def n (case op 'push 1 'push2 2 3))
+        (def vals (case op 'push [a] 'push2 [a c] [a c z]))
+        (out "NX_TICK();")
+        (out "if (f->stacktop + " (string n) " > f->maxstack || f->stacktop + " (string n) " > f->capacity) { NX_BOUNDARY(" (string k) "); }")
+        (each v vals (out "f->data[f->stacktop++] = s[" (string v) "];")))
+
+      # Native scratch-tuple construction. The compiler reserves a frame
+      # slot that becomes a reusable array after the first VM execution. Only
+      # a reusable array with enough capacity is handled here; the first
+      # allocation (or a capacity growth) exits at this PC and the VM performs
+      # it. No allocation, callback, or GC is reachable on the native path.
+      (= op 'mkscr)
+      (do
+        (out "NX_TICK();")
+        (out "{ Janet nxsc_ = s[" (string c) "];")
+        (out "  if (!janet_checktype(nxsc_, JANET_ARRAY)) { NX_BOUNDARY(" (string k) "); }")
+        (out "  JanetArray *nxa_ = janet_unwrap_array(nxsc_);")
+        (out "  int32_t nxn_ = f->stacktop - f->stackstart;")
+        (out "  if (nxn_ < 0 || nxa_->capacity < nxn_) { NX_BOUNDARY(" (string k) "); }")
+        (out "  for (int32_t nxi_ = 0; nxi_ < nxn_; nxi_++) nxa_->data[nxi_] = f->data[f->stackstart + nxi_];")
+        (out "  nxa_->count = nxn_;")
+        (out "  s[" (string a) "] = nxsc_;")
+        (out "  f->stacktop = f->stackstart; }"))
+
+      # Native call to an installed FFI alias function. Arguments stay
+      # GC-scanned in JOP_CALL's C frame. After storing the result and
+      # checking GC, exit at the NEXT bytecode PC: callbacks/finalizers
+      # can invalidate the executor's structural verdict. Every other
+      # callee exits BEFORE the call with its argument stack untouched.
+      (= op 'call)
+      (if (= k (- (length (d :bytecode)) 1))
+        (out "NX_BOUNDARY(" (string k) "); /* terminal call: VM owns it */")
+        (do
+          (out "NX_TICK();")
+          (out "{ Janet nxcallee_ = s[" (string c) "];")
+          (out "  if (f->stack_overflowed) { NX_EXIT(" (string k) ", JANET_NATIVE_VM); }")
+          (out "  int32_t nxargc_ = f->stacktop - f->stackstart;")
+          (out "  JanetCFunction nxfn_ = janet_native_alias_cfun(nxcallee_, nxargc_);")
+          (out "  if (nxfn_) {")
+          (out "      /* Only the direct-wrapper path polls here. Ordinary")
+          (out "         JOP_CALL polls after fallback; never poll twice. */")
+          (out "      if (janet_native_poll(1)) { NX_EXIT(" (string k) ", JANET_NATIVE_INTERRUPT); }")
+          (out "      Janet nxret_ = janet_native_alias_call(f, nxfn_, nxargc_, d->bytecode + " (string k) ");")
+          (out "      s = f->data + f->frame;")
+          (out "      s[" (string a) "] = nxret_;")
+          (out "      janet_native_alias_after_call();")
+          (out "      NX_VMEXIT(); NX_EXIT(" (string (+ k 1)) ", JANET_NATIVE_VM);")
+          (out "  } else { NX_EXIT(" (string k) ", JANET_NATIVE_VM); } }")))
+
+      # Native `next` for arrays, tuples, strings, and buffers. This is the
+      # iterator used by `each`; tables, structs, abstracts, fibers, and
+      # non-integral keys exit to the VM's janet_next_impl at this PC.
+      (= op 'next)
+      (do
+        (out "NX_TICK();")
+        (out "{ Janet nds_ = s[" (string c) "]; Janet nkey_ = s[" (string z) "];")
+        (out "  int32_t nxi_ = -1;")
+        (out "  if (janet_checktype(nkey_, JANET_NIL)) nxi_ = 0;")
+        (out "  else if (janet_checkint(nkey_)) {")
+        (out "    int32_t nxn_ = janet_unwrap_integer(nkey_);")
+        (out "    nxi_ = (nxn_ == INT32_MAX) ? -1 : nxn_ + 1;")
+        (out "  }")
+        (out "  else { NX_BOUNDARY(" (string k) "); }")
+        (out "  int32_t nxl_ = -1;")
+        (out "  if (janet_checktype(nds_, JANET_ARRAY)) nxl_ = janet_unwrap_array(nds_)->count;")
+        (out "  else if (janet_checktype(nds_, JANET_TUPLE)) nxl_ = janet_tuple_length(janet_unwrap_tuple(nds_));")
+        (out "  else if (janet_checktype(nds_, JANET_STRING)) nxl_ = janet_string_length(janet_unwrap_string(nds_));")
+        (out "  else if (janet_checktype(nds_, JANET_BUFFER)) nxl_ = janet_unwrap_buffer(nds_)->count;")
+        (out "  else { NX_BOUNDARY(" (string k) "); }")
+        (out "  s[" (string a) "] = ((nxi_ >= 0 && nxi_ < nxl_) ? janet_wrap_integer(nxi_) : janet_wrap_nil()); }"))
+
       (get boundaries op) (out "NX_BOUNDARY(" (string k) "); /* " (string op) ": VM executes once */")
+
+      # Equality on primitive non-numbers. The generic comparison path below
+      # requires numbers; `=`/`not=` are also valid on strings, symbols,
+      # keywords, nil, booleans, and function identities, and ttfx's draw loop
+      # tests every cell symbol against " ". Keep composite values (tables,
+      # structs, arrays, buffers, abstracts) on the VM path so recursive or
+      # user equality cannot run inside a native region.
+      (or (= op 'eq) (= op 'neq))
+      (do
+        (out "NX_TICK();")
+        (out "if (janet_checktype(s[" (string c) "], JANET_NUMBER) && janet_checktype(s[" (string z) "], JANET_NUMBER)) {")
+        (out "  s[" (string a) "] = janet_wrap_boolean(janet_unwrap_number(s[" (string c) "]) "
+             (if (= op 'eq) "==" "!=") " janet_unwrap_number(s[" (string z) "]));")
+        (out "} else {")
+        (out "  JanetType nxta_ = janet_type(s[" (string c) "]);")
+        (out "  JanetType nxtb_ = janet_type(s[" (string z) "]);")
+        (out "  if (nxta_ == nxtb_ && (nxta_ == JANET_STRING || nxta_ == JANET_SYMBOL ||")
+        (out "      nxta_ == JANET_KEYWORD || nxta_ == JANET_NIL || nxta_ == JANET_BOOLEAN ||")
+        (out "      nxta_ == JANET_CFUNCTION || nxta_ == JANET_FUNCTION)) {")
+        (out "    s[" (string a) "] = janet_wrap_boolean(janet_equals(s[" (string c) "], s[" (string z) "])"
+             (if (= op 'eq) "" " ? 0 : 1") ");")
+        (out "  } else { NX_BOUNDARY(" (string k) "); }")
+        (out "}"))
+
       (or (get arithmetic op) (get comparisons op))
       (do
-        (out tag "_ops++;")
+        (out "NX_TICK();")
         (out "NX_NUM(" (string c) "," (string k) ");")
         (unless (get immediate op) (out "NX_NUM(" (string z) "," (string k) ");"))
         (out "s[" (string a) "] = " (if (get arithmetic op) "janet_wrap_number" "janet_wrap_boolean")
@@ -202,7 +347,7 @@
       # k_sr32/k_sru32 helpers, so the two tiers cannot disagree.
       (get bitwise op)
       (do
-        (out tag "_ops++;")
+        (out "NX_TICK();")
         (out "NX_INT32(" (string c) "," (string k) ");")
         (out "NX_INT32(" (string z) "," (string k) ");")
         (out "s[" (string a) "] = janet_wrap_number((double)(int32_t)("
@@ -210,13 +355,13 @@
              " (int32_t)janet_unwrap_number(s[" (string z) "])));"))
       (= op 'bnot)
       (do
-        (out tag "_ops++;")
+        (out "NX_TICK();")
         (out "NX_INT32(" (string c) "," (string k) ");")
         (out "s[" (string a) "] = janet_wrap_number((double)(int32_t)(~"
              "(int32_t)janet_unwrap_number(s[" (string c) "])));"))
       (get shifts op)
       (do
-        (out tag "_ops++;")
+        (out "NX_TICK();")
         (out "NX_INT32(" (string c) "," (string k) ");")
         (unless (get shift-imm op) (out "NX_INT32(" (string z) "," (string k) ");"))
         # Shift count: immediate forms carry it in the instruction; the
@@ -236,7 +381,7 @@
       (or (= op 'jmp) (get branches op))
       (do
         (def delta (if (= op 'jmp) a c))
-        (out tag "_ops++;")
+        (out "NX_TICK();")
         (unless (= op 'jmp)
           (out "if (" (case op
                         'jmpif (string "janet_truthy(s[" a "])")
@@ -244,20 +389,21 @@
                         'jmpni (string "janet_checktype(s[" a "], JANET_NIL)")
                         (string "!janet_checktype(s[" a "], JANET_NIL)")) ") {"))
         (when (<= delta 0)
-          (out tag "_edges++; if (janet_native_poll(1)) NX_EXIT(" (string k) ",JANET_NATIVE_INTERRUPT);"))
+          (out "NX_EDGE(); if (janet_native_poll(1)) NX_EXIT(" (string k) ",JANET_NATIVE_INTERRUPT);"))
         (out "goto L" (string (+ k delta)) ";")
         (unless (= op 'jmp) (out "}")))
       (or (= op 'ret) (= op 'retn)) (out "NX_BOUNDARY(" (string k) ");")
-      (= op 'movn) (do (out tag "_ops++;") (out "s[" (string a) "] = s[" (string c) "];"))
-      (= op 'movf) (do (out tag "_ops++;") (out "s[" (string c) "] = s[" (string a) "];"))
-      (= op 'ldc) (do (out tag "_ops++;") (out "s[" (string a) "] = d->constants[" (string c) "];"))
-      (= op 'ldi) (do (out tag "_ops++;") (out "s[" (string a) "] = janet_wrap_integer(" (string c) ");"))
-      (= op 'ldn) (do (out tag "_ops++;") (out "s[" (string a) "] = janet_wrap_nil();"))
-      (= op 'ldt) (do (out tag "_ops++;") (out "s[" (string a) "] = janet_wrap_true();"))
-      (= op 'ldf) (do (out tag "_ops++;") (out "s[" (string a) "] = janet_wrap_false();"))
+      (= op 'movn) (do (out "NX_TICK();") (out "s[" (string a) "] = s[" (string c) "];"))
+      (= op 'movf) (do (out "NX_TICK();") (out "s[" (string c) "] = s[" (string a) "];"))
+      (= op 'ldc) (do (out "NX_TICK();") (out "s[" (string a) "] = d->constants[" (string c) "];"))
+      (= op 'ldi) (do (out "NX_TICK();") (out "s[" (string a) "] = janet_wrap_integer(" (string c) ");"))
+      (= op 'ldn) (do (out "NX_TICK();") (out "s[" (string a) "] = janet_wrap_nil();"))
+      (= op 'ldt) (do (out "NX_TICK();") (out "s[" (string a) "] = janet_wrap_true();"))
+      (= op 'ldf) (do (out "NX_TICK();") (out "s[" (string a) "] = janet_wrap_false();"))
       (= op 'noop) nil
       (out "NX_BOUNDARY(" (string k) "); /* unsupported, before effects */")))
-  (out "#undef NX_NUM\n#undef NX_EXIT\n#undef NX_BOUNDARY\n}")
+  (out "#undef NX_NUM\n#undef NX_EXIT\n#undef NX_BOUNDARY\n"
+       "#undef NX_ENTRY\n#undef NX_EDGE\n#undef NX_TICK\n#undef NX_FALLBACK\n#undef NX_VMEXIT\n}")
   (out "#if defined(__GNUC__) && !defined(__clang__)\n#pragma GCC pop_options\n#endif")
   (out "static const JanetNativeCode " tag "_code = {" tag "," tag "_words," tag "_constants,"
        (if (empty? mask) "NULL," (string tag "_mask,"))

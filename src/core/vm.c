@@ -207,7 +207,7 @@ static JANET_THREAD_LOCAL int native_stepping;
  * Lazy attachment tries the unique key-matching registered descriptor
  * once per registry generation per definition. */
 #define vm_native() do { \
-    if (!native_stepping) { \
+    if (JANET_UNLIKELY(janet_vm.native_possible) && !native_stepping) { \
         JanetFuncDef *ndef_ = func->def; \
         if (NULL != ndef_->native_code) { \
             if (janet_native_region_allowed(ndef_->native_code, (uint32_t)(pc - ndef_->bytecode))) { \
@@ -249,6 +249,46 @@ int janet_native_poll(int condition) {
 #else
     return vm_poll_condition(condition);
 #endif
+}
+
+/* Native executors may call an installed FFI alias wrapper directly only
+ * under the exact conditions of the VM's alias fast path: function callee,
+ * runtime alias marker, no trace hook, no active profiler, matching argc,
+ * and a one-constant cfunction body. Return NULL for every other callee so
+ * the executor exits at the call PC and ordinary JOP_CALL owns it. */
+JANET_API JanetCFunction janet_native_alias_cfun(Janet callee, int32_t argc) {
+    if (!janet_checktype(callee, JANET_FUNCTION)) return NULL;
+    JanetFunction *func = janet_unwrap_function(callee);
+    JanetFuncDef *def = func->def;
+    if (func->gc.flags & JANET_FUNCFLAG_TRACE) return NULL;
+    if (NULL != janet_vm.profile_table) return NULL;
+    if (!(def->flags & JANET_FUNCDEF_FLAG_FFI_ALIAS)) return NULL;
+    if (def->arity != argc) return NULL;
+    if (def->constants_length != 1) return NULL;
+    if (!janet_checktype(def->constants[0], JANET_CFUNCTION)) return NULL;
+    return janet_unwrap_cfunction(def->constants[0]);
+}
+
+/* Enter an already-validated alias wrapper with JOP_CALL's C-frame
+ * discipline. The argument stack remains GC-scanned until the wrapper
+ * returns; a signature without function arguments does NOT prove that
+ * a C function cannot allocate or call back into Janet. */
+JANET_API Janet janet_native_alias_call(JanetFiber *fiber, JanetCFunction cfun,
+                                        int32_t argc, uint32_t *pc) {
+    janet_stack_frame(fiber->data + fiber->frame)->pc = pc;
+    janet_fiber_cframe(fiber, cfun);
+    Janet ret = cfun(argc, fiber->data + fiber->frame);
+    janet_fiber_popframe(fiber);
+    return ret;
+}
+
+/* The caller has already stored the result in a scanned frame slot. Do the
+ * same GC check as JOP_CALL before leaving the effectful native region.
+ * Collection/finalizers and arbitrary C callbacks can invalidate a cached
+ * structural verdict, so the next native entry must revalidate all words. */
+JANET_API void janet_native_alias_after_call(void) {
+    maybe_collect();
+    janet_vm.native_epoch++;
 }
 
 #ifdef JANET_NO_INTERPRETER_INTERRUPT
@@ -2998,6 +3038,13 @@ Janet janet_mcall(const char *name, int32_t argc, Janet *argv) {
 
 /* Setup VM */
 int janet_init(void) {
+
+#ifdef JANET_NATIVE_EXECUTORS
+    /* Linked descriptor registrations can survive janet_deinit; an explicit
+     * registration or later publication sets this flag as soon as it can
+     * affect dispatch. */
+    janet_vm.native_possible = janet_native_registry_count() != 0;
+#endif
 
     /* Garbage collection */
     janet_vm.blocks = NULL;

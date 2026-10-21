@@ -123,6 +123,13 @@ struct JanetVM {
     uint64_t native_attach_nomatch;
     uint64_t native_vm_exits;
     uint64_t native_exit_opcodes[256];
+#ifdef JANET_NATIVE_EXECUTORS
+    /* A single predictable dispatch gate when no descriptor has been
+     * published or explicitly attached in this VM. Even a runtime built
+     * with executor support must not pay registry/shape checks in a
+     * completely ordinary interpreter/AOT program. */
+    int native_possible;
+#endif
     /* Validation epoch for cached whole-definition native verdicts.
      * Bumped on every VM resume entry, debugger breakpoint write and
      * descriptor publication; a def's cached verdict is usable only at

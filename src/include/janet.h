@@ -1301,6 +1301,10 @@ typedef struct JanetNativeCode {
 JANET_API int janet_native_register(JanetFunction *, const JanetNativeCode *);
 JANET_API int janet_native_matches(JanetFuncDef *, const JanetNativeCode *);
 JANET_API int janet_native_poll(int condition);
+JANET_API JanetCFunction janet_native_alias_cfun(Janet callee, int32_t argc);
+JANET_API Janet janet_native_alias_call(JanetFiber *fiber, JanetCFunction cfun,
+                                        int32_t argc, uint32_t *pc);
+JANET_API void janet_native_alias_after_call(void);
 /* Stage 2: VM-boundary regions. region_allowed gates whole-definition
  * validation to useful native starts (>= 3 native operations ahead).
  * registry_add publishes a linked descriptor; try_attach performs the

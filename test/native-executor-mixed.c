@@ -82,7 +82,12 @@ static Janet snapshot(void) { return run("(mx/snapshot)"); }
 static int trace_run(JanetFunction *fn, int native, const JanetNativeCode *code,
                      int budget, Janet arg, Janet *out, int *pcs, int maxpcs) {
     JanetFiber *f = spawn_arg(fn, arg);
-    if (native) assert(janet_native_register(fn, code));
+    if (native) {
+        assert(janet_native_register(fn, code));
+#ifdef JANET_NATIVE_EXECUTORS
+        assert(janet_vm.native_possible);
+#endif
+    }
     else fn->def->native_code = NULL;
     janet_vm.quantum = budget;
     int signals = 0;
@@ -127,6 +132,11 @@ static void differential(JanetFunction *fn, const JanetNativeCode *code, Janet a
 int main(int argc, char **argv) {
     assert(argc == 2);
     janet_init();
+#ifdef JANET_NATIVE_EXECUTORS
+    /* The compiled-in tier starts dormant until explicit registration or
+     * descriptor publication; dispatch must be cheap in the ordinary VM. */
+    assert(!janet_vm.native_possible);
+#endif
     janet_vm.quantum = 0;
     env = janet_core_env(NULL);
     janet_gcroot(janet_wrap_table(env));
@@ -418,21 +428,23 @@ int main(int argc, char **argv) {
                         (unsigned long long)janet_native_exit_stat(op));
         }
         /* Exit-by-opcode counts the opcode at each native->VM region exit.
+         * Argument pushes are native on the fiber stack; a non-alias call
+         * is the first effectful operation and remains the region exit.
          * Boundary ops that only ever follow boxed instructions (like the
          * ldc before a call) are reached by ordinary dispatch and are not
          * region exits. */
-        assert(janet_native_exit_stat(JOP_PUSH) > 0);
+        assert(janet_native_exit_stat(JOP_CALL) > 0);
         assert(janet_native_exit_stat(JOP_GET) > 0);
         assert(janet_native_exit_stat(JOP_PUT) > 0);
         printf("boundary counters: entries=%llu ops=%llu vmexits=%llu edges=%llu guards=%llu\n",
                (unsigned long long)nx_1_entries, (unsigned long long)nx_1_ops,
                (unsigned long long)nx_1_vmexits, (unsigned long long)nx_1_edges,
                (unsigned long long)nx_1_fallbacks);
-        printf("global: attempts=%llu attached=%llu vmexits=%llu push-exits=%llu\n",
+        printf("global: attempts=%llu attached=%llu vmexits=%llu call-exits=%llu\n",
                (unsigned long long)janet_native_stat(JANET_NATIVE_STAT_ATTACH_ATTEMPTS),
                (unsigned long long)janet_native_stat(JANET_NATIVE_STAT_ATTACH_ATTACHED),
                (unsigned long long)janet_native_stat(JANET_NATIVE_STAT_VM_EXITS),
-               (unsigned long long)janet_native_exit_stat(JOP_PUSH));
+               (unsigned long long)janet_native_exit_stat(JOP_CALL));
     }
 
     /* 9. Ambiguity refusal, deliberately last: a duplicate descriptor makes

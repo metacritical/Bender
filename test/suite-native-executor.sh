@@ -19,6 +19,36 @@ if grep 'unsupported-bit' "$root/generated/native-executors.txt"; then exit 1; f
 JANET_NATIVE_EXECUTORS=1 ./build/bender --aot test/fixtures/native-executor.janet --native --no-auto-pgo -o "$root/image" > "$root/image-build.log" 2>&1
 "$root/image" > "$root/image.log" 2>&1
 grep 'image-executor' "$root/image.log"
+# Stage 2's guarded geti/next/string equality, scratch tuple and FFI alias
+# call require the *actual* executor-enabled runtime (the generic C harness
+# below also checks budget-1/2 PCs). Build a tiny struct-by-value dylib in
+# this private root: the alias wrapper allocates a tuple return under GC
+# pressure, so a shortcut that drops argument roots cannot pass this gate.
+case "$(uname -s)" in
+    Darwin) ops_ext=dylib; ops_link=-dynamiclib ;;
+    Linux) ops_ext=so; ops_link=-shared ;;
+    *) echo "native-ops fixture requires a POSIX shared library" >&2; exit 1 ;;
+esac
+${CC:-cc} -O2 -fPIC "$ops_link" test/fixtures/native-executor-ops-lib.c \
+    -o "$root/native-ops.$ops_ext"
+export JANET_NATIVE_OPS_LIB="$root/native-ops.$ops_ext"
+./build/bender --aot test/fixtures/native-executor-ops-main.janet --native \
+    --no-auto-pgo -o "$root/ops-boxed" > "$root/ops-boxed-build.log" 2>&1
+JANET_NATIVE_EXECUTORS=1 ./build/bender --aot \
+    test/fixtures/native-executor-ops-main.janet --native --no-auto-pgo \
+    -o "$root/ops-native" > "$root/ops-native-build.log" 2>&1
+grep 'indexed-loop' "$root/ops-native-native/native-executors.txt"
+grep 'scratch-loop' "$root/ops-native-native/native-executors.txt"
+# The same generated primitive struct writer must accept the scratch array
+# fast path and an immutable tuple, with other indexables still going through
+# the ordinary janet_getindexed fallback.
+grep -q 'if (janet_checktype(v, JANET_ARRAY))' "$root/ops-native-native/native.c"
+grep -q 'else if (janet_checktype(v, JANET_TUPLE))' "$root/ops-native-native/native.c"
+"$root/ops-boxed" > "$root/ops-boxed.out" 2> "$root/ops-boxed.err"
+NATIVE_OPS_STATS=1 "$root/ops-native" > "$root/ops-native.out" 2> "$root/ops-native.err"
+cmp "$root/ops-boxed.out" "$root/ops-native.out"
+grep 'native-ops-global' "$root/ops-native.err"
+echo "native geti/next/scratch/alias/GC image parity passed"
 build_case() {
     name=$1
     shift
