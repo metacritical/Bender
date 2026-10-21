@@ -1,0 +1,126 @@
+# Profile-guided AOT optimizer: execution plan
+
+Updated 2026-10-21. This is a concrete continuation of
+[`ttfx-driven-compiler-work.md`](ttfx-driven-compiler-work.md), not a promise
+that PGO by itself makes boxed bytecode run at native speed.
+
+## Goal and current evidence
+
+The long-run target is to meet or exceed Rust on **comparable, parity-gated**
+workloads. The five-effect release GUI comparison is Bender/Rust **0.865×**;
+the same-scene CLI frame-dump throughput is about **0.072×** Rust and
+**0.48×** LuaJIT. CLI includes construction, formatting and startup; GUI
+includes a shared raylib/OpenGL presentation floor. These are different
+optimization targets and must not be combined into one ratio.
+
+Single-frame to full-animation release CLI probes were, respectively:
+`wipe` 16→49 ms, `randomsequence` 14→68 ms, `scattered` 18→96 ms.
+The latter additional time remains in effect stepping and frame-string
+construction, not just stdout writing. In the generated release, nine
+scalar helpers are native; `ctx-frame-string` and `ctx-update` remain
+mixed-operation VM loops. The first expanded frame-executor prototype
+generated 76 descriptors but lost 5.2% CLI throughput in a paired A/B;
+more importantly its leaf-alias shortcut was GC-unsafe. Its timings are
+historical, **not a gate for the corrected code**. See
+[`native-loop-executors.md`](native-loop-executors.md).
+
+The corrected default-off dispatch gate recovered **6.7%** of the
+macro-enabled runtime's CLI throughput when no descriptors were present.
+The safe executor candidate itself was **0.989×** its same-compiler
+no-executor release across five paired effects and **0.927×** the prior
+macro-free `rel2` in a separate paired sitting. It is a correctness
+foundation that remains opt-in, not an achieved optimization win.
+The default macro-free runtime and CLI were rebuilt from the feature
+commits: two isolated PGO collections, verified `--release`, 37/37
+bounded frame streams at seed 42 and 25/25 held-out effect/seed cases
+match `rel2`; seven paired CLI rounds gave **1.006×** `rel2` (noise).
+GUI PGO collection still needs a robust macOS app-bundle launcher:
+direct interpreter runs currently crash in the hidden-window path,
+including an old `rel2` control binary. Do not substitute a non-GUI
+profile or benchmark a non-release candidate as the GUI result.
+
+## Invariants for every stage
+
+- No ttfx-specific lowering or change to ttfx source. Scratch experiments
+  live outside both repositories; code-generation changes must be generic.
+- Exact full-frame bytes on all 37 effects, multiple seeds with held-out
+  seeds; comparable GUI appearance, dimension, tick cadence and draw count.
+- Original GC roots, write barriers, exceptions, debugger PCs, marshal and
+  quantum/interruption order. A guard must deopt **before** unexecuted
+  effects, or **after** a completed effect at the following original PC.
+- No JIT/downloaded code on iOS: profile-guided versions are generated
+  before packaging and linked into the app with bundled bytecode.
+- Benchmark the verified `--release` binary after **two isolated PGO
+  collections**, not an instrumentation/telemetry build. Interleave
+  same-sitting pairs, retain all raw samples, and reject noisy wins.
+
+## Work units, in dependency order
+
+### 0. Attribute the release workload (measurement prerequisite)
+
+Create a sustained single-process AOT/PGO probe in the approved scratch
+root, reusing the unmodified scene modules and input. Attribute sampled
+time and allocations to VM dispatch, `janet_dict_find`/container access,
+core calls, string-buffer construction, GC, and native code. Report
+dynamic executor entries/backedges/**effectful exits**, not just emitted
+function counts. Measure startup/construction independently from playback.
+Do not choose a data-layout rewrite until its expected share is measured.
+
+### 1. Sound effectful safepoints (first feature, default-off)
+
+Finish the guarded native `geti`, `next`, primitive equality, fiber-stack
+push and scratch-array reuse. For an installed FFI alias, use the same
+GC-scanned C frame as `JOP_CALL`, store its return in the live frame
+before the GC check, then exit at the next original PC and invalidate the
+structural-validation epoch. Non-alias calls fall back at the unexecuted
+call PC without double polling. Allowlist every executed opcode in the
+runtime verifier. Test with a genuine struct-by-value alias that allocates
+a tuple return under GC pressure, both boxed and executor images, the
+budget-1/2 native matrix, ASan/UBSan and event-loop fibers. **Passing is a
+correctness milestone, not a speed claim**. Keep double opt-in until a
+positive release A/B survives the broader sweep.
+
+### 2. Collect useful feedback for an optimizing IR
+
+Extend existing source-qualified PGO evidence with bounded per-PC receiver
+types/shapes, observed call targets, branch/edge counts and allocation
+sites. Merge only compatible workloads; guard every observed type at
+runtime. Preserve the existing source/replay parity gate and test held-out
+inputs to prevent profile-dependent answers. Feedback must enable a
+specialization decision, not merely count how often a wrapper ran.
+
+### 3. Lower effectful loops as a single native region
+
+Build an SSA-like representation with typed values, effects, liveness and
+per-PC deopt snapshots. Lower common core calls, table/array reads and
+bounded writes with type/shape/arity guards. Calls that may allocate need
+scanned roots, GC checks and revalidation; unknown callbacks deopt. Poll
+at exactly the VM's backedges and calls. Never rerun a completed write or
+call on fallback. First gate on tiny generic loop fixtures, then measure
+the unchanged `ctx-frame-string` and `ctx-update` paths. A function that
+still exits once per cell has not met this milestone.
+
+### 4. Remove boxed record and temporary traffic
+
+Only after Step 0 measures it material: propagate proven closed table
+shapes across function boundaries (see [`unboxing-plan.md`](unboxing-plan.md)),
+scalar-replace nonescaping tuples/records and specialize append buffers.
+Unknown shape, reflection, marshal or escape must stay boxed. Conversion
+on every call can cost more than the saved hash lookup, so require a
+measured reduction in total allocations and time, not just faster loads.
+
+### 5. Lower startup cost separately
+
+Minimize image initialization, deserialization and module setup without
+special-casing effect selection. Even zero-time playback cannot make a
+15–18 ms first frame match Rust's 4–5 ms whole process. Gate startup
+with the same full binary, not a microbenchmark that omits module setup.
+
+## Decision gates
+
+For CLI: first catch the LuaJIT geomean on shared parity-gated effects,
+then move toward Rust; for GUI: **0.865 → 0.92 → 0.97 → ≥1.0** against
+paired Rust. No feature is advertised as faster from emission counts,
+counter hits, or a non-release run. A failed A/B is documented and the
+optimization stays opt-in; correctness features may still be committed
+behind the existing runtime and emission gates.

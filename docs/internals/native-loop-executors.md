@@ -26,27 +26,37 @@ amortized per (definition, descriptor) pair — see stage 2. It is not called on
 generated internal label transitions.
 
 All original slots remain boxed and GC scanned. C temporaries live only within
-one operation. Executors cannot call Janet, allocate, or invoke overloaded
-operations. A type guard failure returns `JANET_NATIVE_VM` at the exact current
-original opcode; VM dispatch executes that opcode once before another native
-entry can occur. Native return instructions also exit to the original VM opcode,
-preserving frame removal, result delivery, profiling, and caller resume logic.
+one operation. Executors cannot call arbitrary Janet or invoke overloaded
+operations. The one direct-call exception is an installed FFI alias wrapper
+(stage 2). Its arguments remain on the GC-scanned fiber stack; it uses exactly
+`JOP_CALL`'s C-frame discipline even when the C signature has no callback
+parameter. The return value is stored in a scanned slot before the VM's
+normal collection check. The executor then **exits at the next bytecode PC**
+and bumps the validation epoch so any callback/finalizer mutation forces a
+new structural comparison. All other callable types exit at the original
+unexecuted PC. Native return instructions still exit to the original VM
+opcode, preserving frame removal, result delivery, profiling, and caller
+resume logic.
 
-No allocation or callback is reachable between entry validation and native exit,
-so synchronous bytecode/debugger mutation cannot happen during a generated loop.
-After a boxed fallback, GC, or suspension, the next entry validates again and
-reacquires slots. Concurrent unsynchronized C mutation is not supported, just as
-it is not supported by the ordinary interpreter. No mutation epoch or per-inner-
-iteration full-word scan is required.
+Outside that explicit alias-call boundary no allocation or callback is
+reachable between entry validation and native exit. After a boxed fallback,
+GC, or suspension, the next entry validates again and reacquires slots.
+Concurrent unsynchronized C mutation remains unsupported, as in the VM.
 
 ## Scheduling and debugging
 
 Every executed nonpositive backedge polls **before** changing the original PC.
-Taken conditional edges poll; untaken/forward edges do not. The generated poll
-and interpreter share exactly the same expression, with auto_suspend short
-circuiting quantum decrement. On interrupt, the VM commits the unexecuted jump
-PC and `RESUME_NO_USEVAL | RESUME_NO_SKIP`. Resume/cancel signals and longjmp
-recovery run before native entry. There is no batching.
+Taken conditional edges poll; untaken/forward edges do not. A native direct
+FFI-alias call polls before entering the wrapper. If the same call must fall
+back to the VM (non-alias callee, trace/profiler/arity guard), the executor
+does **not** poll first: ordinary `JOP_CALL` performs its own auto-suspend
+poll, so one source-level call consumes exactly one poll in either mode. The
+generated poll and interpreter share exactly the same expression, with
+auto_suspend short circuiting quantum decrement. On interrupt, the VM commits
+the unexecuted jump/call PC and `RESUME_NO_USEVAL | RESUME_NO_SKIP`. Direct
+wrapper calls commit the call PC before entry so argument-validation panics
+resume there. Resume/cancel signals and longjmp recovery run before native
+entry. There is no batching.
 
 `quantum` is an enable flag, not the budget. Each resume resets remaining polls
 to `JANET_QUANTUM_BUDGET` (default remains 200). This compile-time constant is now
@@ -84,16 +94,37 @@ unless explicitly registered again.
 ## Stage 2: mixed-operation regions
 
 Stage 2 admits loop bodies whose instructions are either stage-1 native
-operations or **explicit VM boundaries**: `call`, `tcall`, `push`,
-`push2`, `push3`, `get`, `in`, `len`, `next`, `put`, `mkarr`, `mkbuf`,
-`mktup` and the whole divide/modulo family (`div`, `divim`, `divf`,
-`mod`, `rem`). Boundary words are still compared exactly in
-`janet_native_matches`, but generated code never executes them: each
-region exits with `JANET_NATIVE_VM` at the boundary's original
-unexecuted PC and ordinary dispatch performs the effect exactly once.
-No native local pointer or cached value survives the exit; PUSH stays
-in the VM because argument-stack growth can invalidate pointers, and
-CALL/TCALL use ordinary VM callable semantics (frame entry/replacement).
+operations, **native control operations**, or **explicit VM boundaries**.
+
+Native control operations are `push`, `push2`, `push3`, `call`, `mkscr`,
+`next`, `geti`, and primitive `eq`/`neq`. They have exact fast paths and fall
+back to their original PC before effects:
+
+- pushes append to the live fiber argument stack after capacity/max-stack
+  checks;
+- `call` uses `janet_native_alias_cfun` to recognize only the installed FFI
+  alias shape the VM's own fast path accepts, polls once, and calls through a
+  GC-scanned C frame. After storing the result and checking GC, it exits at
+  the **next** PC for revalidation. A non-alias call exits before effects at
+  the current PC for ordinary `JOP_CALL`;
+- `mkscr` refills only an already-allocated reusable scratch array with enough
+  capacity; first allocation/growth exits to the VM;
+- `next` handles arrays, tuples, strings, and buffers with nil/integral keys;
+  tables, structs, abstracts, fibers, and non-integral keys exit to
+  `janet_next_impl`;
+- `geti` handles arrays, tuples, string-like values, and buffers with the
+  out-of-range nil rule;
+- primitive equality handles numbers and same-typed primitive values;
+  composites and mixed types exit to the VM.
+
+Explicit VM boundaries remain `tcall`, `get`, `put`, `len`, `in` (boxed
+exception path), `mkarr`, `mkbuf`, `mktup`, and the whole divide/modulo family
+(`div`, `divim`, `divf`, `mod`, `rem`). Boundary words are still compared
+exactly in `janet_native_matches`; generated code never executes them. Each
+region exits with `JANET_NATIVE_VM` at the boundary's original unexecuted PC
+and ordinary dispatch performs the effect exactly once. No native local pointer
+or cached value survives the exit. `PUSH` state is on the live scanned fiber
+stack, so a fallback after pushes is ordinary VM state.
 
 Constants use an explicit **opaque runtime load** policy. Primitive
 (nil/boolean/finite-number) constants keep exact bit matching.
@@ -166,7 +197,11 @@ unsynchronized C mutation).
 per VM attach attempts/attached/ambiguous/nomatch, total VM exits, and
 exits by opcode (the opcode at each native-to-VM region exit; boundary
 ops reached only via boxed dispatch after another boundary are not
-region exits).
+region exits). Counter increments are compiled only when
+`JANET_NATIVE_TELEMETRY` is nonzero; `--release` passes
+`-DJANET_NATIVE_TELEMETRY=0`, while ordinary profiling/AOT builds default
+it to 1 so counters remain diagnostic. The stat readers still exist and
+report zero when disabled.
 
 ## Verification (stage 2)
 
@@ -227,3 +262,98 @@ re-priming (`janet_fiber_ctx_prime`, fiber.c:417), reproducing with executors
 compiled out. The native executor harness's ASan run passes, but reports ASan's
 alternate-stack warning. This is not a clean full shared-stack ASan validation.
 No benchmark or application-specific lowering is part of this stage.
+
+## 2026-10-21 release CLI A/B: historical, not a shipping win
+
+The expanded executor prototype (`ttfx-cli-rel6`) was built with
+`JANET_NATIVE_EXECUTORS`, two isolated PGO collections and verified
+`--release`; executor telemetry was compiled out. It generated 76 frame
+executor descriptors alongside nine scalar native helpers. A same-sitting,
+seven-round paired A/B against the already-shipped `ttfx-cli-rel2` used the
+unchanged logo, seed 42, 80×24 canvas, and bounded full frame dumps. Five of
+five frame streams were byte-identical.
+
+**Do not ship that binary:** the prototype had a signature-derived "leaf"
+alias-call shortcut which cleared the scanned argument stack before calling
+C. A C call can allocate or callback regardless of its signature. It has
+since been removed in favor of the VM's C-frame discipline, GC check, and
+post-call revalidation. The numbers below describe the old prototype only;
+the corrected feature needs its own release A/B.
+
+| Effect | rel2 ms | executor rel6 ms | rel2 / rel6 |
+|---|---:|---:|---:|
+| wipe | 49.59 | 51.43 | 0.964× |
+| highlight | 50.46 | 51.95 | 0.971× |
+| expand | 85.35 | 94.00 | 0.908× |
+| randomsequence | 68.85 | 70.62 | 0.975× |
+| scattered | 96.23 | 104.08 | 0.925× |
+
+Geometric mean **rel2/rel6 = 0.948×**: the executor candidate delivered 5.2%
+less throughput in this CLI sitting. This does not justify shipping it. The
+artifacts and raw runs are outside the repositories under the session scratch root
+(`ab-bender-cli.json`). The hot `ctx-frame-string` bytecode has 313
+instructions, including 43 calls, six `put`, six `len` and three collection
+allocations; `ctx-update` contains eight calls and a `put`. Current native
+regions exit around most effectful operations, so the profile cannot turn
+those loops into one continuous native program. Neither "PGO enabled" nor
+"76 descriptors emitted" is evidence of substantial hot-loop coverage.
+
+An independent same-sitting release CLI breakdown bounded output to one
+frame and then the whole animation. `rel2` took **16.0→49.4 ms** on wipe,
+**14.3→67.9 ms** on randomsequence, and **17.9→96.0 ms** on scattered;
+Rust took **4.1→4.4**, **3.8→4.3**, and **4.1→5.4 ms**, respectively.
+Bender's own `--bench` time, measured after effect construction and with no
+frame dump, was approximately 33/53/76 ms. Thus neither process startup nor
+writing the dump alone explains the gap; substantial time remains in scene
+stepping and frame-string construction. This is not an isolated VM dispatch
+measurement and should not be labeled one.
+
+Closing the CLI gap needs a generic profile-guided AOT IR that can keep
+typed/unboxed state across *effectful* calls and allocations, with live
+boxed values rooted for GC and precise deopt snapshots at original bytecode
+PCs. Calls and backedges must retain the VM's quantum/preemption polling
+points. Specialization needs runtime type/shape guards and a boxed fallback;
+it cannot rely on ttfx-specific kernels or weaken the parity/preemption
+gates. Startup/image initialization is a separate target from playback.
+
+## Corrected default-off runtime and safe release candidate
+
+The unsafe signature-derived leaf shortcut above was removed. Every native
+alias call now uses the scanned C frame, stores its return before the normal
+GC check and exits at the following original PC with a new validation epoch.
+`geti` and `mkscr` are in the runtime opcode allowlist. The six-mode
+executor matrix now additionally builds a private shared library with two
+struct-by-value aliases (one returns a GC-allocated tuple), compares boxed
+and executor image bytes, exercises array/tuple/table reads and loops in
+event fibers under GC pressure, and asserts that the executors actually
+attach. It passes with ASan/UBSan; no assertion was removed.
+
+The enabled runtime also has a cheap *no-descriptor* dispatch gate: it
+starts dormant, activates on explicit registration or descriptor publication,
+and accounts for linked registrations surviving `janet_deinit`/`janet_init`.
+The same-compiler macro-enabled **default-off** CLI baseline gained
+**1.067×** geometric-mean throughput across five effects in seven paired
+release rounds. This reduces the cost of compiling executor support into
+an otherwise ordinary runtime; it does not make hot loops native.
+
+The **safe** `ttfx-cli-safeR8` candidate (two isolated PGO collections,
+verified `--release`, telemetry off) produced identical frame dumps on
+five effects. Seven paired release rounds gave **0.989×** throughput
+relative to the same-compiler, macro-enabled, no-executor build: neutral
+to slightly negative. Compared directly in its own paired sitting with
+the previously shipped macro-free `rel2`, it was **0.927×**. Therefore
+executor emission remains double opt-in; do not promote these prototypes
+as a speedup. Raw samples and build/parity logs are in the approved
+session scratch root (`ab-bender-safeR8-vs-base.json`,
+`ab-bender-safeR8-vs-rel2.json`). A future compiler must keep type-stable
+state across effectful operations rather than adding further per-opcode
+entry/exit overhead.
+
+The committed default-off build is `1.43.0-dev-0178fd1f`. Its
+PGO-collected, verified `--release` CLI image matches the previous
+`rel2` image byte-for-byte on 37 bounded effect dumps and 25 held-out
+effect/seed runs. Seven paired rounds give **1.006×** `rel2` throughput
+(noise), not a speed claim. The new windowed GUI release remains
+unverified because PGO's direct interpreter launch crashes after the
+hidden-window/font stage; the old `rel2` binary reproduces it under the
+same direct launch. Do not infer GUI performance from that failed run.

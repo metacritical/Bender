@@ -1,11 +1,45 @@
 # General Janet optimization driven by ttfx
 
-Updated 2026-10-18. **This is the authoritative compiler work/status record.**
+Updated 2026-10-21. **This is the authoritative compiler work/status record.**
 The original repository is `/Users/pankajdoharey/Development/Projects/janet`.
 All ongoing optimization design and status belong in this compiler repository.
 The ttfx port is an unchanged integration fixture, not an optimization target.
 Its existing `bench-engines.md` contains historical measurements; temporary
 logs/binaries are supporting evidence only.
+
+## 2026-10-21 checkpoint: committed safety foundation, not Rust parity
+
+The next optimizer stages and their falsifiable gates are in
+[`profile-guided-optimizer-plan.md`](profile-guided-optimizer-plan.md).
+Two generic features are now committed: `ed422ca9` (direct primitive
+array/tuple struct writers with generic fallback) and `0178fd1f`
+(guarded native reads/iteration/scratch arrays and safe FFI-alias
+safepoints, plus a cheap no-descriptor runtime dispatch gate). The
+executor remains double opt-in; **do not enable it in the default
+release based on emitted descriptor counts**. A prior leaf-FFI shortcut
+was unsafe because it dropped GC roots, and has been removed.
+
+`build/bender` was rebuilt with the default macro-free runtime and
+reports `1.43.0-dev-0178fd1f`. The unchanged ttfx CLI was PGO-collected
+twice and verified with `--release`: all 37 bounded frame dumps match
+`rel2` at seed 42; five effects at five held-out seeds match 25/25.
+Seven paired rounds on five effects gave geometric-mean release
+throughput **1.006×** `rel2` (noise). The corrected opt-in executor was
+**0.989×** its same-compiler macro-enabled no-executor control and
+**0.927×** the macro-free `rel2` in a separate paired sitting. These are
+correctness foundations, **not an achieved speedup**. Compiling executor
+support but publishing no descriptors had cost ~6–7%; the new dormant
+dispatch gate recovered **1.067×** on that macro-enabled control.
+
+The newly rebuilt GUI cannot yet be called a verified `--release`:
+its required windowed PGO collection currently exits 139 from an
+interpreter-launched macOS window, after the hidden-window/font stage.
+The old `rel2` binary reproduces the same crash when launched directly;
+app-bundle launches succeeded in the paired GUI benchmarks. This is a
+**PGO launch-environment blocker**, not a measured compiler regression.
+Do not replace the GUI workload with `--list` and claim representative
+PGO evidence. The last complete Bender/Rust 37-effect GUI comparison
+remains the earlier paired `rel2` record.
 
 ## Goal and correctness contract
 
