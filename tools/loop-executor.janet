@@ -35,15 +35,14 @@
 # `next` iteration, `geti`, and primitive equality are handled by
 # `native-control` / explicit emitters below; they fall back to their own PC
 # when their fast path does not apply.
-# `in` is handled natively below (see NX_IN): it is a PURE READ, so
-# unlike `put` it cannot allocate, cannot need a GC write barrier, and
-# cannot trigger a collection. `put` deliberately stays a boundary --
+# `in` and guarded array/tuple `get` are pure reads: neither allocates,
+# needs a GC write barrier, or triggers collection. `put` stays a boundary --
 # JOP_PUT does vm_commit, sets RESUME_NO_USEVAL, may GROW the array
 # (allocation), and ends with vm_checkgc, none of which an executor is
-# permitted to do. `get` also stays: it returns nil for a missing key
-# where `in` raises, and its nil-default path is compiled as a branch.
+# permitted to do. Other `get` receivers exit at the original PC;
+# invalid array/tuple keys return nil, whereas `in` raises.
 (def boundaries {'tcall true
-                 'get true 'len true 'put true
+                 'len true 'put true
                  'mkarr true 'mkbuf true 'mktup true
                  'div true 'divim true 'divf true 'mod true 'rem true})
 # Native control/data operations. These used to be hard VM boundaries; the
@@ -62,7 +61,7 @@
   (or (get simple op) (get arithmetic op) (get comparisons op)
       (get branches op) (get boundaries op) (get native-control op)
       (get bitwise op) (get shifts op) (= op 'bnot)
-      (= op 'in) (= op 'inim)))
+      (= op 'in) (= op 'inim) (= op 'get)))
 
 (defn eligible? [d]
   (and (d :bytecode-words) (not (d :vararg)) (not (d :structarg))
@@ -204,6 +203,26 @@
         (out "  if (nxi_ >= janet_tuple_length(nxt_)) { NX_BOUNDARY(" (string k) "); }")
         (out "  s[" (string a) "] = nxt_[nxi_];")
         (out "} else { NX_BOUNDARY(" (string k) "); } }"))
+
+      # Guarded `get`: for arrays/tuples only, with janet_get's int32 key and
+      # nil-on-invalid-index rule. Other receivers fall back before effects.
+      (= op 'get)
+      (do
+        (out "NX_TICK();")
+        (out "{ Janet nxds_ = s[" (string c) "]; Janet nxkey_ = s[" (string z) "];")
+        (out "  if (janet_checktype(nxds_, JANET_ARRAY)) {")
+        (out "    JanetArray *nxa_ = janet_unwrap_array(nxds_);")
+        (out "    if (janet_checkint(nxkey_)) {")
+        (out "      int32_t nxi_ = janet_unwrap_integer(nxkey_);")
+        (out "      s[" (string a) "] = ((uint32_t)nxi_ < (uint32_t)nxa_->count) ? nxa_->data[nxi_] : janet_wrap_nil();")
+        (out "    } else s[" (string a) "] = janet_wrap_nil();")
+        (out "  } else if (janet_checktype(nxds_, JANET_TUPLE)) {")
+        (out "    const Janet *nxt_ = janet_unwrap_tuple(nxds_);")
+        (out "    if (janet_checkint(nxkey_)) {")
+        (out "      int32_t nxi_ = janet_unwrap_integer(nxkey_);")
+        (out "      s[" (string a) "] = ((uint32_t)nxi_ < (uint32_t)janet_tuple_length(nxt_)) ? nxt_[nxi_] : janet_wrap_nil();")
+        (out "    } else s[" (string a) "] = janet_wrap_nil();")
+        (out "  } else { NX_BOUNDARY(" (string k) "); } }"))
 
       # Native `geti`: immediate-index read with janet_getindex semantics.
       # Arrays, tuples, strings/symbols/keywords, and buffers are read

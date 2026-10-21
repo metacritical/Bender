@@ -39,6 +39,7 @@ JANET_NATIVE_EXECUTORS=1 ./build/bender --aot \
     -o "$root/ops-native" > "$root/ops-native-build.log" 2>&1
 grep 'indexed-loop' "$root/ops-native-native/native-executors.txt"
 grep 'scratch-loop' "$root/ops-native-native/native-executors.txt"
+grep 'get-loop' "$root/ops-native-native/native-executors.txt"
 # The same generated primitive struct writer must accept the scratch array
 # fast path and an immutable tuple, with other indexables still going through
 # the ordinary janet_getindexed fallback.

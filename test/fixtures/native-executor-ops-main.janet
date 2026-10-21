@@ -4,7 +4,9 @@
 # structural, so a silent opcode change must fail this test, not pass boxed.
 (def index-ops (map |($0 0) ((disasm O/indexed-loop) :bytecode)))
 (def scratch-ops (map |($0 0) ((disasm O/scratch-loop) :bytecode)))
+(def get-ops (map |($0 0) ((disasm O/get-loop) :bytecode)))
 (assert (index-of 'geti index-ops) "geti was not compiled")
+(assert (index-of 'get get-ops) "register-key get was not compiled")
 (assert (index-of 'next index-ops) "next was not compiled")
 (assert (index-of 'eq index-ops) "string equality was not compiled")
 (assert (index-of 'mkscr scratch-ops) "scratch tuple was not compiled")
@@ -14,6 +16,18 @@
 (assert (= 7 (O/indexed-loop @[[1 " "] [2 "x"] [3 " "]])))
 (assert (= 7 (O/indexed-loop @[(tuple 1 " ") (tuple 2 "x") (tuple 3 " ")])))
 (assert (= 7 (O/indexed-loop @[@{0 1 1 " "} @{0 2 1 :x} @{0 3 1 " "}])))
+
+# A dynamic int key, including out-of-range -> nil; arrays and tuples
+# execute the guarded read, tables require exact-PC VM fallback. A non-int
+# key must return nil, not convert to zero or accidentally call a getter.
+(def get-array @[@[1 2] [3 4] @[-5]])
+(def get-tuple @[[1 2] (tuple 3 4) [-5]])
+(def get-table @[@{0 1 1 2} @{0 3 1 4} @{0 -5}])
+(assert (= 20 (O/get-loop get-array 12)))
+(assert (= 20 (O/get-loop get-tuple 12)))
+(assert (= 20 (O/get-loop get-table 12)))
+(assert (= nil (get @[99] :non-index)))
+(assert (= nil (get (tuple 99) :non-index)))
 
 # Force frequent GC checks in the alias-call path. The temporary tuple
 # argument is a per-site scratch array; the struct result is GC allocated.

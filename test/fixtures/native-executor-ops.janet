@@ -28,6 +28,20 @@
     (++ i))
   total)
 
+# These reads deliberately use the register-key `get` opcode, not `geti`.
+# The receiver alternates between arrays and tuples; a table forces the
+# original VM getter at the exact PC after native arithmetic has run.
+(defn get-loop [xs n]
+  (var i 0)
+  (var total 0)
+  (while (< i n)
+    (def row (xs (mod i (length xs))))
+    (def key (mod i 3))
+    (def value (get row key))
+    (when value (+= total value))
+    (++ i))
+  total)
+
 (defn tuple-alias-loop [n]
   (def pair (tuple 2 3))
   (var i 0)
