@@ -268,6 +268,26 @@ renderer still fails executor eligibility on other operations; independent
 verified-release parity/performance gates remain pending for any larger
 lowering.
 
+**First actual raw-double loop slice (`59b75b6c`):** Under the already
+opt-in frame executor, a name-independent exact eight-instruction bytecode
+pattern (one-argument numeric sum with slots `n,sum,i,test`) keeps the
+accumulator and index in C `double` locals across iterations. Guarded input
+`0 <= n <= 1,000,000`, integral and finite local/index/sum values, and a
+conservative `sum <= 500,000,000,000` range make each addition an exact
+integer and avoid counter overflow; any guard failure exits at unexecuted
+original PC 2. The single backedge uses the VM quantum poll; interruption
+materializes both numeric locals and comparison slot into GC-scanned VM frame
+slots before parking at the original jump PC 6, while the normal return path
+spills both at PC 7. No allocation, callback or side effect occurs inside the
+unboxed region; structural descriptor validation still runs at native entry.
+The emitter oracle asserts raw C doubles exist. Executor differential
+budget-1 and budget-2 oracles passed PC/slot parity, overloaded arithmetic
+fallback, cancellation, GC/marshal, and 392 IEEE numeric pairs; budget-2
+ASan/UBSan and mixed-effects harness passed with the known alternate-stack
+ASan warning. The raw-double path has **no evidence of ttfx hot-loop use or
+end-to-end speedup**. It is the proof of a bounded unboxed primitive, not the
+full effect-aware IR or Rust-parity result; executor remains opt-in.
+
 ### 3. Lower effectful loops as a single native region
 
 Build an SSA-like representation with typed values, effects, liveness and
