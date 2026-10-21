@@ -129,6 +129,41 @@
     (assert (indexed? (get info :edges)) "edge counts survive dump")))
 (assert saw-edge-dump "edge dump contains function")
 
+# Collection reads sample receiver types at their original PC, before the
+# operation runs. A single site seeing both an array and a tuple must retain
+# the union; a different site in the same def observes a table separately.
+(def prof-receivers (eval '(fn prof-receivers [value record]
+  (+ (get value 0) (get record :key)))))
+(debug/profile-start)
+(prof-receivers @[1] @{:key 2})
+(prof-receivers [3] @{:key 4})
+(def receiver-table (debug/profile-stop))
+(var receiver-entry nil)
+(eachk key receiver-table
+  (def value (get receiver-table key))
+  (when (= prof-receivers (get value :func)) (set receiver-entry value)))
+(assert receiver-entry "receiver profile entry exists")
+(def receiver-sites (get receiver-entry :receivers))
+(assert (= (length receiver-sites) (div (length (get receiver-entry :edges)) 2))
+        "receiver sites align with original bytecode")
+(var mixed-site false)
+(var table-site false)
+(each mask receiver-sites
+  (when (and (not (zero? (band mask (blshift 1 7))))
+             (not (zero? (band mask (blshift 1 8)))))
+    (set mixed-site true))
+  (when (not (zero? (band mask (blshift 1 9)))) (set table-site true)))
+(assert (and mixed-site table-site) "receiver types stay per-site")
+(debug/profile-start)
+(prof-receivers @[5] @{:key 6})
+(debug/profile-dump "/tmp/suite-profile-receivers.jdn")
+(var receiver-dump nil)
+(each [id info] (parse (slurp "/tmp/suite-profile-receivers.jdn"))
+  (when (= (id 2) "prof-receivers") (set receiver-dump (get info :receivers))))
+(assert (indexed? receiver-dump) "receiver evidence survives dump")
+(assert (not (nil? (find |(and (indexed? $) (index-of :array $)) receiver-dump)))
+        "dump decodes receiver type tags")
+
 # reset clears: old entries must not survive, even though the loader's
 # own evaluate/eval1 calls (one per top-level form) legitimately record
 (debug/profile-reset)

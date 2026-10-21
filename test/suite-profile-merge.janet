@@ -150,11 +150,13 @@
 (spit "/tmp/pmg-acc-a.jdn" (string/format "%j"
   @[@[@["/tmp/pmg-fix.janet" 1 "wseed"]
       @{:calls 2 :params @[@[:number]] :mins @[2] :maxs @[9]
-        :elems @[] :rets @[:number] :from :home :edges @[0 2 3 1]}]]))
+        :elems @[] :rets @[:number] :from :home :edges @[0 2 3 1]
+         :receivers @[@[:array] @[:table]]}]]))
 (spit "/tmp/pmg-acc-b.jdn" (string/format "%j"
   @[@[@["/tmp/pmg-fix.janet" 1 "wseed"]
       @{:calls 3 :params @[@[:string]] :mins @[-4] :maxs @["inf"]
-        :elems @[] :rets @[:string] :from :worker :edges @[1 4 2 0]}]]))
+        :elems @[] :rets @[:string] :from :worker :edges @[1 4 2 0]
+         :receivers @[@[:tuple] @[:table]]}]]))
 (assert (run-ok "./build/bender" "tools/profile-merge.janet" "--accumulate"
                 "--out" "/tmp/pmg-acc-out.jdn"
                 "cached=/tmp/pmg-acc-a.jdn" "run=/tmp/pmg-acc-b.jdn")
@@ -164,6 +166,8 @@
 (assert (= 1 (length accumulated)) "same identity coalesces")
 (assert (= 5 (get ai :calls)) "counts add")
 (assert (deep= @[1 6 5 1] (get ai :edges)) "per-PC successors add")
+(assert (deep= @[@[:array :tuple] @[:table]] (get ai :receivers))
+        "receiver types union per original PC")
 (assert (deep= @[:number :string] ((get ai :params) 0)) "types union")
 (assert (deep= @[-4] (get ai :mins)) "range min expands")
 (assert (deep= @["inf"] (get ai :maxs)) "range max expands")
@@ -199,6 +203,8 @@
 (assert (nil? (missing-slot 0)) "missing evidence remains unknown")
 (assert (= :open (get (((parse (slurp "/tmp/pmg-unknown.jdn")) 0) 1) :edges))
         "missing edge history cannot imply unobserved successors")
+(assert (= :open (get (((parse (slurp "/tmp/pmg-unknown.jdn")) 0) 1) :receivers))
+        "missing receiver history cannot imply a monomorphic site")
 (def [unknown-code unknown-log]
   (run-out "./build/bender" "tools/callgraph.janet" "/tmp/pmg-fix.janet"
            "--profile" "/tmp/pmg-unknown.jdn"))

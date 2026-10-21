@@ -630,6 +630,7 @@ typedef struct {
     JanetArray *sh;
     Janet sig;
     JanetArray *edges;
+    JanetArray *receivers;
 } JanetProfileCache;
 /* Phase C: the fast-path cache is per-thread. Worker VMs share this
  * translation unit across OS threads; a single global would let two
@@ -684,6 +685,8 @@ static void janet_profile_cache_fill(JanetTable *pt, JanetFuncDef *def, JanetTab
     {
         Janet edge = janet_table_get(e, janet_ckeywordv("edges"));
         c->edges = janet_checktype(edge, JANET_ARRAY) ? janet_unwrap_array(edge) : NULL;
+        edge = janet_table_get(e, janet_ckeywordv("receivers"));
+        c->receivers = janet_checktype(edge, JANET_ARRAY) ? janet_unwrap_array(edge) : NULL;
     }
     c->live = 1;
 }
@@ -804,6 +807,14 @@ static JanetTable *janet_profile_entry(JanetFunction *func) {
                 janet_array_push(edges, janet_wrap_integer(0));
             janet_table_put_raw(e, janet_ckeywordv("edges"), janet_wrap_array(edges));
             janet_gcunroot(janet_wrap_array(edges));
+            /* One type-mask slot per original bytecode PC. This does not
+             * infer a shape or authorize a specialization on its own. */
+            JanetArray *receivers = janet_array(func->def->bytecode_length);
+            janet_gcroot(janet_wrap_array(receivers));
+            for (i = 0; i < func->def->bytecode_length; i++)
+                janet_array_push(receivers, janet_wrap_integer(0));
+            janet_table_put_raw(e, janet_ckeywordv("receivers"), janet_wrap_array(receivers));
+            janet_gcunroot(janet_wrap_array(receivers));
         }
         /* Joint, full-arity tag vectors; true denotes OPEN. The entry
          * owns this array and every nested vector across GC. */
@@ -1091,6 +1102,35 @@ static void janet_profile_edge(JanetFunction *func, int32_t pc, int taken) {
         janet_profile_edge(func, (int32_t)(pc - func->def->bytecode), (taken)); \
 } while (0)
 
+/* Observe the receiver BEFORE a potentially effectful read: janet_in/get
+ * may raise or invoke user code. The observation itself is allocation-free,
+ * uses only type bits (no raw GC pointer), and does not change the VM PC. */
+static void janet_profile_receiver(JanetFunction *func, int32_t pc, Janet receiver) {
+    if (pc < 0 || pc >= JANET_PROFILE_EDGE_MAXPC ||
+        func->def->bytecode_length > JANET_PROFILE_EDGE_MAXPC) return;
+    JanetProfileCache *hit = janet_profile_hit(func);
+    JanetArray *sites = NULL;
+    if (NULL != hit) {
+        sites = hit->receivers;
+    } else {
+        Janet entry = janet_table_get(janet_vm.profile_table, janet_wrap_pointer(func->def));
+        if (janet_checktype(entry, JANET_TABLE)) {
+            Janet field = janet_table_get(janet_unwrap_table(entry), janet_ckeywordv("receivers"));
+            if (janet_checktype(field, JANET_ARRAY)) sites = janet_unwrap_array(field);
+        }
+    }
+    if (NULL != sites && sites->count == func->def->bytecode_length) {
+        uint32_t mask = (uint32_t) janet_unwrap_integer(sites->data[pc]);
+        mask |= 1u << (uint32_t) janet_type(receiver);
+        sites->data[pc] = janet_wrap_integer((int64_t) mask);
+    }
+}
+
+#define vm_profile_receiver(receiver) do { \
+    if (JANET_UNLIKELY(NULL != janet_vm.profile_table)) \
+        janet_profile_receiver(func, (int32_t)(pc - func->def->bytecode), (receiver)); \
+} while (0)
+
 static void janet_profile_return(JanetFunction *func, Janet retval) {
     JanetProfileCache *hit = janet_profile_hit(func);
     if (NULL == hit) {
@@ -1200,6 +1240,18 @@ JanetArray *janet_profile_rows(void) {
                     Janet edges = janet_table_get(e, janet_ckeywordv("edges"));
                     if (janet_checktype(edges, JANET_ARRAY))
                         janet_table_put(info, janet_ckeywordv("edges"), edges);
+                    Janet receiver = janet_table_get(e, janet_ckeywordv("receivers"));
+                    if (janet_checktype(receiver, JANET_ARRAY)) {
+                        JanetArray *raw = janet_unwrap_array(receiver);
+                        JanetArray *decoded = janet_array(raw->count);
+                        janet_gcroot(janet_wrap_array(decoded));
+                        for (int32_t ri = 0; ri < raw->count; ri++) {
+                            uint32_t mask = (uint32_t) janet_unwrap_integer(raw->data[ri]);
+                            janet_array_push(decoded, mask ? janet_profile_mask_types(mask) : janet_wrap_nil());
+                        }
+                        janet_table_put(info, janet_ckeywordv("receivers"), janet_wrap_array(decoded));
+                        janet_gcunroot(janet_wrap_array(decoded));
+                    }
                 }
                 {
                     Janet sig = janet_table_get(e, janet_ckeywordv("signatures"));
@@ -2334,6 +2386,7 @@ static JanetSignal run_vm(JanetFiber *fiber, Janet in) {
     vm_checkgc_pcnext();
 
     VM_OP(JOP_IN)
+    vm_profile_receiver(stack[B]);
     vm_commit();
     {
         Janet a = janet_in(stack[B], stack[C]);
@@ -2349,6 +2402,7 @@ static JanetSignal run_vm(JanetFiber *fiber, Janet in) {
      * out-of-range string/symbol/keyword index where janet_getindex
      * (and therefore JOP_GET_INDEX) would instead yield nil. */
     VM_OP(JOP_IN_IMMEDIATE)
+    vm_profile_receiver(stack[B]);
     vm_commit();
     {
         Janet a = janet_in(stack[B], janet_wrap_integer((int32_t)(uint8_t) C));
@@ -2358,6 +2412,7 @@ static JanetSignal run_vm(JanetFiber *fiber, Janet in) {
     vm_pcnext();
 
     VM_OP(JOP_GET)
+    vm_profile_receiver(stack[B]);
     vm_commit();
     {
         Janet a = janet_get(stack[B], stack[C]);
@@ -2367,6 +2422,7 @@ static JanetSignal run_vm(JanetFiber *fiber, Janet in) {
     vm_pcnext();
 
     VM_OP(JOP_GET_INDEX)
+    vm_profile_receiver(stack[B]);
     vm_commit();
     {
         Janet a = janet_getindex(stack[B], C);

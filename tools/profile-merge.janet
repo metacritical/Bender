@@ -138,6 +138,23 @@
           (not= (length x) (length y))) :open
       (map + x y)))
 
+# Receiver type masks are advisory per original bytecode PC. A missing or
+# incompatible observation opens the whole vector; zero means unobserved.
+(defn- receivers [value]
+  (when (nil? value) (break nil))
+  (when (= value :open) (break :open))
+  (unless (and (indexed? value) (<= (length value) 256))
+    (bad "invalid receiver sites"))
+  (each slot value (types slot))
+  value)
+
+(defn- merge-receivers [a b]
+  (def x (receivers a)) (def y (receivers b))
+  (if (or (nil? x) (nil? y) (= x :open) (= y :open)
+          (not= (length x) (length y))) :open
+      (map (fn [left right] (if (deep= left right) left
+                               (union-types left right))) x y)))
+
 (defn- accumulate-info [a b]
   (def ca (get a :calls))
   (def cb (get b :calls))
@@ -173,7 +190,8 @@
     :rets (union-types (get a :rets) (get b :rets)) :from from
     :type-from type-origins
     :signatures (merge-signatures (get a :signatures) (get b :signatures))
-    :edges (merge-edges (get a :edges) (get b :edges))})
+    :edges (merge-edges (get a :edges) (get b :edges))
+    :receivers (merge-receivers (get a :receivers) (get b :receivers))})
 
 (defn main [& _args]
   # Script name arrives as args[0] (like tools/callgraph.janet, which
@@ -217,7 +235,8 @@
             (def pos (get positions key))
             (def tagged (merge info {:from (origins (get info :from prov))
                                      :signatures (signatures (get info :signatures))
-                                     :edges (edges (get info :edges))}))
+                                     :edges (edges (get info :edges))
+                                     :receivers (receivers (get info :receivers))}))
             (unless (and (number? (get info :calls)) (>= (get info :calls) 0)
                          (= (get info :calls) (math/trunc (get info :calls))))
               (bad "invalid call count"))
