@@ -182,6 +182,70 @@ budget-2 ASan/UBSan/quantum harness passes with the known alternate-stack
 warning. Native record unboxing, effectful IR, roots, deopt snapshots and
 startup specialization remain unimplemented; the executor stays opt-in.
 
+### 2026-10-21 compiler-to-Rust CLI gap diagnosis
+
+The seven-round, five-effect **complete bounded ANSI frame stream** sitting
+(seed 42, `ruby-port/logo.txt`, output discarded, whole process included)
+passed byte-for-byte parity across current verified-release Bender, Rust,
+Lua 5.5, LuaJIT and precompiled Chez. Raw records:
+`/tmp/janet-receiver-cli-language-fps.json` (ephemeral local artifact).
+Median effective frames/s were:
+
+| Effect | Frames | Bender | Rust | Lua 5.5 | LuaJIT | Chez compiled |
+|---|---:|---:|---:|---:|---:|---:|
+| wipe | 138 | 2,656 | 28,695 | 2,449 | 5,260 | 2,156 |
+| highlight | 129 | 2,464 | 28,175 | 2,075 | 4,811 | 1,833 |
+| expand | 117 | 1,337 | 21,713 | 1,580 | 3,333 | 1,674 |
+| randomsequence | 261 | 3,662 | 53,732 | 3,075 | 7,966 | 3,477 |
+| scattered | 181 | 1,806 | 31,833 | 1,810 | 3,758 | 2,195 |
+
+Bender's across-effect geomean throughput is **0.072× Rust, 0.470× LuaJIT,
+1.053× Lua 5.5 and 1.028× compiled Chez**. Those are workload-specific
+whole-process ratios, not isolated compiler efficiency or GUI FPS. The
+release callgraph emits **nine scalar wrappers and zero frame executors**;
+`ctx-update` (def 47) and `ctx-frame-string` (def 58) explicitly skip with
+`loop requires resumable VM quantum polls`, and neither name appears in
+`native.c`. Its 813 logged skips include 169 loop-quantum refusals, 436
+unproven-type refusals and 180 duplicate registrations (not independent
+functions). PGO seeds both hot functions' parameters but cannot turn the
+313-instruction `ctx-frame-string` into native code; its 43 calls, six writes,
+six lengths and three allocations cross exactly the effects that require
+roots, guards, polling and precise fallback. The <=256-PC receiver collector
+cannot even cover this 313-instruction function yet. Do not infer that
+activating the opt-in frame executor solves it: its prior corrected paired
+candidate did not win and exits around effectful operations.
+
+A controlled one-frame versus full-frame dump at the same input previously
+measured Bender **16.0→49.4 ms** (`wipe`), **14.3→67.9 ms**
+(`randomsequence`), **17.9→96.0 ms** (`scattered`); Rust measured **4.1→4.4,
+3.8→4.3, 4.1→5.4 ms** respectively (see native-loop-executors.md).
+A new seven-repeat, output-discarded sitting measured Bender `--bench`
+whole process **50.02/68.75/95.68 ms** for those effects versus full dumps
+**51.05/70.59/96.68 ms**. Thus stdout writing is not the main difference;
+startup/effect construction and VM work both matter. One-frame repeats in
+that sitting were **17.73/13.80/18.50 ms**, but the separate quick ablation
+sitting was noisy (one wipe sample at 45 ms); these estimates are not a
+subtractive causal profile. A sustained unrelated `nbody` VM sample showed
+container access (`janet_in`), `janet_put` and GC barriers on its hot stack;
+it does not quantify ttfx scene costs. A direct ttfx `sample` request found
+no stacks because the ~100 ms process ended before sampling began. Avoid
+inventing a main-thread ttfx percentage from those incomplete samples.
+
+Ranked safe next steps: (1) obtain **actual ttfx hot-stack and per-function
+counts** by replaying many full effects in a single process or adding a
+nonsemantic sampling harness, separating startup from playback; (2) grow a
+bounded, source/bytecode-qualified receiver/edge feedback representation
+that covers the 313-PC renderer without profile-dependent behavior;
+(3) implement one guarded, effect-aware loop region with original-PC deopt
+snapshots, GC-scanned boxed roots, exact VM call/backedge polls, validated
+array/table reads and post-effect revalidation; (4) only then propagate
+closed record shapes and scalar-replace proven nonescaping temporaries,
+and independently address image startup. Fail closed on aliasing, callback,
+mutation or type changes; never replay an already committed write/call.
+Require executor-enabled sanitizer/preemption, all-effect and held-out
+frame parity, and two-PGO paired verified-release CLI+GUI A/B before any
+performance claim. None of these steps is yet proven to reach Rust parity.
+
 ### 3. Lower effectful loops as a single native region
 
 Build an SSA-like representation with typed values, effects, liveness and
