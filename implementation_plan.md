@@ -1,8 +1,8 @@
-# Janet compiler-to-Rust parity continuation
+# Read-only CLI cost ablation and stack attribution (Janet/Bender vs Rust)
 
-1. Preserve clean baseline, existing opt-in executor, current source-qualified PGO and byte-exact ttfx parity gates. Treat CLI numeric, container, allocation, call and I/O workloads alongside GUI.
-2. Attribute representative CLI costs using matched compiler controls; inspect VM execution and PGO hooks before selecting one bounded, semantics-preserving feedback or loop-IR increment.
-3. Implement the smallest justified compiler increment with precise GC, deoptimization and quantum safeguards; run narrow tests and commit the verified feature atomically.
-4. Repeat differential correctness, executor-enabled sanitizer/preemption checks, and interleaved two-PGO verified-release CLI+GUI measurements against an unchanged control. Distinguish measurement noise from wins; never default-enable the unproven executor.
-5. Record raw evidence, limitations and pending IR/GC/root/deopt/record/startup work in the optimizer plan, committing documentation separately. Leave unfinished gates pending in the standing todo tree.
-6. Compare actual CLI frame throughput against Rust, Lua/LuaJIT and Chez Scheme only on equivalent ttfx effect, seed, input, frame and output workloads: inspect existing harness and versions, validate frame parity, take paired reproducible FPS measurements, report missing comparators or incompatible modes explicitly. Retain pending effect-aware loop IR phases.
+1. Inventory the existing verified binaries (`/tmp/janet-receiver-cli`, `ttfx/target/release/ttfx`) and read-only discover the CLI flag surface each exposes (dump mode, `--max-frames`, input, seed) plus any mode that skips output. No source edits; temp inputs/outputs only under /tmp.
+2. Re-confirm byte parity of the two release binaries on the chosen effects so every timing row is an equivalent workload.
+3. Ablate fixed cost vs per-frame cost: sweep `--max-frames` N = 1..~89 per effect, `stdout` to `/dev/null`, interleaved rounds, medians; fit intercept (startup + scene build) and slope (per-frame step + render + format). Report both engines.
+4. Ablate output cost: same run with stdout to `/dev/null` vs a regular file under `/tmp` vs piped through `cat > /dev/null`; report producer wall time and `/usr/bin/time -l` user/sys CPU, faults and RSS to separate formatting/write syscalls from compute.
+5. Attribute stacks: run a long-duration variant (large temp input, capped frames) and `sample(1)` the live PIDs for both engines; aggregate self time by symbol/function, and map hot frames onto build vs frame-step vs GC vs write phases. Cross-check with user/sys CPU split.
+6. Report a measured breakdown table (fixed ms, per-frame us, output share, top stack symbols), the exact commands, and explicit caveats: whole-process measurement, startup included, /dev/null vs disk sink, sample-based stack attribution validity (symbolization, inlining, JIT/VM), sampling noise, and that no speed claim or source change follows.
