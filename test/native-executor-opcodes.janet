@@ -24,4 +24,12 @@
            :constants [-0.0 0.0 1.7976931348623157e308 -1.7976931348623157e308
                        2.2250738585072014e-308 4.9406564584124654e-324]
            :bytecode '[(ldc 0 0) (ret 0) (jmp 0)]})
+# Exact structural numeric loop emits one raw-double accumulator and counter
+# across the backedge, while all other bytecode shapes remain generic.
+(file/flush output)
+(def sum-code (slurp ((dyn :args) 1)))
+(assert (string/find "double nxn_ = janet_unwrap_number(s[0]), nxsum_" sum-code)
+        "numeric sum has a raw-double loop region")
+(assert (string/find "if (janet_native_poll(1)) {" sum-code)
+        "unboxed backedge retains a resumable quantum poll")
 (file/close output)

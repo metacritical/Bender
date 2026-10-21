@@ -116,11 +116,29 @@
     (array/push words (string "0x" (string/join chars))))
   words)
 
+# Exact bytecode contract for a single-loop numeric reduction. The input
+# guard limits execution to a small finite integer domain, so doubles retain
+# exact integer values and no callback, allocation or GC can occur in-region.
+# This is a name-independent pattern: any different bytecode uses the
+# ordinary guarded executor, never a guessed source-level shape.
+(defn- numeric-sum-pattern? [d]
+  (and (= 1 (d :arity)) (= 4 (d :slotcount))
+       (empty? (or (d :constants) []))
+       (= 8 (length (d :bytecode)))
+       (every? (map (fn [i expected]
+                      (def ins ((d :bytecode) i))
+                      (and (= (length ins) (length expected))
+                           (every? (map = ins expected))))
+                    (range 8)
+                    '[(ldi 1 0) (ldi 2 0) (lt 3 2 0) (jmpno 3 4)
+                      (add 1 1 2) (addim 2 2 1) (jmp -4) (ret 1)]))))
+
 (defn emit [id d]
   (def b @"")
   (defn out [& xs] (buffer/push-string b ;xs) (buffer/push-string b "\n"))
   (def tag (string "nx_" id))
   (def mask (region-mask (d :bytecode)))
+  (def numeric-sum? (numeric-sum-pattern? d))
   (out "#ifdef __FAST_MATH__\n#error Native executors require strict floating-point semantics\n#endif\n#pragma STDC FP_CONTRACT OFF")
   (out "#if defined(__GNUC__) && !defined(__clang__)\n#pragma GCC push_options\n#pragma GCC optimize (\"fp-contract=off\")\n#endif")
   (out "static JANET_THREAD_LOCAL uint64_t " tag "_entries, " tag "_edges, " tag "_fallbacks, "
@@ -164,14 +182,41 @@
        "\nswitch (*pc - d->bytecode) {")
   (each k (range (length (d :bytecode))) (out "case " (string k) ": goto L" (string k) ";"))
   (out "default: return JANET_NATIVE_VM; }")
+  (when numeric-sum?
+    # Enter only at the original loop head, after both initialization
+    # instructions. n and the accumulator stay boxed and GC-scanned in the
+    # VM frame; the two local doubles never hold a heap pointer. Deopt at
+    # this unexecuted head on any failed guard. The bound makes all adds
+    # exact integers; it also prevents int32 counter overflow.
+    (out "L2:;")
+    (out "if (!janet_checktype(s[0], JANET_NUMBER) || !janet_checktype(s[1], JANET_NUMBER) || !janet_checktype(s[2], JANET_NUMBER)) { NX_FALLBACK(); NX_EXIT(2,JANET_NATIVE_VM); }")
+    (out "double nxn_ = janet_unwrap_number(s[0]), nxsum_ = janet_unwrap_number(s[1]), nxi_ = janet_unwrap_number(s[2]);")
+    (out "if (!(nxn_ >= 0.0 && nxn_ <= 1000000.0 && nxn_ == floor(nxn_) && nxi_ >= 0.0 && nxi_ <= nxn_ && nxi_ == floor(nxi_) && nxsum_ >= 0.0 && nxsum_ <= 500000000000.0 && nxsum_ == floor(nxsum_))) { NX_FALLBACK(); NX_EXIT(2,JANET_NATIVE_VM); }")
+    (out "while (nxi_ < nxn_) {")
+    (out "  nxsum_ += nxi_; nxi_ += 1.0;")
+    # The VM polls *after* the completed additions and *before* the jump.
+    # On interruption, materialize the scanned VM slots and leave PC at
+    # the unexecuted backedge. Without interruption, the doubles stay raw.
+    (out "  NX_TICK(); NX_TICK(); NX_TICK(); NX_EDGE();")
+    (out "  if (janet_native_poll(1)) {")
+    (out "    s[1] = janet_wrap_number(nxsum_); s[2] = janet_wrap_number(nxi_);")
+    (out "    s[3] = janet_wrap_true(); NX_EXIT(6,JANET_NATIVE_INTERRUPT);")
+    (out "  }")
+    (out "}")
+    (out "s[1] = janet_wrap_number(nxsum_); s[2] = janet_wrap_number(nxi_);")
+    (out "s[3] = janet_wrap_false(); NX_EXIT(7,JANET_NATIVE_VM);")
+  )
   (each k (range (length (d :bytecode)))
     (def ins ((d :bytecode) k))
     (def op (ins 0))
     (def a (get ins 1))
     (def c (get ins 2))
     (def z (get ins 3))
-    (out "L" (string k) ":;")
+    (unless (and numeric-sum? (= k 2)) (out "L" (string k) ":;"))
     (cond
+      (and numeric-sum? (= k 1)) (do (out "NX_TICK();")
+                                 (out "s[2] = janet_wrap_integer(0); goto L2;"))
+      (and numeric-sum? (= k 2)) nil
       # Native `in` / `inim`: ARRAY and TUPLE with an in-range
       # non-negative integer index are read directly; EVERYTHING else
       # (tables, structs, strings, buffers, negative or fractional or
