@@ -1,7 +1,7 @@
 # Janet compiler-to-Rust parity continuation
 
-1. Establish the clean baseline and read the existing optimizer plan, current compiler/runtime layout, and CLI benchmark harness. Preserve the executor opt-in and treat CLI number tower, container, allocation, call, and I/O workloads as first-class alongside GUI FPS.
-2. In parallel, delegate independent audits of (a) per-PC feedback and VM profiling hooks, (b) effect-aware AOT IR/GC/deoptimization architecture, (c) representative CLI benchmarking and correctness coverage, and (d) native call/state and record traffic. Reconcile findings into a small, implementable first compiler slice.
-3. Implement the first measured, semantics-preserving compiler slice with narrow tests and precise GC/preemption safeguards. Keep changes atomic and commit each verified feature immediately.
-4. Run differential correctness, sanitizer/GC/preemption checks as applicable, and paired CLI+GUI performance measurements against an unchanged control. Report regressions and speedups honestly; do not default-enable an unproven executor.
-5. Update the standing optimizer plan with evidence, commit documentation separately, and leave remaining compiler phases explicitly pending if parity is not achieved in this round.
+1. Preserve clean baseline, existing opt-in executor, current source-qualified PGO and byte-exact ttfx parity gates. Treat CLI numeric, container, allocation, call and I/O workloads alongside GUI.
+2. Attribute representative CLI costs using matched compiler controls; inspect VM execution and PGO hooks before selecting one bounded, semantics-preserving feedback or loop-IR increment.
+3. Implement the smallest justified compiler increment with precise GC, deoptimization and quantum safeguards; run narrow tests and commit the verified feature atomically.
+4. Repeat differential correctness, executor-enabled sanitizer/preemption checks, and interleaved two-PGO verified-release CLI+GUI measurements against an unchanged control. Distinguish measurement noise from wins; never default-enable the unproven executor.
+5. Record raw evidence, limitations and pending IR/GC/root/deopt/record/startup work in the optimizer plan, committing documentation separately. Leave unfinished gates pending in the standing todo tree.
