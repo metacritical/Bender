@@ -1734,11 +1734,18 @@ JANET_CORE_FN(os_setenv,
     const char *ks = janet_getcstring(argv, 0);
     const char *vs = janet_optcstring(argv, argc, 1, NULL);
     janet_lock_environ();
+    int env_status;
     if (NULL == vs) {
-        UNSETENV(ks);
+        env_status = UNSETENV(ks);
     } else {
-        SETENV(ks, vs);
+        env_status = SETENV(ks, vs);
     }
+    /* Diagnostic state normally changes through os/setenv. Keep its
+     * once-per-VM fast path coherent without re-reading the process
+     * environment on every allocation or write barrier. Foreign C code
+     * mutating environ directly is picked up by the next janet_init. */
+    if (!env_status && !strcmp(ks, "JANET_TRACE_STRICT"))
+        janet_vm.trace_strict = (NULL != vs);
     janet_unlock_environ();
     return janet_wrap_nil();
 }

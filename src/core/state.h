@@ -115,6 +115,11 @@ struct JanetVM {
     int32_t quantum;
     int32_t quantum_remaining;
 
+    /* Diagnostic logging only. The strict heap barrier itself is never
+     * gated by this flag. Read once on janet_init (and again after a
+     * deinit/init cycle), not on every slab allocation or write barrier. */
+    int trace_strict;
+
     /* Native executor stage 2 counters (per VM/thread). Lazy structural
      * attachment to actual runtime functions and VM-boundary exits. */
     uint64_t native_attach_attempts;

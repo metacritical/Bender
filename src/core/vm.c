@@ -3039,6 +3039,7 @@ Janet janet_mcall(const char *name, int32_t argc, Janet *argv) {
 /* Setup VM */
 int janet_init(void) {
 
+    janet_vm.trace_strict = getenv("JANET_TRACE_STRICT") != NULL;
 #ifdef JANET_NATIVE_EXECUTORS
     /* Linked descriptor registrations can survive janet_deinit; an explicit
      * registration or later publication sets this flag as soon as it can

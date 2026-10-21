@@ -1382,7 +1382,7 @@ static void *janet_slab_alloc(int class_index) {
         if (NULL != page && page->age < JANET_SLAB_OLD_AGE) {
             if (0 != page->owner && page->owner != reqid) page->mixed = 1;
             if (NULL != req) req->gc_nursery_bytes += slot;
-            if (NULL != getenv("JANET_TRACE_STRICT") && NULL != req &&
+            if (janet_vm.trace_strict && NULL != req &&
                     req->heap_strict) {
                 janet_eprintf("[slab-pop-strict] req_owner=%d "
                         "class=%d page(owner=%d mixed=%d isolated=%d)\n",
@@ -2090,7 +2090,7 @@ void janet_gc_barrier(void *obj, Janet value) {
         if (NULL != vobj) {
             iso_v = (janet_gc_header(vobj)->flags & JANET_MEM_ISOLATED) ? 1 : 0;
         }
-        if (NULL != getenv("JANET_TRACE_STRICT")) {
+        if (janet_vm.trace_strict) {
             JanetSlabPage *tp = janet_slab_page_for(obj);
             JanetFiber *treq = (NULL != janet_vm.gc_alloc_ctx)
                 ? janet_vm.gc_alloc_ctx : janet_vm.fiber;
