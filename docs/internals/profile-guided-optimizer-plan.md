@@ -66,6 +66,29 @@ dynamic executor entries/backedges/**effectful exits**, not just emitted
 function counts. Measure startup/construction independently from playback.
 Do not choose a data-layout rewrite until its expected share is measured.
 
+**First measured slice (scattered, 2026-10-21):** A scratch driver outside
+both repos imports the unchanged effect modules, runs 100 full animations
+in one process, and is itself PGO-collected twice and verified `--release`.
+Its 4-second main-thread sample had 3,380 stack tops: `run_vm` 1,383
+(~41%), `janet_gc_barrier` 283 (~8%), `janet_dict_find` 185 (~5%),
+`janet_in` 169 (~5%), and libc environment lookup 96 (~3%). Samples
+are an attribution guide, not independent addends or a VM-only timing.
+The lookup came from repeated diagnostic `getenv("JANET_TRACE_STRICT")`
+checks on slab reuse and strict write barriers, not enforcement of
+strict-heap isolation.
+
+The first generic VM fix (`5e3f2740`) caches that diagnostic flag at
+`janet_init` and refreshes it on `os/setenv`; C reinitialization tests
+pin both modes. GC/proc/event and the enabled executor/ASan matrix pass.
+Re-sampling removes environment lookup from the hot-stack list. In six
+same-sitting paired sustained-scattered release runs it is **1.033×**
+faster, with every pair positive. Wipe was noisy/neutral and
+randomsequence about 1.01×; a seven-round five-effect **whole-process**
+release CLI sweep was **1.001×** (noise). Full frame parity is 37/37 at
+seed 42 and 25/25 held-out effect/seed cases. This is a small measured
+workload win, **not** Rust-class whole-program throughput. Profile other
+effects before ranking table layout against dispatch/GC work.
+
 ### 1. Sound effectful safepoints (first feature, default-off)
 
 Finish the guarded native `geti`, `next`, primitive equality, fiber-stack

@@ -41,6 +41,22 @@ Do not replace the GUI workload with `--list` and claim representative
 PGO evidence. The last complete Bender/Rust 37-effect GUI comparison
 remains the earlier paired `rel2` record.
 
+The sustained single-process **release** profile and first measured
+runtime fix are recorded in the execution plan. Commit `5e3f2740`
+caches the strict-heap *diagnostic logging flag*, not the isolation
+check, across slab allocation and GC barriers. A four-second scattered
+sample previously spent roughly 3% of main-thread stack tops in libc
+environment lookup; the lookup disappears from the top list afterward.
+Six paired long-running release samples improve **1.033×**, while five
+whole-process CLI effects are neutral at **1.001×** geomean. The
+default-off Bender and a new PGO-collected CLI release were rebuilt,
+with 37/37 bounded frame dumps and 25/25 held-out effect/seed cases
+byte-identical to `rel2`. GC-minor, GC-stress, proc (99/99), ev
+(776/776), and the enabled executor/ASan matrix pass. This is an
+incremental VM result; the GUI release PGO launch blocker above is
+unchanged and the effectful-loop AOT compiler remains the next major
+piece.
+
 ## Goal and correctness contract
 
 Optimize the general Janet compiler/VM, not effect-specific kernels. Unmodified
