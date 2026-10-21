@@ -146,6 +146,42 @@ are not a paired release speed measurement. The CLI frame-stream, held-out
 seed and paired same-compiler GUI/CLI release gates remain pending for this
 slice. Executor stays opt-in.
 
+**Measured feedback continuation (`1acdc279`, 2026-10-21):** An unchanged
+`572c8bcf` compiler and the branch-only compiler each built two independent
+CLI PGO runs (`wipe` and `scattered`, seed 42, bounded frame streams) and
+verified `--release` images; 37/37 bounded effect streams and 25/25 held-out
+seed/effect streams matched byte-for-byte. Seven interleaved full-animation
+CLI rounds were noisy and did not establish a win. Ten paired short CLI rounds
+had per-effect median control/candidate throughput ratios
+`1.0124/0.9940/1.0054/0.9971/0.9982` (wipe/highlight/expand/randomsequence/
+scattered), geometric mean **1.0014×**, effectively neutral. Five paired real
+GUI windowed probes after two GUI PGO runs and verified releases had
+candidate/control effect-median geometric mean **0.9915×**; individual scenes
+varied in sign. These are within sitting-to-sitting display and startup noise,
+not Rust parity progress. The first ordinary executor suite failure was a
+macro-free AOT library, not a demonstrated VM failure; an independently
+compiled executor-enabled amalgamated harness passed budget-1 and budget-2
+ASan/UBSan gates (with the existing alternate-stack ASan warning).
+
+The next slice instruments **per-PC receiver type masks** for VM `in`,
+`in-immediate`, `get` and `get-index` on definitions up to 256 instructions.
+Types are recorded before the potentially effectful read; the hook allocates
+nothing, changes no PC, holds no unscanned pointer, and remains inactive with
+profiling off. Dump decodes type tags, cumulative merge unions compatible PC
+vectors and opens missing history, and the callgraph loader validates but does
+not yet use the evidence. Focused profile 62/62, merge 57/57, native joint
+28/28, source-qualified callgraph, auto-PGO/cache migration, GC tracing, and
+receiver-heavy CLI suites pass. Two fresh CLI PGO runs, verified `--release`,
+37/37 bounded effect streams and 25/25 held-out seed/effect cases match the
+unchanged control. Seven interleaved **full-animation** CLI rounds gave
+per-effect median geometric mean control/candidate **1.0026×**; five real GUI
+windowed paired rounds after two GUI PGO runs and verified releases gave
+candidate/control **0.9952×**, with sign-changing per-effect noise. This is
+feedback coverage, **not a speedup**. The separately compiled executor-enabled
+budget-2 ASan/UBSan/quantum harness passes with the known alternate-stack
+warning. Native record unboxing, effectful IR, roots, deopt snapshots and
+startup specialization remain unimplemented; the executor stays opt-in.
+
 ### 3. Lower effectful loops as a single native region
 
 Build an SSA-like representation with typed values, effects, liveness and
