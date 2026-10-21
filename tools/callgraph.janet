@@ -5005,19 +5005,47 @@
   (each d order
     (def nm (get names (d :key)))
     (def nf (length (d :fields)))
-    (buffer/push-string cout (string
-      "static void " nm "_write(" nm " *out, Janet v) {\n"
-      "    JanetView els = janet_getindexed(&v, 0);\n"
-      "    if ((int32_t) els.len != " nf
-      ") janet_panicf(\"wrong number of fields in struct, expected " nf
-      ", got %d\", (int32_t) els.len);\n"))
-    (eachp [j f] (d :fields)
-      (if (= (f :kind) :struct)
-        (buffer/push-string cout (string "    " (get names (f :key))
-                                       "_write(&out->f" j ", els.items[" j "]);\n"))
-        (buffer/push-string cout (string "    out->f" j " = "
-                                       (ffi-write-c f "els.items" j) ";\n"))))
-    (buffer/push-string cout "}\n")
+    (def prim-only (every? (map |(not= ($ :kind) :struct) (d :fields))))
+    (if prim-only
+      # Hot-path writer for all-primitive structs (Vector2, Color, and the
+      # scalar fields of larger cached structs). Array/tuple payloads are
+      # decoded directly; every other indexed payload uses the ordinary
+      # janet_getindexed view, preserving its exact length/element semantics.
+      (do
+        (buffer/push-string cout (string
+          "static void " nm "_write(" nm " *out, Janet v) {\n"
+          "    const Janet *els;\n"
+          "    int32_t len;\n"
+          "    if (janet_checktype(v, JANET_ARRAY)) {\n"
+          "        JanetArray *a = janet_unwrap_array(v);\n"
+          "        els = a->data; len = a->count;\n"
+          "    } else if (janet_checktype(v, JANET_TUPLE)) {\n"
+          "        els = janet_unwrap_tuple(v); len = janet_tuple_length(els);\n"
+          "    } else {\n"
+          "        JanetView view = janet_getindexed(&v, 0);\n"
+          "        els = view.items; len = view.len;\n"
+          "    }\n"
+          "    if (len != " nf
+          ") janet_panicf(\"wrong number of fields in struct, expected " nf
+          ", got %d\", len);\n"))
+        (eachp [j f] (d :fields)
+          (buffer/push-string cout (string "    out->f" j " = "
+                                           (ffi-write-c f "els" j) ";\n")))
+        (buffer/push-string cout "}\n"))
+      (do
+        (buffer/push-string cout (string
+          "static void " nm "_write(" nm " *out, Janet v) {\n"
+          "    JanetView els = janet_getindexed(&v, 0);\n"
+          "    if ((int32_t) els.len != " nf
+          ") janet_panicf(\"wrong number of fields in struct, expected " nf
+          ", got %d\", (int32_t) els.len);\n"))
+        (eachp [j f] (d :fields)
+          (if (= (f :kind) :struct)
+            (buffer/push-string cout (string "    " (get names (f :key))
+                                           "_write(&out->f" j ", els.items[" j "]);\n"))
+            (buffer/push-string cout (string "    out->f" j " = "
+                                           (ffi-write-c f "els.items" j) ";\n"))))
+        (buffer/push-string cout "}\n")))
     (buffer/push-string cout (string
       "static Janet " nm "_read(const " nm " *in) {\n"
       "    Janet *tup = janet_tuple_begin(" nf ");\n"))
