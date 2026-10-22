@@ -16,6 +16,14 @@ grep 'numeric-nested' "$root/generated/native-executors.txt"
 grep 'boundary' "$root/generated/native-executors.txt"
 grep 'unsupported-loop' "$root/generated/native-executors.txt"
 if grep 'unsupported-bit' "$root/generated/native-executors.txt"; then exit 1; fi
+# Fast-path calls must be emitted, not just the generic VM boundaries.
+grep -q 'janet_native_array_put_fast' "$root/generated/native.c"
+grep -q 'janet_native_table_get_fast' "$root/generated/native.c"
+grep -q 'janet_native_container_call_fast' "$root/generated/native.c"
+grep -q 'janet_native_table_put_fast' "$root/generated/native.c"
+grep -q 'janet_native_buffer_push_string_ready' "$root/generated/native.c"
+grep -q 'janet_native_core_predicate' "$root/generated/native.c"
+grep -q 'janet_native_register_predicates' "$root/generated/native.c"
 JANET_NATIVE_EXECUTORS=1 ./build/bender --aot test/fixtures/native-executor.janet --native --no-auto-pgo -o "$root/image" > "$root/image-build.log" 2>&1
 "$root/image" > "$root/image.log" 2>&1
 grep 'image-executor' "$root/image.log"

@@ -44,6 +44,7 @@
 (def boundaries {'tcall true
                  'len true 'put true
                  'mkarr true 'mkbuf true 'mktup true
+                 'mkstr true 'mkstu true 'mktab true 'mkbtp true
                  'div true 'divim true 'divf true 'mod true 'rem true})
 # Native control/data operations. These used to be hard VM boundaries; the
 # stage-2 executor now executes them directly when it can prove the fast path
@@ -267,7 +268,14 @@
         (out "      int32_t nxi_ = janet_unwrap_integer(nxkey_);")
         (out "      s[" (string a) "] = ((uint32_t)nxi_ < (uint32_t)janet_tuple_length(nxt_)) ? nxt_[nxi_] : janet_wrap_nil();")
         (out "    } else s[" (string a) "] = janet_wrap_nil();")
-        (out "  } else { NX_BOUNDARY(" (string k) "); } }"))
+        # Table reads with primitive keys are pure: janet_table_get walks
+        # the table/prototype hashes without allocating or calling Janet.
+        # Non-primitive keys (abstract hashing callbacks) stay in the VM.
+        (out "  } else {")
+        (out "    Janet nxout_;")
+        (out "    if (janet_native_table_get_fast(nxds_, nxkey_, &nxout_)) s[" (string a) "] = nxout_;")
+        (out "    else NX_BOUNDARY(" (string k) ");")
+        (out "  } }"))
 
       # Native `geti`: immediate-index read with janet_getindex semantics.
       # Arrays, tuples, strings/symbols/keywords, and buffers are read
@@ -293,6 +301,24 @@
         (out "  JanetBuffer *nxb_ = janet_unwrap_buffer(nxds_);")
         (out "  s[" (string a) "] = ((uint32_t)(" (string z) ") < (uint32_t)nxb_->count) ? janet_wrap_integer(nxb_->data[" (string z) "]) : janet_wrap_nil();")
         (out "} else { NX_BOUNDARY(" (string k) "); } }"))
+
+      # Guarded `put`: an in-range array index performs exactly janet_put's
+      # store plus generational barrier. An already-present primitive table
+      # key performs exactly the existing-key branch of janet_table_put
+      # (value store plus both barriers). Array growth, table insertion/
+      # removal/rehash, buffers, abstract setters, non-integer array keys and
+      # non-primitive table keys exit before any mutation. The PC is
+      # committed before the barrier so a strict-heap panic still reports
+      # this instruction.
+      (= op 'put)
+      (do
+        (out "NX_TICK();")
+        (out "{ Janet nxds_ = s[" (string a) "]; Janet nxkey_ = s[" (string c) "]; Janet nxval_ = s[" (string z) "];")
+        (out "  janet_native_set_pc(f, d->bytecode + " (string k) ");")
+        (out "  if (!janet_native_array_put_fast(nxds_, nxkey_, nxval_) &&")
+        (out "      !janet_native_table_put_fast(nxds_, nxkey_, nxval_)) {")
+        (out "    NX_BOUNDARY(" (string k) ");")
+        (out "  } }"))
 
       # Native argument pushes. Values go directly to the fiber argument
       # stack, exactly where the bytecode would put them. Capacity and
@@ -338,6 +364,42 @@
           (out "{ Janet nxcallee_ = s[" (string c) "];")
           (out "  if (f->stack_overflowed) { NX_EXIT(" (string k) ", JANET_NATIVE_VM); }")
           (out "  int32_t nxargc_ = f->stacktop - f->stackstart;")
+          # Boot predicates (nil?, empty?, symbol?, ...) are tiny pure
+          # Janet functions. Match their exact core JanetFuncDef, poll, and
+          # compute the boxed boolean inline. Rebinding any predicate gives
+          # a different def and falls through to the VM.
+          (out "  { Janet nxpred_;")
+          (out "    if (janet_native_core_predicate(nxcallee_, nxargc_, f->data + f->stackstart, &nxpred_)) {")
+          (out "      if (janet_native_poll(1)) { NX_EXIT(" (string k) ", JANET_NATIVE_INTERRUPT); }")
+          (out "      s[" (string a) "] = nxpred_;")
+          (out "      f->stacktop = f->stackstart;")
+          (out "      goto L" (string (+ k 1)) ";")
+          (out "    } }")
+          # Exact two-argument buffer/push-string call: capacity-checked
+          # append with no allocation, collection, or signal. Poll before
+          # the commit so an interrupt leaves the argument stack untouched
+          # and the VM re-executes the call at this PC.
+          (out "  { const uint8_t *nxbytes_ = NULL; int32_t nxlen_ = 0;")
+          (out "    if (janet_native_buffer_push_string_ready(nxcallee_, nxargc_, f->data + f->stackstart, &nxbytes_, &nxlen_)) {")
+          (out "      if (janet_native_poll(1)) { NX_EXIT(" (string k) ", JANET_NATIVE_INTERRUPT); }")
+          (out "      Janet nxret_ = janet_native_buffer_push_string_commit(nxargc_, f->data + f->stackstart, nxbytes_, nxlen_);")
+          (out "      s[" (string a) "] = nxret_;")
+          (out "      f->stacktop = f->stackstart;")
+          (out "      goto L" (string (+ k 1)) ";")
+          (out "    } }")
+          # Container-as-function calls: (table key), (struct key),
+          # (array index), ... are exactly janet_in when argc == 1. The
+          # helper only accepts primitive keys and in-range indices; all
+          # other cases (including the VM's range errors and method hooks)
+          # fall through. The read is side-effect-free, so a poll after the
+          # lookup can still exit with the argument stack untouched.
+          (out "  { Janet nxco_;")
+          (out "    if (janet_native_container_call_fast(nxcallee_, nxargc_, f->data + f->stackstart, &nxco_)) {")
+          (out "      if (janet_native_poll(1)) { NX_EXIT(" (string k) ", JANET_NATIVE_INTERRUPT); }")
+          (out "      s[" (string a) "] = nxco_;")
+          (out "      f->stacktop = f->stackstart;")
+          (out "      goto L" (string (+ k 1)) ";")
+          (out "    } }")
           (out "  JanetCFunction nxfn_ = janet_native_alias_cfun(nxcallee_, nxargc_);")
           (out "  if (nxfn_) {")
           (out "      /* Only the direct-wrapper path polls here. Ordinary")

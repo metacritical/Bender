@@ -155,6 +155,134 @@ Janet janet_table_get(JanetTable *t, Janet key) {
     return janet_wrap_nil();
 }
 
+/* Native-executor table read fast path. Restrict the key to primitive
+ * values so janet_hash/janet_equals cannot invoke an abstract callback
+ * or allocate while the executor's structural verdict is live. The table
+ * itself may contain any keys: a primitive query never calls their
+ * equality hook. */
+JANET_API int janet_native_table_get_fast(Janet ds, Janet key, Janet *out) {
+    if (!janet_checktype(ds, JANET_TABLE)) return 0;
+    switch (janet_type(key)) {
+        case JANET_NUMBER:
+        case JANET_NIL:
+        case JANET_BOOLEAN:
+        case JANET_STRING:
+        case JANET_SYMBOL:
+        case JANET_KEYWORD:
+            *out = janet_table_get(janet_unwrap_table(ds), key);
+            return 1;
+        default:
+            return 0;
+    }
+}
+
+static int janet_native_primitive_key_p(Janet key) {
+    switch (janet_type(key)) {
+        case JANET_NUMBER:
+        case JANET_NIL:
+        case JANET_BOOLEAN:
+        case JANET_STRING:
+        case JANET_SYMBOL:
+        case JANET_KEYWORD:
+            return 1;
+        default:
+            return 0;
+    }
+}
+
+/* Non-function Janet values are callable with exactly one argument:
+ * (table key), (struct key), (array index), (tuple index), and the byte
+ * sequence types. The VM routes this through call_nonfn and
+ * janet_method_invoke to janet_in. Executors recognize the cases that
+ * cannot allocate, panic, or invoke a callback and return the exact
+ * janet_in result inline. Out-of-range indices, composite keys, and all
+ * other callee types stay with the VM so its errors and method hooks are
+ * preserved. */
+JANET_API int janet_native_container_call_fast(Janet callee, int32_t argc,
+        const Janet *argv, Janet *out) {
+    if (argc != 1) return 0;
+    switch (janet_type(callee)) {
+        case JANET_TABLE:
+            if (!janet_native_primitive_key_p(argv[0])) return 0;
+            *out = janet_table_get(janet_unwrap_table(callee), argv[0]);
+            return 1;
+        case JANET_STRUCT:
+            if (!janet_native_primitive_key_p(argv[0])) return 0;
+            *out = janet_struct_get(janet_unwrap_struct(callee), argv[0]);
+            return 1;
+        case JANET_ARRAY: {
+            JanetArray *a = janet_unwrap_array(callee);
+            int32_t i;
+            if (!janet_checkint(argv[0])) return 0;
+            i = janet_unwrap_integer(argv[0]);
+            if (i < 0 || i >= a->count) return 0;
+            *out = a->data[i];
+            return 1;
+        }
+        case JANET_TUPLE: {
+            const Janet *t = janet_unwrap_tuple(callee);
+            int32_t i, n = janet_tuple_length(t);
+            if (!janet_checkint(argv[0])) return 0;
+            i = janet_unwrap_integer(argv[0]);
+            if (i < 0 || i >= n) return 0;
+            *out = t[i];
+            return 1;
+        }
+        case JANET_STRING:
+        case JANET_SYMBOL:
+        case JANET_KEYWORD: {
+            const uint8_t *str = janet_unwrap_string(callee);
+            int32_t i, n = janet_string_length(str);
+            if (!janet_checkint(argv[0])) return 0;
+            i = janet_unwrap_integer(argv[0]);
+            if (i < 0 || i >= n) return 0;
+            *out = janet_wrap_integer(str[i]);
+            return 1;
+        }
+        case JANET_BUFFER: {
+            JanetBuffer *b = janet_unwrap_buffer(callee);
+            int32_t i;
+            if (!janet_checkint(argv[0])) return 0;
+            i = janet_unwrap_integer(argv[0]);
+            if (i < 0 || i >= b->count) return 0;
+            *out = janet_wrap_integer(b->data[i]);
+            return 1;
+        }
+        default:
+            return 0;
+    }
+}
+
+/* Native-executor table write fast path for an already-present,
+ * primitive key. janet_table_put's existing-key branch is just a value
+ * store plus both generational barriers; insertion (which may rehash and
+ * allocate) and nil removal stay in the VM. */
+JANET_API int janet_native_table_put_fast(Janet ds, Janet key, Janet value) {
+    if (!janet_checktype(ds, JANET_TABLE)) return 0;
+    if (janet_checktype(key, JANET_NIL)) return 1; /* janet_table_put no-op */
+    if (janet_checktype(key, JANET_NUMBER) && isnan(janet_unwrap_number(key))) return 1;
+    if (janet_checktype(value, JANET_NIL)) return 0;
+    switch (janet_type(key)) {
+        case JANET_NUMBER:
+        case JANET_BOOLEAN:
+        case JANET_STRING:
+        case JANET_SYMBOL:
+        case JANET_KEYWORD:
+            break;
+        default:
+            return 0;
+    }
+    {
+        JanetTable *t = janet_unwrap_table(ds);
+        JanetKV *bucket = janet_table_find(t, key);
+        if (NULL == bucket || janet_checktype(bucket->key, JANET_NIL)) return 0;
+        bucket->value = value;
+        janet_gc_barrier(t, key);
+        janet_gc_barrier(t, value);
+        return 1;
+    }
+}
+
 /* Used internally for compiler stuff */
 Janet janet_table_get_keyword(JanetTable *t, const char *keyword) {
     int32_t keyword_len = (int32_t) strlen(keyword);

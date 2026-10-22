@@ -2064,6 +2064,183 @@ int janet_native_revalidate(JanetFuncDef *d) {
     return 1;
 }
 
+/* Boot predicates are Janet functions with tiny, side-effect-free bodies.
+ * Executors recognize the exact core function definitions and compute their
+ * results inline. Identity, not the binding name, is the guard: a module
+ * that shadows nil?/empty?/... has a different JanetFuncDef and therefore
+ * falls back to the VM. native_init runs before boot.janet defines these
+ * functions, so registration is retried lazily from the first predicate
+ * call, by which point janet_vm.core_env is fully populated. */
+typedef enum {
+    JANET_NATIVE_PRED_NIL,
+    JANET_NATIVE_PRED_EMPTY,
+    JANET_NATIVE_PRED_SYMBOL,
+    JANET_NATIVE_PRED_KEYWORD,
+    JANET_NATIVE_PRED_STRING,
+    JANET_NATIVE_PRED_NUMBER,
+    JANET_NATIVE_PRED_BOOLEAN,
+    JANET_NATIVE_PRED_FUNCTION,
+    JANET_NATIVE_PRED_CFUNCTION,
+    JANET_NATIVE_PRED_TABLE,
+    JANET_NATIVE_PRED_STRUCT,
+    JANET_NATIVE_PRED_ARRAY,
+    JANET_NATIVE_PRED_TUPLE,
+    JANET_NATIVE_PRED_BUFFER,
+    JANET_NATIVE_PRED_FIBER,
+    JANET_NATIVE_PRED_TRUTHY,
+    JANET_NATIVE_PRED_TRUE,
+    JANET_NATIVE_PRED_FALSE,
+    JANET_NATIVE_PRED_COUNT
+} JanetNativePredicate;
+
+static const char *const janet_native_pred_names[JANET_NATIVE_PRED_COUNT] = {
+    "nil?", "empty?", "symbol?", "keyword?", "string?", "number?",
+    "boolean?", "function?", "cfunction?", "table?", "struct?", "array?",
+    "tuple?", "buffer?", "fiber?", "truthy?", "true?", "false?"
+};
+static JanetFuncDef *janet_native_pred_defs[JANET_NATIVE_PRED_COUNT];
+static Janet janet_native_pred_keys[JANET_NATIVE_PRED_COUNT];
+static int janet_native_pred_keys_ready;
+static int janet_native_preds_ready;
+
+JANET_API void janet_native_register_predicates(JanetTable *env) {
+    int32_t i;
+    int found = 0;
+    if (!janet_native_pred_keys_ready) {
+        for (i = 0; i < JANET_NATIVE_PRED_COUNT; i++) {
+            Janet key = janet_csymbolv(janet_native_pred_names[i]);
+            janet_gcroot(key);
+            janet_native_pred_keys[i] = key;
+        }
+        janet_native_pred_keys_ready = 1;
+    }
+    if (!env) return;
+    for (i = 0; i < JANET_NATIVE_PRED_COUNT; i++) {
+        Janet v = janet_wrap_nil();
+        JanetBindingType bt = janet_resolve(env,
+            janet_unwrap_symbol(janet_native_pred_keys[i]), &v);
+        janet_native_pred_defs[i] =
+            (bt != JANET_BINDING_NONE && janet_checktype(v, JANET_FUNCTION))
+                ? janet_unwrap_function(v)->def : NULL;
+        if (janet_native_pred_defs[i]) found++;
+    }
+    /* native_init sees the pre-boot core env (no Janet-defined predicates).
+     * Keep the defs unresolved so the first executor call retries against
+     * the fully populated core env. Once any predicate is found, missing
+     * ones are permanently left to the VM. */
+    if (found > 0) janet_native_preds_ready = 1;
+}
+
+static void janet_native_predicates_lazy(void) {
+    if (janet_native_preds_ready) return;
+    if (janet_vm.core_env) janet_native_register_predicates(janet_vm.core_env);
+}
+
+static int janet_native_empty_p(Janet x, Janet *out) {
+    switch (janet_type(x)) {
+        case JANET_ARRAY:
+            *out = janet_wrap_boolean(janet_unwrap_array(x)->count == 0);
+            return 1;
+        case JANET_TUPLE:
+            *out = janet_wrap_boolean(janet_tuple_length(janet_unwrap_tuple(x)) == 0);
+            return 1;
+        case JANET_TABLE:
+            *out = janet_wrap_boolean(janet_unwrap_table(x)->count == 0);
+            return 1;
+        case JANET_STRUCT:
+            *out = janet_wrap_boolean(janet_struct_length(janet_unwrap_struct(x)) == 0);
+            return 1;
+        case JANET_STRING:
+            *out = janet_wrap_boolean(janet_string_length(janet_unwrap_string(x)) == 0);
+            return 1;
+        case JANET_SYMBOL:
+            *out = janet_wrap_boolean(janet_string_length(janet_unwrap_symbol(x)) == 0);
+            return 1;
+        case JANET_KEYWORD:
+            *out = janet_wrap_boolean(janet_string_length(janet_unwrap_keyword(x)) == 0);
+            return 1;
+        case JANET_BUFFER:
+            *out = janet_wrap_boolean(janet_unwrap_buffer(x)->count == 0);
+            return 1;
+        default:
+            return 0;
+    }
+}
+
+JANET_API int janet_native_core_predicate(Janet callee, int32_t argc,
+        const Janet *argv, Janet *out) {
+    int32_t i;
+    JanetFuncDef *d;
+    Janet x;
+    if (argc != 1 || !janet_checktype(callee, JANET_FUNCTION)) return 0;
+    if (!janet_native_preds_ready) janet_native_predicates_lazy();
+    d = janet_unwrap_function(callee)->def;
+    x = argv[0];
+    for (i = 0; i < JANET_NATIVE_PRED_COUNT; i++) {
+        if (d != janet_native_pred_defs[i]) continue;
+        switch (i) {
+            case JANET_NATIVE_PRED_NIL:
+                *out = janet_wrap_boolean(janet_checktype(x, JANET_NIL));
+                return 1;
+            case JANET_NATIVE_PRED_EMPTY:
+                return janet_native_empty_p(x, out);
+            case JANET_NATIVE_PRED_SYMBOL:
+                *out = janet_wrap_boolean(janet_checktype(x, JANET_SYMBOL));
+                return 1;
+            case JANET_NATIVE_PRED_KEYWORD:
+                *out = janet_wrap_boolean(janet_checktype(x, JANET_KEYWORD));
+                return 1;
+            case JANET_NATIVE_PRED_STRING:
+                *out = janet_wrap_boolean(janet_checktype(x, JANET_STRING));
+                return 1;
+            case JANET_NATIVE_PRED_NUMBER:
+                *out = janet_wrap_boolean(janet_checktype(x, JANET_NUMBER));
+                return 1;
+            case JANET_NATIVE_PRED_BOOLEAN:
+                *out = janet_wrap_boolean(janet_checktype(x, JANET_BOOLEAN));
+                return 1;
+            case JANET_NATIVE_PRED_FUNCTION:
+                *out = janet_wrap_boolean(janet_checktype(x, JANET_FUNCTION));
+                return 1;
+            case JANET_NATIVE_PRED_CFUNCTION:
+                *out = janet_wrap_boolean(janet_checktype(x, JANET_CFUNCTION));
+                return 1;
+            case JANET_NATIVE_PRED_TABLE:
+                *out = janet_wrap_boolean(janet_checktype(x, JANET_TABLE));
+                return 1;
+            case JANET_NATIVE_PRED_STRUCT:
+                *out = janet_wrap_boolean(janet_checktype(x, JANET_STRUCT));
+                return 1;
+            case JANET_NATIVE_PRED_ARRAY:
+                *out = janet_wrap_boolean(janet_checktype(x, JANET_ARRAY));
+                return 1;
+            case JANET_NATIVE_PRED_TUPLE:
+                *out = janet_wrap_boolean(janet_checktype(x, JANET_TUPLE));
+                return 1;
+            case JANET_NATIVE_PRED_BUFFER:
+                *out = janet_wrap_boolean(janet_checktype(x, JANET_BUFFER));
+                return 1;
+            case JANET_NATIVE_PRED_FIBER:
+                *out = janet_wrap_boolean(janet_checktype(x, JANET_FIBER));
+                return 1;
+            case JANET_NATIVE_PRED_TRUTHY:
+                *out = janet_wrap_boolean(janet_truthy(x));
+                return 1;
+            case JANET_NATIVE_PRED_TRUE:
+                *out = janet_wrap_boolean(
+                    janet_checktype(x, JANET_BOOLEAN) && janet_unwrap_boolean(x));
+                return 1;
+            case JANET_NATIVE_PRED_FALSE:
+                *out = janet_wrap_boolean(
+                    janet_checktype(x, JANET_BOOLEAN) && !janet_unwrap_boolean(x));
+                return 1;
+            default:
+                return 0;
+        }
+    }
+    return 0;
+}
+
 int janet_native_register(JanetFunction *f, const JanetNativeCode *n) {
     f->def->native_code = NULL;
 #ifdef JANET_NATIVE_EXECUTORS

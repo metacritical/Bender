@@ -160,9 +160,9 @@ int main(int argc, char **argv) {
 #ifdef TEST_NATIVE_DISABLED
     {
         JanetFunction *boundary = lookup("mx/boundary");
-        assert(!janet_native_register(boundary, &nx_1_code));
+        assert(!janet_native_register(boundary, &nx_2_code));
         assert(!boundary->def->native_code);
-        janet_native_registry_add(&nx_1_code);
+        janet_native_registry_add(&nx_2_code);
         assert(!janet_native_registry_count());
         assert(!janet_native_try_attach(boundary->def));
         puts("default-off: mixed registration and attachment refused");
@@ -177,10 +177,10 @@ int main(int argc, char **argv) {
     JanetFunction *iter = lookup("mx/iterate-table");
     JanetFunction *sum = lookup("numeric-sum");
 
-    differential(boundary, &nx_1_code, janet_wrap_integer(20 * TEST_BUDGET));
-    differential(tail, &nx_3_code, janet_wrap_integer(4 * TEST_BUDGET));
-    differential(buf, &nx_6_code, janet_wrap_integer(4 * TEST_BUDGET));
-    differential(iter, &nx_7_code, run("@{:a 1 :b 2 :c 3 :d 4 :e 5 :f 6 :g 7 :h 8}"));
+    differential(boundary, &nx_2_code, janet_wrap_integer(20 * TEST_BUDGET));
+    differential(tail, &nx_4_code, janet_wrap_integer(4 * TEST_BUDGET));
+    differential(buf, &nx_7_code, janet_wrap_integer(4 * TEST_BUDGET));
+    differential(iter, &nx_8_code, run("@{:a 1 :b 2 :c 3 :d 4 :e 5 :f 6 :g 7 :h 8}"));
 
 #ifndef JANET_NO_INTERPRETER_INTERRUPT
     /* 2. Native/boxed paired interrupts park at identical PCs/slots while
@@ -197,7 +197,7 @@ int main(int argc, char **argv) {
             JanetSignal sa = janet_continue(a, janet_wrap_nil(), &x);
             if (sa == JANET_SIGNAL_OK) { a_done = 1; break; }
             assert(sa == JANET_SIGNAL_INTERRUPT);
-            assert(janet_native_register(buf, &nx_6_code));
+            assert(janet_native_register(buf, &nx_7_code));
             JanetSignal sb = janet_continue(b, janet_wrap_nil(), &y);
             assert(sb == JANET_SIGNAL_INTERRUPT);
             same_parked(a, b);
@@ -208,7 +208,7 @@ int main(int argc, char **argv) {
             buf->def->native_code = NULL;
             assert(janet_continue(a, janet_wrap_nil(), &x) == JANET_SIGNAL_OK);
         }
-        assert(janet_native_register(buf, &nx_6_code));
+        assert(janet_native_register(buf, &nx_7_code));
         assert(janet_continue(b, janet_wrap_nil(), &y) == JANET_SIGNAL_OK);
         assert(janet_equals(x, y));
         assert(paired > 0);
@@ -221,7 +221,7 @@ int main(int argc, char **argv) {
      * descriptor does not pin changes behavior through the native path too
      * (live pool load, never a specialized identity). */
     {
-        assert(janet_native_register(boundary, &nx_1_code));
+        assert(janet_native_register(boundary, &nx_2_code));
         Janet callee = run("mx/callee");
         int idx = -1;
         for (int32_t i = 0; i < boundary->def->constants_length; i++)
@@ -241,15 +241,15 @@ int main(int argc, char **argv) {
         assert(janet_equals(r1, r3));
         assert(!janet_equals(r1, r2));
         /* primitive constants stay pinned: exact matching refuses changes */
-        assert(janet_native_register(sum, &nx_9_code));
+        assert(janet_native_register(sum, &nx_10_code));
         puts("opaque constant swap observed live; primitives stay exact");
     }
 
     /* 4. GC across boundaries: collect between every resume; callee code
      * and buffer allocation must not invalidate anything. */
     {
-        assert(janet_native_register(boundary, &nx_1_code));
-        assert(janet_native_register(buf, &nx_6_code));
+        assert(janet_native_register(boundary, &nx_2_code));
+        assert(janet_native_register(buf, &nx_7_code));
         reset_state();
         JanetFiber *f = spawn1(boundary, 8);
         janet_vm.quantum = 2;
@@ -275,26 +275,26 @@ int main(int argc, char **argv) {
     /* 5. Debugger: a breakpoint bit inside the body forces boxed execution
      * and preserves PCs; stepping suppresses native entry entirely. */
     {
-        assert(janet_native_register(boundary, &nx_1_code));
+        assert(janet_native_register(boundary, &nx_2_code));
         uint32_t hold = boundary->def->bytecode[3];
         boundary->def->bytecode[3] |= 0x80;
-        assert(!janet_native_matches(boundary->def, &nx_1_code));
+        assert(!janet_native_matches(boundary->def, &nx_2_code));
         reset_state();
         JanetFiber *f = spawn1(boundary, 3);
         Janet out;
         assert(janet_continue(f, janet_wrap_nil(), &out) == JANET_SIGNAL_DEBUG);
         assert(pc_of(f) == 3);
-        uint64_t before = nx_1_entries;
+        uint64_t before = nx_2_entries;
         int steps = 0;
         while (janet_step(f, janet_wrap_nil(), &out) == JANET_SIGNAL_DEBUG) {
-            assert(nx_1_entries == before);
+            assert(nx_2_entries == before);
             steps++;
         }
-        assert(nx_1_entries == before && steps > 0);
+        assert(nx_2_entries == before && steps > 0);
         assert(janet_checktype(out, JANET_NUMBER));
         janet_gcunroot(janet_wrap_fiber(f));
         boundary->def->bytecode[3] = hold;
-        assert(janet_native_matches(boundary->def, &nx_1_code));
+        assert(janet_native_matches(boundary->def, &nx_2_code));
         reset_state();
         Janet boxed = run("(do (mx/boundary 3) nil)");
         (void)boxed;
@@ -306,12 +306,12 @@ int main(int argc, char **argv) {
      * cached verdict, so the mutated constant is observed through boxed
      * execution and no native entry happens until the word is restored. */
     {
-        assert(janet_native_register(boundary, &nx_1_code));
+        assert(janet_native_register(boundary, &nx_2_code));
         reset_state();
         JanetFiber *f1 = spawn1(boundary, 4);
         Janet r1;
         assert(janet_continue(f1, janet_wrap_nil(), &r1) == JANET_SIGNAL_OK);
-        assert(nx_1_entries > 0);
+        assert(nx_2_entries > 0);
         janet_gcunroot(janet_wrap_fiber(f1));
         int32_t ci = -1;
         for (int32_t i = 0; i < boundary->def->constants_length; i++) {
@@ -325,23 +325,23 @@ int main(int argc, char **argv) {
         Janet hold = boundary->def->constants[ci];
         assert(janet_checktype(hold, JANET_NUMBER));
         boundary->def->constants[ci] = janet_wrap_number(1.5);
-        assert(!janet_native_matches(boundary->def, &nx_1_code));
+        assert(!janet_native_matches(boundary->def, &nx_2_code));
         reset_state();
         JanetFiber *f2 = spawn1(boundary, 4);
         Janet r2;
-        uint64_t before = nx_1_entries;
+        uint64_t before = nx_2_entries;
         assert(janet_continue(f2, janet_wrap_nil(), &r2) == JANET_SIGNAL_OK);
-        assert(nx_1_entries == before); /* mutated def: cache must not admit native entry */
+        assert(nx_2_entries == before); /* mutated def: cache must not admit native entry */
         assert(janet_checktype(r2, JANET_NUMBER));
         assert(janet_unwrap_number(r2) == janet_unwrap_number(r1) + 4.0); /* boxed sees 1.5 */
         janet_gcunroot(janet_wrap_fiber(f2));
         boundary->def->constants[ci] = hold;
-        assert(janet_native_matches(boundary->def, &nx_1_code));
+        assert(janet_native_matches(boundary->def, &nx_2_code));
         reset_state();
         JanetFiber *f3 = spawn1(boundary, 4);
         Janet r3;
         assert(janet_continue(f3, janet_wrap_nil(), &r3) == JANET_SIGNAL_OK);
-        assert(nx_1_entries > before); /* restored def: native entry resumes */
+        assert(nx_2_entries > before); /* restored def: native entry resumes */
         assert(janet_unwrap_number(r3) == janet_unwrap_number(r1));
         janet_gcunroot(janet_wrap_fiber(f3));
         reset_state();
@@ -357,7 +357,7 @@ int main(int argc, char **argv) {
      * arguments already lose them in the plain interpreter too (documented
      * stage-2 baseline limitation, reproduced without native code). */
     {
-        assert(janet_native_register(tail, &nx_3_code));
+        assert(janet_native_register(tail, &nx_4_code));
         Janet arg = janet_wrap_integer(6 * TEST_BUDGET);
         JanetFiber *f = janet_fiber(tail, 64, 1, &arg);
         janet_gcroot(janet_wrap_fiber(f));
@@ -372,8 +372,8 @@ int main(int argc, char **argv) {
         janet_gcroot(restored);
         JanetFiber *g = janet_unwrap_fiber(restored);
         assert(!janet_fiber_frame(g)->func->def->native_code);
-        uint64_t before = nx_3_entries;
-        janet_native_registry_add(&nx_3_code); /* bump generation */
+        uint64_t before = nx_4_entries;
+        janet_native_registry_add(&nx_4_code); /* bump generation */
         JanetSignal sg = janet_continue(g, janet_wrap_nil(), &x);
         if (sg != JANET_SIGNAL_OK) {
             const uint8_t *ds = janet_formatc("%v", x);
@@ -386,7 +386,7 @@ int main(int argc, char **argv) {
             snprintf(callbuf, sizeof callbuf, "(mx/tail-boundary %d)", 6 * TEST_BUDGET);
             assert(janet_equals(x, run(callbuf)));
         }
-        assert(nx_3_entries > before); /* re-attached and entered natively */
+        assert(nx_4_entries > before); /* re-attached and entered natively */
         janet_gcunroot(janet_wrap_fiber(f)); janet_gcunroot(restored);
         janet_gcunroot(janet_wrap_buffer(b));
         puts("parked mixed-frame marshal round trip passed");
@@ -397,18 +397,18 @@ int main(int argc, char **argv) {
      * function identical to an emitted one; its first dispatch attaches
      * and executes natively. Explicit registration still wins. */
     {
-        janet_native_registry_add(&nx_9_code);
-        janet_native_registry_add(&nx_1_code);
+        janet_native_registry_add(&nx_10_code);
+        janet_native_registry_add(&nx_2_code);
         assert(janet_native_registry_count() >= 2);
         run("(defn later-sum [n] (var s 0) (var i 0)"
             " (while (< i n) (+= s i) (++ i)) s)");
         JanetFunction *later = lookup("later-sum");
         assert(!later->def->native_code);
         assert(janet_equals(run("(later-sum 10)"), janet_wrap_integer(45)));
-        assert(later->def->native_code == &nx_9_code);
-        uint64_t ops_before = nx_9_ops;
+        assert(later->def->native_code == &nx_10_code);
+        uint64_t ops_before = nx_10_ops;
         assert(janet_equals(run("(later-sum 10)"), janet_wrap_integer(45)));
-        assert(nx_9_ops > ops_before);
+        assert(nx_10_ops > ops_before);
         assert(janet_native_stat(JANET_NATIVE_STAT_ATTACH_ATTACHED) > 0);
         /* fresh marshal of a cfunction-carrying closure re-attaches too */
         puts("later-evaluated function attached and executed natively");
@@ -417,8 +417,8 @@ int main(int argc, char **argv) {
     /* 8. Counters: entries/ops/vmexits for a mixed workload, VM exits by
      * opcode recorded (call/push/put/len are all exercised). */
     {
-        assert(nx_1_entries > 0 && nx_1_ops > 0 && nx_1_vmexits > 0);
-        assert(nx_1_entries >= nx_1_vmexits);
+        assert(nx_2_entries > 0 && nx_2_ops > 0 && nx_2_vmexits > 0);
+        assert(nx_2_entries >= nx_2_vmexits);
         fprintf(stderr, "VM_EXITS global=%llu registry=%d\n",
                 (unsigned long long)janet_native_stat(JANET_NATIVE_STAT_VM_EXITS),
                 janet_native_registry_count());
@@ -437,9 +437,9 @@ int main(int argc, char **argv) {
         assert(janet_native_exit_stat(JOP_GET) > 0);
         assert(janet_native_exit_stat(JOP_PUT) > 0);
         printf("boundary counters: entries=%llu ops=%llu vmexits=%llu edges=%llu guards=%llu\n",
-               (unsigned long long)nx_1_entries, (unsigned long long)nx_1_ops,
-               (unsigned long long)nx_1_vmexits, (unsigned long long)nx_1_edges,
-               (unsigned long long)nx_1_fallbacks);
+               (unsigned long long)nx_2_entries, (unsigned long long)nx_2_ops,
+               (unsigned long long)nx_2_vmexits, (unsigned long long)nx_2_edges,
+               (unsigned long long)nx_2_fallbacks);
         printf("global: attempts=%llu attached=%llu vmexits=%llu call-exits=%llu\n",
                (unsigned long long)janet_native_stat(JANET_NATIVE_STAT_ATTACH_ATTEMPTS),
                (unsigned long long)janet_native_stat(JANET_NATIVE_STAT_ATTACH_ATTACHED),
@@ -452,7 +452,7 @@ int main(int argc, char **argv) {
      * attachment happens for it. A fresh import compiles an identical body. */
     {
         static JanetNativeCode dup;
-        dup = nx_1_code;
+        dup = nx_2_code;
         janet_native_registry_add(&dup);
         run("(import native-executor-mixed :fresh true :as mx2)");
         JanetFunction *later2 = lookup("mx2/boundary");
@@ -465,8 +465,8 @@ int main(int argc, char **argv) {
         assert(!later2->def->native_code); /* ambiguous: refused */
         assert(janet_native_stat(JANET_NATIVE_STAT_ATTACH_AMBIGUOUS) > 0);
         /* explicit registration is still authoritative for this def */
-        assert(janet_native_register(later2, &nx_1_code));
-        assert(later2->def->native_code == &nx_1_code);
+        assert(janet_native_register(later2, &nx_2_code));
+        assert(later2->def->native_code == &nx_2_code);
         puts("ambiguous descriptors refuse lazy attachment");
     }
 

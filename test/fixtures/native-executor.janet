@@ -28,6 +28,12 @@
 (assert (deep= mixed-snap-1 mixed-snap-2))
 (assert (> (mixed/iterate-table mixed/shared) 0))
 (assert (= 8 (mixed/tail-boundary 4)))
+(assert (= 36 (mixed/container-call 4 @{:field 7} :field)))
+(assert (= 44 (mixed/container-call 4 {:field 9} :field)))
+(assert (= 56 (mixed/container-call 4 @[11 12 13] 1)))
+(assert (= 92 (mixed/container-call 4 [21 22] 0)))
+(assert (= 400 (mixed/container-call 4 "abc" 1)))
+(assert (= 268 (mixed/container-call 4 @"A" 0)))
 (assert (= 4 (mixed/build-buffer 4)))
 (assert (= 8 (mixed/unsupported-bit 7)))
 (defn numeric-fraction [n]
@@ -36,9 +42,10 @@
 (assert (= 3 (numeric-fraction 10)))
 (when (get (curenv) 'executor-stats)
   (def stats ((get (curenv) 'executor-stats) :value))
-  # ids: 1 boundary, 3 tail-boundary, 6 build-buffer, 7 iterate-table,
-  # 9 numeric-sum, 10 numeric-nested, 12 unsupported-loop, 13 numeric-fraction
-  (each id [9 10 13]
+  # ids: 1 container-call, 2 boundary, 4 tail-boundary, 7 build-buffer,
+  # 8 iterate-table, 10 numeric-sum, 11 numeric-nested, 13 unsupported-loop,
+  # 14 numeric-fraction
+  (each id [10 11 14]
     (def counts (stats id))
     (assert (> (counts 0) 0))
     (assert (> (counts 1) 0))
@@ -53,7 +60,7 @@
   (assert (> (gs 1) 0) "lazy attachment never succeeded")
   # Mixed-op imported functions: native ops executed AND VM boundary exits.
   # Mixed-op imported functions: native ops executed AND VM boundary exits.
-  (each id [1 3 6 7 12]
+  (each id [1 2 4 7 8 13]
     (def counts (stats id))
     (assert (> (counts 0) 0) (string "mixed executor " id " never entered"))
     (assert (> (counts 3) 0) (string "mixed executor " id " executed no native ops"))
@@ -69,7 +76,7 @@
   (assert (= 16815 (answers 0)))
   (assert (= 499500 (answers 1)))
   (ev/timeslice false)
-  (assert (> ((stats 9) 0) 2))
   (assert (> ((stats 10) 0) 2))
+  (assert (> ((stats 11) 0) 2))
   (print "image shared-stack resumes: passed; sum entries=" ((stats 9) 0)
          " nested entries=" ((stats 10) 0)))

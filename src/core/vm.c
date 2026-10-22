@@ -282,6 +282,12 @@ JANET_API Janet janet_native_alias_call(JanetFiber *fiber, JanetCFunction cfun,
     return ret;
 }
 
+/* Keep error/panic locations exact when a fast executor operation can
+ * raise (notably the generational barrier's strict-heap checks). */
+JANET_API void janet_native_set_pc(JanetFiber *fiber, uint32_t *pc) {
+    janet_stack_frame(fiber->data + fiber->frame)->pc = pc;
+}
+
 /* The caller has already stored the result in a scanned frame slot. Do the
  * same GC check as JOP_CALL before leaving the effectful native region.
  * Collection/finalizers and arbitrary C callbacks can invalidate a cached

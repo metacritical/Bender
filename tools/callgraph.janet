@@ -5620,6 +5620,7 @@
     (buffer/push-string cout "    { \"ffi-alias-install\", cfun_ffi_alias_install, NULL },\n"))
   (buffer/push-string cout "    { NULL, NULL, NULL } };\n")
   (buffer/push-string cout "    janet_cfuns(env, \"native\", regs);\n")
+  (buffer/push-string cout "    janet_native_register_predicates(env);\n")
   # Stage 2: publish linked descriptors so the VM's lazy structural
   # attachment can find actual imported/unmarshaled/evaluated functions.
   (each id executors

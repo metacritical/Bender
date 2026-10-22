@@ -321,6 +321,41 @@ JANET_CORE_FN(cfun_buffer_chars,
     return argv[0];
 }
 
+/* Native-executor fast path for the exact two-argument
+ * (buffer/push-string buf bytes) call. `ready` performs no mutation and
+ * returns 0 for every case that could grow/reallocate, alias the target,
+ * panic on a non-bytes value, or use a different callee. `commit` then
+ * does only the capacity-checked copy, so it cannot allocate, collect, or
+ * signal. The executor polls between the two calls. */
+JANET_API int janet_native_buffer_push_string_ready(
+    Janet callee, int32_t argc, const Janet *argv,
+    const uint8_t **bytes, int32_t *len) {
+    JanetBuffer *buffer;
+    const uint8_t *view_bytes;
+    int32_t view_len;
+    if (argc != 2) return 0;
+    if (!janet_checktype(callee, JANET_CFUNCTION)) return 0;
+    if (janet_unwrap_cfunction(callee) != cfun_buffer_chars) return 0;
+    if (!janet_checktype(argv[0], JANET_BUFFER)) return 0;
+    buffer = janet_unwrap_buffer(argv[0]);
+    if (!janet_bytes_view(argv[1], &view_bytes, &view_len)) return 0;
+    if (view_len < 0) return 0;
+    if (view_bytes == buffer->data) return 0;
+    if ((int64_t)buffer->count + view_len > buffer->capacity) return 0;
+    *bytes = view_bytes;
+    *len = view_len;
+    return 1;
+}
+
+JANET_API Janet janet_native_buffer_push_string_commit(
+    int32_t argc, const Janet *argv, const uint8_t *bytes, int32_t len) {
+    JanetBuffer *buffer = janet_unwrap_buffer(argv[0]);
+    (void)argc;
+    if (len > 0) memcpy(buffer->data + buffer->count, bytes, (size_t)len);
+    buffer->count += len;
+    return argv[0];
+}
+
 static int should_reverse_bytes(const Janet *argv, int32_t argc) {
     JanetKeyword order_kw = janet_getkeyword(argv, argc);
     if (!janet_cstrcmp(order_kw, "le")) {

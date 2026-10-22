@@ -821,3 +821,21 @@ void janet_put(Janet ds, Janet key, Janet value) {
         }
     }
 }
+
+/* Native-executor array write fast path. Only an in-range non-negative
+ * integer index is handled: janet_put's store plus generational barrier.
+ * Growth (which allocates and fills intermediates), buffers, tables and
+ * abstract setters stay in the VM at the original PC. */
+JANET_API int janet_native_array_put_fast(Janet ds, Janet key, Janet value) {
+    JanetArray *array;
+    int32_t index;
+    if (!janet_checktype(ds, JANET_ARRAY)) return 0;
+    if (!janet_checkint(key)) return 0;
+    index = janet_unwrap_integer(key);
+    if (index < 0) return 0;
+    array = janet_unwrap_array(ds);
+    if (index >= array->count) return 0;
+    array->data[index] = value;
+    janet_gc_barrier(array, value);
+    return 1;
+}

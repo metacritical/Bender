@@ -91,7 +91,7 @@ static Janet add_once(int32_t argc, Janet *argv) {
 }
 static void fallback(JanetFunction *fn, int native, int bad) {
     JanetFiber *f = spawn(fn, 4);
-    if (native) attach(fn, &nx_9_code); else fn->def->native_code = NULL;
+    if (native) attach(fn, &nx_10_code); else fn->def->native_code = NULL;
     janet_vm.quantum = 2;
     Janet out;
     assert(janet_continue(f, janet_wrap_nil(), &out) == JANET_SIGNAL_INTERRUPT);
@@ -127,23 +127,35 @@ int main(int argc, char **argv) {
     assert(fread(src, 1, (size_t)size, file) == (size_t)size); fclose(file); src[size] = 0;
     assert(!janet_dostring(env, src, argv[1], NULL)); free(src);
     JanetFunction *sum = lookup(env, "numeric-sum"), *nested = lookup(env, "numeric-nested");
+    /* Predicate fast paths are keyed by the canonical core JanetFuncDef.
+     * A different function must never match, even with the same arity. */
+    {
+        Janet nv = janet_wrap_nil();
+        Janet pout = janet_wrap_nil();
+        Janet pv = janet_wrap_function(lookup(env, "nil?"));
+        janet_native_register_predicates(janet_core_env(NULL));
+        assert(janet_native_core_predicate(pv, 1, &nv, &pout));
+        assert(janet_checktype(pout, JANET_BOOLEAN) && janet_unwrap_boolean(pout));
+        pout = janet_wrap_nil();
+        assert(!janet_native_core_predicate(janet_wrap_function(sum), 1, &nv, &pout));
+    }
 #ifdef TEST_NATIVE_DISABLED
-    assert(!janet_native_register(sum, &nx_9_code));
+    assert(!janet_native_register(sum, &nx_10_code));
     assert(!sum->def->native_code);
     puts("default-off registration refused; compiler oracles passed");
     janet_deinit(); return 0;
 #endif
-    attach(sum, &nx_9_code); attach(nested, &nx_10_code);
-    assert(!janet_native_register(lookup(env, "unsupported-loop"), &nx_9_code));
+    attach(sum, &nx_10_code); attach(nested, &nx_11_code);
+    assert(!janet_native_register(lookup(env, "unsupported-loop"), &nx_10_code));
     assert(!lookup(env, "boxed-caller")->def->native_code);
     /* A boxed caller must actually reach the generated executor. */
-    uint64_t before = nx_9_entries;
+    uint64_t before = nx_10_entries;
     assert(!janet_dostring(env, "(assert (= 45 (boxed-caller 10)))", "caller", NULL));
-    assert(nx_9_entries > before && nx_9_edges >= 10);
+    assert(nx_10_entries > before && nx_10_edges >= 10);
 #ifndef JANET_NO_INTERPRETER_INTERRUPT
     assert(JANET_QUANTUM_BUDGET == 1 || JANET_QUANTUM_BUDGET == 2);
-    parity(sum, &nx_9_code, JANET_QUANTUM_BUDGET, 10, 45);
-    parity(nested, &nx_10_code, JANET_QUANTUM_BUDGET, 10, 870);
+    parity(sum, &nx_10_code, JANET_QUANTUM_BUDGET, 10, 45);
+    parity(nested, &nx_11_code, JANET_QUANTUM_BUDGET, 10, 870);
     JanetFunction *conditional = assembled(&nx_100_code);
     parity(conditional, &nx_100_code, JANET_QUANTUM_BUDGET, 4, 6);
     janet_gcunroot(janet_wrap_function(conditional));
@@ -158,7 +170,7 @@ int main(int argc, char **argv) {
     janet_gcunroot(janet_wrap_fiber(self_fiber)); janet_gcunroot(janet_wrap_function(self));
     fallback(sum, 0, 0); fallback(sum, 1, 0);
     fallback(sum, 0, 1); fallback(sum, 1, 1);
-    assert(nx_9_fallbacks >= 2);
+    assert(nx_10_fallbacks >= 2);
     /* Auto-suspend short circuits before spending any quantum. */
     JanetFiber *a = spawn(sum, 10), *b = spawn(sum, 10);
     Janet x, y;
@@ -167,14 +179,14 @@ int main(int argc, char **argv) {
     sum->def->native_code = NULL;
     assert(janet_continue(a, janet_wrap_nil(), &x) == JANET_SIGNAL_INTERRUPT);
     assert(janet_vm.quantum_remaining == JANET_QUANTUM_BUDGET);
-    attach(sum, &nx_9_code);
+    attach(sum, &nx_10_code);
     assert(janet_continue(b, janet_wrap_nil(), &y) == JANET_SIGNAL_INTERRUPT);
     assert(janet_vm.quantum_remaining == JANET_QUANTUM_BUDGET);
     same_parked(a, b);
     janet_interpreter_interrupt_handled(NULL);
-    before = nx_9_entries;
+    before = nx_10_entries;
     assert(janet_continue_signal(b, janet_wrap_integer(123), &y, JANET_SIGNAL_ERROR) == JANET_SIGNAL_ERROR);
-    assert(janet_unwrap_number(y) == 123 && nx_9_entries == before);
+    assert(janet_unwrap_number(y) == 123 && nx_10_entries == before);
     janet_vm.quantum = 0;
     assert(janet_continue(a, janet_wrap_nil(), &x) == JANET_SIGNAL_OK && janet_unwrap_number(x) == 45);
     janet_gcunroot(janet_wrap_fiber(a)); janet_gcunroot(janet_wrap_fiber(b));
@@ -198,50 +210,50 @@ int main(int argc, char **argv) {
     Janet restored = janet_unmarshal(buf->data, buf->count, 0, NULL, NULL);
     janet_gcroot(restored); b = janet_unwrap_fiber(restored);
     assert(!janet_fiber_frame(b)->func->def->native_code); same_parked(a, b);
-    before = nx_9_entries; janet_vm.quantum = 0;
+    before = nx_10_entries; janet_vm.quantum = 0;
     assert(janet_continue(b, janet_wrap_nil(), &y) == JANET_SIGNAL_OK);
-    assert(janet_unwrap_number(y) == 45 && nx_9_entries == before);
+    assert(janet_unwrap_number(y) == 45 && nx_10_entries == before);
     janet_gcunroot(janet_wrap_fiber(a)); janet_gcunroot(restored); janet_gcunroot(janet_wrap_buffer(buf));
     puts("fallback once + GC, auto_suspend, cancellation, interleaving, parked marshal: passed");
 #else
     Janet out; JanetFiber *f = spawn(nested, 10); janet_vm.quantum = 1;
     janet_interpreter_interrupt(NULL);
     assert(janet_continue(f, janet_wrap_nil(), &out) == JANET_SIGNAL_OK);
-    assert(janet_unwrap_number(out) == 870 && nx_10_edges > 0);
+    assert(janet_unwrap_number(out) == 870 && nx_11_edges > 0);
     janet_interpreter_interrupt_handled(NULL); janet_vm.quantum = 0;
     janet_gcunroot(janet_wrap_fiber(f));
 #endif
     /* Any mutation anywhere refuses entry. Breakpoint and step keep PCs. */
     janet_vm.quantum = 0;
-    attach(sum, &nx_9_code);
+    attach(sum, &nx_10_code);
     uint32_t old = sum->def->bytecode[4]; sum->def->bytecode[4] |= 0x80;
-    assert(!janet_native_matches(sum->def, &nx_9_code));
+    assert(!janet_native_matches(sum->def, &nx_10_code));
     JanetFiber *debug = spawn(sum, 3); Janet result;
-    before = nx_9_entries;
+    before = nx_10_entries;
     assert(janet_continue(debug, janet_wrap_nil(), &result) == JANET_SIGNAL_DEBUG);
-    assert(pc_of(debug) == 4 && nx_9_entries == before);
+    assert(pc_of(debug) == 4 && nx_10_entries == before);
     assert(janet_step(debug, janet_wrap_nil(), &result) == JANET_SIGNAL_DEBUG);
-    assert(pc_of(debug) == 5 && nx_9_entries == before);
+    assert(pc_of(debug) == 5 && nx_10_entries == before);
     sum->def->bytecode[4] = old;
     assert(janet_continue(debug, janet_wrap_nil(), &result) == JANET_SIGNAL_OK);
     assert(janet_unwrap_number(result) == 3);
     janet_gcunroot(janet_wrap_fiber(debug));
     sum->def->bytecode[0] ^= 1u << 16;
-    assert(!janet_native_matches(sum->def, &nx_9_code)); sum->def->bytecode[0] ^= 1u << 16;
+    assert(!janet_native_matches(sum->def, &nx_10_code)); sum->def->bytecode[0] ^= 1u << 16;
     int flags = sum->def->flags; sum->def->flags ^= JANET_FUNCDEF_FLAG_TAG;
-    assert(!janet_native_matches(sum->def, &nx_9_code)); sum->def->flags = flags;
-    assert(janet_native_matches(sum->def, &nx_9_code));
+    assert(!janet_native_matches(sum->def, &nx_10_code)); sum->def->flags = flags;
+    assert(janet_native_matches(sum->def, &nx_10_code));
     JanetFunction *fraction = lookup(env, "numeric-fraction");
-    attach(fraction, &nx_13_code);
+    attach(fraction, &nx_14_code);
     Janet constant = fraction->def->constants[0];
     fraction->def->constants[0] = janet_wrap_number(-0.0);
-    assert(!janet_native_matches(fraction->def, &nx_13_code));
+    assert(!janet_native_matches(fraction->def, &nx_14_code));
     fraction->def->constants[0] = janet_wrap_nil();
-    assert(!janet_native_register(fraction, &nx_13_code));
+    assert(!janet_native_register(fraction, &nx_14_code));
     assert(!fraction->def->native_code);
-    fraction->def->constants[0] = constant; attach(fraction, &nx_13_code);
+    fraction->def->constants[0] = constant; attach(fraction, &nx_14_code);
     assert(!janet_dostring(env, "(assert (= 3 (numeric-fraction 10)))", "constants", NULL));
-    assert(nx_13_entries > 0 && nx_13_edges == 10);
+    assert(nx_14_entries > 0 && nx_14_edges == 10);
     JanetFunction *primitives = assembled(&nx_102_code);
     attach(primitives, &nx_102_code);
     JanetFiber *pf = spawn(primitives, 0);
@@ -297,8 +309,8 @@ int main(int argc, char **argv) {
     puts("emitted signed-zero/extreme finite/subnormal constant roundtrip passed");
     puts("primitive/conditional/self-edge oracles and 392 IEEE numeric pairs passed");
     printf("generated counters: sum entries=%llu backedges=%llu guards=%llu; nested entries=%llu backedges=%llu\n",
-           (unsigned long long)nx_9_entries, (unsigned long long)nx_9_edges, (unsigned long long)nx_9_fallbacks,
-           (unsigned long long)nx_10_entries, (unsigned long long)nx_10_edges);
+           (unsigned long long)nx_10_entries, (unsigned long long)nx_10_edges, (unsigned long long)nx_10_fallbacks,
+           (unsigned long long)nx_11_entries, (unsigned long long)nx_11_edges);
     janet_deinit();
     return 0;
 }

@@ -1305,6 +1305,22 @@ JANET_API JanetCFunction janet_native_alias_cfun(Janet callee, int32_t argc);
 JANET_API Janet janet_native_alias_call(JanetFiber *fiber, JanetCFunction cfun,
                                         int32_t argc, uint32_t *pc);
 JANET_API void janet_native_alias_after_call(void);
+/* Fast, no-allocation paths for native executors. Each returns 1 after
+ * performing exactly the boxed operation's mutation/read, or 0 without
+ * touching the target so the executor can fall back at the original PC. */
+JANET_API void janet_native_set_pc(JanetFiber *fiber, uint32_t *pc);
+JANET_API int janet_native_array_put_fast(Janet ds, Janet key, Janet value);
+JANET_API int janet_native_table_get_fast(Janet ds, Janet key, Janet *out);
+JANET_API int janet_native_container_call_fast(Janet callee, int32_t argc,
+        const Janet *argv, Janet *out);
+JANET_API int janet_native_table_put_fast(Janet ds, Janet key, Janet value);
+JANET_API int janet_native_buffer_push_string_ready(Janet callee, int32_t argc,
+        const Janet *argv, const uint8_t **bytes, int32_t *len);
+JANET_API Janet janet_native_buffer_push_string_commit(int32_t argc,
+        const Janet *argv, const uint8_t *bytes, int32_t len);
+JANET_API void janet_native_register_predicates(JanetTable *env);
+JANET_API int janet_native_core_predicate(Janet callee, int32_t argc,
+        const Janet *argv, Janet *out);
 /* Stage 2: VM-boundary regions. region_allowed gates whole-definition
  * validation to useful native starts (>= 3 native operations ahead).
  * registry_add publishes a linked descriptor; try_attach performs the
