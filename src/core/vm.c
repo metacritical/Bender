@@ -94,14 +94,14 @@ extern int janet_oph_prev;
 #endif
 
 #ifdef JANET_USE_COMPUTED_GOTOS
-#define VM_START() { goto *op_lookup[first_opcode];
+#define VM_START() { JANET_SITE_TICK(first_opcode); goto *op_lookup[first_opcode];
 #define VM_END() }
 #define VM_OP(op) label_##op :
 #define VM_DEFAULT() label_unknown_op:
-#define vm_next() do { vm_native(); JANET_OPH_TICK(); goto *op_lookup[*pc & 0xFF]; } while (0)
+#define vm_next() do { vm_native(); JANET_OPH_TICK(); JANET_SITE_TICK(*pc & 0xFF); goto *op_lookup[*pc & 0xFF]; } while (0)
 #define opcode (*pc & 0xFF)
 #else
-#define VM_START() uint8_t opcode = first_opcode; for (;;) {switch(opcode) {
+#define VM_START() uint8_t opcode = first_opcode; for (;;) {JANET_SITE_TICK(opcode); switch(opcode) {
 #define VM_END() }}
 #define VM_OP(op) case op :
 #define VM_DEFAULT() default:
@@ -138,6 +138,112 @@ static void janet_oph_dump(void) {
         janet_ophp[ba][bb] = 0;
     }
 }
+#endif
+
+/* Diagnostic-only per-original-PC VM dispatch counts, separate from PGO.
+ * Use an interpreter-only binary: native executor instructions are NOT
+ * counted. Compile-disabled builds remove every hook; compile-enabled builds
+ * additionally require JANET_TTFX_SITE_PROFILE in the environment. The
+ * bounded fixed table avoids allocations and GC at dispatch. Counts are
+ * single-thread only; out-of-range PCs and table overflow report drops. */
+#ifdef JANET_TTFX_SITE_PROFILE
+#define JANET_SITE_MAX_DEFS 4096
+#define JANET_SITE_MAX_PC 1024
+#define JANET_SITE_NAME_BYTES 192
+#include <inttypes.h>
+typedef struct {
+    JanetFuncDef *def;
+    uint64_t fingerprint;
+    int32_t words;
+    uint8_t op[JANET_SITE_MAX_PC];
+    char source[JANET_SITE_NAME_BYTES];
+    char name[JANET_SITE_NAME_BYTES];
+    uint64_t total;
+    uint64_t pc[JANET_SITE_MAX_PC];
+    uint64_t call[JANET_SITE_MAX_PC];
+} JanetSiteRow;
+static JanetSiteRow janet_site_rows[JANET_SITE_MAX_DEFS];
+static size_t janet_site_count;
+static uint64_t janet_site_dropped;
+static int janet_site_enabled;
+static JanetSiteRow *janet_site_last;
+static JanetFuncDef *janet_site_last_def;
+static void janet_site_name(char *out, JanetString name) {
+    if (!name) { out[0] = 0; return; }
+    int32_t n = janet_string_length(name);
+    if (n >= JANET_SITE_NAME_BYTES) n = JANET_SITE_NAME_BYTES - 1;
+    for (int32_t i = 0; i < n; ++i) {
+        unsigned char ch = name[i];
+        out[i] = (ch >= 32 && ch < 127 && ch != ',' && ch != '\\') ? (char)ch : '_';
+    }
+    out[n] = 0;
+}
+static uint64_t janet_site_fingerprint(JanetFuncDef *def) {
+    uint64_t hash = UINT64_C(14695981039346656037);
+    for (int32_t i = 0; i < def->bytecode_length; ++i) {
+        uint32_t word = def->bytecode[i];
+        for (int j = 0; j < 4; ++j) {
+            hash ^= word & 255u;
+            hash *= UINT64_C(1099511628211);
+            word >>= 8;
+        }
+    }
+    return hash;
+}
+static JanetSiteRow *janet_site_row(JanetFuncDef *def) {
+    if (def == janet_site_last_def) return janet_site_last;
+    for (size_t i = 0; i < janet_site_count; ++i)
+        if (janet_site_rows[i].def == def) {
+            janet_site_last_def = def;
+            return janet_site_last = &janet_site_rows[i];
+        }
+    if (janet_site_count == JANET_SITE_MAX_DEFS) {
+        ++janet_site_dropped;
+        janet_site_last_def = def;
+        return janet_site_last = NULL;
+    }
+    JanetSiteRow *row = &janet_site_rows[janet_site_count++];
+    row->def = def;
+    row->words = def->bytecode_length;
+    row->fingerprint = janet_site_fingerprint(def);
+    for (int32_t i = 0; i < row->words && i < JANET_SITE_MAX_PC; ++i)
+        row->op[i] = (uint8_t)def->bytecode[i];
+    janet_site_name(row->source, def->source);
+    janet_site_name(row->name, def->name);
+    janet_site_last_def = def;
+    return janet_site_last = row;
+}
+static void janet_site_tick(JanetFunction *func, uint32_t *pc, int op_id) {
+    if (!janet_site_enabled || !func || !func->def || !func->def->bytecode || op_id > 255) return;
+    JanetFuncDef *def = func->def;
+    ptrdiff_t offset = pc - def->bytecode;
+    if (offset < 0 || offset >= def->bytecode_length || offset >= JANET_SITE_MAX_PC) {
+        ++janet_site_dropped;
+        return;
+    }
+    JanetSiteRow *row = janet_site_row(def);
+    if (!row) return;
+    ++row->total;
+    ++row->pc[offset];
+    if (op_id == JOP_CALL || op_id == JOP_TAILCALL) ++row->call[offset];
+}
+#define JANET_SITE_TICK(op) janet_site_tick(func, pc, (op))
+static void janet_site_dump(void) {
+    if (!janet_site_enabled) return;
+    fprintf(stderr, "ttfx-site-profile defs=%zu dropped=%" PRIu64 "\n", janet_site_count, janet_site_dropped);
+    for (size_t i = 0; i < janet_site_count; ++i) {
+        JanetSiteRow *row = &janet_site_rows[i];
+        if (!row->total) continue;
+        fprintf(stderr, "site-def=%zu source=%s name=%s words=%d hash=%016" PRIx64 " total=%" PRIu64 "\n",
+                i, row->source, row->name, row->words, row->fingerprint, row->total);
+        for (int pc = 0; pc < row->words && pc < JANET_SITE_MAX_PC; ++pc) {
+            if (row->pc[pc]) fprintf(stderr, "site=%zu pc=%d op=%u count=%" PRIu64 " calls=%" PRIu64 "\n",
+                i, pc, row->op[pc], row->pc[pc], row->call[pc]);
+        }
+    }
+}
+#else
+#define JANET_SITE_TICK(op) ((void)0)
 #endif
 
 /* Commit and restore VM state before possible longjmp */
@@ -3163,6 +3269,13 @@ Janet janet_mcall(const char *name, int32_t argc, Janet *argv) {
 
 /* Setup VM */
 int janet_init(void) {
+#ifdef JANET_TTFX_SITE_PROFILE
+    janet_site_count = 0;
+    janet_site_dropped = 0;
+    janet_site_last = NULL;
+    janet_site_last_def = NULL;
+    janet_site_enabled = getenv("JANET_TTFX_SITE_PROFILE") != NULL;
+#endif
 
     janet_vm.trace_strict = getenv("JANET_TRACE_STRICT") != NULL;
 #ifdef JANET_NATIVE_EXECUTORS
@@ -3360,6 +3473,10 @@ void janet_profile_auto_output(const char *path) {
 
 /* Clear all memory associated with the VM */
 void janet_deinit(void) {
+#ifdef JANET_TTFX_SITE_PROFILE
+    janet_site_dump();
+    janet_site_enabled = 0;
+#endif
 #ifdef JANET_EV
     /* Publish shutdown before profile flushing or GC can stall the loop. */
     janet_abstract_home_unregister();
