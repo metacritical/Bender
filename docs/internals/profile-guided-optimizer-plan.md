@@ -273,8 +273,20 @@ specific `ctx-frame-string` PC** or infer AOT speedup from instrumented
 counts. Diagnostic runs perturb timing (~0.77 s vs ~0.27 s for a one-effect
 scattered run here). Runtime-flag-off emits no diagnostics; a compile-disabled
 binary ignores the flag, and computed-goto/switch dispatch produced identical
-smoke counts. Fixed row/PC caps and single-thread counting limit this probe;
-its `dropped` indicator must be zero before treating totals as complete.
+smoke counts. Hardening `df160232` gave definitions per-thread monotone IDs,
+self-contained copied row metadata (no GC-owned definition pointers in dump
+rows or caches), per-thread counter state, saturating counts with explicit
+lost-event reporting, and hand-counted branch/CALL/301-PC fixture tests.
+Computed-goto and switch full fixture logs match exactly; a diagnostic binary
+with the flag off and a compile-disabled binary with the flag on both emit
+nothing. Test-only `JANET_SITE_COUNTER_MAX=2` caps per-site totals at two and
+reports 12,590 lost increments; ASan/UBSan under temporary-function/GC churn
+completed with zero drops. Repeated scattered/wipe profile logs match the
+pre-hardening totals byte-for-byte (zero drops). Fixed 4,096-definition and
+1,024-PC caps still apply; each worker VM owns an independent dump, **not**
+merged process-wide counts, and every included dump must report zero drops.
+Source/name strings are bounded and sanitized; the bytecode fingerprint is a
+diagnostic mapping aid, not authenticated source content or optimization proof.
 
 Ranked safe next steps: (1) map the hottest original-PC call sites to their
 callee and receiver distributions; (2) grow a bounded, source/bytecode-qualified receiver/edge feedback representation
