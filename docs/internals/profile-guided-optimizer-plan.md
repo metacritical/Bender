@@ -231,10 +231,53 @@ it does not quantify ttfx scene costs. A direct ttfx `sample` request found
 no stacks because the ~100 ms process ended before sampling began. Avoid
 inventing a main-thread ttfx percentage from those incomplete samples.
 
-Ranked safe next steps: (1) obtain **actual ttfx hot-stack and per-function
-counts** by replaying many full effects in a single process or adding a
-nonsemantic sampling harness, separating startup from playback; (2) grow a
-bounded, source/bytecode-qualified receiver/edge feedback representation
+A subsequent diagnostic-only replay (`3684d0b` in ttfx, `388511ee` here)
+now supplies those missing **ttfx-specific** observations. The driver
+`janet-port/bench/hot-stack.janet` reconstructs canvas, RNG, context and
+effect from seed 42 and `ruby-port/logo.txt` on every replay; a single
+`--dump` replay is byte-identical to the existing CLI for `wipe` (138 frames)
+and `scattered` (181 frames). Five discarded-output scattered replays produce
+905 frames. It does not reuse completed mutable effects. Build the interpreter
+from the current amalgamation with `-DJANET_TTFX_SITE_PROFILE` and pass
+`JANET_TTFX_SITE_PROFILE=1` at runtime to collect counts; use a separate
+compile-disabled interpreter for sampling. The diagnostic counter is
+**separate from PGO**, indexed by original PC with source/name and a bytecode
+word fingerprint; it reports drops, and counts VM `call`/`tailcall` opcode
+*dispatches*, not callee invocations or elapsed time.
+
+Three complete scattered replays produced **74,831,613 original-PC VM
+dispatches** across 783 definitions and zero drops; a repeated run had
+byte-identical counts, and every per-PC sum equaled its definition total.
+`ctx-frame-string` was **26,494,366** dispatches and **2,972,457** call-site
+dispatches; `ctx-path-step` **9,665,497 / 2,257,784**, `ease`
+**6,307,895 / 126,110**, `ctx-update` **1,837,752 / 317,360**. Three wipe
+replays had **29,694,341** dispatches across 767 definitions, zero drops:
+`ctx-frame-string` **16,147,686 / 1,707,274** and `ctx-update`
+**1,218,026 / 187,818**. These are exact diagnostic dispatch counts, not
+CPU-time shares. `ctx-frame-string` PC 127 had 439,857 call dispatches on
+scattered (335,330 on wipe); PC 246 had 436,539 (332,808 on wipe). Both
+should be mapped to bytecode/disassembly before choosing a call-lowering
+contract. The large `ease` function has 601 instructions and is outside the
+current 256-PC receiver/edge feedback limit too.
+
+A separate *uninstrumented* sustained 60-replay process permitted two
+independent macOS 4-second/1-ms `sample` runs for scattered (10,860 frames
+per run) and one wipe run (8,280 frames). Main-thread stacks repeatedly
+showed `run_vm` and `janet_in` -> `janet_dict_find` -> `janet_hash`; the
+scattered samples also show `janet_table_put`/`janet_gc_barrier` and method
+invocation. Raw artifacts are under `/tmp/ttfx-site-profile-2K7oHk85/`:
+`replay3.sites`, `wipe-replay3.sites`, `scattered-stack.txt`,
+`scattered-stack-2.txt`, `wipe-stack-2.txt`. The sample tree does not identify
+Janet caller functions; **do not attribute sampled C time directly to a
+specific `ctx-frame-string` PC** or infer AOT speedup from instrumented
+counts. Diagnostic runs perturb timing (~0.77 s vs ~0.27 s for a one-effect
+scattered run here). Runtime-flag-off emits no diagnostics; a compile-disabled
+binary ignores the flag, and computed-goto/switch dispatch produced identical
+smoke counts. Fixed row/PC caps and single-thread counting limit this probe;
+its `dropped` indicator must be zero before treating totals as complete.
+
+Ranked safe next steps: (1) map the hottest original-PC call sites to their
+callee and receiver distributions; (2) grow a bounded, source/bytecode-qualified receiver/edge feedback representation
 that covers the 313-PC renderer without profile-dependent behavior;
 (3) implement one guarded, effect-aware loop region with original-PC deopt
 snapshots, GC-scanned boxed roots, exact VM call/backedge polls, validated
