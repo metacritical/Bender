@@ -1934,6 +1934,10 @@ int janet_verify(JanetFuncDef *def) {
  * as commonalities between asm and compile arise. */
 JanetFuncDef *janet_funcdef_alloc(void) {
     JanetFuncDef *def = janet_gcalloc(JANET_MEMORY_FUNCDEF, sizeof(JanetFuncDef));
+#ifdef JANET_TTFX_SITE_PROFILE
+    extern uint64_t janet_site_profile_new_id(void);
+    def->site_profile_id = janet_site_profile_new_id();
+#endif
     def->environments = NULL;
     def->constants = NULL;
     def->bytecode = NULL;

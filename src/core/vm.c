@@ -144,15 +144,19 @@ static void janet_oph_dump(void) {
  * Use an interpreter-only binary: native executor instructions are NOT
  * counted. Compile-disabled builds remove every hook; compile-enabled builds
  * additionally require JANET_TTFX_SITE_PROFILE in the environment. The
- * bounded fixed table avoids allocations and GC at dispatch. Counts are
- * single-thread only; out-of-range PCs and table overflow report drops. */
+ * bounded fixed table avoids allocations and GC at dispatch. State is
+ * per-thread: workers have separate VM-local dumps, never a shared counter
+ * stream. Out-of-range PCs and capacity overflow report dropped events. */
 #ifdef JANET_TTFX_SITE_PROFILE
 #define JANET_SITE_MAX_DEFS 4096
 #define JANET_SITE_MAX_PC 1024
 #define JANET_SITE_NAME_BYTES 192
+#ifndef JANET_SITE_COUNTER_MAX
+#define JANET_SITE_COUNTER_MAX UINT64_MAX
+#endif
 #include <inttypes.h>
 typedef struct {
-    JanetFuncDef *def;
+    uint64_t id;
     uint64_t fingerprint;
     int32_t words;
     uint8_t op[JANET_SITE_MAX_PC];
@@ -162,12 +166,23 @@ typedef struct {
     uint64_t pc[JANET_SITE_MAX_PC];
     uint64_t call[JANET_SITE_MAX_PC];
 } JanetSiteRow;
-static JanetSiteRow janet_site_rows[JANET_SITE_MAX_DEFS];
-static size_t janet_site_count;
-static uint64_t janet_site_dropped;
-static int janet_site_enabled;
-static JanetSiteRow *janet_site_last;
-static JanetFuncDef *janet_site_last_def;
+static JANET_THREAD_LOCAL JanetSiteRow janet_site_rows[JANET_SITE_MAX_DEFS];
+static JANET_THREAD_LOCAL size_t janet_site_count;
+static JANET_THREAD_LOCAL uint64_t janet_site_dropped;
+static JANET_THREAD_LOCAL int janet_site_enabled;
+static JANET_THREAD_LOCAL JanetSiteRow *janet_site_last;
+static JANET_THREAD_LOCAL uint64_t janet_site_last_id;
+static JANET_THREAD_LOCAL uint64_t janet_site_next_id;
+uint64_t janet_site_profile_new_id(void) {
+    if (janet_site_next_id == UINT64_MAX) return 0;
+    return ++janet_site_next_id;
+}
+static void janet_site_saturate(uint64_t *counter) {
+    if (*counter >= JANET_SITE_COUNTER_MAX) {
+        if (&janet_site_dropped != counter && janet_site_dropped < UINT64_MAX)
+            ++janet_site_dropped;
+    } else ++*counter;
+}
 static void janet_site_name(char *out, JanetString name) {
     if (!name) { out[0] = 0; return; }
     int32_t n = janet_string_length(name);
@@ -191,26 +206,34 @@ static uint64_t janet_site_fingerprint(JanetFuncDef *def) {
     return hash;
 }
 static JanetSiteRow *janet_site_row(JanetFuncDef *def) {
-    if (def == janet_site_last_def) return janet_site_last;
+    uint64_t id = def->site_profile_id;
+    /* Boot-image and unmarshaled defs bypass janet_funcdef_alloc. Assign
+     * their identity at first execution; this thread owns the VM heap. */
+    if (!id) {
+        id = janet_site_profile_new_id();
+        if (!id) { janet_site_saturate(&janet_site_dropped); return NULL; }
+        def->site_profile_id = id;
+    }
+    if (id == janet_site_last_id) return janet_site_last;
     for (size_t i = 0; i < janet_site_count; ++i)
-        if (janet_site_rows[i].def == def) {
-            janet_site_last_def = def;
+        if (janet_site_rows[i].id == id) {
+            janet_site_last_id = id;
             return janet_site_last = &janet_site_rows[i];
         }
     if (janet_site_count == JANET_SITE_MAX_DEFS) {
-        ++janet_site_dropped;
-        janet_site_last_def = def;
+        janet_site_saturate(&janet_site_dropped);
+        janet_site_last_id = id;
         return janet_site_last = NULL;
     }
     JanetSiteRow *row = &janet_site_rows[janet_site_count++];
-    row->def = def;
+    row->id = id;
     row->words = def->bytecode_length;
     row->fingerprint = janet_site_fingerprint(def);
     for (int32_t i = 0; i < row->words && i < JANET_SITE_MAX_PC; ++i)
         row->op[i] = (uint8_t)def->bytecode[i];
     janet_site_name(row->source, def->source);
     janet_site_name(row->name, def->name);
-    janet_site_last_def = def;
+    janet_site_last_id = id;
     return janet_site_last = row;
 }
 static void janet_site_tick(JanetFunction *func, uint32_t *pc, int op_id) {
@@ -218,14 +241,15 @@ static void janet_site_tick(JanetFunction *func, uint32_t *pc, int op_id) {
     JanetFuncDef *def = func->def;
     ptrdiff_t offset = pc - def->bytecode;
     if (offset < 0 || offset >= def->bytecode_length || offset >= JANET_SITE_MAX_PC) {
-        ++janet_site_dropped;
+        janet_site_saturate(&janet_site_dropped);
         return;
     }
     JanetSiteRow *row = janet_site_row(def);
     if (!row) return;
-    ++row->total;
-    ++row->pc[offset];
-    if (op_id == JOP_CALL || op_id == JOP_TAILCALL) ++row->call[offset];
+    janet_site_saturate(&row->total);
+    janet_site_saturate(&row->pc[offset]);
+    if (op_id == JOP_CALL || op_id == JOP_TAILCALL)
+        janet_site_saturate(&row->call[offset]);
 }
 #define JANET_SITE_TICK(op) janet_site_tick(func, pc, (op))
 static void janet_site_dump(void) {
@@ -3273,7 +3297,7 @@ int janet_init(void) {
     janet_site_count = 0;
     janet_site_dropped = 0;
     janet_site_last = NULL;
-    janet_site_last_def = NULL;
+    janet_site_last_id = 0;
     janet_site_enabled = getenv("JANET_TTFX_SITE_PROFILE") != NULL;
 #endif
 

@@ -1365,6 +1365,11 @@ JANET_API uint64_t janet_native_exit_stat(int opcode);
 /* A function definition. Contains information needed to instantiate closures. */
 struct JanetFuncDef {
     JanetGCObject gc;
+#ifdef JANET_TTFX_SITE_PROFILE
+    /* Monotone per-thread definition identity for diagnostic counts. Distinct
+     * allocations remain distinct even if GC reuses the same address. */
+    uint64_t site_profile_id;
+#endif
     int32_t *environments; /* Which environments to capture from parent. */
     Janet *constants;
     JanetFuncDef **defs;
