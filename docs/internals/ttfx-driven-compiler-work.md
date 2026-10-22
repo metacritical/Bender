@@ -255,3 +255,40 @@ note remain preserved, not endorsed as current instructions. Both manual pool
 probes exited 0 under a timeout. Historical plans include provenance/status warnings.
 The original Janet worktree was clean after these commits; ttfx's separate WIP was
 not included in this compiler cleanup. Branch/worktree references remain available.
+
+## Guarded native-executor fast paths (2026-10-22, `efe625e5`)
+
+Committed guarded, same-PC fast paths for primitive table get/put, in-range
+array put, capacity-checked `buffer/push-string`, canonical core predicates,
+and one-argument container-as-function reads (`(table key)`, `(struct key)`,
+`(array i)`, tuples, strings, symbols, keywords, buffers). The container path
+is exactly `janet_in`; composite keys and out-of-range indices remain VM
+boundaries. Table/struct/string/tuple allocation opcodes are now admitted as
+VM boundaries, so functions containing literals can still carry frame
+executors.
+
+Safety evidence: `test/suite-native-executor.sh` passes (budget, ASan/UBSan,
+GC, breakpoint/step, parked marshal, preemption, differential parity); the
+37-effect bounded CLI stream is 37/37 byte-identical. The release was built
+from two fresh `decrypt --bench --seed 42` PGO collections (`home=1546`,
+83 frame executors, 9 kernels) and `--release`.
+
+Benchmarks are same-source release binaries with the container path on/off,
+the same PGO cache/profile and the same 83 frame executors:
+
+| Scope | Geomean | Median | Wins | Worst |
+|---|---:|---:|---:|---|
+| 37 effects, `--bench`, 5 rounds | **1.0979** | 1.0955 | 36/37 | `matrix` 1.000 |
+| Five hot effects, no release PGO, 10 rounds | **1.13-1.16x** | - | 5/5 | - |
+
+The comparison against the older `ttfx-cli-bender-gcR10` release (a
+different PGO profile) was only 1.021 geomean across 37 effects; that number
+is profile-confounded and is not used as this feature's gate. The clean
+same-PGO on/off pair is the claim.
+
+Remaining executor cost is now dominated by ~119k calls that still leave
+native regions per sustained `scattered` run: `ctx-motion-move`,
+`ctx-char-active?`, `ctx-seg-start`, `ease`, `ctx-add-frame`, and `color-fg`.
+Next work is native-to-native call continuation/inlining and the GET/length/
+divide boundaries that the container path exposed. No overall Rust parity
+claim is made from this step.
