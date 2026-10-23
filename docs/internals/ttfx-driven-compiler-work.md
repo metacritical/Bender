@@ -504,6 +504,31 @@ A merged PGO profile cannot see this because collection runs before the
 executor decides which calls stay native. Runtime sampling, not PGO call
 counts, must gate the next change.
 
+### Packed scene frames (accepted, first unboxing step)
+
+The first runtime-sampling-driven change packs each scene frame from
+`@{:sym :fg :duration :ticks}` into a four-element array. Scene frames are
+written every tick by `ctx-step-animation` and cleared by `scene-reset`;
+packing removes the per-frame hash-table `get`/`put` and table barrier from
+that path. The scene API is unchanged, and ttfx effects do not access frame
+fields directly. Parity is **37/37 byte-identical** to the previous CLI
+release.
+
+Built with the same decrypt PGO cache and 82 executors (the source change
+removes one eligible executor), the three-round all-37 paired A/B against
+the previous release gave a packed/base time geomean of **0.9744** (median
+**0.9773**, faster in **29/37**). Gains are concentrated in `beams` 0.912,
+`colorshift` 0.913, `waves` 0.918, `synthgrid` 0.932, `decrypt` 0.935,
+`thunderstorm` 0.944, `vhstape` 0.956, and `smoke` 0.959. Remaining small
+regressions are `matrix` 1.033, `overflow` 1.024, `bubbles` 1.018,
+`slice` 1.017, `spotlights` 1.010, and `orbittingvolley` 1.007.
+
+The candidate is `janet-port/build/ttfx-cli-packed-pgo`; the source change
+is committed in the ttfx worktree as
+`ttfx: pack scene frame state into arrays`. The previous release remains
+`ttfx-cli-container-rel` until the next changes are combined and the final
+release choice is made.
+
 ### Final artifacts
 
 - `janet-port/build/ttfx-cli-container-rel`: 83 loop executors, 9 kernels,
