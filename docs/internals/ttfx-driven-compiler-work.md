@@ -407,6 +407,30 @@ on the 36 parity effects it is 23.491. Largest time ratios:
 | thunderstorm | 6.3 | 263.6 | 41.77 |
 | decrypt | 4.6 | 185.3 | 39.99 |
 
+I also split the cached all-37 CLI profiles back into per-effect profiles
+(37 records, mapped by collection order). The lag is not in the outer
+effect frame functions, many of which are already loop executors. It is in
+their callees and in build-time scene construction:
+
+| Effect | Dominant profile rows | Effect-specific part | Native coverage |
+|---|---|---|---|
+| rings | `ctx-anim` 800k, `ctx-step-animation`/`ctx-char-active?` 512k, `ctx-motion-move` 504k, path/segment/lerp helpers 487k each | `rings-next-frame` 1.4k, `rings-set-disperse-path` 1.2k | only `ctx-path-step` and `rings-set-disperse-path` |
+| binarypath | `nil?` 862k, `round-half-even` 517k, `empty?` 267k, step/active 248k, motion/path 230k | `binarypath.janet:82` 21.9k, `travel-complete?` 16.4k | `travel-complete?`; the 82 loop is VM |
+| waves | active/step 190k each, `ease`/`scene-next-eased`/`round-half-even` 138k each, frame creation 74k | `waves.janet:71` 69.1k build-loop map, `while` at 70 3.2k | `waves-next-frame`; helpers VM |
+| vhstape | `nil?` 924k, `xor64` 302k, `ctx-anim` 267k, RNG bit helpers 121-181k | `vhstape.janet:100` 85.4k, line 156 1.2k | no effect-specific executor |
+| smoke | active/step 102k each, `color-clamp` 31k, frame creation 26k | `smoke.janet:73`/`:77` 12.8k each build-loop maps | `smoke-next-frame`; helpers VM |
+| colorshift | active/step 209k each, frame creation 37k, `color-clamp` 10k | `colorshift.janet:103` 3.6k, line 73 1.2k | `colorshift-next-frame` absent from executor set; helpers VM |
+
+Only five of the hot names (`ctx-path-step`, `waves-next-frame`,
+`smoke-next-frame`, `travel-complete?`, `rings-set-disperse-path`) are in the
+83 loop executors. The hot `ctx-char-active?`, `ctx-step-animation`,
+`ctx-anim`, `ctx-motion-move`, `ease`, `nil?`, `empty?`, `index-of`, and the
+64-bit RNG helpers remain VM calls. Several worst effects also spend heavily
+in build-time loops (waves/smoke gradient-pair maps, binarypath collapse/wipe,
+vhstape line completion), so per-frame executor tuning alone cannot close the
+23x gap. Call counts are not time attribution; this is a target map, not a
+cycle profile.
+
 GUI protocol: 1458x400 windowed raylib, uncapped, `--show-fps`, seed 42,
 same logo, 2 s probe; current noexec release versus Rust, two complete
 rounds with per-run retries. Bender/Rust FPS geomean is **0.8458**, median
