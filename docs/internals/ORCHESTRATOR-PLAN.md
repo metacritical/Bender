@@ -41,6 +41,20 @@ Amdahl on the ≈42% `run_vm` share: removing it ENTIRELY caps at **1.72×**; a 
 
 **Queue item 5 is now a MEASURED NULL**: O2-vs-O3 runtime, 7 alternating interpreter microbenchmark runs, median 0.11s each, identical output — no credible O3 advantage. LTO/`-march` untested, deprioritised.
 
+## Typed pilot verdict (ML/ttfx 0ffcaf1, `docs/typed-pilot.md`) — MECHANISM YES, SPEEDUP NO
+Hints + slot-pressure reduction DID convert refused functions into emitted kernels (9 → 11 kernels; `radial_fraction`, `hue_to_rgb`), 37/37 byte-exact, both sides 81/81 bound. But: geomean **0.9917**, **no per-effect ratio clears ±3% in both runs**, and **attribution FAILS the control test** — the two effects calling NEITHER new kernel averaged 0.9826, *faster* than the eight that do (0.9940). A real kernel win must order those the other way. The isolated 3.5× for `radial-fraction` reproduces; it is ~1.6% of `colorshift`'s frame work. **Two numeric leaves are not enough: the hint-addressable population and the hot population barely intersect.**
+
+### New blockers found (beyond the audit's four hard limits)
+- **(5) Per-slot non-SSA lattice — largest practical blocker.** Blocks `xor64` (**399,197 calls, hottest function in the program**) and `or64` (159,674): loop-free, 2 params, non-recursive, yet `slot s2 mixes unanalyzable u64load/array`. Also forced full inlining of all ten locals in `radial-fraction`. Confirms roadmap rank 1 (CFG/SSA per-PC typing) as the top lever.
+- **(6) Context-table parameters — ttfx's structural ceiling, a NEW rank 0.** `ctx-char-active?` (54,115 calls), `ctx-step-animation` (54,115), `ctx-anim` (44,904) all `mixes unanalyzable keyword/unknown`. `:ctx` is rejected by the closed vocabulary and `:table` does not unbox field reads, so **no hint can reach them** — only user types or field-level unboxing can.
+- **(7) cfunction lowering gap**: `math/hypot` is not lowered while `sqrt`/`pow`/`floor`/`cos`/`sin` are.
+
+### janet-side bugs to fix (queued; janet currently owned by 639be9a5)
+1. **A hint on `defn-` is SILENTLY DROPPED** — no `hint` line, no `hint-bad`; inference then widens on its own. The one place a hint fails OPEN in an otherwise fail-closed design. HIGH priority.
+2. Hints are invisible through a dynamic `require` (bodies compile, hints dropped, no diagnostic).
+3. **PGO call-site evidence is keyed by file+line**, so moving a function silently loses a previously-proven kernel inference — this makes naive module-level A/B tests dishonest by default (it cost the pilot `color_clamp` until a hint restored it).
+4. Lower `math/hypot`.
+
 ## Facts for any agent
 - `make NATIVE_EXECUTORS=1`; export `JANET_NATIVE_EXECUTORS=1`. Plain `make` proves nothing. `make test` globs `test/suite*.janet` and never runs the shell executor suite — use `make test-executors`.
 - Binary is `build/bender`, NOT `build/janet`. The 37-effect gate lives in ML/ttfx, not janet.
