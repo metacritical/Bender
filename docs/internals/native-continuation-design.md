@@ -1272,11 +1272,27 @@ byte-identical in shape to pre-v1 output, which v1 could not claim.
 
 ### Limitations
 
-- The selection profile is one decrypt workload. A motion-dominated profile
-  would select different edges and has not been measured.
-- `JANET_EXECUTOR_EDGE_MIN_CALLS` is unset by default, so a default build
-  selects nothing and emits no continuation attempt at all. v1's mechanism is
-  still opt-in, now at two levels.
+- The five-PC selection profile above covers one decrypt workload; its
+  99.3% retained-chain observation applies to decrypt, **not all effects**.
+  In the fixed 400-frame comparison recorded in `work-counters.md`, v2 lost
+  exactly 654 decrypt, 1,966 rings, zero beams, and **30,846 binarypath**
+  chains versus v1, with each loss replaced by an interpreted call. The
+  missing binarypath edges came from `travel-complete?`, not one of decrypt's
+  five selected callers. Binarypath-trained v2 selected that call and
+  `ctx-coord-on-line`→`geom-lerp-point`, recovering live chains, but also
+  selected 107 rather than 96 executors: this experiment is evidence for
+  profile representativeness, not an isolated continuation speedup.
+- `JANET_EXECUTOR_EDGE_MIN_CALLS` is unset (or nonnumeric) by default, so a
+  default build selects nothing and emits no continuation attempt at all.
+  Pick a numeric threshold against profiles representative of the effects
+  being shipped, then inspect `native-continuations.txt`, executor-set parity,
+  chained calls and interpreter work *per effect*. At 500, a decrypt-only
+  profile discarded 30,846 otherwise chainable binarypath calls. Lowering
+  the threshold cannot recover an edge **absent from training evidence**;
+  representative or conservatively merged multi-workload evidence is needed
+  first, and merge may open conflicting edges. Reducing the threshold for
+  observed edges can emit more guards (and spend more work on refused
+  attempts), so recheck costs rather than choosing 500 universally.
 - Timing: one machine, no CPU pinning, medians of 5-7 paired alternating
   rounds. Per-effect ratios must not be read individually against the +/-3%
   floor.
