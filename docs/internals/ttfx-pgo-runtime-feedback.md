@@ -354,11 +354,35 @@ the `--pgo-auto` release binary byte-identical to Rust, to the current
 
 For one identical workload, the generated C from `--pgo-auto` evidence is
 **byte-for-byte identical** to the generated C from an explicit `--pgo`
-collection of that workload (same 81 loop executors, same 9 kernels).
-Auto-PGO evidence is therefore not weaker evidence; it is the same
-evidence collected at a different time.  Measured decrypt timings vary by
-about 2% between binaries built from identical generated C, which sets the
-noise floor for the subset bench below.
+collection of that workload, and identical again to the C behind the
+existing `ttfx-cli-packed-path-pgo` candidate (same 81 loop executors,
+same 9 kernels, same 4,486,468-byte `native.c`).  Auto-PGO evidence is
+therefore not weaker evidence; it is the same evidence collected at a
+different time.
+
+Direct `--dump-frames` A/B against that candidate, seed 42,
+`../ruby-port/logo.txt`, 400 frames:
+
+| effect | bytes | sha256 (first 24) | vs candidate | vs interpreter |
+|---|---:|---|---|---|
+| decrypt | 2,423,238 | `315c4acb2580e71f36bdb6ed` | identical | identical |
+| rings | 2,693,696 | `6f53f72d3be9b59a1cf0ac05` | identical | identical |
+
+`--bench` timing on decrypt is dominated by machine noise, and the stored
+candidate binary is faster than *any* binary rebuilt today, including one
+built from the untouched pre-change compiler (7 order-alternating rounds,
+best-of):
+
+| binary | min ms | median ms | min vs candidate |
+|---|---:|---:|---:|
+| `ttfx-cli-packed-path-pgo` (stored candidate) | 215 | 241 | 1.000 |
+| pre-change janet `6cdb7857` + explicit `--pgo` | 240 | 277 | 1.116 |
+| this work + `--pgo-auto` | 234 | 265 | 1.088 |
+
+Since a build from the untouched tree is the *slowest* of the three while
+the generated C is identical everywhere, the spread is link/layout and
+machine state, not code quality, and `--pgo-auto` is not a regression
+against an explicit `--pgo` build.
 
 Known limitations:
 
