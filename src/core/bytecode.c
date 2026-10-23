@@ -2433,6 +2433,10 @@ uint64_t janet_native_stat(int which) {
         case JANET_NATIVE_STAT_ATTACH_AMBIGUOUS: return janet_vm.native_attach_ambiguous;
         case JANET_NATIVE_STAT_ATTACH_NOMATCH: return janet_vm.native_attach_nomatch;
         case JANET_NATIVE_STAT_VM_EXITS: return janet_vm.native_vm_exits;
+        case JANET_NATIVE_STAT_CONTINUATIONS: return janet_vm.native_continuations;
+        case JANET_NATIVE_STAT_CONTINUATION_REFUSALS: return janet_vm.native_continuation_refusals;
+        case JANET_NATIVE_STAT_NATIVE_RETURNS: return janet_vm.native_returns;
+        case JANET_NATIVE_STAT_INTERP_CALLS: return janet_vm.native_interp_calls;
         default: return 0;
     }
 #else

@@ -1280,7 +1280,11 @@ struct JanetSymbolMap {
 /* Linked, executable-lifetime metadata; never contains GC references or gets
  * serialized. All bytecode PCs are legal entries. Enabled only in a runtime
  * built with JANET_NATIVE_EXECUTORS. */
-typedef enum { JANET_NATIVE_VM, JANET_NATIVE_INTERRUPT } JanetNativeStep;
+/* JANET_NATIVE_FRAME: the executor pushed a real fiber frame for a Janet
+ * callee (exactly what JOP_CALL's function branch does) and `*pc` points at
+ * PC 0 of the NEW current frame's definition. Every consumer must reload
+ * stack, pc AND func from the frame (vm_restore) before continuing. */
+typedef enum { JANET_NATIVE_VM, JANET_NATIVE_INTERRUPT, JANET_NATIVE_FRAME } JanetNativeStep;
 typedef JanetNativeStep (*JanetNativeExecutor)(JanetFiber *, JanetFuncDef *, uint32_t **);
 /* Stage 2: opaque entries describe a live pool load only. They assume
  * nothing about the boxed value at that index beyond it being a valid
@@ -1305,6 +1309,27 @@ JANET_API JanetCFunction janet_native_alias_cfun(Janet callee, int32_t argc);
 JANET_API Janet janet_native_alias_call(JanetFiber *fiber, JanetCFunction cfun,
                                         int32_t argc, uint32_t *pc);
 JANET_API void janet_native_alias_after_call(void);
+/* Native-to-native continuation (v1, flat trampoline).
+ *
+ * janet_native_call_enter is ALL-OR-NOTHING. It returns:
+ *   0 - refused; NOTHING on the fiber was touched, so the executor must take
+ *       its ordinary VM exit at the call PC and JOP_CALL performs the call
+ *       exactly once;
+ *   1 - it did precisely what JOP_CALL's function branch does (commit the
+ *       caller PC, janet_fiber_funcframe, GC check) and *out_npc is PC 0 of
+ *       the callee definition; the executor must return JANET_NATIVE_FRAME;
+ *   2 - an interrupt is due; nothing was touched and the executor must return
+ *       JANET_NATIVE_INTERRUPT at the call PC so the VM re-executes it.
+ * The single interrupt poll happens only after every refusal check passed,
+ * so a refused edge is polled exactly once -- by JOP_CALL, as today.
+ *
+ * janet_native_ret_pop mirrors JOP_RETURN/JOP_RETURN_NIL: it returns 1 after
+ * popping the frame and storing the result in the caller's result slot
+ * (decoded from the caller's committed JOP_CALL word), with *pc advanced to
+ * the instruction after the call; 0 without touching anything. */
+JANET_API int janet_native_call_enter(JanetFiber *fiber, Janet callee, int32_t argc,
+                                      uint32_t *callpc, uint32_t **out_npc);
+JANET_API int janet_native_ret_pop(JanetFiber *fiber, uint32_t **pc);
 /* Fast, no-allocation paths for native executors. Each returns 1 after
  * performing exactly the boxed operation's mutation/read, or 0 without
  * touching the target so the executor can fall back at the original PC. */
@@ -1361,6 +1386,10 @@ JANET_API uint64_t janet_native_exit_stat(int opcode);
 #define JANET_NATIVE_STAT_ATTACH_AMBIGUOUS 2
 #define JANET_NATIVE_STAT_ATTACH_NOMATCH 3
 #define JANET_NATIVE_STAT_VM_EXITS 4
+#define JANET_NATIVE_STAT_CONTINUATIONS 5
+#define JANET_NATIVE_STAT_CONTINUATION_REFUSALS 6
+#define JANET_NATIVE_STAT_NATIVE_RETURNS 7
+#define JANET_NATIVE_STAT_INTERP_CALLS 8
 
 /* A function definition. Contains information needed to instantiate closures. */
 struct JanetFuncDef {

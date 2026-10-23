@@ -128,6 +128,22 @@ struct JanetVM {
     uint64_t native_attach_nomatch;
     uint64_t native_vm_exits;
     uint64_t native_exit_opcodes[256];
+    /* Native-to-native continuation accounting. `native_continuations` counts
+     * call edges where janet_native_call_enter pushed the callee frame instead
+     * of the interpreter; `native_interp_calls` counts Janet-function JOP_CALL
+     * dispatches the interpreter performed. Their SUM is invariant with the
+     * continuation path on or off -- that is the counter-identity gate for a
+     * call executed twice (R1) or skipped (R2), which byte parity can miss
+     * when the callee is pure. `native_returns` counts native JOP_RETURN
+     * edges taken by janet_native_ret_pop. */
+    uint64_t native_continuations;
+    uint64_t native_continuation_refusals;
+    uint64_t native_returns;
+    uint64_t native_interp_calls;
+    /* Runtime off-switch (JANET_NATIVE_NO_CONTINUATION), read once in
+     * janet_init. One binary can then run both halves of an A/B with a
+     * provably identical executor set, and it is an emergency disable. */
+    int native_continuation;
 #ifdef JANET_NATIVE_EXECUTORS
     /* A single predictable dispatch gate when no descriptor has been
      * published or explicitly attached in this VM. Even a runtime built

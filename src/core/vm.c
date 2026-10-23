@@ -328,6 +328,15 @@ static void janet_site_dump(void) {
 } while (0)
 #ifdef JANET_NATIVE_EXECUTORS
 static JANET_THREAD_LOCAL int native_stepping;
+/* Flat native-to-native trampoline (defined below, next to the call-enter
+ * and native-return primitives it drives). It runs executors back to back
+ * across pushed and popped FIBER frames without ever recursing in C, so a
+ * chain of native calls still occupies exactly one C frame: no new
+ * stack-overflow class, no janet_vm.stackn pressure, no pinned C frame
+ * across a yield. On return, the current frame may be a different one than
+ * on entry, which is why vm_native() below reloads `func` as well as
+ * `stack` and `pc`. */
+static JanetNativeStep janet_native_trampoline(JanetFiber *f, JanetFuncDef *d, uint32_t **pc);
 /* Region gating and lazy structural attachment. Whole-definition
  * validation (janet_native_matches) runs at useful native region
  * starts recorded in the descriptor mask; consecutive VM-only
@@ -348,9 +357,14 @@ static JANET_THREAD_LOCAL int native_stepping;
                         !janet_native_revalidate(ndef_)) break; \
                 uint32_t *npc = pc; \
                 vm_commit(); \
-                JanetNativeStep result = ndef_->native_code->execute(fiber, ndef_, &npc); \
+                JanetNativeStep result = janet_native_trampoline(fiber, ndef_, &npc); \
                 pc = npc; \
                 stack = fiber->data + fiber->frame; \
+                /* The trampoline can leave us in a DIFFERENT frame (it \
+                 * chains calls and returns). `func` must be reloaded or \
+                 * the interpreter would run the new frame's bytecode \
+                 * against the old definition's constants. */ \
+                func = janet_stack_frame(stack)->func; \
                 vm_commit(); \
                 if (result == JANET_NATIVE_VM) { \
                     janet_vm.native_vm_exits++; \
@@ -428,6 +442,198 @@ JANET_API void janet_native_alias_after_call(void) {
     maybe_collect();
     janet_vm.native_epoch++;
 }
+
+/* ---- Native-to-native continuation (v1): call-enter and native return ----
+ *
+ * The contract is stated in janet.h. Everything below exists to make
+ * `janet_native_call_enter` ALL-OR-NOTHING: every refusal returns before the
+ * first byte of fiber state changes, so the executor's ordinary exit at the
+ * call PC leaves the interpreter to perform the call exactly once. */
+
+JANET_API int janet_native_call_enter(JanetFiber *fiber, Janet callee, int32_t argc,
+                                      uint32_t *callpc, uint32_t **out_npc) {
+#ifdef JANET_NATIVE_EXECUTORS
+    /* Runtime off-switch first: one load, and it makes the whole feature
+     * disappear without rebuilding. */
+    if (!janet_vm.native_continuation) goto refuse;
+    /* The debugger bypasses executors entirely (see the resume entry);
+     * a chained frame must not be able to step around a breakpoint. */
+    if (fiber->flags & JANET_FIBER_BREAKPOINT) goto refuse;
+    /* Callee identity: keywords resolve through resolve_method, cfunctions
+     * and non-functions take their own JOP_CALL branches. */
+    if (!janet_checktype(callee, JANET_FUNCTION)) goto refuse;
+    {
+        JanetFunction *callee_func = janet_unwrap_function(callee);
+        JanetFuncDef *def = callee_func->def;
+        /* Trace and profile hooks must observe every call. A profiling build
+         * therefore never takes this path, which is also what keeps
+         * auto-PGO evidence (and :calls) exact. */
+        if (callee_func->gc.flags & JANET_FUNCFLAG_TRACE) goto refuse;
+        if (NULL != janet_vm.profile_table) goto refuse;
+        /* No vararg tuple construction, no environment capture, no struct or
+         * named argument rewriting: funcframe's remaining work is then a
+         * capacity check, a nil fill and the frame header. */
+        if (def->flags & (JANET_FUNCDEF_FLAG_VARARG |
+                          JANET_FUNCDEF_FLAG_NEEDSENV |
+                          JANET_FUNCDEF_FLAG_STRUCTARG |
+                          JANET_FUNCDEF_FLAG_NAMEDARGS)) goto refuse;
+        if (def->environments_length != 0) goto refuse;
+        /* funcframe's arity gate, pre-checked so it cannot fail after we
+         * commit. `&opt` parameters give min_arity < max_arity with no
+         * VARARG flag and omitted optionals are nil-filled by funcframe,
+         * exactly as JOP_CALL does -- so this must NOT demand fixed arity. */
+        if (argc < def->min_arity || argc > def->max_arity) goto refuse;
+        /* The callee must have a descriptor that is enterable at PC 0 and
+         * proven for the current validation epoch. janet_native_revalidate
+         * stays the sole authority; the cache only skips re-proving while
+         * nothing can have changed. */
+        if (NULL == def->native_code) goto refuse;
+        if (!janet_native_region_allowed(def->native_code, 0)) goto refuse;
+        if ((def->native_verified != def->native_code ||
+                def->native_verified_epoch != janet_vm.native_epoch) &&
+                !janet_native_revalidate(def)) goto refuse;
+        /* Depth, exactly as JOP_CALL checks it (vm_maybe_overflow and the
+         * maxstack throw). Both are VM-owned error paths: refuse and let the
+         * interpreter raise them in its own place. */
+        if (fiber->stack_overflowed) goto refuse;
+        if (fiber->stacktop > fiber->maxstack) goto refuse;
+        /* Everything is proven. From here the edge is ours, so poll exactly
+         * once -- JOP_CALL's own vm_maybe_auto_suspend(1) is the poll this
+         * replaces, and it is skipped on this path. Nothing has been
+         * mutated yet, so an interrupt leaves the argument stack intact and
+         * the VM re-executes the call at its own PC. */
+        if (janet_native_poll(1)) return 2;
+        /* Commit the caller's PC before the push: janet_native_ret_pop and
+         * every stack trace read it from the frame, and a panic inside the
+         * callee must report the call site, not a stale PC. */
+        janet_stack_frame(fiber->data + fiber->frame)->pc = callpc;
+        if (janet_fiber_funcframe(fiber, callee_func)) {
+            /* Unreachable: the arity gate above is funcframe's own test and
+             * funcframe checks arity before mutating any state. Treat it as
+             * a refusal anyway rather than trusting the comment. */
+            goto refuse;
+        }
+        janet_vm.native_continuations++;
+        *out_npc = def->bytecode;
+        /* JOP_CALL's vm_checkgc_next(). Without it a long native chain is an
+         * unbounded nursery-growth window. */
+        maybe_collect();
+        return 1;
+    }
+refuse:
+    janet_vm.native_continuation_refusals++;
+    return 0;
+#else
+    (void) fiber;
+    (void) callee;
+    (void) argc;
+    (void) callpc;
+    (void) out_npc;
+    return 0;
+#endif
+}
+
+JANET_API int janet_native_ret_pop(JanetFiber *fiber, uint32_t **pc) {
+#ifdef JANET_NATIVE_EXECUTORS
+    if (!janet_vm.native_continuation) return 0;
+    if (fiber->flags & JANET_FIBER_BREAKPOINT) return 0;
+    /* janet_profile_return must run inside the VM. */
+    if (NULL != janet_vm.profile_table) return 0;
+    {
+        uint32_t word = **pc;
+        Janet retval;
+        if ((word & 0xFF) == JOP_RETURN) {
+            retval = (fiber->data + fiber->frame)[(word >> 8) & 0xFFFFFF];
+        } else if ((word & 0xFF) == JOP_RETURN_NIL) {
+            retval = janet_wrap_nil();
+        } else {
+            return 0;
+        }
+        {
+            Janet *s = fiber->data + fiber->frame;
+            JanetStackFrame *frame = janet_stack_frame(s);
+            /* Everything is decided BEFORE the pop, so a refusal leaves the
+             * fiber untouched and JOP_RETURN performs the return itself.
+             *
+             * An ENTRANCE frame belongs to janet_call: returning from it is a
+             * signal out of run_vm, not a frame pop. A TAILCALL frame's
+             * caller word is a JOP_TAILCALL and its own caller frame is not
+             * the one this return unwinds to. The root frame has no caller. */
+            if (frame->flags & (JANET_STACKFRAME_ENTRANCE | JANET_STACKFRAME_TAILCALL)) return 0;
+            if (fiber->frame == 0) return 0;
+            /* prevframe 0 is "no caller frame": its header would sit at a
+             * negative stack index. Valid frame bases are >= JANET_FRAME_SIZE. */
+            if (frame->prevframe < JANET_FRAME_SIZE) return 0;
+            {
+                JanetStackFrame *cframe =
+                    (JanetStackFrame *)(fiber->data + frame->prevframe - JANET_FRAME_SIZE);
+                uint32_t *cpc = cframe->pc;
+                /* A C frame has no bytecode to resume into. */
+                if (NULL == cframe->func || NULL == cpc) return 0;
+                /* The caller's committed word decides the result slot. Refuse
+                 * anything that is not a plain JOP_CALL -- a breakpoint bit,
+                 * a resumed signal op, an unexpected shape: the VM owns it. */
+                if ((*cpc & 0xFF) != JOP_CALL) return 0;
+                janet_fiber_popframe(fiber);
+                (fiber->data + fiber->frame)[(*cpc >> 8) & 0xFF] = retval;
+                cframe->pc = cpc + 1;
+                *pc = cpc + 1;
+            }
+        }
+        janet_vm.native_returns++;
+        return 1;
+    }
+#else
+    (void) fiber;
+    (void) pc;
+    return 0;
+#endif
+}
+
+#ifdef JANET_NATIVE_EXECUTORS
+/* Bound on frames chained inside one trampoline entry. A native recursion
+ * must not be able to monopolize the quantum or build an unbounded chain
+ * between interpreter dispatches; on exhaustion we simply return at the
+ * current unexecuted PC in a real frame, which run_vm already accepts. */
+#define JANET_NATIVE_CHAIN_BUDGET 64
+
+/* The loop referenced by vm_native(). Preconditions, established by the
+ * caller: `d` is the current frame's definition, it has a descriptor, the
+ * descriptor allows entry at *pc, and the structural verdict is proven for
+ * the current epoch. It holds NO state across an executor call that a
+ * longjmp would have to unwind (no gcroot, no lock, no counter needing a
+ * decrement), so a panic inside a chained callee unwinds through this one C
+ * frame as an ordinary two-frame Janet chain. */
+static JanetNativeStep janet_native_trampoline(JanetFiber *f, JanetFuncDef *d, uint32_t **pc) {
+    int budget = JANET_NATIVE_CHAIN_BUDGET;
+    for (;;) {
+        JanetNativeStep step = d->native_code->execute(f, d, pc);
+        if (step == JANET_NATIVE_INTERRUPT) return step;
+        if (step == JANET_NATIVE_FRAME) {
+            /* Chain DOWN: janet_native_call_enter already pushed the callee
+             * frame and did JOP_CALL's GC check. */
+        } else {
+            /* Chain UP: the executor stopped at an unexecuted ret/retn.
+             * ret_pop refuses (touching nothing) for anything the VM must
+             * own, in which case this is an ordinary boundary exit. */
+            if (!janet_native_ret_pop(f, pc)) return JANET_NATIVE_VM;
+            /* JOP_RETURN's vm_checkgc_pcnext(). */
+            maybe_collect();
+        }
+        if (--budget <= 0) return JANET_NATIVE_VM;
+        /* Re-gate for the new current frame. The verdict cache makes this
+         * two comparisons unless the epoch moved -- and if a collection or
+         * finalizer moved it, re-proving is exactly what must happen. */
+        d = janet_stack_frame(f->data + f->frame)->func->def;
+        if (NULL == d->native_code) return JANET_NATIVE_VM;
+        if (!janet_native_region_allowed(d->native_code, (uint32_t)(*pc - d->bytecode)))
+            return JANET_NATIVE_VM;
+        if ((d->native_verified != d->native_code ||
+                d->native_verified_epoch != janet_vm.native_epoch) &&
+                !janet_native_revalidate(d)) return JANET_NATIVE_VM;
+    }
+}
+#endif
 
 #ifdef JANET_NO_INTERPRETER_INTERRUPT
 #define vm_maybe_auto_suspend(COND)
@@ -2325,6 +2531,11 @@ static JanetSignal run_vm(JanetFiber *fiber, Janet in) {
                 vm_checkgc_pcnext();
             }
             func = callee_func;
+            /* Counter-identity half: every Janet-function call the
+             * interpreter dispatches here. janet_vm.native_continuations
+             * counts the ones a native executor took instead, and the sum
+             * must not change when continuation is enabled or disabled. */
+            janet_vm.native_interp_calls++;
             if (func->gc.flags & JANET_FUNCFLAG_TRACE) {
                 vm_do_trace(func, fiber->stacktop - fiber->stackstart, fiber->data + fiber->stackstart);
             }
@@ -3310,6 +3521,13 @@ int janet_init(void) {
      * affect dispatch. */
     janet_vm.native_possible = janet_native_registry_count() != 0;
 #endif
+    /* Native-to-native continuation is on unless explicitly disabled, so one
+     * binary can run both halves of an A/B with an identical executor set. */
+    janet_vm.native_continuation = getenv("JANET_NATIVE_NO_CONTINUATION") == NULL;
+    janet_vm.native_continuations = 0;
+    janet_vm.native_continuation_refusals = 0;
+    janet_vm.native_returns = 0;
+    janet_vm.native_interp_calls = 0;
 
     /* Garbage collection */
     janet_vm.blocks = NULL;
