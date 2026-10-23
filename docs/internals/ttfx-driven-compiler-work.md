@@ -292,3 +292,71 @@ native regions per sustained `scattered` run: `ctx-motion-move`,
 Next work is native-to-native call continuation/inlining and the GET/length/
 divide boundaries that the container path exposed. No overall Rust parity
 claim is made from this step.
+
+## 2026-10-23 same-profile executor control and opt-in leaf executors
+
+The earlier GUI container-vs-`gcR10` result was confounded: `gcR10` has
+**zero** frame executors, while the container candidate had 85. To isolate
+execution from code size and PGO, I rebuilt the GUI and CLI releases from
+their exact existing PGO caches with `JANET_NATIVE_EXECUTORS` unset. The
+resulting controls have the same compiler, source, profile, and nine kernels,
+but zero frame executors. Same-sitting paired runs:
+
+| Pair | Metric | Geomean | Median | Paired wins |
+|---|---|---:|---:|---:|
+| CLI 83 executors vs 0, same PGO | `--bench` time ratio on/off (lower is better) | **0.9342** | 0.9348 | on faster 55/60 |
+| GUI 85 executors vs 0, same PGO | windowed uncapped FPS ratio exec/noexec | **0.9901** | 0.9790 | noexec faster 16/25 |
+| GUI 0 executors vs `gcR10` (different PGO) | FPS ratio noexec/gcR10 | **0.9710** | 0.9739 | `gcR10` faster 16/25 |
+
+The CLI executor tier is a real **1.070x** same-profile speedup (6.6% lower
+time); it stays enabled. The GUI tier is slightly negative even on the same
+profile, and its 4.5 MB `native.c` / 2.8 MB binary versus 200 KB / 1.7 MB
+for noexec makes the tradeoff worse. The noexec GUI recovers about two points
+of the old 0.9538 candidate-vs-`gcR10` deficit, but is still 2.9% behind
+`gcR10`; that residual is profile/source, not executor execution.
+
+Profile-call coverage is thin at the definition level: 104,902 of 5,339,748
+CLI rows (1.96%) and 72,132 of 12,136,582 GUI rows (0.59%) name a frame
+executor. The hot CLI rows are mostly small helpers (`xor64`, `shr64`,
+`shl64`, `cfunction?`, `nil?`, `ctx-char-active?`, `ctx-step-animation`),
+and the GUI draw loop is dominated by the FFI alias `rl-draw-text-ex` plus
+`EndDrawing`. Executors are selected for **all** structurally eligible
+definitions; the final PGO collections cover only `decrypt` (CLI) and
+`scattered` (GUI). Gating executor emission on those one-effect call counts
+would remove executors that the six-effect CLI A/B shows are useful, so no
+such gate was shipped.
+
+### Leaf executor experiment (opt-in, not enabled in the final release)
+
+I added a separate no-loop leaf tier behind
+`JANET_EXECUTOR_LEAF_MIN_CALLS` (default `math/inf`, i.e. off). It requires a
+native run at entry and excludes FFI alias wrappers; a leaf wrapper around
+void/struct-return aliases hung a GUI `highlight` probe, while the loop
+executor's existing alias fast path already covers those calls. With a
+threshold of 1000 it selected 16 CLI and 12 GUI leaf definitions.
+
+Evidence: 37/37 bounded CLI frame streams identical; `test/suite-native-executor.sh`
+passes with `JANET_EXECUTOR_LEAF_MIN_CALLS=0` (budget 1/2, portable dispatch,
+interrupts off, ASan+UBSan, GC across boundaries, breakpoint/step,
+parked marshal, preemption); leaf executors `callee`/`reset`/`short-fn`
+actually attach and execute. Paired leaf-vs-loop release runs gave 0.9846
+time geomean across six effects (1.5% faster, 25/60 rows), but a 20-round
+`decrypt` rerun gave 1.0002 (neutral). The GUI leaf A/B was inconclusive
+(leaf/noexec 0.9604 versus leaf/loop 1.0201 across different sittings), so
+the leaf tier remains opt-in and is **not** in the final release.
+
+### Final artifacts
+
+- `janet-port/build/ttfx-cli-container-rel`: 83 loop executors, 9 kernels,
+  2.8 MB, 37/37 bounded CLI parity. This is the release CLI.
+- `janet-port/build/ttfx-gui-bender-container-rel`: 0 frame executors,
+  9 kernels, 1.7 MB. This is the release GUI; the 85-executor build is
+  retained as `...-on-rel`, and the leaf candidate as `...-leaf-noffi-rel`.
+- `janet-port/build/ttfx-cli-container-leaf-rel`: 99 executors (16 leaf),
+  37/37 parity, retained only as an opt-in experiment.
+
+The measured next target is not another boundary fast path: it is an
+environment-capable native function/leaf continuation for the hot
+`ctx-*`/`ease`/RNG helpers, or a full-workload PGO collection that can gate
+executor code without overfitting `decrypt`/`scattered`. No overall Rust
+parity claim is made from this checkpoint.
