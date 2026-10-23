@@ -212,3 +212,17 @@ Refusals: decrypt 397 / rings 3 / beams 4,003 / binarypath 792 — two to three 
 
 **CONFOUND, still respected:** the merged build selects 111 executors vs v1's 96, so part of the chain gain comes from broader leaf coverage, not edge selection alone; no isolated continuation effect and no time claim may be drawn from these numbers. A same-image `JANET_NATIVE_NO_CONTINUATION` toggle is the outstanding control.
 **Threshold note:** lowering `EDGE_MIN_CALLS` below 500 is NOT indicated — the 13-PC selection already covers every named hot edge, and a lower threshold cannot select edges a profile never observed. Coverage is bounded by workload representativeness, not by the threshold.
+
+### Merged-training work reduction — the headline number (ec621797)
+Interpreted dispatches, 400 frames, seed 42, byte-identical output across all revisions:
+| effect | pre | v1 | v2 decrypt-only | **v2 merged** | merged vs pre | merged vs v1 |
+|---|---:|---:|---:|---:|---:|---:|
+| decrypt | 18,672,489 | 18,431,435 | 18,432,093 | **18,421,082** | −1.3% | −10,353 |
+| rings | 113,188,121 | 113,125,945 | 113,127,919 | **108,669,940** | **−4.0%** | −4,456,005 |
+| beams | 17,249,923 | 16,976,178 | 16,976,178 | **16,916,670** | −1.9% | −59,508 |
+| binarypath | 65,264,779 | 65,100,716 | 65,131,718 | **59,841,977** | **−8.3%** | −5,258,739 |
+Merged training is the best configuration on every effect, against both pre-change and unnarrowed v1.
+
+**How to state this honestly.** The merged build selects 111 executors (vs 96) AND 13 edge PCs, so this is the measured effect of the WHOLE auto-PGO package — representative training selecting more leaf executors *and* more chain edges — not an isolated continuation result. Stated that way it is sound and significant: **representative multi-workload PGO training removes 4–8% of interpreted work on motion-heavy effects.** No wall-time claim follows (counters measure work, not time), and decrypt still ends 259 chains short of v1.
+
+**This validates the session's first deliverable with its last measurement:** `--pgo-auto` per-workload merge + gating (Phases 1–3) is what makes the narrowed-emission tier actually pay. Build training sets from several replayable workloads; never train selection on one.
