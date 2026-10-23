@@ -1304,11 +1304,25 @@ byte-identical in shape to pre-v1 output, which v1 could not claim.
   (89,775 versus 90,034). Multi-profile selection did **not** keep near-zero
   refusals on every effect: 397 decrypt, 3 rings, 4,003 beams, 792 binarypath.
   It also selected 111 executors versus 96 in decrypt-trained v1/v2, so
-  changed VM exits and native ops cannot isolate continuation benefit. The
-  demonstrable choice is representative training for *coverage*, followed by
-  per-effect guards/work and byte-parity checks; threshold 500 is not proven
-  a universal shipping setting, and lower thresholds were not tested because
-  all named missing edges were already emitted.
+  changed VM exits and native ops cannot isolate continuation benefit.
+  A controlled `JANET_NATIVE_NO_CONTINUATION` ON/OFF pair on binarypath *within*
+  each pinned v2 image closes that attribution gap for each image separately:
+  decrypt-trained (96 executors) saves 45,385 interpreted calls, 133,061
+  dispatches and 65,764 VM exits with chaining ON; binarypath-trained (107)
+  saves 216,823 calls, 452,699 dispatches and 367,232 exits. Each image has
+  byte-identical ON/OFF output, exact conserved call edges, and invariant
+  native operations and executor entries. The **difference between** those
+  within-image savings is still conditional on different executor sets; it
+  cannot assign the cross-image −5,282,115 dispatches entirely to selected
+  edges. Same source and leaf threshold selected 96 vs 107 executors, so
+  `JANET_EXECUTOR_LEAF_MIN_CALLS` is workload-sensitive too. The binarypath
+  profile selected `ctx-coord-on-line` PC 3→`geom-lerp-point`, **exactly the
+  motion-chain edge predicted by §5**; decrypt training missed it. Full work
+  vectors and limitations are in `work-counters.md`. The demonstrable choice
+  is representative merged training for *coverage*, followed by per-effect
+  guards/work and byte-parity checks; threshold 500 is not proven a universal
+  shipping setting, and lower thresholds were not tested because all named
+  missing edges were already emitted.
 - Timing: one machine, no CPU pinning, medians of 5-7 paired alternating
   rounds. Per-effect ratios must not be read individually against the +/-3%
   floor.
