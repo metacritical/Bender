@@ -140,6 +140,18 @@ struct JanetVM {
     uint64_t native_continuation_refusals;
     uint64_t native_returns;
     uint64_t native_interp_calls;
+    /* Retired interpreter dispatches, including the first instruction on
+     * re-entry. Unlike native ops, this counts only actual VM dispatches. */
+    uint64_t native_interp_dispatches;
+    /* GC diagnostics: timing/scheduling can change these, so they are
+     * advisory and never part of the deterministic work vector. */
+    uint64_t work_allocations;
+    uint64_t work_alloc_bytes;
+    uint64_t work_barrier_calls;
+    uint64_t work_gc_major;
+    uint64_t work_gc_minor;
+    uint64_t work_gc_fiber_minor;
+    uint64_t work_gc_process_minor;
     /* Runtime off-switch (JANET_NATIVE_NO_CONTINUATION), read once in
      * janet_init. One binary can then run both halves of an A/B with a
      * provably identical executor set, and it is an emergency disable. */

@@ -2437,6 +2437,14 @@ uint64_t janet_native_stat(int which) {
         case JANET_NATIVE_STAT_CONTINUATION_REFUSALS: return janet_vm.native_continuation_refusals;
         case JANET_NATIVE_STAT_NATIVE_RETURNS: return janet_vm.native_returns;
         case JANET_NATIVE_STAT_INTERP_CALLS: return janet_vm.native_interp_calls;
+        case JANET_NATIVE_STAT_INTERP_DISPATCHES: return janet_vm.native_interp_dispatches;
+        case JANET_NATIVE_STAT_ALLOCATIONS: return janet_vm.work_allocations;
+        case JANET_NATIVE_STAT_ALLOC_BYTES: return janet_vm.work_alloc_bytes;
+        case JANET_NATIVE_STAT_BARRIER_CALLS: return janet_vm.work_barrier_calls;
+        case JANET_NATIVE_STAT_GC_MAJOR: return janet_vm.work_gc_major;
+        case JANET_NATIVE_STAT_GC_MINOR: return janet_vm.work_gc_minor;
+        case JANET_NATIVE_STAT_GC_FIBER_MINOR: return janet_vm.work_gc_fiber_minor;
+        case JANET_NATIVE_STAT_GC_PROCESS_MINOR: return janet_vm.work_gc_process_minor;
         default: return 0;
     }
 #else

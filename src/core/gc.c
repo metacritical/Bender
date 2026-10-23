@@ -36,6 +36,15 @@
 #include "compile.h"
 #endif
 
+#ifndef JANET_NATIVE_TELEMETRY
+#define JANET_NATIVE_TELEMETRY 1
+#endif
+#if defined(JANET_NATIVE_EXECUTORS) && JANET_NATIVE_TELEMETRY
+#define JANET_GC_WORK_TICK(field) (++janet_vm.field)
+#else
+#define JANET_GC_WORK_TICK(field) ((void)0)
+#endif
+
 /* Helpers for marking the various gc types */
 static void janet_mark_funcenv(JanetFuncEnv *env);
 static void janet_mark_funcdef(JanetFuncDef *def);
@@ -2035,6 +2044,7 @@ static int janet_gc_minor_skip(JanetGCObject *mem) {
  * minors (1.3). Shared either side needs nothing (shared space is
  * always traversed). Hot path unchanged when same-owner. */
 void janet_gc_barrier(void *obj, Janet value) {
+    JANET_GC_WORK_TICK(work_barrier_calls);
     JanetType t = janet_type(value);
     if (t == JANET_NIL || t == JANET_BOOLEAN || t == JANET_NUMBER ||
             t == JANET_CFUNCTION || t == JANET_POINTER) {
@@ -2233,6 +2243,11 @@ void *janet_gcalloc(enum JanetMemoryType type, size_t size) {
         JANET_OUT_OF_MEMORY;
     }
 
+    /* Requested bytes, not slab occupancy or external buffer storage. */
+#if defined(JANET_NATIVE_EXECUTORS) && JANET_NATIVE_TELEMETRY
+    janet_vm.work_allocations++;
+    janet_vm.work_alloc_bytes += size;
+#endif
     /* Configure block */
     mem->flags = type;
     /* P3.3 strict bit: slab objects follow their page's quarantine
@@ -2606,6 +2621,7 @@ static void janet_xfb_mark_owned(JanetSlabState *ss, uint32_t owner) {
 void janet_collect_fiber_minor(JanetFiber *f) {
     JanetSlabState *ss;
     if (janet_vm.gc_suspend) return;
+    /* Fallbacks delegate to the global minor; count only actual scopes. */
     if (NULL == f || 0 == f->gc_owner) {
         /* D1 (plain-fiber form): the global minor never clears the
          * caller's gc_nursery_bytes. */
@@ -2619,6 +2635,7 @@ void janet_collect_fiber_minor(JanetFiber *f) {
         f->gc_nursery_bytes = 0;
         return;
     }
+    JANET_GC_WORK_TICK(work_gc_fiber_minor);
     janet_gc_epoch_next();
     depth = JANET_RECURSION_GUARD;
     janet_vm.gc_mark_phase = 1;
@@ -2906,6 +2923,7 @@ void janet_collect_process(JanetProcess *proc) {
         if (NULL != f) f->gc_nursery_bytes = 0;
         return;
     }
+    JANET_GC_WORK_TICK(work_gc_process_minor);
     janet_gc_epoch_next();
     depth = JANET_RECURSION_GUARD;
     janet_vm.gc_mark_phase = 1;
@@ -2971,6 +2989,7 @@ void janet_collect_process(JanetProcess *proc) {
  * young pages age (cap old) and dirty flags clear. */
 void janet_collect_minor(void) {
     if (janet_vm.gc_suspend) return;
+    JANET_GC_WORK_TICK(work_gc_minor);
 #ifdef JANET_GC_COUNT
     g_n_minor++;
 #endif
@@ -3028,6 +3047,7 @@ void janet_collect(void) {
     fflush(stderr);
 #endif
     if (janet_vm.gc_suspend) return;
+    JANET_GC_WORK_TICK(work_gc_major);
 #ifdef JANET_GC_COUNT
     g_n_major++;
 #endif

@@ -95,15 +95,24 @@ extern int janet_oph_prev;
 #define JANET_OPH_TICK() ((void)0)
 #endif
 
+#ifndef JANET_NATIVE_TELEMETRY
+#define JANET_NATIVE_TELEMETRY 1
+#endif
+#if defined(JANET_NATIVE_EXECUTORS) && JANET_NATIVE_TELEMETRY
+#define JANET_DISPATCH_TICK() (++janet_vm.native_interp_dispatches)
+#else
+#define JANET_DISPATCH_TICK() ((void)0)
+#endif
+
 #ifdef JANET_USE_COMPUTED_GOTOS
-#define VM_START() { JANET_SITE_TICK(first_opcode); goto *op_lookup[first_opcode];
+#define VM_START() { JANET_DISPATCH_TICK(); JANET_SITE_TICK(first_opcode); goto *op_lookup[first_opcode];
 #define VM_END() }
 #define VM_OP(op) label_##op :
 #define VM_DEFAULT() label_unknown_op:
-#define vm_next() do { vm_native(); JANET_OPH_TICK(); JANET_SITE_TICK(*pc & 0xFF); goto *op_lookup[*pc & 0xFF]; } while (0)
+#define vm_next() do { vm_native(); JANET_DISPATCH_TICK(); JANET_OPH_TICK(); JANET_SITE_TICK(*pc & 0xFF); goto *op_lookup[*pc & 0xFF]; } while (0)
 #define opcode (*pc & 0xFF)
 #else
-#define VM_START() uint8_t opcode = first_opcode; for (;;) {JANET_SITE_TICK(opcode); switch(opcode) {
+#define VM_START() uint8_t opcode = first_opcode; for (;;) {JANET_DISPATCH_TICK(); JANET_SITE_TICK(opcode); switch(opcode) {
 #define VM_END() }}
 #define VM_OP(op) case op :
 #define VM_DEFAULT() default:
@@ -3639,6 +3648,14 @@ int janet_init(void) {
     janet_vm.native_continuation_refusals = 0;
     janet_vm.native_returns = 0;
     janet_vm.native_interp_calls = 0;
+    janet_vm.native_interp_dispatches = 0;
+    janet_vm.work_allocations = 0;
+    janet_vm.work_alloc_bytes = 0;
+    janet_vm.work_barrier_calls = 0;
+    janet_vm.work_gc_major = 0;
+    janet_vm.work_gc_minor = 0;
+    janet_vm.work_gc_fiber_minor = 0;
+    janet_vm.work_gc_process_minor = 0;
 
     /* Garbage collection */
     janet_vm.blocks = NULL;
