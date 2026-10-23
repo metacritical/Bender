@@ -844,11 +844,18 @@ promise of this feature until the measurement exists.
    their own PC, so type evidence selects which edges get a fast path.
    Proof becomes mandatory only when arguments are passed unboxed or callee
    guards are elided (v2.4 / v3).
-6. **A static native-to-native direct C call is not possible** in this
-   toolchain: descriptor identity is structural and resolved at runtime by
+6. **A static native-to-native direct C call is not possible for the
+   EXECUTOR tier** (the scope of this document): descriptor identity is
+   structural and resolved at runtime by
    `janet_native_matches` / `janet_native_try_attach`
    (`bytecode.c:2050`, `:2376`), and the callee lives in a runtime slot. The
    continuation must be a runtime-resolved trampoline (§2.1).
+   ERRATUM (see typed-path-capability-audit.md): the KERNEL tier (Tier A,
+   `emit-fn-c`) makes exactly such static calls today — kernels are emitted
+   non-`static` into one TU and call each other as literal C calls, inlined
+   at -O3. Do not read this item as a blanket toolchain statement. The same
+   audit found 1–8 lines of citation drift in this document; symbol names
+   are authoritative, line numbers approximate.
 7. **Executor selection is not purely structural today**: loop executors are
    (`loop-executor.janet:77`), but a second *leaf* (straight-line) tier is
    already PGO-gated by `JANET_EXECUTOR_LEAF_MIN_CALLS`

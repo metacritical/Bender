@@ -15,8 +15,9 @@ Toolchain used: `/Users/pankajdoharey/Development/Projects/janet/build/bender`.
 | # | Capability | Verdict |
 |---|---|---|
 | Q1 | Type hints on functions | **EXISTS** — closed vocabulary, boundary-**checked**, fail-closed |
-| Q2 | Unboxed flat aggregates | **PARTIAL** — two mechanisms with *dual, non-overlapping* limits |
-| Q2b | `unsafe/*` pointer peek/poke | **PARTIAL** — exists as cfunctions, **not** lowered by the emitter |
+| Q2 | Unboxed flat aggregates (single struct) | **EXISTS** — two independent routes, both emitting direct loads |
+| Q2b | Flat struct **arrays** (stride) | **ABSENT** — no `ptr-add` intrinsic |
+| Q2c | `unsafe/*` pointer ops | **PARTIAL** — 14 cfuns exist; lowered **only** via `:kernel` metadata (and there is no `unsafe/peek`) |
 | Q3a | Arena / region allocation | **ABSENT** |
 | Q3b | Whole-module TU + direct cross-calls | **EXISTS** (kernel tier), unused by ttfx |
 | Q4 | "VM near LuaJIT-class speed" | **NOT SUPPORTED** by committed evidence |
@@ -267,38 +268,176 @@ double step(double p0, double p1) {
 - **`:long` + `:double` mixing works** (`struct nsh1_2 { int64_t f0; double f1; }`),
   but asymmetrically per rule 3(b): `:long`→`:double` field ✅,
   `:double`→`:long` field opens ❌.
-- **`mkstu` (`{...}` struct literals) unsupported** — comment at `:206-207` is accurate.
-- **No field-count cap** (validator `infer.janet:481-497` checks only
-  even/≥2/keyword-const/no-dup/`:long`-or-`:double`).
+- **`mkstu` (`{...}` struct literals) unsupported** — `(def st {:px x :vx v})`
+  yields no `table-flat` line at all and `slot s4 mixes unanalyzable
+  keyword/unknown`. Only `mktab` (`@{...}`) is dispatched (`infer.janet:468`);
+  the comment at `:207` is accurate.
+- **No field-count cap** — 10 fields emit fine (`k0:double,…,k9:double`).
+  Validator `infer.janet:481-497` checks only
+  even/≥2/keyword-const/no-dup/`:long`-or-`:double`.
+- **Single construction site, entry block only.** A second `mktab` on the slot —
+  *even a shape-identical one* — opens it sticky (`infer.janet:474-480`).
+- `movn`/`movf` **propagate** the shape and its rules (`infer.janet:499+`), which
+  surfaces as two `table-flat` lines for one logical table.
+- Width mapping (`nshape-ctype`, `callgraph.janet:1784`): `:long`→`int64_t`,
+  otherwise `double`.
 
-### Mechanism 2 — `ffi/defstruct` / `unsafe/*`
+### Mechanism 2 — `ffi/defstruct` + `:kernel` intrinsics → direct pointer loads
 
-The fork has the upstream-style FFI plus an `unsafe/` namespace;
-`unsafe/malloc` is at `src/core/ffi.c:2216-2223`. `ffi/defstruct` kernel-maps
-only `:double`/`:float`/`:int` and leaves `:long` boxed-only
-(`src/boot/boot.janet:4783-4787`).
+**This is the stronger of the two mechanisms and it is a fork extension.**
 
-**Blocking limitation: the emitter has no pointer arithmetic.** `ptr-add` is not
-an intrinsic, so *persistent* state works but **collections** of it do not — you
-cannot stride an array of flat structs in emitted C. Pointer peek/poke exist as
-cfunctions but are **not lowered** to C memory accesses outside the
-`:kernel :pread/:pwrite` intrinsic path.
+`ffi/defstruct` (`src/boot/boot.janet:4792-4866`, **not upstream**) generates a
+whole kit from one declaration: `Name/descriptor` (`:4824`), `Name/size`
+(`:4825`), `Name/offsets` (`:4826`), `Name/new` (`:4829`), `Name/malloc`
+(`:4833-4837`, `unsafe/calloc` + per-field `unsafe/poke`), `Name/free` (`:4839`),
+plus per-field getters (`:4855-4857`) and setters (`:4862-4864`).
 
-### The two limits are exactly dual
+The crucial part is the `:kernel` metadata it attaches (`:4848-4851`, `:4858-4861`):
+
+```janet
+{:hint {:params [:pointer]    :returns ht} :kernel {:pread  [kt off]}}
+{:hint {:params [:pointer ht] :returns ht} :kernel {:pwrite [kt off]}}
+```
+
+The emitter consumes that through `kernel-intrinsics` (`tools/callgraph.janet:389`,
+populated by `extract-intrinsics` `:402-434`, dispatched at `:3755-3765`) and
+lowers it in `emit-intrinsic-call` (`:2598-2650`). The money line is `:2634`:
+
+```janet
+(def mem (string "(*(" cty "*)((char*)(" pexpr ") + " koff "))"))
+```
+
+**Verified end to end.** A 5-field `{double×4, int}` animation struct stepped in
+a hinted kernel emitted *every* field access as a direct load/store, including
+the `int`:
+
+```c
+double step(void* p0, double p1) {
+    s3 = (double)((*(double*)((char*)(p0) + 0)));
+    s2 = (double)((*(double*)((char*)(p0) + 16)));
+    s4 = s2 * p1;  s2 = s3 + s4;
+    (*(double*)((char*)(p0) + 0)) = (double)(s2);
+    s4 = (double)((*(int32_t*)((char*)(p0) + 32)));
+    s5 = s4 + 1;
+    (*(int32_t*)((char*)(p0) + 32)) = (int32_t)(s5);
+    …
+}
+```
+
+Running the real AOT binary: `native-lib 1 kernels`, `calls=5`,
+`arity-guard-failures=0 type-guard-failures=0`, result bit-identical to the
+interpreter. **Values do not re-box at field boundaries, and kernel→kernel
+pointer calls stay native** (`s2 = inner(p0);` beside a direct load).
+
+**FFI is on by default and live inside AOT images.** `src/include/janet.h:198-204`
+makes `JANET_NO_FFI` an opt-*out*, and the fork **removed upstream's x86-64 arch
+guard** (commit `398833eb`, "Enable FFI module unconditionally"), which is why
+this works on arm64. `Makefile:165` always compiles `src/core/ffi.c`;
+`meson_options.txt:24-25` default both FFI options to `true`. Confirmed by running
+`ffi/size`, `ffi/align`, `unsafe/malloc`, `unsafe/poke`, `ffi/read`, `ffi/struct`
+inside a built AOT image.
+
+**Symbol inventory** (`src/core/ffi.c:2440-2465`): `ffi/native :2440`,
+`ffi/lookup :2441`, `ffi/close :2442`, `ffi/signature :2443`, `ffi/call :2444`,
+`ffi/struct :2445`, `ffi/write :2446`, `ffi/read :2447`, `ffi/size :2448`,
+`ffi/align :2449`, `ffi/struct-info :2450`, `ffi/calling-conventions :2465`; and
+14 `unsafe/*` cfuns at `:2451-2464` — `trampoline, jitfn, malloc, free, calloc,
+realloc, ptr-add, ptr-sub, ptr-eq, poke, exec-alloc, exec-protect,
+pointer-buffer, pointer-cfunction`.
+
+> **Naming correction:** there is **no `unsafe/peek`.** The read side is
+> `ffi/read` (`:2447`); only the write side is `unsafe/poke` (`:2460`).
+
+**Limits (each verified by experiment):**
+
+- **No pointer arithmetic in the emitter.** `unsafe/ptr-add` is a plain cfunction
+  with no entry in any emitter table (zero hits for `ptr-add` in
+  `tools/callgraph.janet`). A stride loop over an array of structs is refused
+  outright: `native-skip 5 loopsum call to non-native or type mismatch`.
+  **This is the single blocking gap for an animation system over N entities.**
+- **Only `:double`/`:float`/`:int` fields are kernel-mapped** (gate at
+  `src/boot/boot.janet:4783-4789`). `:long`, pointers and nested structs are
+  boxed-only and refuse fail-closed.
+- **Hand-written `ffi/read`/`unsafe/poke` are NOT lowered and poison the
+  function** — the lowering is strictly whitelist-by-`:kernel`-metadata. A bare
+  `(ffi/read :double p 0)` yields `native-skip … slot s2 mixes keyword/u64ok`:
+  the `:double` keyword argument poisons the slot and disqualifies the function.
+- **A getter in tail position refuses** (guard at `tools/callgraph.janet:2609`);
+  worked around by `(+ 0 (M/frame p))`, but it is a live foot-gun.
+
+### The two mechanisms are exactly dual — by design
+
+This duality is explicit in the source. The emission helpers at
+`tools/callgraph.janet:1776-1784` describe `table-flat` as *"the auto-discovered
+sibling of the hand-declared `ffi/defstruct` path -- same field contract
+`:long`/`:double`, same fail-closed guards"* (`:1781-1783`).
 
 | | `ffi/defstruct` | `table-flat` |
 |---|---|---|
-| persists across calls | **YES** | **NO** |
-| `:long` unboxed | **NO** | **YES** |
-| array / stride | **NO** (no `ptr-add`) | N/A |
+| direct-load field access | **YES** | **YES** |
+| allocation | **heap** (`unsafe/calloc`) | **stack** (`struct nsh1_2 nshv2 = {0};`) |
+| lifetime | **persists across calls** | **function-local only** |
+| crosses fn boundaries | **YES** (`s2 = inner(p0);`) | **NO** (return/arg → sticky open) |
+| `:long` fields unboxed | **NO** (boxed-only) | **YES** (`int64_t`) |
+| array / stride | **NO** (no `ptr-add`) | N/A (no addressing at all) |
+| loop inside the kernel | OK | OK standalone; **refused** by `--aot --native` |
+| tail-position read | **refused** (`:2609`) | **OK** (`tcall` accepted) |
+| declared by | hand (`:kernel` metadata) | auto-inferred |
 
-So: **a flat animation struct whose field access is a direct load — YES, today,
-via `table-flat`, as a per-call working set.** A persistent, natively-stepped
-*array* of such structs — **no**.
+Note the tail-position row inverts between the two — a getter in tail position
+refuses under `ffi/defstruct` but is fine under `table-flat`.
 
-One further caution carried forward from the Q2 pass: emitted punning code
-contains a strict-aliasing UB exposure that the production flags
-(`src/boot/boot.janet:6127`, `:6472`) do not suppress (no `-fno-strict-aliasing`).
+So: **a flat animation struct whose field access compiles to a direct load —
+YES, today, by two independent routes.** `ffi/defstruct` is the vehicle for
+*persistent* per-entity state; `table-flat` is the zero-ceremony, zero-heap route
+for a *per-call* working set, and is the only one that unboxes `:long` or
+supports heterogeneous `:long`+`:double` layout. What remains genuinely
+impossible is a **persistent array of such structs strided in a native loop**,
+blocked solely by the missing `ptr-add` intrinsic.
+
+**The three shapes actually achievable today:**
+
+1. **One** persistent entity via `ffi/defstruct` + a per-call native `step`
+   (proven: 5 native calls, 0 guard failures, bit-identical).
+2. Scalars-in → `table-flat` working struct → scalar-out per call, with the
+   entity loop staying in the interpreter (proven: `native-lib 1 kernels`).
+3. A full native C loop over a `table-flat` struct — but **only** via the
+   standalone `--emit-native` + manual `cc` tier (20/20 `PARITY_OK`), *not* the
+   deployable `--aot --native` tier.
+
+### Two defects found in passing
+
+**Defect A — emitted C relies on strict-aliasing UB, and the production build
+does not suppress it.** The generated `(*(int32_t*)((char*)p + 32))` type-puns
+bytes written as `double`. A mixed `{double…, int}` kernel **diverged from the
+interpreter under optimization**:
+
+```
+cc -O2 …                       → -4 3 6 9     (wrong)
+cc -O1 …                       → -4 3 6 9     (wrong)
+cc -O0 …                       → -4 2 4 6     (correct)
+cc -O2 -fno-strict-aliasing …  → -4 2 4 6     (correct)
+interpreter ground truth       → -4 2 4 6
+```
+
+The real AOT path (`src/boot/boot.janet:6472-6476`, plain-image `:6127`) compiles
+at `-O3` and **never passes `-fno-strict-aliasing`**. In genuine use the memory
+comes from `unsafe/calloc` (no declared type) and fields occupy distinct offsets,
+so the real `--native` build did not miscompile — but nothing in the emitter
+*enforces* that invariant. One flag fixes it.
+
+**Defect B — the mixed-struct parity oracle is unsound.** The pointer fixtures
+are `double[8]` on both sides (C at `tools/callgraph.janet:4098-4104`, Janet
+`mkptr` at `:4131-4134`). Any struct with a non-`:double` field is therefore
+"validated" by reinterpreting double bytes as `int32` — both UB-sensitive per
+Defect A and semantically meaningless. `test/suite-callgraph.janet:883-903`
+exercises only an all-`:double` `Point`, so the shipped suite never covers the
+mixed-type path that `docs/internals/native-memory.md:143-148` advertises.
+
+*Doc accuracy:* `native-memory.md:122-155` is otherwise accurate line by line
+(the `Point/size => 24`, `offsets => {:x 0 :y 8 :n 16}` example matches
+`test/suite-ffi.janet:60-61`). Its "**8× measured on a stepping loop**" claim
+(`:146`) is **unbacked** — no committed benchmark supports that number.
 
 ---
 
@@ -351,20 +490,63 @@ double outer(double p0, double p1) {
 }
 ```
 
-  At `-O3`, in one TU, these inline (measured down to 3 ARM64 instructions).
-- **Executors are different**: `nx_<id>` executors *are* `static` and
-  registry-resolved; zero executor→kernel calls exist in the real artifact.
+  Emission shapes are at `tools/callgraph.janet:3814-3830` (void statement,
+  value assignment, tail call). Verified at the machine level on a 3-deep chain
+  `hyp2`→`addsq`→`sq`: `nm -gU` reports `T _sq`, `T _addsq`, `T _hyp2`
+  (**external linkage**, confirming non-`static`), and `-O3` collapsed the whole
+  chain into **3 ARM64 instructions** (`mul`/`mul`/`add`).
+- **Ordering is by 4-round fixpoint, not prototypes** (`:5361-5375`). Because no
+  forward declarations are emitted, a kernel can only call one appearing
+  *earlier* in the file; the fixpoint guarantees callee-before-caller
+  (verified with deliberately out-of-order sources). Survivors are reported as
+  `"calls non-emitted native"` (`:5378-5381`).
+- **Recursion is refused.** A self-recursive `fib` fails at the load-self opcode:
+  `native-skip 1 fib unhandled op lds`. **Recursive kernels do not exist**, so
+  the no-prototype design is never stressed by a back edge.
+- **Dispatch-branch kernels are deliberately not composable**: they are excluded
+  from `emitted-names` (`:5382-5386`), so other kernels refuse to call a
+  dispatcher natively and stay boxed — conservative by design.
+- **Three tiers with different linkage.** (1) Kernels: external linkage,
+  `JanetReg` + `janet_cfuns(env, "native", regs)`. (2) Loop/leaf executors
+  `nx_<id>`: **`static`**, registered structurally via
+  `janet_native_registry_add` (`:5651`) and matched by a shape key, not a name;
+  double opt-in (`JANET_NATIVE_EXECUTORS=1` at emission **and**
+  `-DJANET_NATIVE_EXECUTORS` at build). (3) FFI alias thunks:
+  `static void *ffi_alias_ptr_<id>` (`:5086`).
+  **Zero executor→kernel calls exist in the real artifact.**
 - **ttfx exercises none of it**: all 8 kernels are non-static in one TU but make
   **zero** cross-calls, because their callers (`randbelow`, `rng-random`) are
   themselves not kernels.
 
-**Two corrections to existing docs.** `docs/internals/aot-plan.md:996` claims
-kernels emit as `static …` — **wrong**. And `janet-port/src/rng-kernels.janet:8-10`
-claims kernel-to-kernel calls "refuse `:array` returns" — **over-broad/stale**:
-a direct `:array`-returning cross-call emits fine
-(`/tmp/q1x/k2ka.janet` → `s3 = mk(p0, p1);` with a `JanetArray*` return). What
-actually refuses is a *mixed destination slot*. Note array *elements* still
-re-box (`janet_unwrap_number(s3->data[…])`).
+**Corrections to existing docs** (all first-hand verified):
+
+- `docs/internals/aot-plan.md:996` claims kernels emit as `static int64_t|double
+  f(...)` — **wrong**. Bodies carry no storage class (`callgraph.janet:3855`) and
+  link as `T`. Only wrappers, executors, helpers and atom slots are `static`.
+- `janet-port/src/rng-kernels.janet:8-10` claims kernel-to-kernel calls "refuse
+  `:array` returns" — **over-broad/stale**. The quoted error string is real
+  (`callgraph.janet:3840`), but per `ret-ok` clause 3 (`:3796-3802`) an
+  `:array`-returning kernel **does** compose when the destination slot is proven
+  `:array`. Verified both ways: `s3 = mk(p0, p1);` with a `JanetArray*` return
+  succeeds, while adding a `nil` branch to the same slot yields
+  `native-skip … slot s2 mixes nil/array`. What actually refuses is a **mixed
+  destination slot**. (The file's *conclusion* is still right for ttfx — those
+  kernels are called back-to-back from boxed code — but its stated rule is not.)
+- `docs/internals/native-continuation-design.md:847-851` states *"a static
+  native-to-native direct C call is not possible in this toolchain"* —
+  **true for the executor tier only, and misleading as a blanket statement.**
+  Its §2.1 scope is `nx_A`→`nx_B` (`:193`), which genuinely is impossible
+  (structural runtime resolution). The **kernel tier does make static direct C
+  calls**, as proven above. A reader taking `:847` literally concludes wrongly.
+- `docs/internals/aot-notes.md:257-260` ("now 4 kernels … `bitlen`") is a dated
+  changelog and is **stale**: the current ttfx artifact has 9 kernels and no
+  `bitlen`. By contrast `aot-notes.md:114` and `:262-264` are exactly right.
+- **Systemic line drift** in `native-continuation-design.md`: 3 of 3 checked
+  `callgraph.janet` citations were off by 1–8 lines (e.g. the structural key is
+  at `:5500-5510`, not `:5508-5518`; registry publish at `:5650-5651`, not
+  `:5654-5655`). Symbols are correct; re-resolve line numbers rather than trust them.
+
+Note array *elements* still re-box (`janet_unwrap_number(s3->data[…])`).
 
 ### Compile flags
 
@@ -376,11 +558,24 @@ cc -O3 -fwrapv -fno-math-errno -fno-trapping-math -w -DJANET_AOT_NATIVE_INIT \
 ```
 
 - `-O3` default; `-Oz` with the `-Oz` flag (`:6060`). `CC` is overridable (`:6057`).
+  There is no `--opt` flag and no `CFLAGS` hook on the AOT path.
+- `-fwrapv` is a **correctness** requirement for the `:wrap` int policy
+  (rationale at `:6122-6126`); `-fno-math-errno -fno-trapping-math` is a
+  deliberate oracle-identical fast-math subset, explicitly *not* `-ffast-math`.
 - **No LTO, no `-march`/`-mcpu`** — both still unchecked `- [ ]` in
   `docs/internals/extreme-perf.md:113,117`.
-- `--pgo` is *Janet-level* profiling, **not** compiler PGO.
-- `--ldflags "-flto -mcpu=native"` is an undocumented but working escape hatch
-  (single `cc` invocation compiles and links).
+- **Optimization asymmetry worth knowing:** `native.c` compiles at `-O3`, but it
+  links against `libjanet.a` built at **`-O2`** (`Makefile:56`,
+  `CFLAGS?=-O2 -g`), with **no LTO between them**. The runtime the kernels call
+  into is therefore a less-optimized TU.
+- `--pgo` / `--pgo-auto` are *Janet-level* profiling, **not** compiler PGO — they
+  seed kernel/executor selection via `--profile <file>` (`:6159`, `:6456`); no
+  `-fprofile-generate`/`-fprofile-use` is ever passed.
+- `--ldflags "-flto -mcpu=apple-m1"` is an undocumented but **verified working**
+  escape hatch — the words land in the single `cc` invocation before `-o`
+  (`:6478`), so they reach the compiler, not just the linker.
+- Intermediates are **retained by default**; `-c` keeps them and prints paths
+  (`aot-clean` at `:6566-6569` only removes them on the non-`-c` path).
 
 ### Bonus finding: the loop veto is a *tier* restriction, not a codegen gap
 
@@ -536,12 +731,26 @@ miscompile**: a wrong hint either refuses to emit or panics loudly at the bounda
    family is an artifact of register reuse, not of genuinely untyped code. It
    forced a source rewrite even in my successful 3.5× pilot, and it silently caps
    how much of the 338-refusal population hints can actually convert.
-3. **Cross-function lifetime for flat aggregates** (pass/return a `table-flat`
-   struct) — today it can only ever be a per-call working set, so flat state
-   cannot flow between kernels.
-4. **Pointer arithmetic (`ptr-add`) as an emitter intrinsic** — the one thing
-   blocking a persistent *array* of flat entity structs, i.e. real
-   animation-state packing.
+3. **Pointer arithmetic (`ptr-add`) as a `:kernel` intrinsic** — the *single*
+   remaining blocker for a persistent array of flat entity structs, i.e. real
+   animation-state packing. Everything else on that path already works:
+   `ffi/defstruct` persists across calls and already emits direct loads, so this
+   is a narrowly-scoped addition (one constant-stride intrinsic) with
+   disproportionate payoff. Promoted above cross-function `table-flat` lifetime
+   for exactly that reason.
+4. **Cross-function lifetime for flat aggregates** (pass/return a `table-flat`
+   struct) — today it can only ever be a per-call working set. Lower priority
+   than #3 because `ffi/defstruct` already covers persistent state.
+4c. **Extend Phase 5 to `mkstu` and to whole-program shape tracking** — the
+   decision-rule comment at `tools/infer.janet:205-207` names this as the
+   intended next step, and it is the same lever as #4: whole-program tracking is
+   precisely what would let a flat struct cross a function boundary.
+4b. **Safety fixes that are nearly free**: add `-fno-strict-aliasing` at both
+   `aot-run-cc` sites (`src/boot/boot.janet:6127`, `:6472`) to close the Defect-A
+   UB exposure, and give the parity harness a `char`-backed or per-struct-typed
+   pointer fixture (`tools/callgraph.janet:4098-4134`) plus a mixed-type case in
+   `test/suite-callgraph.janet:883` to close Defect B. These are correctness,
+   not performance, and should precede any wider rollout of struct kernels.
 5. **Zero-arg/vararg kernel support** (`callgraph.janet:5230`) — 115 refusals, and
    cheap relative to items 1–4.
 6. **An arena / per-frame region allocator** exposed to both user code and emitted
