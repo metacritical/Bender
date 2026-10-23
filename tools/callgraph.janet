@@ -5492,6 +5492,10 @@
   # resolves attachment by exact validation, never by name.
   (def executors @[])
   (def emitted-descriptors @{})
+  # id -> the structural descriptor key it was emitted under. Continuation
+  # narrowing is keyed by this, never by the id, because one descriptor
+  # attaches to every structurally identical definition.
+  (def executor-keys @{})
   # Loop executors remain selected exactly as before. Leaf (no-loop) executors
   # are a separate PGO-gated tier: only definitions with enough observed calls
   # and a native run at entry are emitted. Without a profile no leaf executor is
@@ -5539,8 +5543,101 @@
         (unless (get emitted-descriptors key)
           (put emitted-descriptors key true)
           (array/push executors id)
-          (buffer/push-string cout (loop-executor/emit id d))
+          (put executor-keys id key)
           (print "native-executor " id " " (d :name) (if leaf-eligible " leaf" ""))))))
+  # ---------------------------------------------------------------------
+  # Continuation-edge selection (design 7 steps 8-11). Emission of the
+  # native-to-native continuation attempt is NARROWED to the call PCs the
+  # profile says actually chain. An always-on attempt at every non-terminal
+  # call PC measured +0.6-1.0% geomean with no measurable chaining benefit;
+  # the edges that do chain are a small minority of call PCs.
+  #
+  # This is selection only. A chosen PC still runs the full runtime proof in
+  # janet_native_call_enter (callee is a JANET_FUNCTION with a
+  # current-epoch-revalidated native_code, untraced, unprofiled, arity in
+  # range, no env/vararg/structarg/namedargs, region-allowed at PC 0, within
+  # stack limits) and is all-or-nothing. A stale or wrong profile can
+  # therefore only cost performance, never correctness; an unselected PC
+  # behaves exactly as it did before the feature existed.
+  (def edge-min-calls
+    (let [raw (os/getenv "JANET_EXECUTOR_EDGE_MIN_CALLS")
+          n (if raw (scan-number raw) nil)]
+      (if (number? n) n math/inf)))
+  (def executor-set @{})
+  (each id executors (put executor-set id true))
+  # Fold a name bucket's per-PC :calledges rows into one vector. Agreement
+  # sums; any disagreement, :open slot or length mismatch opens the slot.
+  # Same conservative direction as tools/profile-merge.janet.
+  (defn- fold-calledges [bucket]
+    (var acc nil)
+    (var opened false)
+    (each row bucket
+      (def ce (get row :calledges))
+      (cond
+        (or (nil? ce) (= ce :open) (not (indexed? ce))) (set opened true)
+        (nil? acc) (set acc (map |$ ce))
+        (not= (length acc) (length ce)) (set opened true)
+        (set acc (map (fn [left right]
+                        (cond
+                          (nil? left) right
+                          (nil? right) left
+                          (or (= left true) (= left :open)
+                              (= right true) (= right :open)) :open
+                          (not= (left 0) (right 0)) :open
+                          @[(left 0) (+ (left 1) (right 1)) (+ (left 2) (right 2))]))
+                      acc ce))))
+    (if opened nil acc))
+  (def continuation-lines @[])
+  (def cont-by-id @{})
+  (each id executors
+    (def info (get defs id))
+    (def d (info :d))
+    (def bucket (and profile-index (get profile-index (info :name))))
+    (def ce (and bucket (fold-calledges bucket)))
+    (when ce
+      (def cmap (or (get call-map id) @{}))
+      (def pcs @{})
+      (each pc (range (min (length ce) (length (or (d :bytecode) []))))
+        (def slot (get ce pc))
+        (when (and (indexed? slot) (= 3 (length slot))
+                   (string? (slot 0)) (number? (slot 1))
+                   (>= (slot 1) edge-min-calls))
+          (def cname (slot 0))
+          # Unique-name requirement: the same anti-ambiguity rule the
+          # registry enforces at attach time (an ambiguous structural match
+          # refuses outright) and the name-duplicate guard above.
+          (def cids (get name-ids cname))
+          (when (and cids (= 1 (length cids)))
+            (def cid (cids 0))
+            # The static call graph must independently resolve this slot to
+            # the same definition. An absent entry means the slot is not
+            # statically monomorphic, which disqualifies it.
+            (when (and (get executor-set cid) (= cid (get cmap pc)))
+              (put pcs pc true)
+              (array/push continuation-lines
+                           (string "native-continuation " id " " pc " "
+                                   cname " " (slot 1)))))))
+      (unless (empty? pcs) (put cont-by-id id pcs))))
+  # Structurally identical descriptors are emitted ONCE and attach to every
+  # matching definition at run time, so the selected PC set must be a
+  # function of the structural key alone -- not of the id that happened to
+  # be emitted. Union the sets of every selected id sharing a key. Union is
+  # the conservative direction: it can only widen where a guard is emitted,
+  # and a guard that refuses touches nothing.
+  (def cont-by-key @{})
+  (each [id pcs] (pairs cont-by-id)
+    (def key (get executor-keys id))
+    (def merged (or (get cont-by-key key) @{}))
+    (each pc (keys pcs) (put merged pc true))
+    (put cont-by-key key merged))
+  (each id executors
+    (buffer/push-string cout
+      (loop-executor/emit id ((get defs id) :d)
+                          (get cont-by-key (get executor-keys id)))))
+  (each line continuation-lines (print line))
+  (spit (string outdir "/native-continuations.txt")
+        (if (empty? continuation-lines) ""
+          (string (string/join continuation-lines "\n") "\n")))
   (def manifest @"")
   (each id executors
     (buffer/push-string manifest (string id " " (((get defs id) :d) :name) "\n")))

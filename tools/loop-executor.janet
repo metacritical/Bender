@@ -154,7 +154,14 @@
                     '[(ldi 1 0) (ldi 2 0) (lt 3 2 0) (jmpno 3 4)
                       (add 1 1 2) (addim 2 2 1) (jmp -4) (ret 1)]))))
 
-(defn emit [id d]
+# `cont-pcs` is the profile-narrowed set of call PCs (a table/struct used as
+# a set, or nil) at which a native-to-native continuation attempt is emitted.
+# nil or an empty set emits NO attempt anywhere, which is byte-for-byte the
+# pre-continuation shape: a plain NX_EXIT to the VM at the call PC. Narrowing
+# only chooses WHERE the guard is emitted; an un-narrowed PC behaves exactly
+# as it did before the feature existed, and a narrowed PC still proves the
+# live callee at run time inside janet_native_call_enter.
+(defn emit [id d &opt cont-pcs]
   (def b @"")
   (defn out [& xs] (buffer/push-string b ;xs) (buffer/push-string b "\n"))
   (def tag (string "nx_" id))
@@ -445,13 +452,23 @@
           # the ordinary VM exit below performs the call exactly once --
           # including its interrupt poll, which is why only the committed
           # path (1 or 2) is ever polled here.
+          #
+          # Emitted ONLY at profile-selected PCs. Everywhere else this is a
+          # bare NX_EXIT to the VM, which is both the pre-continuation shape
+          # and measurably cheaper: an always-on attempt at every
+          # non-terminal call PC cost +0.6-1.0% geomean with no measurable
+          # chaining benefit (see the Implementation Notes in
+          # docs/internals/native-continuation-design.md).
           (out "  } else {")
-          (out "      uint32_t *nxnpc_ = NULL;")
-          (out "      int nxcont_ = janet_native_call_enter(f, nxcallee_, nxargc_,")
-          (out "                                            d->bytecode + " (string k) ", &nxnpc_);")
-          (out "      if (nxcont_ == 1) { NX_CONT(); *pc = nxnpc_; return JANET_NATIVE_FRAME; }")
-          (out "      if (nxcont_ == 2) { NX_EXIT(" (string k) ", JANET_NATIVE_INTERRUPT); }")
-          (out "      NX_EXIT(" (string k) ", JANET_NATIVE_VM);")
+          (if (and cont-pcs (get cont-pcs k))
+            (do
+              (out "      uint32_t *nxnpc_ = NULL;")
+              (out "      int nxcont_ = janet_native_call_enter(f, nxcallee_, nxargc_,")
+              (out "                                            d->bytecode + " (string k) ", &nxnpc_);")
+              (out "      if (nxcont_ == 1) { NX_CONT(); *pc = nxnpc_; return JANET_NATIVE_FRAME; }")
+              (out "      if (nxcont_ == 2) { NX_EXIT(" (string k) ", JANET_NATIVE_INTERRUPT); }")
+              (out "      NX_EXIT(" (string k) ", JANET_NATIVE_VM);"))
+            (out "      NX_EXIT(" (string k) ", JANET_NATIVE_VM);"))
           (out "  } }")))
 
       # Native `next` for arrays, tuples, strings, and buffers. This is the
