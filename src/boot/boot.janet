@@ -5512,7 +5512,8 @@
 ### tools/janet-aot.sh is a thin shim over this. Mirrors the shell
 ### grammar 1:1: app.janet [-o app] [-c] [-S] [-E args...] [--native]
 ### [-Oz] [--release] [--upx] [--no-auto-pgo] [--externs F]
-### [--include F]... [-x F] [--ldflags S] [--pgo S] [--pgo-stdin F].
+### [--include F]... [-x F] [--ldflags S] [--pgo S] [--pgo-stdin F]
+### [--pgo-auto].
 ### Tools (callgraph/mkimage) run in-process via dofile;
 ### only cc and profile/parity workloads spawn subprocesses, like any
 ### cc-style driver.
@@ -5713,6 +5714,71 @@
                   (os/dir cdir)))
     @[]))
 
+# --pgo-auto: every auto-PGO profile carries a companion <profile>.workload
+# record written by the running binary (see src/core/vm.c). Validate one.
+(defn- aot-auto-workload [profile]
+  (def rec (try (parse (slurp (string profile ".workload"))) ([_] nil)))
+  (unless (and (dictionary? rec)
+               (= 1 (get rec :version))
+               (string? (get rec :args))
+               (indexed? (get rec :argv))
+               (boolean? (get rec :has-stdin))
+               (boolean? (get rec :replayable))
+               (if (get rec :has-stdin)
+                 (string? (get rec :stdin-bytes))
+                 (nil? (get rec :stdin-bytes))))
+    (break nil))
+  rec)
+
+# Group the base auto profile and its sidecars by workload identity, so each
+# workload is gated on its own evidence instead of one widened union. Returns
+# [groups rejected]; nothing is promoted silently and nothing is dropped
+# silently (every refusal carries a reason the caller prints).
+(defn- aot-auto-groups [cdir key sources]
+  (def groups @[])
+  (def rejected @[])
+  (def candidates [(string cdir "/" key ".jdn")
+                   ;(map (fn [name] (string cdir "/" name))
+                         (aot-cache-sidecars cdir key))])
+  (each path candidates
+    (cond
+      (not= :file (os/stat path :mode)) nil # base profile may not exist yet
+      (nil? (os/stat (string path ".workload")))
+      (array/push rejected [path "no workload record (binary predates provenance)"])
+      (not (aot-cache-fresh? path sources))
+      (array/push rejected [path "stale: sources are newer than this profile"])
+      (do
+        (def rec (aot-auto-workload path))
+        (cond
+          (nil? rec)
+          (array/push rejected [path "malformed workload record"])
+          (not (get rec :replayable))
+          (array/push rejected [path (string "not replayable: "
+                                             (or (get rec :reason) :unknown))])
+          (do
+            (def argv (map string (get rec :argv)))
+            (def hit (find (fn [g] (and (deep= (get g :argv) argv)
+                                        (= (get g :has-stdin) (get rec :has-stdin))
+                                        (= (get g :stdin-bytes) (get rec :stdin-bytes))))
+                           groups))
+            (if hit
+              (array/push (get hit :profiles) path)
+              (array/push groups @{:args (get rec :args) :argv argv
+                                   :has-stdin (get rec :has-stdin)
+                                   :stdin-bytes (get rec :stdin-bytes)
+                                   :profiles @[path]})))))))
+  [groups rejected])
+
+# Evidence that failed its own parity replay is moved aside, never reused and
+# never deleted (the failing observation stays available for inspection).
+(defn- aot-auto-quarantine [paths]
+  (each path paths
+    (def dest (string path ".quarantine-" (os/getpid)))
+    (try (os/rename path dest) ([_] nil))
+    (when (os/stat (string path ".workload"))
+      (try (os/rename (string path ".workload") (string dest ".workload")) ([_] nil)))
+    (eprint "bender --aot: quarantined " path " -> " dest)))
+
 # An exclusive directory serializes cache profile/workload reads and writes
 # across build processes. Contention fails closed rather than reading a
 # partially published profile/metadata pair.
@@ -5900,6 +5966,7 @@
   (var pgo false)
   (var pgo-args "")
   (var pgo-stdin "")
+  (var pgo-auto false)
   (var no-auto-pgo false)
   # B7.2 Part B, Piece 1c: opt-in whole-program dead-code elimination.
   # Off by default so no existing build invocation changes behavior
@@ -5926,6 +5993,7 @@
       (= a "--include") (do (array/push includes (aot-next aotargs i "--include")) (+= i 2))
       (= a "--pgo") (do (set pgo true) (set pgo-args (aot-next aotargs i "--pgo")) (+= i 2))
       (= a "--pgo-stdin") (do (set pgo-stdin (aot-next aotargs i "--pgo-stdin")) (+= i 2))
+      (= a "--pgo-auto") (do (set pgo-auto true) (++ i))
       (= a "--no-auto-pgo") (do (set no-auto-pgo true) (++ i))
       (= a "--dce") (do (set dce true) (++ i))
       (= a "-x") (do (array/push extrac (aot-next aotargs i "-x")) (+= i 2))
@@ -5934,7 +6002,7 @@
       (do (when (not (empty? src)) (aot-die "one input only"))
           (set src a) (++ i))))
   (when (empty? src)
-    (aot-die "usage: bender --aot app.janet [-o app] [-c] [-S] [-E args...] [--native] [-Oz] [--release] [--upx] [--dce] [--externs FILE] [--include FILE] [-x FILE] [--ldflags STR] [--pgo ARGS] [--pgo-stdin FILE] [--no-auto-pgo]"))
+    (aot-die "usage: bender --aot app.janet [-o app] [-c] [-S] [-E args...] [--native] [-Oz] [--release] [--upx] [--dce] [--externs FILE] [--include FILE] [-x FILE] [--ldflags STR] [--pgo ARGS] [--pgo-stdin FILE] [--pgo-auto] [--no-auto-pgo]"))
   # --dce only has an effect on the native path: the dce-reachable gate
   # lives in callgraph.janet, which the plain-image path never invokes.
   # Refuse loudly rather than silently ignoring the flag.
@@ -5954,8 +6022,14 @@
     (aot-die "--upx requires --native and a replayable PGO workload"))
   (when release
     (unless native (aot-die "--release requires --native"))
-    (when (or pgo no-auto-pgo only-c print-c run-mode)
-      (aot-die "--release requires existing verified PGO evidence; incompatible with --pgo/--no-auto-pgo/-c/-S/-E")))
+    (when (or pgo pgo-auto no-auto-pgo only-c print-c run-mode)
+      (aot-die "--release requires existing verified PGO evidence; incompatible with --pgo/--pgo-auto/--no-auto-pgo/-c/-S/-E")))
+  (when pgo-auto
+    (unless native (aot-die "--pgo-auto needs --native (profiling seeds kernel shaping)"))
+    (when (or only-c print-c run-mode)
+      (aot-die "--pgo-auto needs a real binary build (no -c/-S/-E)"))
+    (when (or pgo no-auto-pgo release)
+      (aot-die "--pgo-auto merges cached auto-PGO runs; incompatible with --pgo/--no-auto-pgo/--release")))
   (when pgo
     (unless native (aot-die "--pgo needs --native (profiling seeds kernel shaping)"))
     (when (or only-c print-c run-mode)
@@ -6164,6 +6238,82 @@
         (set gate-stdin (if captured-stdin (string ndir "/stdin.capture") ""))
         (array/push gate-records {:args pgo-args :stdin gate-stdin
                                   :oracle expected}))
+      # --pgo-auto: merge the runtime evidence this output key already
+      # collected. Every candidate must carry a replayable workload record,
+      # be newer than the sources, and then reproduce the interpreter's
+      # output through the same parity gate --pgo uses. Evidence is kept per
+      # workload (identity = argv + stdin), never flattened into one
+      # anonymous union.
+      (var auto-groups @[])
+      (when pgo-auto
+        (def cdir (aot-cache-dir))
+        (unless (and cdir (os/stat cdir))
+          (aot-die "--pgo-auto found no PGO cache; run the training binary first" 1))
+        (def key (aot-cache-key out))
+        (def sources [src ;includes ;extrac])
+        (var groups nil)
+        (var rejected nil)
+        (var prior nil)
+        (try
+          (aot-cache-transaction cdir key (fn []
+            (def pair (aot-auto-groups cdir key sources))
+            (set groups (pair 0))
+            (set rejected (pair 1))
+            (set prior (aot-cache-load cdir key sources true))))
+          ([e] (aot-die (string "PGO cache busy or unreadable: " e) 1)))
+        (each entry rejected
+          (eprint "bender --aot: --pgo-auto skipping " (entry 0) ": " (entry 1)))
+        (when (empty? groups)
+          (aot-die "--pgo-auto found no replayable auto-PGO evidence for this key" 1))
+        # A legacy v2 record in the cache would need its oracle regenerated
+        # before republication; that promotion belongs to --pgo.
+        (when (and prior (find (fn [r] (nil? (get r :oracle))) prior))
+          (aot-die "--pgo-auto cannot promote a legacy cache record; run --pgo once first" 1))
+        (unless (os/stat ndir) (os/mkdir ndir))
+        (var profile-count 0)
+        (each g groups (+= profile-count (length (get g :profiles))))
+        (eprint "bender --aot: --pgo-auto merging " profile-count " auto profiles over "
+                (length groups) " workloads")
+        (def exe (aot-abs-exe))
+        (for gi 0 (length groups)
+          (def g (groups gi))
+          # per-workload merge, with the same accumulator --pgo uses
+          (def merged (string ndir "/auto-profile-" gi ".jdn"))
+          (try (aot-merge-profiles (get g :profiles) merged)
+            ([e] (aot-die (string "--pgo-auto profile merge failed: " e) 1)))
+          # The oracle is regenerated from the CURRENT sources: a recorded
+          # output hash is provenance, not an authority.
+          (def oracle (string ndir "/auto-oracle-" gi ".out"))
+          (def input-path (string ndir "/auto-stdin-" gi))
+          (when (get g :has-stdin) (spit input-path (get g :stdin-bytes)))
+          (def oenv (merge @{} (os/environ) {"JANET_NO_PROFILE" "1"}))
+          (def oout (file/open oracle :w))
+          (var oin nil)
+          (when (get g :has-stdin)
+            (set oin (file/open input-path :r))
+            (put oenv :in oin))
+          (put oenv :out oout)
+          (def ocode (os/execute [exe src ;(get g :argv)]
+                                 (if (string/find "/" exe) :e :ep) oenv))
+          (file/close oout)
+          (when oin (file/close oin))
+          (unless (= 0 ocode)
+            (aot-auto-quarantine (get g :profiles))
+            (aot-die (string "--pgo-auto oracle run failed with exit " ocode
+                             " for workload \"" (get g :args) "\"") 1))
+          (eprint "bender --aot: --pgo-auto workload " gi " runs=" (length (get g :profiles))
+                  " argv=\"" (get g :args) "\"")
+          (array/push auto-groups g)
+          (array/push gate-records {:args (get g :args) :argv (get g :argv)
+                                    :stdin (if (get g :has-stdin) input-path "")
+                                    :oracle oracle :profile merged}))
+        (def joined (string ndir "/profile.jdn"))
+        (aot-report-divergence (map (fn [r] (get r :profile)) gate-records))
+        (aot-merge-profiles (map (fn [r] (get r :profile)) gate-records) joined)
+        (set profile-args ["--profile" joined])
+        (set gate true)
+        (set gate-workload (get (gate-records 0) :args))
+        (set gate-stdin (get (gate-records 0) :stdin)))
       # auto-PGO: no flags needed. A fresh cached profile (collected by
       # first binary runs or earlier --pgo builds, newer than sources,
       # with a recorded workload) applies automatically through the
@@ -6174,7 +6324,7 @@
       # Immutable generations permit replay after a locked manifest snapshot;
       # contention itself still means the cache is unavailable for this build.
       (var cache-busy false)
-      (when (and native (not pgo) (not no-auto-pgo)
+      (when (and native (not pgo) (not pgo-auto) (not no-auto-pgo)
                  (not only-c) (not print-c) (not run-mode))
         (def cdir (aot-cache-dir))
         (when (and cdir (os/stat cdir))
@@ -6206,7 +6356,7 @@
               (set gate true)
               (set auto true)
               (eprint "bender --aot: verifying " (length gate-records) " cached workloads")))))
-      (when (and native (not pgo) (not no-auto-pgo)
+      (when (and native (not pgo) (not pgo-auto) (not no-auto-pgo)
                  (not cache-busy) (not gate) (not only-c) (not print-c) (not run-mode))
         (def cdir (aot-cache-dir))
         (when cdir
@@ -6348,13 +6498,19 @@
                   (set ainfile (file/open input :r))
                   (put aenv :in ainfile))
                 (put aenv :out aout)
-                (def acode (os/execute [candidate ;(aot-words (get rec :args))] :e aenv))
+                (def acode (os/execute [candidate ;(or (get rec :argv)
+                                                       (aot-words (get rec :args)))]
+                                       :e aenv))
                 (file/close aout)
                 (when ainfile (file/close ainfile))
                 (when (or (not= acode 0)
                           (not= (string (slurp (get rec :oracle))) (string (slurp actual))))
                   (eprint "bender --aot: PGO PARITY FAILED workload " idx
                           " argv=" (get rec :args) " (artifacts in " ndir ")")
+                  # --pgo-auto evidence that cannot reproduce the interpreter
+                  # is moved aside so no later build can reuse it.
+                  (when pgo-auto
+                    (aot-auto-quarantine (get (auto-groups idx) :profiles)))
                   (if (and auto (not release))
                     (set gate-fallback true)
                     (aot-die "PGO workload parity failed; no binary installed" 1))))
@@ -6369,6 +6525,28 @@
                                                  [src ;includes ;extrac] captured-stdin
                                                  prior-oracles prior-cache-meta)
                           (aot-die "PGO cache publication failed; no binary installed" 1)))
+                      # --pgo-auto publishes one gateable v3 record per
+                      # verified workload, reusing the --pgo publication
+                      # path, so a later --release finds real evidence.
+                      (when pgo-auto
+                        (def cdir (aot-cache-dir))
+                        (def ckey (aot-cache-key out))
+                        (def cmeta (string cdir "/" ckey ".meta"))
+                        (for gi 0 (length auto-groups)
+                          (def g (auto-groups gi))
+                          (def rec (gate-records gi))
+                          (spit (string ndir "/profile.raw.jdn") (slurp (get rec :profile)))
+                          (spit (string ndir "/expected.out") (slurp (get rec :oracle)))
+                          (def snapshot (if (os/stat cmeta) (string (slurp cmeta)) nil))
+                          (unless (aot-cache-store out ndir (get g :args)
+                                                   (get rec :stdin)
+                                                   [src ;includes ;extrac]
+                                                   (if (get g :has-stdin)
+                                                     (get g :stdin-bytes) nil)
+                                                   @[] snapshot)
+                            (aot-die "PGO cache publication failed; no binary installed" 1)))
+                        (eprint "bender --aot: --pgo-auto published " (length auto-groups)
+                                " gateable workloads"))
                       (os/rename candidate out)
                       (eprint "bender --aot: pgo parity ok, installed " out)))))
           (when (and release gate-fallback)
@@ -6466,8 +6644,11 @@
                                           --aot app.janet [-o app] [-c] [-S] [-E args...]
                                           [--native] [--externs F] [--include F] [-x F]
                                           [--ldflags S] [--pgo ARGS] [--pgo-stdin F]
-                                          [--no-auto-pgo] [--release] [-Oz] [--upx]
+                                          [--pgo-auto] [--no-auto-pgo] [--release] [-Oz] [--upx]
                                           --pgo requires --native; collect/replay ARGS for parity
+                                          --pgo-auto requires --native; merges and gates the auto-PGO
+                                            runs this output key already collected (JANET_AUTO_PGO=1),
+                                            quarantining evidence that fails parity
                                           --no-auto-pgo skips cached evidence during this build
                                           --release requires --native and verified cached evidence;
                                             final binary omits automatic profiling and native telemetry
