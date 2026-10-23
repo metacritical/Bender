@@ -195,3 +195,20 @@ Narrow the emission, but train on a **merged multi-workload profile** — exactl
 
 ### Open, cheap, and decisive
 A same-image `JANET_NATIVE_NO_CONTINUATION` toggle on the binarypath-trained build would attribute its remaining dispatch delta with zero cross-build confound. Also still open: reconcile the gate's 68 BLOCKED against the frozen baseline's 67.
+
+## CAPSTONE — merged multi-workload training BEATS unnarrowed v1 on coverage
+`--pgo-auto` merged THREE isolated replayable 400-frame workloads, gating and publishing each (the Phase 1–3 machinery doing exactly the job it was built for). Result at `EDGE_MIN_CALLS=500`: **13 selected PCs / 111 executors**, covering all five decrypt edges PLUS `travel-complete?` 20→`ctx-anim`, `ctx-coord-on-line` 3→`geom-lerp-point` (the design §5 motion chain) and `rings-set-disperse-path` 24→`randrange`.
+
+**Chained calls (higher = more work moved out of the interpreter):**
+| effect | v1 (emit everywhere) | v2 decrypt-only | v2 merged 3-workload |
+|---|---:|---:|---:|
+| decrypt | 90,034 | 89,380 | 89,775 |
+| rings | 19,344 | 17,378 | **136,743 (7.1× v1)** |
+| beams | 127,249 | 127,249 | 128,975 |
+| binarypath | 76,231 | 45,385 | **216,823 (2.8× v1)** |
+Refusals: decrypt 397 / rings 3 / beams 4,003 / binarypath 792 — two to three orders of magnitude below v1's 602,846/410,297/249,662/446,192, but NOT uniformly near-zero (beams 4,003). Output byte-exact on all four effects; per-effect call-edge conservation still exact against measured pre calls (653,830/2,408,002/534,828/2,272,883).
+
+**So merged training dominates both predecessors on coverage** — more chains than emit-everywhere v1 on every effect — while keeping guard waste far below v1. That is the shipping direction.
+
+**CONFOUND, still respected:** the merged build selects 111 executors vs v1's 96, so part of the chain gain comes from broader leaf coverage, not edge selection alone; no isolated continuation effect and no time claim may be drawn from these numbers. A same-image `JANET_NATIVE_NO_CONTINUATION` toggle is the outstanding control.
+**Threshold note:** lowering `EDGE_MIN_CALLS` below 500 is NOT indicated — the 13-PC selection already covers every named hot edge, and a lower threshold cannot select edges a profile never observed. Coverage is bounded by workload representativeness, not by the threshold.
