@@ -356,6 +356,33 @@ not robust across effects. That variant was rejected; its binary is retained
 as `...-leaf-region-any-rel` for reproduction. The conservative 16-leaf tier
 is the only one committed.
 
+### Full-workload PGO experiment (rejected)
+
+The release profiles above are one-effect (`decrypt` for CLI, `scattered` for
+GUI). I tested whether a merged full-workload profile would improve type,
+kernel, and layout evidence without changing the executor set.
+
+For CLI I collected all 37 effects into one isolated cache
+(`bender-cli-fullpgo-cache`), producing a release with the same 83 loop
+executors and 9 kernels. It passes 37/37 bounded CLI parity. A same-sitting
+six-effect paired A/B against the decrypt-only loop release gave a
+fullpgo/loop time geomean of **1.0128** (median 1.0000, fullpgo faster
+18/60), i.e. no win.
+
+For GUI I collected the five target effects (`wipe`, `highlight`, `expand`,
+`randomsequence`, `scattered`) into `bender-gui-fullpgo-cache` and built the
+noexec release; its PGO gate passed and it has 0 executors / 9 kernels /
+1.7 MB. A five-round paired A/B against the scattered-only noexec release
+gave a fullpgo/noexec FPS geomean of **0.9859** (median 0.9659, fullpgo
+faster 12/25), i.e. slower.
+
+The merged profiles also produced expected type divergences across workloads
+(for example `scene-new` and `filter` argument shapes) and did not change
+executor count or code size. Both full-workload candidates were rejected and
+retained as `janet-port/build/ttfx-cli-fullpgo` and
+`janet-port/build/ttfx-gui-bender-fullpgo` for reproduction. The release
+profiles remain one-effect; no full-workload PGO claim is made.
+
 ### Final artifacts
 
 - `janet-port/build/ttfx-cli-container-rel`: 83 loop executors, 9 kernels,
@@ -365,9 +392,12 @@ is the only one committed.
   retained as `...-on-rel`, and the leaf candidate as `...-leaf-noffi-rel`.
 - `janet-port/build/ttfx-cli-container-leaf-rel`: 99 executors (16 leaf),
   37/37 parity, retained only as an opt-in experiment.
+- Rejected full-workload candidates: `janet-port/build/ttfx-cli-fullpgo`
+  (83 executors, 37/37 parity, 1.0128 time ratio versus the one-effect loop
+  release) and `janet-port/build/ttfx-gui-bender-fullpgo` (0 executors,
+  0.9859 FPS ratio versus the one-effect noexec release).
 
 The measured next target is not another boundary fast path: it is an
 environment-capable native function/leaf continuation for the hot
-`ctx-*`/`ease`/RNG helpers, or a full-workload PGO collection that can gate
-executor code without overfitting `decrypt`/`scattered`. No overall Rust
-parity claim is made from this checkpoint.
+`ctx-*`/`ease`/RNG helpers. Full-workload PGO was tested and rejected above.
+No overall Rust parity claim is made from this checkpoint.
