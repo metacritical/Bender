@@ -1068,3 +1068,99 @@ pop it keeps are exactly their cost.
 - `janet_vm.native_interp_calls` is incremented unconditionally in `JOP_CALL`.
   It is one increment beside `janet_fiber_funcframe`; it was not separately
   A/B'd and is assumed below the noise floor shown above.
+
+### Correction: the ~1% is guard cost, not noise (2026-10-23, later)
+
+The validation workstream established the gate's noise floor twice
+independently, using pairs whose generated `native.c` was **byte-identical**:
+**+/-3% per effect, 0.1-0.3% geomean** (`ML/ttfx/bench/bender-37-gate.md`;
+geomean 0.9992 over 37 effects and 1.0025 over 5). That floor does not license
+calling this change's cross-binary geomean noise, because this change's two
+sides do **not** share generated C -- the candidate emits a continuation
+attempt at every non-terminal call PC. Re-measured on the same
+executor-equal 96/96 pair, 7 paired alternating rounds:
+
+| effect | candidate ms | baseline ms | ratio |
+|---|---|---|---|
+| beams | 298.0 | 294.0 | 1.014 |
+| binarypath | 1341.3 | 1408.7 | 0.952 |
+| decrypt | 323.9 | 316.6 | 1.023 |
+| fireworks | 433.6 | 431.6 | 1.005 |
+| laseretch | 419.8 | 411.5 | 1.020 |
+| rings | 2561.3 | 2551.4 | 1.004 |
+| swarm | 401.9 | 397.4 | 1.011 |
+| waves | 383.0 | 373.9 | 1.024 |
+
+**geomean 1.0064** (parity on this subset re-verified: 8/8 exact, 59/59 cases).
+With the 37-effect 5-round run's 1.0100, two independent runs put the
+cross-binary cost at **+0.6% to +1.0% geomean** -- above the 0.1-0.3% geomean
+floor, though individual effects (`binarypath` 1.000 then 0.952) move well
+inside the +/-3% per-effect floor and must not be read individually.
+
+That gives a clean decomposition, because the two legs isolate different
+things:
+
+| leg | what differs | geomean | reads as |
+|---|---|---|---|
+| same binary, `JANET_NATIVE_NO_CONTINUATION` toggled | only whether edges are *taken*; guard code present in both | 0.9996 | **chain benefit ~= 0** |
+| candidate vs pre-change build, identical executor sets | guard emission + the `JOP_CALL` counter increment + the trampoline indirection, *and* edges taken | 1.0064 / 1.0100 | **always-on cost ~= +0.6-1.0%** |
+
+So the earlier "build-to-build layout variation" reading was too generous and
+is withdrawn: the honest statement is that **v1 as built is a small net
+regression**, because it pays an unconditional guard at every non-terminal
+call PC and the chaining it enables buys nothing measurable back. This is a
+direct, quantified argument for design §7 steps 8-11 (`:calledges` plus
+profile-narrowed emission at selected PCs only): narrowing emission removes
+the measured cost term while keeping every edge that actually chains. v1
+should not be enabled by default until that lands or the frame-bookkeeping
+work (v2.2/v3) makes the chain itself pay.
+
+### Reconciliation with the two reported registration failures
+
+The workstream reports (a) `test/suite-native-executor.sh` red at `6cdb7857`
+with four refusals and the `assert failure in (> (counts 0) 0)` at
+`test/fixtures/native-executor.janet:50`, and (b) `188:int-string?` /
+`190:to-i` refused "in every ttfx build", with an exact correspondence between
+the refused ids and the only manifest entries whose `defn` lives in the AOT
+entry file -- those being the only ones `tools/mkimage.janet` (~205-220)
+re-emits with an eager `executor-register id fn`, while everything imported
+from `src/` takes the lazy `janet_native_registry_add` + structural-attachment
+path.
+
+**The correspondence is real and the eager path is indeed the only one that
+reports a refusal at all** (the lazy path is silent). Two pieces of evidence
+from this work refine the cause:
+
+1. **The red suite is explained by the missing build opt-in, not by the eager
+   path being broken.** Reproduced identically on a pristine `66a5cf9a`
+   worktree, and the four refused ids are 10, 11, 13 and 14 -- exactly
+   `numeric-sum`, `numeric-nested`, `unsupported-loop` and `numeric-fraction`,
+   the entry-file `defn`s of `test/fixtures/native-executor.janet`, while the
+   imported `native-executor-mixed` ids (1, 2, 4, 7, 8) print nothing. That is
+   the predicted signature of a runtime where `janet_native_register`
+   *always* returns 0: without `JANET_NATIVE_EXECUTORS` it is compiled to the
+   refusing stub, so **every** registration fails and only the eager ones say
+   so. Rebuilt with `make CFLAGS="-O2 -g -DJANET_NATIVE_EXECUTORS"`, the same
+   suite at the same commit is **green** and those four ids bind.
+
+2. **`188:int-string?` and `190:to-i` do not refuse in builds from this
+   lineage.** Both are present in the manifests of every ttfx binary built
+   here (`ttfx-cli-cont-v1`, `ttfx-pgo-v1`) and both **bind**: the gate
+   reports `available=81 REFUSED: none bound 81` and `available=96 REFUSED:
+   none bound 96`, and running the binaries directly emits no refusal line.
+   The gate doc's own table is consistent with that: `ttfx-cli-packed-path-pgo`
+   (plain `--pgo`) shows `REFUSED: none`, while the refusals appear on
+   `ttfx-cli-autopgo-v2`, built through `--pgo-auto` then `--release`. So the
+   failure is not a property of those two functions, and not of entry-file
+   eager registration in general -- it is specific to the
+   `--pgo-auto`/`--release` pipeline, where something re-emits or transforms
+   the entry file's forms after `tools/callgraph.janet` produced the
+   descriptor. A `--native` vs `--release` pair off one source tree should
+   bisect it in one step.
+
+**Neither failure interacts with continuation.** `janet_native_call_enter`
+never assumes a callee is attached: it requires `def->native_code != NULL`
+*and* a current-epoch `janet_native_revalidate`, and refuses -- touching
+nothing -- otherwise. A definition that lost its executor to either
+registration bug simply never chains; it cannot mis-chain. Fixing the eager
+path is left as a separate commit, as the workstream recommends.
