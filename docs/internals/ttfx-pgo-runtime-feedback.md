@@ -321,21 +321,44 @@ through the `--pgo` publication path, so a later `--release` succeeds.
 (`-DJANET_NO_PGO -DJANET_NATIVE_TELEMETRY=0`); a release binary writes no
 profile.
 
-Verified end to end (no `janet-port` checkout exists in this repo, so an
-equivalent in-repo CLI fixture with two argv workloads was used):
+Verified end to end against the real ttfx CLI at
+`ML/ttfx/janet-port` (cache `XDG_CACHE_HOME=/tmp/autopgo2-cache`,
+`logo.txt` = `../ruby-port/logo.txt`), using two workloads so the merge,
+the dedupe and the per-workload gate are all exercised:
 
 ```text
-# training build, then 3 runs of "decrypt --seed 42" and 2 of "bench --seed 17"
+# training build, 3 runs of "decrypt --bench ..." and 2 of "decrypt --dump-frames ..."
 bender --aot: --pgo-auto merging 5 auto profiles over 2 workloads
-bender --aot: --pgo-auto workload 0 runs=3 argv="decrypt --seed 42"
-bender --aot: --pgo-auto workload 1 runs=2 argv="bench --seed 17"
-bender --aot: cached PGO profiles for 2 workloads
+bender --aot: --pgo-auto workload 0 runs=3 argv="decrypt --bench --input-file ../ruby-port/logo.txt --seed 42"
+bender --aot: --pgo-auto workload 1 runs=2 argv="decrypt --dump-frames --max-frames 400 --input-file ../ruby-port/logo.txt --seed 42"
+pgo-divergence: @["src/color.janet" 110 "color-fg"] workload 0 vs 1 params @[@[:array :tuple]] != @[@[:tuple]]
 bender --aot: --pgo-auto published 2 gateable workloads
-bender --aot: pgo parity ok, installed tmp/e2e/app-autopgo
-# then --release from the same cache
+bender --aot: pgo parity ok, installed build/ttfx-cli-autopgo2
+# --release from the same cache (same -o: the cache is keyed by output basename)
 bender --aot: verifying 2 cached workloads
-bender --aot: pgo parity ok, installed tmp/e2e/app-autopgo
+bender --aot: pgo parity ok, installed build/ttfx-cli-autopgo2
 ```
+
+The `--dump-frames` workload makes the gate meaningful rather than
+vacuous: 2,423,238 bytes of frame output, byte-identical between the
+release binary and the interpreter.  (`--bench` writes its timing to
+stderr and leaves stdout empty, so a `--bench`-only workload proves only
+that the run reproduces an empty stdout.)
+
+`bench/validate-languages.py` was run through a transient copy restricted
+to installed runtimes (`lua`, `luajit` and `chez` are absent on this
+machine) and extended with the two Bender binaries under test:
+**150 byte-parity checks passed**, 5 effects x 3 inputs x 2 seeds, with
+the `--pgo-auto` release binary byte-identical to Rust, to the current
+`ttfx-cli-packed-path-pgo` candidate, and to the interpreter.
+
+For one identical workload, the generated C from `--pgo-auto` evidence is
+**byte-for-byte identical** to the generated C from an explicit `--pgo`
+collection of that workload (same 81 loop executors, same 9 kernels).
+Auto-PGO evidence is therefore not weaker evidence; it is the same
+evidence collected at a different time.  Measured decrypt timings vary by
+about 2% between binaries built from identical generated C, which sets the
+noise floor for the subset bench below.
 
 Known limitations:
 
@@ -352,6 +375,18 @@ Known limitations:
   ttfx) are unaffected.
 - `--pgo-auto` refuses to promote a legacy v2 cache record; run `--pgo`
   once first.
+- The PGO cache is keyed by the **output basename**, so the `--pgo-auto`
+  and `--release` builds must use the same `-o` as the training build.  A
+  different `-o` reports "no replayable workload" and is easy to mistake
+  for an evidence problem.
+- `bench-cli-packed-path-vs-rust.py`, the 37-effect A/B harness this
+  document cites, is not committed anywhere and could not be run, so
+  **full-suite no-regression was not checked**.  A 6-effect `--bench`
+  subset (decrypt, wipe, highlight, expand, randomsequence, scattered;
+  medians of 3 paired rounds) gave a geomean of 0.998 for the
+  `--pgo-auto` release against `ttfx-cli-packed-path-pgo`, i.e. no
+  regression at subset scale, with per-effect ratios between 0.90 and
+  1.08 -- inside this bench's noise.
 
 ## Honest status
 
