@@ -1,0 +1,39 @@
+# Deterministic work counters (AOT/native)
+
+## Purpose and headline
+
+The headline is **interpreted bytecode instructions retired per rendered frame**, with the frame count held fixed by `--dump-frames --max-frames N` (never infer a frame count from variable-duration `--bench`). The adjacent native-operations-per-frame and VM-boundary-exits-per-frame numbers are separate dimensions. A native operation and a bytecode dispatch are **not equivalent units**: do not add them into a percentage of time or claim that `interpreted / (interpreted + native)` is CPU occupancy. This work vector replaces noisy cross-build wall time for *attribution and direction*, not for a final speedup claim. A change can reduce counts yet run slower because of instruction cost, cache locality, branch prediction, allocations, or binary layout; the reverse is possible too. Report elapsed-time measurements separately and with their measured uncertainty.
+
+## Invocation
+
+Build the compiler with `make NATIVE_EXECUTORS=1`, set `JANET_NATIVE_EXECUTORS=1` for AOT compilation **and** execution, and compile a telemetry-enabled native image (`--aot ... --native`, **not `--release`**). A normal image supports:
+
+```sh
+JANET_NATIVE_EXECUTORS=1 JANET_NO_PROFILE=1 ./effect \
+  --work-profile /tmp/effect-work.json decrypt --dump-frames \
+  --max-frames 400 --input-file ../ruby-port/logo.txt --seed 42 \
+  > /tmp/effect-frames.out
+```
+
+`--work-profile -` writes JSON to stderr; a file path keeps stdout exclusively for the application. The switch and its destination are removed before Janet sees `:args`; no application output is added. An absent destination, a plain image, or telemetry-disabled release fails explicitly. Set `JANET_NO_PROFILE=1` **also for the uninstrumented control**, or the profile machinery changes continuation eligibility (an observed zero-chains/89,849-refusals trap). Every run emits a short stderr summary and JSON with `schema`, `deterministic`, `advisory_gc`, `top_native_ops`, and `top_vm_exits`. The top lists each contain up to ten *nonzero* definitions in descending metric order, ties by numeric manifest ID. Each row carries ID, name, entries, ops, VM exits and chained calls. Compare JSON with `cmp` over five repeated runs of the exact same executable, argv, seed and input; separately compare stdout bytes against a run without the switch.
+
+## Inventory and exact counting sites
+
+| Counter | Counting site and interpretation |
+|---|---|
+| Interpreted dispatches (new) | `src/core/vm.c` `VM_START` and `vm_next` in both computed-goto and switch forms: increment immediately before an interpreter opcode dispatch, including first dispatch after re-entry. `vm_native` may run native instructions before the tick; those instructions are not falsely counted as VM dispatches. |
+| Native ops, entries, backedges, fallbacks, VM boundary exits and chained edges (existing) | `tools/loop-executor.janet` emits `NX_TICK/ENTRY/EDGE/FALLBACK/VMEXIT/CONT` for each Tier-B descriptor. `tools/callgraph.janet` exposes `executor-stats(id)` tuple `[entries, backedges, fallbacks, ops, vmexits, continuations]`; `native-executors.txt` maps ID to name. `NX_TICK` means a generated, actually executed operation; guard failures before a tick are not retired native ops. `NX_VMEXIT` is a particular generated boundary site; global VM exits also include other native-to-VM exits, so their totals need not agree. |
+| Native-to-VM exits and exit-opcode histogram (existing) | `src/core/vm.c` `vm_native` increments `native_vm_exits` and `native_exit_opcodes[*pc & 0xFF]` on trampoline `JANET_NATIVE_VM`; `executor-exit-stat(opcode)` and global tuple index 4 expose them. Native entry/re-entry proxy is the sum of per-definition `entries`: entries include resumes and chaining, not just exits' one-to-one inverse. |
+| Interpreted Janet-function calls, native chains, refusal, native returns (existing) | `src/core/vm.c` JOP_CALL and `janet_native_call_enter`/`janet_native_ret_pop`; `executor-global-stats()` indices 9,6,7,8 respectively; per-definition `conts` attributes chains to caller. `interpreted_calls + chained_calls` is the call-edge conservation check in the tested continuation workload; interpreter calls exclude C-function calls and tail calls. |
+| Native kernel invocations (existing, separate tier) | `tools/callgraph.janet` generates per-kernel `*_telemetry_calls` (plus guard failures) or dispatcher variants/fallbacks and `atexit` stderr lines `native-telemetry id=...`; these are wrapper calls, not Tier-B `NX_TICK` operations. The JSON currently covers Tier-B executors, **not** kernel call totals; parse these separate lines when kernel activity matters. |
+| Attach attempts/attached/ambiguous/no-match (existing) | `src/core/bytecode.c` `janet_native_try_attach` and `janet_native_stat`, global tuple indices 0–3. These describe registration/attachment, not executed work; `available N` alone proves no live execution. |
+| GC-object allocations and requested bytes (new advisory) | `src/core/gc.c` `janet_gcalloc`, after successful allocation; requested bytes omit slab internal fragmentation and external buffer storage/`janet_gcpressure`. `src/core/gc.c` `janet_gc_barrier` counts calls even if immediate values return before any remembered-edge change. |
+| GC cycles (new advisory) | Actual major, global minor, fiber minor and process minor collection entries after the suspend gate; delegated fallbacks count only the global minor. `JANET_GC_COUNT` historically counts cycles only when separately built with that diagnostic define and prints on major entry, not as a final aggregate. |
+
+All new increments are under `JANET_NATIVE_EXECUTORS && JANET_NATIVE_TELEMETRY`; the default for telemetry-enabled native images is 1. `--release` passes `-DJANET_NATIVE_TELEMETRY=0` for generated executors and the reporter; it is **not** a counter probe. Runtime increments have per-dispatch/per-native-op/per-allocation/per-barrier costs, and change generated code layout; the report adds a single exit-time O(number of definitions × 10) top-N selection and file write, with no Janet allocations or hash traversal. The existing per-definition TLS counters are read on the main thread; activity on additional OS threads is not aggregated.
+
+## Determinism contract and limits
+
+The `deterministic` vector and top lists are ordered by explicit manifest IDs, not address or hash iteration. For a fixed build, input, seed, environment, frame count and single-threaded scheduling, integer counts and JSON bytes should repeat exactly. Prove this **per workload**; byte-identical visual output alone is insufficient. Native ops and interpreter dispatches can still change if scheduling or a GC-triggered path changes; concurrent workloads, host-dependent I/O, or nondeterministic hash iteration violate the preconditions. The `advisory_gc` object is deliberately **excluded from the deterministic core** because allocation/collection timing and interleavings can alter its totals; it does not promise identical bytes across machines or threads. A complete JSON file can be bit-identical in a specific controlled run, but this is empirical evidence, not a universal guarantee.
+
+Use positive nonzero `top_native_ops`/`native_entries` to prove live executors, a nonzero `chained_calls` to prove selected continuation edges, `JANET_NO_PROFILE=1`, and exact program-byte parity before comparing vectors. Compare each component separately, always quote seed/frame count and exact binary revision. Historical cross-build wall timing on this host falsely found a 4.04% binarypath change between two builds of identical generated C; do not translate count deltas into speedup percentages.
