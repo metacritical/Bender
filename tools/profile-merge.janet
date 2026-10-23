@@ -155,6 +155,44 @@
       (map (fn [left right] (if (deep= left right) left
                                (union-types left right))) x y)))
 
+# Per-PC call-edge attribution, advisory in exactly the same sense as
+# :receivers above. A slot is nil (unobserved), :open
+# (polymorphic/unnamed), or [calleeName total native].
+(defn- calledges [value]
+  (when (nil? value) (break nil))
+  (when (= value :open) (break :open))
+  (unless (and (indexed? value) (<= (length value) 256))
+    (bad "invalid call edges"))
+  (each slot value
+    (unless (or (nil? slot) (= slot true) (= slot :open)
+                (and (indexed? slot) (= 3 (length slot))
+                     (string? (slot 0))
+                     (number? (slot 1)) (>= (slot 1) 0)
+                     (= (slot 1) (math/trunc (slot 1)))
+                     (number? (slot 2)) (>= (slot 2) 0)
+                     (= (slot 2) (math/trunc (slot 2)))
+                     (<= (slot 2) (slot 1))))
+      (bad "invalid call edge slot")))
+  value)
+
+# Monomorphic only survives agreement: two runs that saw different callee
+# names at one PC describe a polymorphic site, so the slot opens. Counts
+# add. Opening is always the conservative direction -- an open slot just
+# means no continuation guard is emitted there.
+(defn- merge-calledges [a b]
+  (def x (calledges a)) (def y (calledges b))
+  (if (or (nil? x) (nil? y) (= x :open) (= y :open)
+          (not= (length x) (length y))) :open
+      (map (fn [left right]
+             (cond
+               (nil? left) right
+               (nil? right) left
+               (or (= left true) (= left :open)
+                   (= right true) (= right :open)) :open
+               (not= (left 0) (right 0)) :open
+               @[(left 0) (+ (left 1) (right 1)) (+ (left 2) (right 2))]))
+           x y)))
+
 (defn- accumulate-info [a b]
   (def ca (get a :calls))
   (def cb (get b :calls))
@@ -191,7 +229,8 @@
     :type-from type-origins
     :signatures (merge-signatures (get a :signatures) (get b :signatures))
     :edges (merge-edges (get a :edges) (get b :edges))
-    :receivers (merge-receivers (get a :receivers) (get b :receivers))})
+    :receivers (merge-receivers (get a :receivers) (get b :receivers))
+    :calledges (merge-calledges (get a :calledges) (get b :calledges))})
 
 (defn main [& _args]
   # Script name arrives as args[0] (like tools/callgraph.janet, which
@@ -236,7 +275,8 @@
             (def tagged (merge info {:from (origins (get info :from prov))
                                      :signatures (signatures (get info :signatures))
                                      :edges (edges (get info :edges))
-                                     :receivers (receivers (get info :receivers))}))
+                                     :receivers (receivers (get info :receivers))
+                                     :calledges (calledges (get info :calledges))}))
             (unless (and (number? (get info :calls)) (>= (get info :calls) 0)
                          (= (get info :calls) (math/trunc (get info :calls))))
               (bad "invalid call count"))

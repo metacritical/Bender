@@ -1677,6 +1677,30 @@
     (when (and (indexed? edges) (indexed? receivers)
                (not= (length edges) (* 2 (length receivers))))
       (profile-invalid "edge and receiver PCs disagree"))
+    # Per-PC call-edge attribution: nil = unobserved, :open =
+    # polymorphic/unnamed, [calleeName total native] = the single observed
+    # callee name with its call counts. Shaping evidence only (it selects
+    # WHERE a continuation guard is emitted), but malformed cache data is
+    # rejected rather than trusted, exactly like :edges above.
+    (def calledges (get info :calledges))
+    (unless (or (nil? calledges) (= calledges :open)
+                (and (indexed? calledges) (<= (length calledges) 256)
+                     (every? (map |(or (nil? $) (= $ true) (= $ :open)
+                                       (and (indexed? $) (= 3 (length $))
+                                            (string? ($ 0))
+                                            (number? ($ 1)) (>= ($ 1) 0)
+                                            (= ($ 1) (math/trunc ($ 1)))
+                                            (number? ($ 2)) (>= ($ 2) 0)
+                                            (= ($ 2) (math/trunc ($ 2)))
+                                            (<= ($ 2) ($ 1))))
+                                  calledges))))
+      (profile-invalid "invalid call edges"))
+    (when (and (indexed? calledges) (indexed? receivers)
+               (not= (length calledges) (length receivers)))
+      (profile-invalid "call edge and receiver PCs disagree"))
+    (when (and (indexed? calledges) (indexed? edges)
+               (not= (* 2 (length calledges)) (length edges)))
+      (profile-invalid "call edge and branch edge PCs disagree"))
     (each field [:params :elems]
       (def slots (profile-sequence (get info field @[]) field))
       (each slot slots (profile-types slot field)))
@@ -1718,6 +1742,7 @@
                           :mins (map prof-bound (get info :mins @[]))
                           :maxs (map prof-bound (get info :maxs @[]))
                           :calls (get info :calls 0)
+                          :calledges (get info :calledges)
                           :from (get info :from :home)
                           :type-from (get info :type-from @[])})
       (put profile-index nm bucket)))
