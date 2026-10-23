@@ -5503,7 +5503,7 @@
   (each s ffi-alias-skips
     (print "ffi-alias-skip " (s 0) " " (s 1)))
   (def cout @"")
-  (buffer/push-string cout "#include <janet.h>\n#include <inttypes.h>\n#include <math.h>\n#include <stdbool.h>\n#include <stdlib.h>\n\n")
+  (buffer/push-string cout "#include <janet.h>\n#include <inttypes.h>\n#include <math.h>\n#include <stdbool.h>\n#include <stdio.h>\n#include <stdlib.h>\n#include <string.h>\n#ifndef JANET_NATIVE_TELEMETRY\n#define JANET_NATIVE_TELEMETRY 1\n#endif\n\n")
   # Independent tier: never insert executor ids into emitted-names/kernels.
   # Distinct definitions may share a name (an imported module's real function
   # and its one-thunk analysis copy). Identity for this tier is structural:
@@ -5779,11 +5779,19 @@
       (buffer/push-string am (string id " " (a :janet) " " (a :argcount) " "
                                      (p :source-base) "\n")))
     (spit (string outdir "/native-ffi-aliases.txt") am))
+  (def work-template (slurp (string (string/join (tuple/slice (string/split "/" ((dyn :args) 0)) 0 (- (length (string/split "/" ((dyn :args) 0))) 1)) "/") "/work-profile-template.c")))
+  (def work-rows @"")
+  (each id executors
+    (buffer/push-string work-rows
+      (string "{" id ",\"" (emit-c-string-literal
+                              (string (or (((get defs id) :d) :name) "?")))
+              "\",nx_" id "_entries,nx_" id "_ops,nx_" id "_vmexits,nx_" id "_conts},\n")))
+  (buffer/push-string cout (string/replace-all "JANET_WORK_ROWS" (string work-rows) work-template))
   (buffer/push-string cout "#if JANET_NATIVE_TELEMETRY\nstatic void native_telemetry_report_all(void) {\n")
   (each k kernels (buffer/push-string cout (string "    " (emit-c-name (k :name)) "_telemetry_report();\n")))
   (buffer/push-string cout "}\n#endif\n\n")
   (buffer/push-string cout "void native_init(JanetTable *env) {\n")
-  (buffer/push-string cout "#if JANET_NATIVE_TELEMETRY\n    atexit(native_telemetry_report_all);\n#endif\n")
+  (buffer/push-string cout "#if JANET_NATIVE_TELEMETRY\n    atexit(native_telemetry_report_all);\n    atexit(janet_work_report);\n#endif\n")
   (each key atom-const-order
     (buffer/push-string cout
       (string "    " (get atom-const-ids key) " = "

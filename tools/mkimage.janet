@@ -533,6 +533,34 @@
 (buffer/push-string out
   ```
   int main(int argc, char **argv) {
+      /* Remove the launcher switch before passing argv into Janet. */
+      const char *work_path = NULL;
+      for (int ai = 1; ai < argc; ai++) {
+          if (!strcmp(argv[ai], "--work-profile")) {
+              if (work_path || ai + 1 >= argc || !argv[ai + 1][0]) {
+                  fprintf(stderr, "--work-profile requires one file path or '-'\n");
+                  return 2;
+              }
+              work_path = argv[++ai];
+              memmove(argv + ai - 1, argv + ai + 1,
+                      (size_t)(argc - ai) * sizeof(*argv));
+              argc -= 2;
+              ai -= 2;
+          }
+      }
+      if (work_path) {
+#if !defined(JANET_AOT_NATIVE_INIT) || (defined(JANET_NATIVE_TELEMETRY) && !JANET_NATIVE_TELEMETRY)
+          fprintf(stderr, "--work-profile requires a telemetry-enabled native build\n");
+          return 2;
+#else
+          if (!getenv("JANET_NO_PROFILE")) {
+              fprintf(stderr, "--work-profile requires JANET_NO_PROFILE=1\n");
+              return 2;
+          }
+          extern void native_work_profile_path(const char *path);
+          native_work_profile_path(work_path);
+#endif
+      }
       janet_init();
 #ifndef JANET_NO_PGO
       /* The VM owns its auto-PGO output across both normal and os/exit
