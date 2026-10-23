@@ -1292,7 +1292,23 @@ byte-identical in shape to pre-v1 output, which v1 could not claim.
   representative or conservatively merged multi-workload evidence is needed
   first, and merge may open conflicting edges. Reducing the threshold for
   observed edges can emit more guards (and spend more work on refused
-  attempts), so recheck costs rather than choosing 500 universally.
+  attempts), so recheck costs rather than choosing 500 universally. A pinned
+  v2 `--pgo-auto` experiment merged 400-frame decrypt, binarypath and rings
+  with an isolated output-keyed cache at threshold 500 (details and exact
+  four-effect work vectors in `work-counters.md`). All three workloads passed
+  separate replay/parity gates; 13 PCs were emitted, including the missing
+  `travel-complete?` and motion `ctx-coord-on-line` edges. On binarypath,
+  chains rose from decrypt-only v2's 45,385 to 216,823 (unnarrowed v1:
+  76,231); rings rose 17,378→136,743 (v1: 19,344), and beams rose
+  127,249→128,975 (v1: 127,249). Decrypt remained 259 short of v1
+  (89,775 versus 90,034). Multi-profile selection did **not** keep near-zero
+  refusals on every effect: 397 decrypt, 3 rings, 4,003 beams, 792 binarypath.
+  It also selected 111 executors versus 96 in decrypt-trained v1/v2, so
+  changed VM exits and native ops cannot isolate continuation benefit. The
+  demonstrable choice is representative training for *coverage*, followed by
+  per-effect guards/work and byte-parity checks; threshold 500 is not proven
+  a universal shipping setting, and lower thresholds were not tested because
+  all named missing edges were already emitted.
 - Timing: one machine, no CPU pinning, medians of 5-7 paired alternating
   rounds. Per-effect ratios must not be read individually against the +/-3%
   floor.
