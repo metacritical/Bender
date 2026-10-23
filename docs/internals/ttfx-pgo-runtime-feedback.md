@@ -101,7 +101,8 @@ Measured with the packed-path candidate:
 - Rust `--parity-dump` vs Bender `--dump-frames`
 - three alternating paired rounds
 - startup, effect construction, frame generation, and output included
-- 36/37 byte parity; only `swarm` differs
+- 36/37 byte parity; only `swarm` differs — **verified 2026-10-23**, see
+  "Stage 0" below
 - Bender/Rust time geomean: **21.773** (Bender speed **0.046x**)
 - previous release: 23.242, so the three packed-structure changes are a
   real but modest **~6.3%** improvement
@@ -271,8 +272,9 @@ JANET_NATIVE_EXECUTORS=1 XDG_CACHE_HOME=$CACHE bender --aot \
 # auto-PGO observation
 XDG_CACHE_HOME=$CACHE JANET_AUTO_PGO=1 build/ttfx-cli-autopgo decrypt --bench ...
 
-# all-37 CLI vs Rust
-python3 bench-cli-packed-path-vs-rust.py
+# all-37 CLI vs Rust -- bench-cli-packed-path-vs-rust.py was never committed
+# and does not exist; the committed replacement lives in ML/ttfx
+python3 bench/validate-bender.py --rust --timing
 ```
 
 ## Implemented: sidecar provenance and `--pgo-auto`
@@ -404,13 +406,57 @@ Known limitations:
   different `-o` reports "no replayable workload" and is easy to mistake
   for an evidence problem.
 - `bench-cli-packed-path-vs-rust.py`, the 37-effect A/B harness this
-  document cites, is not committed anywhere and could not be run, so
-  **full-suite no-regression was not checked**.  A 6-effect `--bench`
-  subset (decrypt, wipe, highlight, expand, randomsequence, scattered;
-  medians of 3 paired rounds) gave a geomean of 0.998 for the
-  `--pgo-auto` release against `ttfx-cli-packed-path-pgo`, i.e. no
-  regression at subset scale, with per-effect ratios between 0.90 and
-  1.08 -- inside this bench's noise.
+  document cited, was never committed anywhere.  It has been **replaced** by
+  `ML/ttfx/bench/validate-bender.py` (see "Stage 0" below), which gates all
+  37 effects and their 436 canonical option sets and reports parity and
+  timing from one run.  A 6-effect `--bench` subset gave a geomean of 0.998
+  for the `--pgo-auto` release against `ttfx-cli-packed-path-pgo`; the full
+  37-effect table now gives 1.0205, but both numbers are confounded by the
+  executor-binding inequality described below.
+
+## Stage 0: the 37-effect gate exists again, and the swarm figure is confirmed
+
+The committed replacement for the missing harness is
+`ML/ttfx/bench/validate-bender.py` (`bench/bender-37-gate.md` for the
+analysis, `bench/baselines/bender-37-2026-10-23.json` for the frozen run).
+It enumerates all 37 effects *and* their 436 canonical option sets from
+`tools/fx/cases/*.txt`, compares sha256 over complete bounded `--dump-frames`
+output, reports a paired `--bench` timing table with geomean in the same run,
+and reports Tier-B executor bindings per binary.
+
+Two figures from this document are now settled empirically:
+
+1. **"36/37, only swarm differs" is correct.** Bare invocations, seeds 42 and
+   1337, 400 frames, `logo.txt`: Bender-vs-Bender 37/37 exact (74/74 cases);
+   Bender-vs-Rust 36/37 with `swarm` the **sole** divergence
+   (seed 42: janet 739,319 B `8327687e…` vs rust 757,416 B `0e69981a…`;
+   seed 1337: janet 676,336 B `2b39cb85…` vs rust 672,992 B `11c0746a…`).
+   Every record in the ttfx tree claiming 37/37 against Rust is wrong about
+   swarm.  Under the canonical option sets Bender-vs-Rust drops to 24/37, but
+   57 of those divergences are Janet CLI flags that do not exist (the CLI
+   ignores unknown flags silently, so the two sides run different workloads);
+   only 15 are genuine engine divergences.
+2. **The all-37 A/B that validated the three packing stages is reproducible
+   again**, so Phase 4 work can be gated.  The current candidate (built via
+   `--pgo-auto` then `--release`) is **37/37 exact** against
+   `ttfx-cli-packed-path-pgo` over 276 runnable cases.
+
+Two blockers the gate surfaced, both documented in `bench/bender-37-gate.md`:
+`bin/ttfx-cli.janet` `flag-values` panics on any option value shorter than
+two characters, which blocks 159 of 436 canonical option sets (one-line fix,
+verified in a scratch copy, not applied); and the
+`docs/benchmarks/2026-09-21.csv` digests cannot cross-check the Janet port,
+because that protocol needs `--virtual-clock`, which the Janet CLI does not
+implement and silently ignores.
+
+**Executor bindings are not automatically like-for-like.** The gate found the
+candidate binding 79 of 81 loop executors while the baseline binds 81
+(`int-string?` and `to-i` refused — now named, see the `id=` in
+`tools/callgraph.janet`).  The same two refusals appear when ttfx is rebuilt
+with the pre-change compiler at `6cdb7857`, so this is a property of
+rebuilding today rather than of the auto-PGO work — but it means the current
+timing geomean (1.0205 candidate/baseline) measures executor inequality as
+much as anything else.  Equalizing those two is Phase 4's first task.
 
 ## Honest status
 
