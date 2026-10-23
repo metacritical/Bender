@@ -776,8 +776,10 @@ static JanetSlot janetc_def(JanetFopts opts, int32_t argn, const Janet *argv) {
         janet_checktype(selections, JANET_TABLE))
         selected_line = janet_table_get(janet_unwrap_table(selections), argv[0]);
     int profiled = janet_checkint(selected_line);
-    int retain = c->retain_hinted_exports_for_analysis && (hinted || profiled) &&
-                 !janet_truthy(janet_table_get_keyword(attr_table, "private"));
+    /* Private hints are checked contracts too; profile selection remains
+     * export-only, since private names are not stable module bindings. */
+    int retain = c->retain_hinted_exports_for_analysis &&
+                 (hinted || (profiled && !janet_truthy(janet_table_get_keyword(attr_table, "private"))));
     JanetScope *fn_scope = c->scope;
     while (fn_scope && !(fn_scope->flags & JANET_SCOPE_FUNCTION)) fn_scope = fn_scope->parent;
     int32_t defs_before = fn_scope ? janet_v_count(fn_scope->defs) : 0;

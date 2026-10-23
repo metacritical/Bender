@@ -147,6 +147,28 @@
 (assert (not (nil? (string/find "hints 2 0" htext))) "hint counts")
 (assert (not (nil? (string/find "hint-call 1 2" htext))) "hinted callees linked")
 
+# Private defn- hints retain the same checked contract as public defn.
+(spit "/tmp/cg-private-hint.janet" (string
+  "(defn- priv {:hint {:params [:double :double] :returns :double}} [x y] (+ x y))\n"
+  "(defn main [] (priv 1.5 2.5))\n"))
+(assert (= 0 (os/execute ["/bin/sh" "-c"
+  "./build/bender tools/callgraph.janet /tmp/cg-private-hint.janet > /tmp/cg-private-hint-out.txt"] :p))
+  "callgraph private hint run")
+(def private-htext (slurp "/tmp/cg-private-hint-out.txt"))
+(assert (not (nil? (string/find "hint 1 double double -> double" private-htext)))
+  "private hint recorded")
+(assert (not (nil? (string/find "hints 1 0" private-htext)))
+  "private hint counted")
+(spit "/tmp/cg-private-hintbad.janet" (string
+  "(defn- priv {:hint {:params [:double] :returns :bogus}} [x] x)\n"
+  "(defn main [] (priv 1.5))\n"))
+(assert (= 0 (os/execute ["/bin/sh" "-c"
+  "./build/bender tools/callgraph.janet /tmp/cg-private-hintbad.janet > /tmp/cg-private-hintbad-out.txt"] :p))
+  "callgraph invalid private hint run")
+(assert (not (nil? (string/find "hint-bad 1 bad-returns-hint"
+  (slurp "/tmp/cg-private-hintbad-out.txt"))))
+  "invalid private hint refused")
+
 # invalid hints are rejected, never silently accepted
 (spit "/tmp/cg-hintbad.janet" (string
   "(defn f {:hint {:params [:double] :returns :bogus}} [x] x)\n"
