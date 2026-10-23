@@ -345,6 +345,17 @@ time geomean across six effects (1.5% faster, 25/60 rows), but a 20-round
 (leaf/noexec 0.9604 versus leaf/loop 1.0201 across different sittings), so
 the leaf tier remains opt-in and is **not** in the final release.
 
+A more aggressive follow-up relaxed the entry rule to allow any native region
+(not only one starting at PC 0) and admitted unused environment slots. It
+selected 25 leaf definitions, including `ctx-char-active?`,
+`ctx-step-animation`, `next-word`, and `next-word-boxed`, and passed 37/37
+parity. Six-effect paired timing improved to 0.9787 geomean (median 0.9749,
+32/60 rows), but `randomsequence` regressed to 1.1619 median (61.0 versus
+52.5 ms); the new leaf wrappers around cfunction/native-kernel dispatch were
+not robust across effects. That variant was rejected; its binary is retained
+as `...-leaf-region-any-rel` for reproduction. The conservative 16-leaf tier
+is the only one committed.
+
 ### Final artifacts
 
 - `janet-port/build/ttfx-cli-container-rel`: 83 loop executors, 9 kernels,
