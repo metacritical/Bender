@@ -553,6 +553,25 @@ than the previous CLI release at the all-37 geomean level. This is still far
 from Rust, so the next targets remain animation/path state and native
 continuation.
 
+### Packed motion-path state (accepted)
+
+Motion paths (`waypoints`, `segments`, `total`, `step`, `max-steps`,
+`hold`, origin, speed, ease) were also per-tick tables. They are now packed
+arrays with small `ctx-path-*` accessors for the three effects that touched
+path fields directly (`vhstape`, `unstable`, `orbittingvolley`). Three-round
+all-37 A/B against the packed-scene release: **0.9893** geomean, median
+**0.9895**, faster in **25/37**. Largest gains: `rings` 0.947,
+`randomsequence` 0.952, `swarm` 0.960, `vhstape` 0.961, `laseretch` 0.970,
+`rain` 0.972. Remaining regressions: `matrix` 1.025, `slice` 1.024,
+`beams` 1.018, `unstable` 1.010. Candidate:
+`janet-port/build/ttfx-cli-packed-path-pgo`; source commit
+`ttfx: pack motion path state into arrays`.
+
+The three accepted unboxing steps combined are about **5.8% faster** than
+the original CLI release at the all-37 geomean level. This is not Rust
+parity; the remaining budget is still dominated by VM excursions, table/GC
+traffic in animation/event state, and frame serialization.
+
 ### Final artifacts
 
 - `janet-port/build/ttfx-cli-container-rel`: 83 loop executors, 9 kernels,
