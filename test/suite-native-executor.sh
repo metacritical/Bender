@@ -24,8 +24,17 @@ grep -q 'janet_native_table_put_fast' "$root/generated/native.c"
 grep -q 'janet_native_buffer_push_string_ready' "$root/generated/native.c"
 grep -q 'janet_native_core_predicate' "$root/generated/native.c"
 grep -q 'janet_native_register_predicates' "$root/generated/native.c"
-grep -q 'janet_native_call_enter' "$root/generated/native.c"
-grep -q 'return JANET_NATIVE_FRAME' "$root/generated/native.c"
+# Continuation emission is profile-narrowed: with no profile, NOT ONE
+# continuation attempt may be emitted, which is exactly the pre-feature
+# shape (a plain NX_EXIT to the VM at every non-terminal call PC). An
+# always-on attempt cost +0.6-1.0% geomean for no measurable benefit.
+if grep -q 'janet_native_call_enter' "$root/generated/native.c"; then
+    echo "profile-free build emitted a continuation attempt" >&2; exit 1
+fi
+if grep -q 'return JANET_NATIVE_FRAME' "$root/generated/native.c"; then
+    echo "profile-free build emitted a continuation step" >&2; exit 1
+fi
+test ! -s "$root/generated/native-continuations.txt"
 JANET_NATIVE_EXECUTORS=1 ./build/bender --aot test/fixtures/native-executor.janet --native --no-auto-pgo -o "$root/image" > "$root/image-build.log" 2>&1
 "$root/image" > "$root/image.log" 2>&1
 grep 'image-executor' "$root/image.log"
@@ -71,8 +80,21 @@ echo "native geti/next/scratch/alias/GC image parity passed"
 #   chained call edges + interpreted Janet JOP_CALLs
 # must come out to the same total, which is what catches a call executed
 # twice or skipped when the callee is pure enough for output to agree.
-JANET_NATIVE_EXECUTORS=1 ./build/bender --aot test/fixtures/native-continuation.janet \
-    --native --no-auto-pgo -o "$root/cont" > "$root/cont-build.log" 2>&1
+# The emission is narrowed by :calledges evidence and gated by
+# JANET_EXECUTOR_EDGE_MIN_CALLS, so this leg needs a real profile: --pgo
+# collects one, gates the binary against the interpreter, and installs only
+# on byte parity.
+JANET_NATIVE_EXECUTORS=1 JANET_EXECUTOR_EDGE_MIN_CALLS=5 \
+    JANET_EXECUTOR_LEAF_MIN_CALLS=5 ./build/bender --aot \
+    test/fixtures/native-continuation.janet \
+    --native --pgo '' -o "$root/cont" > "$root/cont-build.log" 2>&1
+# Every selected edge is reported, and the emitted C carries exactly one
+# attempt per selected PC -- no more, no fewer.
+test -s "$root/cont-native/native-continuations.txt"
+sel=$(wc -l < "$root/cont-native/native-continuations.txt" | tr -d ' ')
+emitted=$(grep -c 'janet_native_call_enter' "$root/cont-native/native.c")
+echo "continuation emission: selected=$sel emitted=$emitted"
+test "$sel" = "$emitted"
 "$root/cont" > "$root/cont-on.log" 2>&1
 JANET_NATIVE_NO_CONTINUATION=1 "$root/cont" > "$root/cont-off.log" 2>&1
 grep 'native-continuation image passed' "$root/cont-on.log"

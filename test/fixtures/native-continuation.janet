@@ -62,7 +62,11 @@
   (def gstats (if (function? gentry) gentry (gentry :value)))
   (def gs (gstats))
   # 6 continuations, 7 refusals, 8 native returns, 9 interpreted Janet calls.
-  (print "cont-identity total=" (+ (gs 6) (gs 9))
+  # Telemetry goes to stderr: it exists only in an executor-enabled native
+  # build, so printing it on stdout would make the AOT binary's stdout differ
+  # from the interpreter's and fail the --pgo parity gate. The suite captures
+  # both streams.
+  (eprint "cont-identity total=" (+ (gs 6) (gs 9))
          " continuations=" (gs 6)
          " refusals=" (gs 7)
          " native-returns=" (gs 8)
@@ -73,5 +77,5 @@
   (loop [id :range [0 64]]
     (def [ok counts] (protect (stats id)))
     (when (and ok (> (counts 5) 0))
-      (print "cont-executor " id " conts=" (counts 5) " entries=" (counts 0)))))
+      (eprint "cont-executor " id " conts=" (counts 5) " entries=" (counts 0)))))
 (print "native-continuation image passed")

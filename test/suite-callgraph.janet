@@ -1077,4 +1077,82 @@
   "cd /tmp/cg-xor64 && ./native > actual.txt && cmp expected.txt actual.txt"] :p))
   "u64 xoshiro-shaped kernel parity vs boxed oracle")
 
+# ---- :calledges profile schema: accepted, and malformed data refused ----
+# :calledges is per-PC shaping evidence that selects WHERE a native
+# continuation guard is emitted. It is never a type or identity proof, so
+# the only thing the schema must guarantee is that malformed cache data is
+# rejected rather than trusted -- exactly the contract :edges/:receivers
+# already carry.
+(spit "/tmp/cg-ce.janet" (string
+  "(defn ce-callee [a b] (+ a b))\n"
+  "(defn ce-caller [n]\n"
+  "  (var s 0)\n"
+  "  (var i 0)\n"
+  "  (while (< i n) (set s (ce-callee s i)) (set i (+ i 1)))\n"
+  "  s)\n"
+  "(defn main [&] (print (ce-caller 40)))\n"))
+(assert (= 0 (os/execute ["/bin/sh" "-c"
+  "JANET_PROFILE=1 JANET_PROFILE_OUT=/tmp/cg-ce-prof.out ./build/bender /tmp/cg-ce.janet >/dev/null 2>&1"] :p))
+  "calledges profile run")
+(def ce-rows (parse (slurp "/tmp/cg-ce-prof.out")))
+(def ce-row (find |(= "ce-caller" (($ 0) 2)) ce-rows))
+(assert ce-row "caller row present in the profile")
+(def ce-slots (get (ce-row 1) :calledges))
+(assert (indexed? ce-slots) ":calledges recorded as a per-PC vector")
+(assert (= (length ce-slots) (length (get (ce-row 1) :receivers)))
+        ":calledges has one slot per bytecode PC")
+(def ce-mono (find indexed? ce-slots))
+(assert (not (nil? ce-mono)) "a monomorphic call edge was recorded")
+(assert (= 3 (length ce-mono)) "call edge slot is [calleeName total native]")
+(assert (= "ce-callee" (ce-mono 0)) "call edge names the observed callee")
+(assert (= 40 (ce-mono 1)) "call edge counts every call at that PC")
+(assert (>= (ce-mono 2) 0) "native-call subcount is non-negative")
+# A clean profile is accepted by the validator.
+(assert (= 0 (os/execute ["/bin/sh" "-c"
+  "rm -rf /tmp/cg-ce-ok && ./build/bender tools/callgraph.janet /tmp/cg-ce.janet --profile /tmp/cg-ce-prof.out --emit-native /tmp/cg-ce-ok >/tmp/cg-ce-ok.txt 2>&1"] :p))
+  "well-formed :calledges accepted")
+# Every malformed shape is a hard profile-invalid, not a silent downgrade.
+(defn- ce-reject [tag mutate expect]
+  (def rows (parse (slurp "/tmp/cg-ce-prof.out")))
+  (def row (find |(= "ce-caller" (($ 0) 2)) rows))
+  (mutate (row 1))
+  (spit (string "/tmp/cg-ce-bad-" tag ".jdn") (string/format "%j" rows))
+  (def code (os/execute ["/bin/sh" "-c"
+    (string "./build/bender tools/callgraph.janet /tmp/cg-ce.janet --profile "
+            "/tmp/cg-ce-bad-" tag ".jdn --emit-native /tmp/cg-ce-bad > "
+            "/tmp/cg-ce-bad-" tag ".txt 2>&1")] :p))
+  (assert (not= 0 code) (string tag ": malformed :calledges must refuse"))
+  (assert (string/find expect (slurp (string "/tmp/cg-ce-bad-" tag ".txt")))
+          (string tag ": refusal names the real reason")))
+(ce-reject "negative" (fn [info]
+                        (def cs (get info :calledges))
+                        (put cs (find-index indexed? cs) @["ce-callee" -1 0]))
+           "invalid call edges")
+(ce-reject "nativegt" (fn [info]
+                        (def cs (get info :calledges))
+                        (put cs (find-index indexed? cs) @["ce-callee" 2 9]))
+           "invalid call edges")
+(ce-reject "badname" (fn [info]
+                       (def cs (get info :calledges))
+                       (put cs (find-index indexed? cs) @[:ce-callee 2 0]))
+           "invalid call edges")
+(ce-reject "shortslot" (fn [info]
+                         (def cs (get info :calledges))
+                         (put cs (find-index indexed? cs) @["ce-callee" 2]))
+           "invalid call edges")
+(ce-reject "pcdisagree" (fn [info]
+                          (put info :calledges
+                               (array/slice (get info :calledges) 0 -2)))
+           "PCs disagree")
+# :open and nil slots are legal: a polymorphic or unobserved site simply
+# does not get a guard.
+(def ce-open (parse (slurp "/tmp/cg-ce-prof.out")))
+(let [row (find |(= "ce-caller" (($ 0) 2)) ce-open)
+      cs (get (row 1) :calledges)]
+  (put cs (find-index indexed? cs) :open))
+(spit "/tmp/cg-ce-open.jdn" (string/format "%j" ce-open))
+(assert (= 0 (os/execute ["/bin/sh" "-c"
+  "rm -rf /tmp/cg-ce-op && ./build/bender tools/callgraph.janet /tmp/cg-ce.janet --profile /tmp/cg-ce-open.jdn --emit-native /tmp/cg-ce-op >/tmp/cg-ce-op.txt 2>&1"] :p))
+  ":open call-edge slot accepted")
+
 (end-suite)
