@@ -105,3 +105,31 @@ So on live-tier builds the per-effect spread is roughly **±12–23%**, not ±3%
 
 ### Consequence — measurement methodology is now the critical path
 No further performance work is meaningful until a protocol exists that can resolve ~1% on this machine: CPU pinning/affinity, many more paired rounds, per-effect confidence intervals rather than single medians, outlier policy, and a declared minimum detectable effect. **Rule: no performance claim without (a) positive proof the tier is live — non-zero per-definition counters, never an inferred binding count — and (b) an effect larger than the protocol's stated MDE.**
+
+## TIMING PROTOCOL RESULT (ML/ttfx c902e6d/012a4a1/4b87c02, `docs/timing-protocol.md`, `bench/paired-timing.py`)
+**We cannot resolve 1% by wall-clock A/B on this machine, and the reason is structural, not statistical.**
+- A/A control, two builds of IDENTICAL generated C, verified live, 16 ABBA rounds: wall geomean 1.00926 CI95 [0.99381, 1.02730] (conditional radius 1.79%); internal `time_ms` was WORSE (1.00736, radius 1.95%).
+- **The killer: A/A `binarypath` came back 1.0404 CI [1.0048, 1.0882] — a confident FALSE POSITIVE against identical C.** Bootstrap CIs model within-run noise but not persistent BUILD-LAYOUT bias, so a per-effect CI can exclude 1.0 while the true effect is zero. Any per-effect claim from a cross-build A/B is therefore unsafe regardless of its interval.
+- Variance decomposition: within-binary repeat CV **13–20%**; within-pair log SD 5.38–7.26%; residual ABBA SD 1.98–8.50%; early-vs-late drift −1.34 to +1.66 log%. ABBA interleaving genuinely helps (decrypt single-pair SD 6.58% → 1.98%); more rounds do NOT help monotonically; macOS gave no CPU affinity and denied priority elevation.
+- Usable guardbands (illustrative, not formal power): **~4.6% on a four-effect geomean, ~8.7% worst individual.**
+- Controls: a synthetic 5% arithmetic control was detected; a PHYSICAL positive control was not achieved — so the MDE is calibrated only against injected arithmetic, not against a real code change.
+
+### Verdict on continuation v2 under the honest protocol
+**NOT DISTINGUISHABLE.** v2 vs pre-change, 12 ABBA rounds, all three binaries rebuilt live-tier: wall geomean **0.99054 CI [0.97192, 1.01547]** — the interval spans 1.0, direction unresolved. (v1 vs v2 observed 1.03870 [1.02957, 1.04912] but is cross-build-confounded by exactly the bias the A/A control exposed.) So "narrowing removed the regression" remains **plausible but unproven**; the mechanism results (5 emitted PCs, 89,380 chains retained, refusals 563,564 → 2, counter identity 89,380 + 564,450 = 653,830, byte parity) all stand on their own and are NOT in question.
+
+### Consequence — how to measure from here
+Cross-build wall-clock A/B is a dead end below ~5%. Future performance claims must use one of:
+1. **Same-binary toggles** (one build, feature switched at runtime, e.g. `JANET_NATIVE_NO_CONTINUATION`) — removes build-layout bias entirely. This is why v1's 0.9996/v2's 0.9924 toggle legs are the more trustworthy numbers.
+2. **Deterministic counters instead of time**: native ops, VM exits, interpreted calls, instruction counts. These are exact, and the project already emits them.
+3. Effects large enough to clear ~5%, or a dedicated quiesced machine.
+
+### Hard-won operational facts (cost real time to rediscover)
+- **Old commits silently ignore `make NATIVE_EXECUTORS=1`** — the Makefile option only exists from d5a24e5d. Building `66a5cf9a`/`3db27d20` with that variable yields a STUB runtime that still prints "96 available". For pre-d5a24e5d commits you MUST pass `CFLAGS='-O2 -g -DJANET_NATIVE_EXECUTORS'`. Always verify with non-zero per-definition counters.
+- **`JANET_NO_PROFILE=1` is mandatory during counter probes**: without it v2 produced 89,849 refusals and ZERO chains — an A/B of a no-op.
+- **`matrix` is unusable for timing**: its `--bench` frame count varies run to run (30,822–31,202). Use `rings` as the stable long effect.
+
+## Hint fixes landed (06e35981, c582a594, 57e84b41)
+1. **Private-hint fail-open CLOSED**: root cause was `src/core/specials.c:janetc_def` excluding `:private` from the compiler's hint-retention sidecar, so `defn-` hints never reached `register-def`/`extract-hints`. Hinted private defs now carry the same checked contract (verified `double priv(double p0, double p1)`), with an invalid-hint `hint-bad` regression.
+2. **Dynamic `require` now DIAGNOSED**: `preimport-unit-imports` only queues top-level literal imports, so a require inside a function never reaches hint extraction. Emits `callgraph: dynamic require module not analyzed for hints: <module>` instead of silence. (Diagnosis, not support.)
+3. **`math/hypot` lowered** via `tools/infer.janet:pure-calls` + C symbol reservation (so a kernel named `hypot` cannot shadow libm); differential test **4096/4096 bit-identical**, including `hypot(1e308,1e308)`.
+Gate: 37/37 effects, 368/368 runnable cases byte-identical, both sides 81/81 bound, no refusals.
