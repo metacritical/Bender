@@ -159,3 +159,24 @@ Same binary, feature toggled, byte-identical output, trained with `JANET_EXECUTO
 
 ### What the vectors say about strategy
 Even PGO-trained, a 400-frame decrypt still retires ~18.4M interpreted dispatches against ~21.5M native ops. **Coverage remains the frontier** — this is the fifth independent line of evidence (continuation v1 refusal census, typed-pilot population mismatch, loop stop-gate shape, zero-fallback counter audit, and now work vectors). Next questions to put to the counters, not to a stopwatch: which definitions dominate `interpreted_dispatches` (the reporter emits top-N), and what share would move if `ctx-frame-string` (17–36% of executor occupancy, blocked by construction poison) became natively constructible.
+
+## PINNED pre/v1/v2 WORK COMPARISON — v2's narrowing is TRAINING-DEPENDENT (settled with counters)
+Historical counters retrofitted via measurement-only overlays in ignored `tmp/` (ABI-matched to each pinned image, output byte-exact; no pinned source mutated).
+
+**Interpreted dispatches, 400 frames, seed 42:**
+| effect | pre | v1 | v2 | v2−v1 |
+|---|---:|---:|---:|---:|
+| decrypt | 18,672,489 | 18,431,435 | 18,432,093 | +658 |
+| rings | 113,188,121 | 113,125,945 | 113,127,919 | +1,974 |
+| beams | 17,249,923 | 16,976,178 | 16,976,178 | 0 |
+| binarypath | 65,264,779 | 65,100,716 | 65,131,718 | **+31,002** |
+Native ops identical across all three revisions for every effect; output byte-exact.
+
+**Root cause, proven by conservation** (lost chains == extra interpreted work, one-for-one): chains v1→v2 are decrypt 90,034→89,380 (−654), rings 19,344→17,378 (−1,966), beams 127,249→127,249 (0), binarypath 76,231→45,385 (**−30,846**). v2 selects only the PCs a DECRYPT profile nominated (`ctx-anim`/`scene-new`/`ctx-scene`/`ctx-add-frame`), so it under-serves untrained workloads; `beams` ties exactly because its hot edges happen to fall in that set, and motion/path-heavy `binarypath` suffers most — its hot edges are design §5's motion chain, which a decrypt profile never sees.
+
+**Three-way conservation proof (validates the metric itself):** pre's interpreted calls — 653,830 / 2,408,002 / 534,828 / 2,272,883 — exactly equal v1's and v2's `interpreted_calls + chained_calls` for every effect. Total call work is invariant across revisions; continuation only MOVES calls from interpreted to chained.
+
+**Refusal counts are NOT comparable between v1 and v2** (audited: v1 `loop-executor.janet:437-455` attempts a chain at every non-terminal call PC so a failure increments a refusal at `vm.c:523-525`; v2 `:456-471` attempts only at selected PCs, so an unselected call exits with no attempt and no refusal). v1's 602,846/410,297/249,662/446,192 versus v2's 2/2/3/2 is a DENOMINATOR change, not a success-rate improvement. Report side by side, never differenced.
+
+### OPERATIONAL RULE (belongs with `JANET_EXECUTOR_EDGE_MIN_CALLS`)
+**Profile-narrowed emission is only as good as its training workload's representativeness; single-workload training can make an untrained effect WORSE in work terms than unnarrowed emission.** v2 as trained is slightly worse than v1 on 3 of 4 effects and equal on the fourth, though both beat pre-change. The open question — whether multi-workload training (via `--pgo-auto`'s per-workload merge + `tools/profile-merge.janet`, possibly with a lower `EDGE_MIN_CALLS`) recovers v1's chain coverage while keeping v2's near-zero guard waste — is NOT yet answered and is the next experiment. If per-PC selection cannot cover several effects at once, that is a real limit of the approach and must go in the design doc.
