@@ -529,6 +529,12 @@ is committed in the ttfx worktree as
 `ttfx-cli-container-rel` until the next changes are combined and the final
 release choice is made.
 
+A follow-up changed `ctx :events` from a hash table keyed by character id
+to a direct array. It also passed 37/37 parity, but the three-round all-37
+A/B against the packed release was **1.0082** (median 1.0039, only 13/37
+faster; `blackhole` 1.062 and `swarm` 1.061 regressed). That experiment was
+reverted; the packed-frame release remains the candidate.
+
 ### Final artifacts
 
 - `janet-port/build/ttfx-cli-container-rel`: 83 loop executors, 9 kernels,
