@@ -1164,3 +1164,174 @@ never assumes a callee is attached: it requires `def->native_code != NULL`
 nothing -- otherwise. A definition that lost its executor to either
 registration bug simply never chains; it cannot mis-chain. Fixing the eager
 path is left as a separate commit, as the workstream recommends.
+
+---
+
+## v2: profile-narrowed emission (`:calledges`), 2026-10-23
+
+Code landed in `45bd0c66` (`:calledges` in the profile), `f6a15bbf`
+(validation/index/merge), `e03ba5ed` (narrowed emission), `53baa402`
+(tests). This is §7 steps 8-11, built in response to the measurement above.
+**Where this section and the design text disagree, the code and this section
+are authoritative.**
+
+### What was built
+
+- **`:calledges`** (`src/core/vm.c`): one slot per original bytecode PC of
+  the caller -- `nil` unobserved, `[calleeName total native]` monomorphic,
+  `:open` polymorphic or unnamed. Recorded in `JOP_CALL`'s Janet-function
+  branch from a caller identity captured *before* `func` is rebound, under
+  the same `JANET_PROFILE_EDGE_MAXPC` bound as `:edges`/`:receivers`, and
+  lookup-only (it never creates a profile entry). Framed exactly like
+  `:elems`: shaping evidence that decides *where* a guard is emitted, never
+  what a guard may skip.
+- **Validation and merge** (`tools/callgraph.janet`, `tools/profile-merge.janet`):
+  malformed slots are a hard `profile-invalid`; `--pgo-auto`'s merge sums
+  agreeing slots and opens on any disagreement. Without the merge support the
+  field would have been silently dropped by `accumulate-info`.
+- **Narrowed emission** (`tools/loop-executor.janet`, `tools/callgraph.janet`):
+  `loop-executor/emit` takes an optional `cont-pcs` set; with none it emits
+  **no** continuation attempt anywhere, which is byte-for-byte the pre-v1
+  shape. Selection requires a monomorphic slot at or above
+  `JANET_EXECUTOR_EDGE_MIN_CALLS`, a callee name resolving to exactly one
+  `name-ids` id, that id in the selected executor set, and agreement from the
+  static `call-map`.
+
+### One divergence worth recording
+
+Descriptors are deduplicated *structurally* and attach to every matching
+definition, so `cont-pcs` cannot be a function of the emitted id. Selection
+and emission are therefore two passes, and ids sharing a structural key emit
+once with the **union** of their PC sets. Union is the conservative
+direction: a guard that refuses touches nothing.
+
+### Measured outcome: the cost term is gone
+
+ttfx, one source tree, `--pgo` on the same decrypt workload,
+`JANET_EXECUTOR_LEAF_MIN_CALLS=500`, candidate additionally
+`JANET_EXECUTOR_EDGE_MIN_CALLS=500`. Baseline is janet `66a5cf9a`, the last
+commit *before* continuation v1. Both binaries bind **96/96, REFUSED: none**,
+with byte-identical `native-executors.txt`.
+
+| leg | v1 as built | v2 narrowed |
+|---|---|---|
+| cross-binary vs pre-change, identical executor sets | 1.0064 (7 rounds) / 1.0100 (5 rounds) | **0.9881** (7 rounds, 436 cases) / **0.9834** (5 rounds) |
+| same binary, `JANET_NATIVE_NO_CONTINUATION` toggled | 0.9996 | **0.9924** (5 rounds, 8 effects) |
+
+**The +0.6-1.0% always-on cost measured for v1 is removed.** Both independent
+cross-binary runs now land *below* 1.0 rather than above it, and the
+same-binary toggle moved from a flat 0.9996 to 0.9924 with 6 of 8 effects
+under 1.0 -- a small but directionally consistent chain benefit that v1 could
+not show because its guard cost cancelled it.
+
+Two honest bounds on those numbers. First, 0.9834-0.9881 is *more* than
+narrowing alone should buy: the candidate still carries the unconditional
+`janet_vm.native_interp_calls++` in `JOP_CALL` and the trampoline
+indirection, so part of the margin below 1.0 is build-to-build code layout,
+the same effect that made v1's first 1.0100 reading look like noise. The
+defensible claim is **"at or below parity"**, not "1.2% faster". Second, the
+toggle leg's 0.9924 sits inside the +/-3% per-effect floor; only its
+consistency across effects distinguishes it from noise.
+
+### Narrowing keeps essentially every edge that chains
+
+On decrypt, 400 frames, leaf tier on:
+
+| | v1 (attempt at every non-terminal call PC) | v2 (5 emitted PCs) |
+|---|---:|---:|
+| emitted `janet_native_call_enter` sites | every non-terminal call PC | **5** |
+| chained edges | 90,041 | **89,392** |
+| runtime refusals | 563,564 (loop tier) | **2** |
+| counter identity | 653,839 == 653,839 | **653,836 == 653,836** |
+
+So 99.3% of the chaining survives five guards, and the refusal traffic --
+the guard firing where it was never going to succeed -- collapses from
+hundreds of thousands to two. That is the mechanism by which the cost term
+disappears, and it confirms the design's premise that chaining edges are
+concentrated at a handful of PCs.
+
+The five selected PCs on this profile are `ctx-anim`, `scene-new`,
+`ctx-scene` and `ctx-add-frame` edges -- **not** the motion chain of §5.
+decrypt is not a motion-dominated workload, so the §5 edge table remains
+unverified by this measurement; selecting it would need a profile collected
+on `binarypath`/`rings`/`waves`.
+
+### Gates
+
+| Gate | Result |
+|---|---|
+| `make test`, `NATIVE_EXECUTORS=1` build | green |
+| `make test-executors` | green |
+| `test/suite-callgraph.janet` | 242/242 (6 new `:calledges` schema gates) |
+| ttfx 37-effect Bender-vs-Bender, 96/96 both sides | **37/37 exact, 368/368 cases, 0 FAIL** |
+| ttfx counter identity, decrypt, 400 frames | **653,836 == 653,836**, dumps byte-identical on/off |
+| Profile-free build emits zero `janet_native_call_enter` | asserted in `test/suite-native-executor.sh` |
+
+R11 is now closed as the design intended: a profile-free build is
+byte-identical in shape to pre-v1 output, which v1 could not claim.
+
+### Limitations
+
+- The selection profile is one decrypt workload. A motion-dominated profile
+  would select different edges and has not been measured.
+- `JANET_EXECUTOR_EDGE_MIN_CALLS` is unset by default, so a default build
+  selects nothing and emits no continuation attempt at all. v1's mechanism is
+  still opt-in, now at two levels.
+- Timing: one machine, no CPU pinning, medians of 5-7 paired alternating
+  rounds. Per-effect ratios must not be read individually against the +/-3%
+  floor.
+- `janet_vm.native_interp_calls++` in `JOP_CALL` remains unconditional and
+  was still not separately A/B'd.
+
+---
+
+## Correction: the `--pgo-auto`/`--release` descriptor refusal is not a descriptor bug
+
+The reconciliation section above predicted that a `--native` vs `--release`
+pair off one source tree would bisect the `188:int-string?` / `190:to-i`
+refusals "in one step". It did, and the answer is that **no descriptor
+transform exists**. Fixed in `591049a3`.
+
+Bisected on one ttfx source tree with janet at `6cdb7857`, the exact commit
+the gate doc blames:
+
+| janet build at `6cdb7857` | ttfx build | refusals |
+|---|---|---|
+| plain `make` (no `-DJANET_NATIVE_EXECUTORS`) | `--native --no-auto-pgo` | **2** (`id=188`, `id=190`) |
+| plain `make` | `--pgo` then `--release` | **2** (same pair) |
+| `make CFLAGS="-O2 -g -DJANET_NATIVE_EXECUTORS"` | `--native --no-auto-pgo` | **0**, binds 81/81 |
+
+The pipeline is irrelevant. Without the compile-time opt-in,
+`janet_native_register` is a stub returning 0 and `janet_native_registry_add`
+is a no-op, so **every** registration fails. `188:int-string?` and
+`190:to-i` are the only manifest entries whose `defn` lives in the AOT entry
+file, hence the only ones `tools/mkimage.janet` registers *eagerly* -- and
+the eager path is the only one that prints anything. Two reports out of 81
+silent failures read as two broken functions rather than a dead tier.
+
+That is exactly the diagnosis the v1 notes reached for
+`test/suite-native-executor.sh`; it generalizes to the ttfx binaries, and the
+`--pgo-auto`/`--release` correlation in `ML/ttfx/bench/bender-37-gate.md` was
+coincidental -- those two binaries were built against differently-configured
+janet builds, not by different pipelines.
+
+Verified at this HEAD with the opt-in: `--native`, `--pgo`, `--pgo-auto` and
+`--release` ttfx builds each report **available=81, REFUSED: none**.
+
+**The fix** makes the misleading line honest. `native_init` printed
+"available N frame executors" straight from the build manifest even when the
+runtime could not bind a single one. It now asks
+`janet_native_registry_count()`, which is zero exactly when the tier is
+absent, and otherwise says so explicitly:
+
+```
+native_init: 81 frame executors in this image, but this runtime was built
+WITHOUT JANET_NATIVE_EXECUTORS -- the executor tier is inert and every
+registration will fail
+```
+
+The underlying ergonomic hazard -- that the tier needs both a compile-time
+define and a runtime environment variable, and silently degrades to the
+interpreter when only one is supplied -- is unchanged; `d5a24e5d`'s
+`make NATIVE_EXECUTORS=1` and this message are the two mitigations now in
+place.
