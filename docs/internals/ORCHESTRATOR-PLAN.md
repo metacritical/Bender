@@ -133,3 +133,29 @@ Cross-build wall-clock A/B is a dead end below ~5%. Future performance claims mu
 2. **Dynamic `require` now DIAGNOSED**: `preimport-unit-imports` only queues top-level literal imports, so a require inside a function never reaches hint extraction. Emits `callgraph: dynamic require module not analyzed for hints: <module>` instead of silence. (Diagnosis, not support.)
 3. **`math/hypot` lowered** via `tools/infer.janet:pure-calls` + C symbol reservation (so a kernel named `hypot` cannot shadow libm); differential test **4096/4096 bit-identical**, including `hypot(1e308,1e308)`.
 Gate: 37/37 effects, 368/368 runnable cases byte-identical, both sides 81/81 bound, no refusals.
+
+## DETERMINISTIC WORK COUNTERS — the primary performance metric now (9296ba62, 1ce43f9c, ac6bb708; `docs/internals/work-counters.md`)
+Wall-clock A/B is retired for sub-5% questions. The metric is now exact, reproducible work attribution: `--work-profile PATH` (requires `JANET_NO_PROFILE=1` per invocation — NEVER export it globally, it legitimately breaks `suite-aot-profile-env`). Determinism proven: five repeats byte-identical (report SHA256 `558147b8…`), stdout identical with counting on vs off. Suites green: full native `make test`, `make test-executors`, `suite-callgraph` 256/256. **Limitation to quote every time: counters measure WORK, not TIME.** A change can cut counts and still be slower (cache, branch prediction) — this metric governs attribution and direction, not final speed claims.
+
+### Baseline work vectors (seed 42, 400 frames, no-PGO builds — coverage at its floor)
+| effect | interp dispatches | native ops | interp share | VM exits |
+|---|---:|---:|---:|---:|
+| rings | 114,391,082 | 50,387,115 | ~69% | 583,894 |
+| binarypath | 66,300,646 | 46,671,003 | ~59% | 771,225 |
+| decrypt | 19,614,209 | 20,387,628 | ~49% | 1,123,599 |
+| beams | 18,313,371 | 24,466,465 | ~43% | 570,499 |
+`rings` is the most interpreter-bound despite being longest-running; `decrypt` is exit-DENSE rather than work-dense (≈2× the exits on a fraction of the work), which is why it was the right continuation workload.
+
+### CONTINUATION v2 — SETTLED IN WORK TERMS (what wall-clock could not do)
+Same binary, feature toggled, byte-identical output, trained with `JANET_EXECUTOR_LEAF_MIN_CALLS=500` + `JANET_EXECUTOR_EDGE_MIN_CALLS=500` (5 PCs selected), 400-frame decrypt:
+| counter | ON | OFF | delta |
+|---|---:|---:|---:|
+| chained edges | 89,380 | 0 | — |
+| interpreted calls | 564,450 | 653,830 | **−89,380 (exact conservation)** |
+| VM exits | 1,436,921 | 1,570,361 | **−133,440 (−8.5%)** |
+| interpreter dispatches | 18,432,093 | 18,672,489 | **−240,396 (−1.3%)** |
+| native ops | 21,506,520 | 21,506,520 | invariant |
+**Verdict: the mechanism provably works and genuinely reduces work — and the magnitude EXPLAINS the wall-clock null rather than contradicting it.** A 1.3% dispatch reduction is far under the ~5% wall-clock can resolve here. Perfect edge/call conservation is strong evidence the accounting is sound; invariant native ops is the signature of work crossing the boundary rather than new work appearing. Both methods now agree.
+
+### What the vectors say about strategy
+Even PGO-trained, a 400-frame decrypt still retires ~18.4M interpreted dispatches against ~21.5M native ops. **Coverage remains the frontier** — this is the fifth independent line of evidence (continuation v1 refusal census, typed-pilot population mismatch, loop stop-gate shape, zero-fallback counter audit, and now work vectors). Next questions to put to the counters, not to a stopwatch: which definitions dominate `interpreted_dispatches` (the reporter emits top-N), and what share would move if `ctx-frame-string` (17–36% of executor occupancy, blocked by construction poison) became natively constructible.
