@@ -383,19 +383,84 @@ retained as `janet-port/build/ttfx-cli-fullpgo` and
 `janet-port/build/ttfx-gui-bender-fullpgo` for reproduction. The release
 profiles remain one-effect; no full-workload PGO claim is made.
 
+### All-37 effect survey against Rust
+
+The five shared parity effects were only a slice of the workload. I measured
+the current releases over all 37 effects against the Rust reference.
+
+CLI protocol: 400-frame bounded dump of `ruby-port/logo.txt`, seed 42,
+`COLUMNS=80`, `LINES=24`; the Rust `--parity-dump` and Bender
+`--dump-frames` outputs were compared byte-for-byte, then three alternating
+paired rounds timed the same complete dump to `/dev/null` (startup included;
+Rust has no `--bench`). 36/37 effects are byte-identical; only `swarm`
+differs. Bender/Rust time geomean is **23.242** (Bender speed **0.043x**);
+on the 36 parity effects it is 23.491. Largest time ratios:
+
+| Effect | Rust ms | Bender ms | Bender/Rust |
+|---|---:|---:|---:|
+| rings | 9.9 | 648.8 | 65.67 |
+| binarypath | 7.8 | 490.7 | 62.97 |
+| waves | 5.9 | 339.4 | 57.69 |
+| vhstape | 8.0 | 416.3 | 52.03 |
+| smoke | 5.1 | 229.6 | 44.97 |
+| colorshift | 5.7 | 243.5 | 42.49 |
+| thunderstorm | 6.3 | 263.6 | 41.77 |
+| decrypt | 4.6 | 185.3 | 39.99 |
+
+GUI protocol: 1458x400 windowed raylib, uncapped, `--show-fps`, seed 42,
+same logo, 2 s probe; current noexec release versus Rust, two complete
+rounds with per-run retries. Bender/Rust FPS geomean is **0.8458**, median
+**0.8486**, with only `print` at or above Rust (1.010). The normally quoted
+five-effect parity is therefore not representative of all 37: the weakest
+effects are `rings` 0.648, `smoke` 0.719, `sweep` 0.721, `unstable` 0.748,
+`binarypath` 0.749, `colorshift` 0.772, and `synthgrid` 0.789.
+
+### All-37 GUI PGO experiment (rejected)
+
+I collected all 37 GUI effects into one isolated PGO cache
+(`bender-gui-all37pgo-cache`), then built the release from that cache. The
+result has **0 executors**, **9 kernels**, and is **1.7 MB**; the compiler
+reported `pgo parity ok` after verifying all 37 workloads. The merged
+profile has 1,224 rows and the expected cross-workload type divergence
+(`ctx-path-step` returns `[]` in some workloads and `[:tuple]` in others).
+
+A two-round, 37-effect paired A/B against the current scattered-only noexec
+release gave a PGO/base FPS geomean of **0.9992** (median **0.9930**; PGO
+faster in 17/37 effects). The five target effects alone were 0.9938. The
+outliers are not a broad win: `binarypath` +19.6% and `decrypt`/`crumble`
+about +7%, but `fireworks` -10.0%, `synthgrid` -8.0%, and `unstable` -5.7%.
+The candidate remains `janet-port/build/ttfx-gui-bender-all37pgo` for
+reproduction; the release GUI stays the scattered-only noexec build.
+
+The all-37 profiles identify where the remaining work is. CLI aggregate hot
+rows are `nil?` 11.6M calls, `xor64` 10.0M, `round-half-even` 6.6M,
+`cfunction?` 6.2M, `shl64` 6.0M, `ctx-step-animation` 5.6M,
+`ctx-char-active?` 5.5M, `ctx-motion-move` 4.5M, and the other 64-bit RNG
+helpers around 4M each. The GUI aggregate is dominated by the FFI alias
+`rl-draw-text-ex` (44.8M) and a generated `boot.janet:4768` wrapper (92.3M);
+the next Janet functions are much smaller (`nil?` 4.7M, `ctx-anim` 1.3M).
+This is draw/FFI-call and VM-entry cost, not missing profile coverage. The
+next compiler target remains native-to-native continuation/inlining for the
+hot helpers and a lower-overhead batched FFI draw path; another merged PGO
+profile is not the answer.
+
 ### Final artifacts
 
 - `janet-port/build/ttfx-cli-container-rel`: 83 loop executors, 9 kernels,
-  2.8 MB, 37/37 bounded CLI parity. This is the release CLI.
+  2.8 MB, 37/37 bounded CLI parity against `ttfx-cli-rel2` (36/37 against
+  Rust; `swarm` differs). This is the release CLI.
 - `janet-port/build/ttfx-gui-bender-container-rel`: 0 frame executors,
   9 kernels, 1.7 MB. This is the release GUI; the 85-executor build is
   retained as `...-on-rel`, and the leaf candidate as `...-leaf-noffi-rel`.
 - `janet-port/build/ttfx-cli-container-leaf-rel`: 99 executors (16 leaf),
   37/37 parity, retained only as an opt-in experiment.
 - Rejected full-workload candidates: `janet-port/build/ttfx-cli-fullpgo`
-  (83 executors, 37/37 parity, 1.0128 time ratio versus the one-effect loop
-  release) and `janet-port/build/ttfx-gui-bender-fullpgo` (0 executors,
-  0.9859 FPS ratio versus the one-effect noexec release).
+  (83 executors, 37/37 parity against `ttfx-cli-rel2`, 1.0128 time ratio
+  versus the one-effect loop release), `janet-port/build/ttfx-gui-bender-fullpgo`
+  (five-effect profile, 0 executors, 0.9859 FPS ratio versus the one-effect
+  noexec release), and `janet-port/build/ttfx-gui-bender-all37pgo`
+  (all-37 profile, 0 executors, 9 kernels, 0.9992 FPS ratio versus the
+  one-effect noexec release).
 
 The measured next target is not another boundary fast path: it is an
 environment-capable native function/leaf continuation for the hot
