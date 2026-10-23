@@ -180,3 +180,18 @@ Native ops identical across all three revisions for every effect; output byte-ex
 
 ### OPERATIONAL RULE (belongs with `JANET_EXECUTOR_EDGE_MIN_CALLS`)
 **Profile-narrowed emission is only as good as its training workload's representativeness; single-workload training can make an untrained effect WORSE in work terms than unnarrowed emission.** v2 as trained is slightly worse than v1 on 3 of 4 effects and equal on the fourth, though both beat pre-change. The open question — whether multi-workload training (via `--pgo-auto`'s per-workload merge + `tools/profile-merge.janet`, possibly with a lower `EDGE_MIN_CALLS`) recovers v1's chain coverage while keeping v2's near-zero guard waste — is NOT yet answered and is the next experiment. If per-PC selection cannot cover several effects at once, that is a real limit of the approach and must go in the design doc.
+
+## CAUSAL ATTRIBUTION — v2's regression localized to ONE unselected caller (3cff5732)
+Exact, not inferred. v1 → decrypt-trained-v2 chain losses, each equal one-for-one to extra interpreted calls: decrypt −654, rings −1,966, beams 0, **binarypath −30,846**. Top-N localizes binarypath's entire loss to a single caller, **`travel-complete?` id664**, which decrypt's profile never nominated. Decrypt's five selected PCs are all scene/animation CONSTRUCTION edges: `ctx-new-scene` 2→`ctx-anim`, 8→`scene-new`; `ctx-scene` 2→`ctx-anim`; `ctx-add-frame` 2→`ctx-scene`; `ctx-apply-gradient` 44→`ctx-add-frame`.
+
+**The design's edge prediction was right; decrypt was the wrong workload to validate it.** A binarypath-trained selection emits 10 PCs including `travel-complete?` 20→`ctx-anim` AND `ctx-coord-on-line` 3→`geom-lerp-point` — the motion chain `native-continuation-design.md` §5 named from the start — recovering binarypath chains **45,385 → 216,823** with byte-exact output.
+
+**CONFOUND, stated and respected:** binarypath training also shifts the leaf executor set **96 → 107** and native ops **47,782,078 → 53,148,727**, so its **−5,282,115** dispatch delta must NOT be credited to edge selection alone, and no time claim follows. Leaf-tier selection being workload-sensitive from identical source is itself a previously unquantified property of `JANET_EXECUTOR_LEAF_MIN_CALLS`.
+
+**Recorded caveats:** the threshold 500 is not universal; lowering it CANNOT select edges a profile never observed (coverage is bounded by the training workload, not by the threshold); v1/v2 refusal denominators differ so refusal counts must never be differenced.
+
+### Shipping recommendation (now evidence-backed)
+Narrow the emission, but train on a **merged multi-workload profile** — exactly what `--pgo-auto` + `tools/profile-merge.janet` (Phases 1–3) were built for. Single-workload training demonstrably makes untrained effects worse than unnarrowed emission.
+
+### Open, cheap, and decisive
+A same-image `JANET_NATIVE_NO_CONTINUATION` toggle on the binarypath-trained build would attribute its remaining dispatch delta with zero cross-build confound. Also still open: reconcile the gate's 68 BLOCKED against the frozen baseline's 67.
