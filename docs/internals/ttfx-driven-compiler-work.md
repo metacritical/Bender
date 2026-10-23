@@ -572,6 +572,12 @@ the original CLI release at the all-37 geomean level. This is not Rust
 parity; the remaining budget is still dominated by VM excursions, table/GC
 traffic in animation/event state, and frame serialization.
 
+A frame-serializer experiment replaced the RGB-array color-cache key with
+a packed integer RGB key. It passed 37/37 parity but regressed to **1.0285**
+geomean (only 8/37 faster; `errorcorrect` 1.126, `sweep` 1.118,
+`synthgrid` 1.087). The array-keyed cache was better and the change was
+reverted.
+
 ### Final artifacts
 
 - `janet-port/build/ttfx-cli-container-rel`: 83 loop executors, 9 kernels,
