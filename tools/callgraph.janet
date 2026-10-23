@@ -5467,16 +5467,44 @@
   # resolves attachment by exact validation, never by name.
   (def executors @[])
   (def emitted-descriptors @{})
+  # Loop executors remain selected exactly as before. Leaf (no-loop) executors
+  # are a separate PGO-gated tier: only definitions with enough observed calls
+  # and a native run at entry are emitted. Without a profile no leaf executor is
+  # selected, so interpreter builds and profile-free AOT keep the old shape.
+  (defn- def-profile-calls [id]
+    (def info (get defs id))
+    (def bucket (and profile-index (get profile-index (info :name))))
+    (if bucket
+      (reduce (fn [a row] (+ a (get row :calls 0))) 0 bucket)
+      0))
+  (def leaf-min-calls
+    (let [raw (os/getenv "JANET_EXECUTOR_LEAF_MIN_CALLS")
+          n (if raw (scan-number raw) nil)]
+      (if (number? n) n math/inf)))
+  # The FFI alias tier already turns calls to these wrappers into direct alias
+  # calls from loop executors. A leaf executor around the wrapper adds a second
+  # native entry around an opaque call and was not safe for void/struct-return
+  # aliases, so leave those wrappers to the existing tier.
+  (def ffi-alias-names @{})
+  (each a ffi-aliases (put ffi-alias-names (a :janet) true))
   (when (= "1" (os/getenv "JANET_NATIVE_EXECUTORS"))
     (each id (range (length defs))
       (def d ((get defs id) :d))
+      (def loop-eligible (loop-executor/eligible? d))
+      (def leaf-eligible (and (not loop-eligible)
+                              (not (get ffi-alias-names (d :name)))
+                              (loop-executor/straight-line-eligible? d)
+                              (loop-executor/region-entry? d)
+                              (>= (def-profile-calls id) leaf-min-calls)))
       (when (= "1" (os/getenv "JANET_EXEC_DEBUG"))
-        (print "exec-debug " id " " (d :name) " src=" ((get defs id) :source) " eligible=" (loop-executor/eligible? d)
+        (print "exec-debug " id " " (d :name) " src=" ((get defs id) :source) " eligible=" loop-eligible
+               " leaf=" leaf-eligible " calls=" (def-profile-calls id)
+               " region=" (loop-executor/region-entry? d)
                " namebucket=" (length (get name-ids (string (d :name)) @[]))
                " envs=" (length (or (d :environments) [])) " defs=" (length (or (d :defs) []))
                " words=" (if (d :bytecode-words) "y" "n") " vararg=" (d :vararg)))
       (when (and (nil? ((get defs id) :name-duplicate))
-                 (loop-executor/eligible? d))
+                 (or loop-eligible leaf-eligible))
         (def key [(d :flags) (d :arity) (d :min-arity) (d :max-arity) (d :slotcount)
                   (map (fn [x] (if (loop-executor/primitive-constant? x)
                                 (tuple (type x) x)
@@ -5487,7 +5515,7 @@
           (put emitted-descriptors key true)
           (array/push executors id)
           (buffer/push-string cout (loop-executor/emit id d))
-          (print "native-executor " id " " (d :name))))))
+          (print "native-executor " id " " (d :name) (if leaf-eligible " leaf" ""))))))
   (def manifest @"")
   (each id executors
     (buffer/push-string manifest (string id " " (((get defs id) :d) :name) "\n")))

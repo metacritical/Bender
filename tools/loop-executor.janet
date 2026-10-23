@@ -64,13 +64,24 @@
       (get bitwise op) (get shifts op) (= op 'bnot)
       (= op 'in) (= op 'inim) (= op 'get)))
 
-(defn eligible? [d]
+(defn- base-eligible? [d]
   (and (d :bytecode-words) (not (d :vararg)) (not (d :structarg))
        (not (d :namedargs)) (empty? (or (d :environments) []))
        (empty? (or (d :defs) []))
-       (every? (map |(allowed-op? ($0 0)) (d :bytecode)))
-       (some |(or (and (= 'jmp ($0 0)) (<= ($0 1) 0))
-                  (and (get branches ($0 0)) (<= ($0 2) 0))) (d :bytecode))))
+       (every? (map |(allowed-op? ($0 0)) (d :bytecode)))))
+
+(defn has-loop? [d]
+  (some |(or (and (= 'jmp ($0 0)) (<= ($0 1) 0))
+             (and (get branches ($0 0)) (<= ($0 2) 0))) (d :bytecode)))
+
+(defn eligible? [d]
+  (and (base-eligible? d) (has-loop? d)))
+
+# A loop is not required to amortize a native entry when the whole leaf body
+# is a short straight-line run: PGO can select these separately. They still
+# use the same region mask, validation, and VM fallback at every boundary.
+(defn straight-line-eligible? [d]
+  (and (base-eligible? d) (not (has-loop? d))))
 
 # Native-op run length from each PC: instructions executed natively before the
 # next boundary/return exit, following fall-through only. Returns count for PCs
@@ -96,6 +107,15 @@
 # Small definitions are exempt from the useful-region filter: whole-function
 # validation is already bounded by their instruction count.
 (def small-def-max 16)
+
+# A leaf executor is useful only if its entry PC starts a native run (or the
+# whole definition is small enough to mark every PC). Otherwise the VM would
+# immediately fall back at PC 0 and the emitted code would be dead weight.
+(defn region-entry? [d]
+  (def bc (d :bytecode))
+  (def n (length bc))
+  (or (<= n small-def-max)
+      (>= ((native-run-lengths bc) 0) useful-min)))
 
 (defn- region-mask [bytecode]
   # Array of little-endian 64-bit words as zero-padded 16-digit hex strings,
