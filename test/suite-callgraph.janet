@@ -105,6 +105,20 @@
   "cross-unit unqualified name reported uncompiled, never attributed")
 
 
+# A function-local require is not in the static import traversal: disclose
+# the resolved module instead of silently reporting zero considered hints.
+(spit "/tmp/cg-dynamic-hint-module.janet"
+  "(defn hidden {:hint {:params [:double] :returns :double}} [x] (+ x 1.0))\n")
+(spit "/tmp/cg-dynamic-hint-entry.janet" (string
+  "(defn load-hidden [] (require \"/tmp/cg-dynamic-hint-module.janet\"))\n"))
+(assert (= 0 (os/execute ["/bin/sh" "-c"
+  "./build/bender tools/callgraph.janet /tmp/cg-dynamic-hint-entry.janet > /tmp/cg-dynamic-hint-out.txt 2> /tmp/cg-dynamic-hint-diag.txt"] :p))
+  "callgraph dynamic require runs")
+(assert (not (nil? (string/find
+  "dynamic require module not analyzed for hints: /tmp/cg-dynamic-hint-module.janet"
+  (slurp "/tmp/cg-dynamic-hint-diag.txt"))))
+  "dynamic require identifies unanalyzed hinted module")
+
 # Step 3 (arity audit): called-as arity sets, mismatches, unknowns
 (spit "/tmp/cg-arity.janet" (string
   "(defn f2 [a b] (+ a b))\n"

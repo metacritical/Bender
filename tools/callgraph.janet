@@ -1208,6 +1208,19 @@
                (os/exit 2))))))
   (setdyn :current-file prev-current-file))
 
+# Runtime requires inside expressions never enter the static import queue.
+# Record literal module paths so missing hint analysis cannot be silent.
+(var dynamic-require-sources @{})
+(defn record-dynamic-requires [form top-level]
+  (when (tuple? form)
+    (when (and (not top-level) (>= (length form) 2)
+               (= (get form 0) 'require) (string? (get form 1)))
+      (def found (try (module/find (get form 1)) ([_] nil)))
+      (when (and (indexed? found) (string? (get found 0))
+                 (string/has-suffix? ".janet" (get found 0)))
+        (put dynamic-require-sources (get found 0) true)))
+    (each child form (record-dynamic-requires child false))))
+
 (var core-names @{})
 
 # Parse profile identities BEFORE whole-unit compilation. The full PGO
@@ -1311,6 +1324,7 @@
   (def slash-idx (string/find "/" (string/reverse f)))
   (def dirname (if (nil? slash-idx) "." (string/slice f 0 (- (length f) slash-idx 1))))
   (module/add-syspath dirname)
+  (each form forms (record-dynamic-requires form true))
   (preimport-unit-imports env f forms)
   # extern fallbacks pre-bind their names so the unit compiles and
   # provides the parity oracle
@@ -1380,6 +1394,11 @@
   (def qf (unit-import-files import-queue-idx))
   (++ import-queue-idx)
   (analyze-unit qf))
+# A literal require nested in runtime code is not a static import; its
+# module may execute, but its definitions and contracts were not analyzed.
+(each source (keys dynamic-require-sources)
+  (unless (get analyzed-files source)
+    (eprint "callgraph: dynamic require module not analyzed for hints: " source)))
 
 # Step 4: extract type hints BEFORE the walk so audit-site sees them.
 (var nhints (extract-hints))
