@@ -5798,7 +5798,25 @@
   (when (not (empty? kernels))
     (buffer/push-string cout (string "    fprintf(stderr, \"native_init: registered " (length kernels) " wrappers\\n\");\n")))
   (when (not (empty? executors))
-    (buffer/push-string cout (string "    fprintf(stderr, \"native_init: available " (length executors) " frame executors\\n\");\n")))
+    # Report the RUNTIME verdict, not the build manifest. Without the
+    # compile-time -DJANET_NATIVE_EXECUTORS opt-in, janet_native_register is
+    # a stub returning 0 and janet_native_registry_add is a no-op, so the
+    # whole tier is inert -- yet this line used to print "available N" all
+    # the same. Two independent investigations then read the two eagerly
+    # registered entry-file definitions' refusal messages as a descriptor
+    # bug in the --pgo-auto/--release pipeline: the lazy registry path is
+    # silent, so only the eager ones report, which looks like a pair of
+    # specific functions failing rather than every registration failing.
+    # janet_native_registry_count() is 0 exactly when the tier is absent.
+    (buffer/push-string cout
+      (string "    if (janet_native_registry_count() > 0) {\n"
+              "        fprintf(stderr, \"native_init: available " (length executors) " frame executors\\n\");\n"
+              "    } else {\n"
+              "        fprintf(stderr, \"native_init: " (length executors)
+              " frame executors in this image, but this runtime was built WITHOUT"
+              " JANET_NATIVE_EXECUTORS -- the executor tier is inert and every"
+              " registration will fail\\n\");\n"
+              "    }\n")))
   (buffer/push-string cout "}\n")
   (spit (string outdir "/native.c") cout)
   (def nl @"")
