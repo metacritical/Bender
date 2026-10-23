@@ -14,10 +14,14 @@ The compiler has two PGO mechanisms:
    run into `<cache>/<key>.jdn`; further runs with `JANET_AUTO_PGO=1` write
    unique `.run-...jdn` sidecars.
 
-The final release does **not** self-profile.  `--release` explicitly adds
-`-DJANET_NO_PGO` and `-DJANET_NATIVE_TELEMETRY=0` in
-`src/boot/boot.janet`.  Auto-PGO sidecars are deliberately diagnostic and
-are **not gateable**: they have no recorded workload, so a rebuild prints
+The final release does **not** self-profile.  This is intentional: the
+release binary is the benchmarking/product binary, and `--release`
+explicitly adds `-DJANET_NO_PGO` and `-DJANET_NATIVE_TELEMETRY=0` in
+`src/boot/boot.janet`.  The training/profiling binary is a separate build.
+
+The actual integration gap is narrower: **auto-PGO sidecars are diagnostic
+and not replayable**, so they cannot be merged into a release build.  A
+rebuild from the auto cache prints
 
 ```
 bender --aot: cached profile has no replayable workload; pass --pgo once
@@ -29,9 +33,18 @@ and `--release` fails with
 bender --aot: --release needs compatible cached PGO evidence and a replayable workload; run --pgo first
 ```
 
-Therefore “run the program 1–3 times and get better C automatically” is
-not currently true for the release path.  It is a two-stage offline cycle:
-explicit workload collection, then a verified release build.
+The intended workflow is therefore:
+
+```
+training build (PGO enabled) -> 1-3 representative runs -> merge/gate
+    -> release build with PGO instrumentation disabled
+```
+
+The release build consumes the merged profile at compile time only; the
+release binary has no runtime PGO connection and never reads the cache.
+The first two stages work.  The missing piece is making multiple training
+runs carry enough workload provenance to be merged and gated for the release
+build, without putting the profiler back into the release binary.
 
 ## Verified auto-PGO experiment
 
