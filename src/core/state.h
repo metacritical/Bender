@@ -388,6 +388,16 @@ void janet_profile_dump(const char *path);
 JanetArray *janet_profile_rows(void);
 void janet_profile_task_call(JanetFunction *func, const Janet *argv, int32_t argc);
 
+/* Auto-PGO workload provenance (implemented in vm.c). The AOT launcher
+ * records the exact argv it was started with; the io.c choke points report
+ * whether stdin was consumed and what bytes reached stdout. A companion
+ * <profile>.workload record is published next to the profile so a later
+ * --pgo-auto build can replay and gate the run. All of it is inert unless
+ * the launcher armed auto-PGO. */
+JANET_API void janet_profile_auto_workload(int argc, char **argv, unsigned long image_bytes);
+void janet_profile_note_stdin(void);
+void janet_profile_note_stdout(const void *bytes, size_t len);
+
 /* M4b-2 quantum driver: back-edge/call polls granted per task run.
  * One poll ≈ one loop iteration or call; 200 keeps scheduling
  * overhead near 1% while preempting hogs within microseconds. */

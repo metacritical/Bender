@@ -453,6 +453,10 @@
                               ", registry names: " (length regnames) " */\n"))
 (buffer/push-string out "#include <janet.h>\n#include <stdio.h>\n#include <stdlib.h>\n#include <string.h>\n")
 (buffer/push-string out "void janet_profile_start(void);\nvoid janet_profile_auto_output(const char *path);\n")
+# Auto-PGO workload provenance: the launcher is the only place that knows
+# this run's exact argv, so it hands it to the VM, which publishes a
+# companion <profile>.workload record next to the profile it writes.
+(buffer/push-string out "void janet_profile_auto_workload(int argc, char **argv, unsigned long image_bytes);\n")
 (buffer/push-string out "#ifndef JANET_NO_PGO\n")
 (buffer/push-string out
   ```
@@ -581,6 +585,9 @@
                if (path[0] != 0) {
                    janet_profile_start();
                    janet_profile_auto_output(path);
+                   /* Record what this run is, so a later --pgo-auto build
+                    * can replay it through the same parity gate as --pgo. */
+                   janet_profile_auto_workload(argc, argv, janet_aot_image_len);
                }
           }
       }

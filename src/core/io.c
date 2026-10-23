@@ -23,6 +23,7 @@
 #ifndef JANET_AMALG
 #include "features.h"
 #include <janet.h>
+#include "state.h"
 #include "util.h"
 #endif
 
@@ -203,6 +204,9 @@ static void read_chunk(JanetFile *iof, JanetBuffer *buffer, int32_t nBytesMax) {
     size_t nread = fread((char *)(buffer->data + buffer->count), 1, ntoread, iof->file);
     if (nread != ntoread && ferror(iof->file))
         janet_panic("could not read file");
+    /* Auto-PGO replayability: a run that consumed stdin is only gateable if
+     * those bytes can be captured (see janet_profile_note_stdin). */
+    if (nread && iof->file == stdin) janet_profile_note_stdin();
     buffer->count += (int32_t) nread;
 }
 
@@ -276,6 +280,7 @@ JANET_CORE_FN(cfun_io_fwrite,
             if (!fwrite(view.bytes, view.len, 1, iof->file)) {
                 janet_panic("error writing to file");
             }
+            if (iof->file == stdout) janet_profile_note_stdout(view.bytes, view.len);
         }
     }
     return argv[0];
@@ -545,6 +550,7 @@ static Janet cfun_io_print_impl_x(int32_t argc, Janet *argv, int newline,
             len = janet_string_length(vstr);
         }
         if (len) {
+            if (f == stdout) janet_profile_note_stdout(vstr, (size_t) len);
             if (1 != fwrite(vstr, len, 1, f)) {
                 if (f == dflt_file) {
                     janet_panicf("cannot print %d bytes", len);
@@ -655,6 +661,7 @@ static Janet cfun_io_printf_impl_x(int32_t argc, Janet *argv, int newline,
     janet_buffer_format(buf, fmt, offset, argc, argv);
     if (newline) janet_buffer_push_u8(buf, '\n');
     if (buf->count) {
+        if (f == stdout) janet_profile_note_stdout(buf->data, (size_t) buf->count);
         if (1 != fwrite(buf->data, buf->count, 1, f)) {
             janet_panicf("could not print %d bytes to file", buf->count);
         }
@@ -781,6 +788,7 @@ void janet_dynprintf(const char *name, FILE *dflt_file, const char *format, ...)
                 io_assert_writeable(iofile);
                 f = iofile->file;
             }
+            if (f == stdout) janet_profile_note_stdout(buffer.data, (size_t) buffer.count);
             fwrite(buffer.data, buffer.count, 1, f);
             janet_buffer_deinit(&buffer);
             break;

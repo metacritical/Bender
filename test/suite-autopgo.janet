@@ -57,7 +57,11 @@
   status)
 (defn sidecars [&opt key]
   (def prefix (string (or key "apg-pgo") ".jdn.run-"))
-  (filter (fn [name] (string/has-prefix? prefix name)) (os/dir (cache ""))))
+  # Same filter as aot-cache-sidecars: profiles only, not the companion
+  # .workload provenance records written beside them.
+  (filter (fn [name] (and (string/has-prefix? prefix name)
+                          (string/has-suffix? ".jdn" name)))
+          (os/dir (cache ""))))
 (defn calls [profile]
   (get ((find (fn [row] (= "half" (get (row 0) 2))) (parse (slurp profile))) 1) :calls))
 

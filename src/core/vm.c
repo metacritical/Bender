@@ -37,6 +37,8 @@
 #if defined(_WIN32)
 #include <windows.h>
 #else
+#include <sys/stat.h>
+#include <sys/types.h>
 #include <unistd.h>
 #endif
 
@@ -3495,6 +3497,173 @@ void janet_profile_auto_output(const char *path) {
     janet_auto_profile_output = copy;
 }
 
+/* Auto-PGO workload provenance. An auto-profiled run is only useful as
+ * release evidence if a build can replay it, so the AOT launcher hands its
+ * exact argv here and the io.c choke points report stdin consumption and
+ * stdout bytes. A companion <profile>.workload record is published beside
+ * the profile, using the same vocabulary as the explicit --pgo cache record
+ * (:args/:argv/:has-stdin/:stdin-bytes) plus an explicit :replayable
+ * verdict. Everything below is inert unless the launcher armed it. */
+#define JANET_AUTO_WORKLOAD_STDIN_MAX (1024 * 1024)
+
+static JANET_THREAD_LOCAL char **janet_auto_workload_argv;
+static JANET_THREAD_LOCAL int janet_auto_workload_argc;
+static JANET_THREAD_LOCAL unsigned long janet_auto_workload_image;
+static JANET_THREAD_LOCAL int janet_auto_workload_armed;
+static JANET_THREAD_LOCAL int janet_auto_workload_stdin;
+static JANET_THREAD_LOCAL uint64_t janet_auto_workload_hash;
+static JANET_THREAD_LOCAL uint64_t janet_auto_workload_out;
+
+void janet_profile_auto_workload(int argc, char **argv, unsigned long image_bytes) {
+    int i;
+    janet_auto_workload_armed = 0;
+    janet_auto_workload_argc = 0;
+    janet_auto_workload_hash = 1469598103934665603ULL; /* FNV-1a 64 offset */
+    janet_auto_workload_out = 0;
+    janet_auto_workload_stdin = 0;
+    if (argc < 1 || NULL == argv) return;
+    janet_auto_workload_argv = malloc(sizeof(char *) * (size_t) argc);
+    if (NULL == janet_auto_workload_argv) return;
+    for (i = 0; i < argc; i++) {
+        size_t len = (NULL == argv[i]) ? 1 : strlen(argv[i]) + 1;
+        char *copy = malloc(len);
+        if (NULL == copy) return; /* keep what copied; the record stays honest */
+        if (NULL == argv[i]) copy[0] = '\0';
+        else memcpy(copy, argv[i], len);
+        janet_auto_workload_argv[janet_auto_workload_argc++] = copy;
+    }
+    janet_auto_workload_image = image_bytes;
+    janet_auto_workload_armed = 1;
+}
+
+void janet_profile_note_stdin(void) {
+    if (janet_auto_workload_armed) janet_auto_workload_stdin = 1;
+}
+
+void janet_profile_note_stdout(const void *bytes, size_t len) {
+    const unsigned char *p = (const unsigned char *) bytes;
+    size_t i;
+    if (!janet_auto_workload_armed || NULL == p) return;
+    for (i = 0; i < len; i++) {
+        janet_auto_workload_hash ^= (uint64_t) p[i];
+        janet_auto_workload_hash *= 1099511628211ULL;
+    }
+    janet_auto_workload_out += (uint64_t) len;
+}
+
+static void janet_auto_workload_free(void) {
+    int i;
+    for (i = 0; i < janet_auto_workload_argc; i++)
+        free(janet_auto_workload_argv[i]);
+    free(janet_auto_workload_argv);
+    janet_auto_workload_argv = NULL;
+    janet_auto_workload_argc = 0;
+    janet_auto_workload_armed = 0;
+}
+
+/* Write the companion record for a just-published profile. Non-replayable
+ * runs are recorded with :replayable false and a reason: never silently
+ * promoted, never silently dropped. */
+static void janet_auto_workload_write(const char *profile) {
+    JanetTable *rec;
+    JanetArray *args;
+    JanetBuffer *joined;
+    JanetBuffer *text;
+    Janet stdin_bytes = janet_wrap_nil();
+    const char *reason = NULL;
+    int has_stdin = 0;
+    int i;
+    char path[4096];
+    FILE *f;
+    if (!janet_auto_workload_armed || NULL == profile || '\0' == *profile) return;
+    if (strlen(profile) + sizeof(".workload") > sizeof(path)) return;
+    /* argv[0] is the binary; the workload is what follows, exactly as the
+     * explicit --pgo path records it. */
+    args = janet_array(janet_auto_workload_argc);
+    janet_gcroot(janet_wrap_array(args));
+    joined = janet_buffer(0);
+    janet_gcroot(janet_wrap_buffer(joined));
+    for (i = 1; i < janet_auto_workload_argc; i++) {
+        const char *a = janet_auto_workload_argv[i];
+        const char *c;
+        janet_array_push(args, janet_cstringv(a));
+        if (i > 1) janet_buffer_push_u8(joined, ' ');
+        janet_buffer_push_cstring(joined, a);
+        for (c = a; *c != '\0'; c++) {
+            /* :args is a space-joined string parsed by aot-words, so an
+             * argument carrying whitespace or quotes cannot round-trip. */
+            if (*c == ' ' || *c == '\t' || *c == '\n' || *c == '\r' ||
+                    *c == '"' || *c == '\'' || *c == '\\')
+                reason = "unquotable-argv";
+        }
+    }
+    if (janet_auto_workload_stdin) {
+#if defined(_WIN32)
+        if (NULL == reason) reason = "stdin-capture-unsupported";
+#else
+        struct stat st;
+        if (0 == fstat(0, &st) && S_ISREG(st.st_mode) && st.st_size >= 0 &&
+                st.st_size <= (off_t) JANET_AUTO_WORKLOAD_STDIN_MAX) {
+            JanetBuffer *sb = janet_buffer((int32_t) st.st_size + 1);
+            ssize_t got;
+            janet_gcroot(janet_wrap_buffer(sb));
+            got = pread(0, sb->data, (size_t) st.st_size, 0);
+            if (got == (ssize_t) st.st_size) {
+                stdin_bytes = janet_stringv(sb->data, (int32_t) got);
+                has_stdin = 1;
+            } else if (NULL == reason) {
+                reason = "stdin-unreadable";
+            }
+            janet_gcunroot(janet_wrap_buffer(sb));
+        } else if (NULL == reason) {
+            /* terminal, pipe, or oversized redirect: not reproducible */
+            reason = "stdin-not-replayable";
+        }
+#endif
+    }
+    rec = janet_table(12);
+    janet_gcroot(janet_wrap_table(rec));
+    janet_table_put(rec, janet_ckeywordv("version"), janet_wrap_integer(1));
+    janet_table_put(rec, janet_ckeywordv("source"), janet_ckeywordv("auto-pgo"));
+    janet_table_put(rec, janet_ckeywordv("args"),
+                    janet_stringv(joined->data, joined->count));
+    janet_table_put(rec, janet_ckeywordv("argv"), janet_wrap_array(args));
+    janet_table_put(rec, janet_ckeywordv("has-stdin"), janet_wrap_boolean(has_stdin));
+    janet_table_put(rec, janet_ckeywordv("stdin-bytes"), stdin_bytes);
+    janet_table_put(rec, janet_ckeywordv("replayable"),
+                    janet_wrap_boolean(NULL == reason));
+    janet_table_put(rec, janet_ckeywordv("reason"),
+                    (NULL == reason) ? janet_wrap_nil() : janet_ckeywordv(reason));
+    janet_table_put(rec, janet_ckeywordv("binary"),
+                    (janet_auto_workload_argc > 0)
+                    ? janet_cstringv(janet_auto_workload_argv[0])
+                    : janet_wrap_nil());
+    janet_table_put(rec, janet_ckeywordv("image-bytes"),
+                    janet_wrap_number((double) janet_auto_workload_image));
+    janet_table_put(rec, janet_ckeywordv("stdout-bytes"),
+                    janet_wrap_number((double) janet_auto_workload_out));
+    {   /* printable identity for the run's observed output */
+        char hash[32];
+        snprintf(hash, sizeof(hash), "%016llx",
+                 (unsigned long long) janet_auto_workload_hash);
+        janet_table_put(rec, janet_ckeywordv("stdout-hash"), janet_cstringv(hash));
+    }
+    text = janet_buffer(0);
+    janet_gcroot(janet_wrap_buffer(text));
+    janet_formatb(text, "%j", janet_wrap_table(rec));
+    snprintf(path, sizeof(path), "%s.workload", profile);
+    f = fopen(path, "wb");
+    if (NULL != f) {
+        fwrite(text->data, 1, (size_t) text->count, f);
+        fputc('\n', f);
+        fclose(f);
+    }
+    janet_gcunroot(janet_wrap_buffer(text));
+    janet_gcunroot(janet_wrap_table(rec));
+    janet_gcunroot(janet_wrap_buffer(joined));
+    janet_gcunroot(janet_wrap_array(args));
+}
+
 /* Clear all memory associated with the VM */
 void janet_deinit(void) {
 #ifdef JANET_TTFX_SITE_PROFILE
@@ -3542,9 +3711,14 @@ void janet_deinit(void) {
                             /* No replacement: a parallel first run or builder
                              * may already have installed the base profile. */
 #if defined(_WIN32)
-                            if (!MoveFileA(pout, completed)) remove(pout);
+                            if (MoveFileA(pout, completed)) janet_auto_workload_write(completed);
+                            else remove(pout);
 #else
-                            (void) link(pout, completed);
+                            /* Only the writer that actually published the
+                             * profile describes it: a lost race must not
+                             * attach this run's workload to another dump. */
+                            if (0 == link(pout, completed))
+                                janet_auto_workload_write(completed);
                             unlink(pout);
 #endif
                             free(completed);
@@ -3556,6 +3730,7 @@ void janet_deinit(void) {
         }
     }
     janet_profile_auto_output(NULL);
+    janet_auto_workload_free();
     janet_clear_memory();
     janet_symcache_deinit();
     janet_free(janet_vm.roots);
