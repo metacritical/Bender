@@ -229,3 +229,17 @@ Merged training is the best configuration on every effect, against both pre-chan
 
 ### CLOSED: the 68-vs-67 BLOCKED discrepancy was a counting artifact
 Not a regression. The "68" counted 67 per-case `BLOCKED effect set N` rows PLUS the aggregate summary line `BLOCKED 67 cases...`. Correct arithmetic on both the frozen baseline and the current run: **368 PASS + 67 BLOCKED + 1 VACUOUS = 436**. All 436 (effect, ordinal) keys were parsed and compared: current == frozen in membership AND status for every case, zero extra/missing/moved. The blocked-reason histogram matches exactly (43 `expected … got 0`; 9 generic invalid colour; 4 `invalid range inf-inf`; 3 `invalid float inf`; 3 colour '196'; 2 '244'; 1 each '250', '21', '45') — all the known 256-colour palette gap at `janet-port/src/color.janet:145`, documented at `bench/bender-37-gate.md:307-325`. No counter regression; no file change warranted.
+
+## ISOLATED CONTINUATION EFFECT — same-binary toggle, the clean causal number
+Both runs are the SAME binary with `JANET_NATIVE_NO_CONTINUATION` toggled, so executor set, generated C and layout are identical by construction. Workload: binarypath, 400 frames. Every ON/OFF stdout byte-identical (both images SHA256 `c96d7773…`).
+
+| image | chains | interpreted calls | interpreted dispatches | VM exits | native ops |
+|---|---:|---:|---:|---:|---:|
+| decrypt-trained (96 exec) | 0 → 45,385 | −45,385 | 65,264,779 → 65,131,718 (**−133,061**) | 1,115,740 → 1,049,976 (**−5.9%**) | invariant 47,782,078 |
+| binarypath-trained (107 exec) | 0 → 216,823 | −216,823 | 60,302,302 → 59,849,603 (**−452,699**) | 2,042,165 → 1,674,933 (**−18.0%**) | invariant 53,148,727 |
+
+**What continuation actually does, now unambiguous:** it removes CALL-BOUNDARY work, not bulk interpretation. In the well-trained image it eliminates 216,823 interpreted calls and **18% of all VM exits**, while interpreted dispatches fall only 0.75% and native ops and executor entries are exactly invariant. Chain gain equals interpreted-call decrease exactly in both images — conservation holds on the isolated measurement too.
+
+**Scope discipline:** each paired ON/OFF delta is attributable to the toggle alone. The DIFFERENCE between the two images (319,638 more dispatches and 301,468 more exits saved, 171,438 more chains) is conditional on their different 96/107 executor sets and is NOT a pure edge-selection estimate. OFF-state refusal counts (45,616 vs 218,723) merely count disabled attempts — never read as a success rate.
+
+**Synthesis — why the 22× gap survives all of this:** continuation is now proven correct, cheap and genuinely effective at what it targets, and it is still nowhere near the bottleneck, because boundary crossings were never the bulk cost. ~60M interpreted dispatches remain on a single 400-frame binarypath run. That is the sixth independent confirmation that COVERAGE — how much code becomes native at all — is the frontier, and it is why the queue is `ctx-frame-string`/construction poison, SSA per-PC slot typing, and context-table parameters rather than any further dispatch work.
