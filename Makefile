@@ -62,6 +62,17 @@ COMMON_CFLAGS:=-std=c99 -Wall -Wextra -Isrc/include -Isrc/conf -fvisibility=hidd
 BOOT_CFLAGS:=-DJANET_BOOTSTRAP -DJANET_BUILD=$(JANET_BUILD) -O0 $(COMMON_CFLAGS) -g
 BUILD_CFLAGS:=$(CFLAGS) $(COMMON_CFLAGS)
 
+# Native loop/leaf executor tier (experimental, opt-in at BOTH build and run
+# time). `make NATIVE_EXECUTORS=1` compiles the tier in; the runtime still
+# needs JANET_NATIVE_EXECUTORS=1 in the environment. Without the compile-time
+# define the tier is inert: every registration is refused and
+# janet_native_stat reports zeros, so any measurement taken against a plain
+# `make` build measures the interpreter only. See
+# docs/internals/native-loop-executors.md and `make test-executors`.
+ifdef NATIVE_EXECUTORS
+BUILD_CFLAGS+=-DJANET_NATIVE_EXECUTORS
+endif
+
 # Disable amalgamated build
 ifeq ($(JANET_NO_AMALG), 1)
 	JANET_TARGET_OBJECTS+=$(patsubst src/%.c,build/%.bin.o,$(JANET_CORE_SOURCES))
@@ -289,6 +300,16 @@ valgrind: $(JANET_TARGET)
 test: $(JANET_TARGET) $(TEST_SCRIPTS) $(EXAMPLE_SCRIPTS)
 	for f in test/suite*.janet; do $(RUN) ./$(JANET_TARGET) "$$f" || exit; done
 	for f in examples/*.janet; do $(RUN) ./$(JANET_TARGET) -k "$$f"; done
+
+# The native executor suite is a shell script, so `make test` (which globs
+# test/suite*.janet) never runs it. It asserts real executor entry counts and
+# therefore REQUIRES a NATIVE_EXECUTORS=1 build; against a plain build it
+# fails on inert counters rather than on a defect. Run it explicitly:
+#   make NATIVE_EXECUTORS=1 && make test-executors
+test-executors: $(JANET_TARGET)
+	@JANET_AOT_TEST_ROOT=$${JANET_AOT_TEST_ROOT:-$$(mktemp -d)} \
+	 XDG_CACHE_HOME=$${XDG_CACHE_HOME:-$$(mktemp -d)} \
+	 sh test/suite-native-executor.sh
 
 # Phase 1.1b: C call-chain suspension proof (tools/fiber-c-test.c).
 # Builds against the static library and runs the embedder assertions.
