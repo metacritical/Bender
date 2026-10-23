@@ -19,9 +19,18 @@ release binary is the benchmarking/product binary, and `--release`
 explicitly adds `-DJANET_NO_PGO` and `-DJANET_NATIVE_TELEMETRY=0` in
 `src/boot/boot.janet`.  The training/profiling binary is a separate build.
 
-The actual integration gap is narrower: **auto-PGO sidecars are diagnostic
-and not replayable**, so they cannot be merged into a release build.  A
-rebuild from the auto cache prints
+**Status 2026-10-23: this gap is now closed** (see "Implemented:
+sidecar provenance and `--pgo-auto`" below).  Auto-PGO profiles carry a
+companion workload record, and `bender --aot --native --pgo-auto` merges,
+replays, gates, and publishes them as release evidence.  The description
+below is kept because it explains what the pipeline looked like before,
+and the failure messages still apply to profiles written by binaries that
+predate the provenance record.
+
+The actual integration gap was narrower than a missing profiler:
+**auto-PGO sidecars were diagnostic and not replayable**, so they could
+not be merged into a release build.  A rebuild from such an auto cache
+prints
 
 ```
 bender --aot: cached profile has no replayable workload; pass --pgo once
@@ -189,12 +198,12 @@ Rejected experiments:
 Goal: let ordinary runs (1–3) produce evidence that can be merged into a
 verified release build without pretending arbitrary runs are replayable.
 
-1. **Record workload provenance in auto-PGO sidecars.**  When the AOT
+1. **Record workload provenance in auto-PGO sidecars.**  *(implemented)*  When the AOT
    launcher writes `<key>.jdn.run-*`, also write `<key>.run-*.workload`
    containing argv (and stdin bytes when applicable), plus source/image
    identity.  Do not record GUI/uncaptured non-replayable runs as
    gateable.
-2. **Add a sidecar merge command.**  A new `--pgo-auto` build mode merges
+2. **Add a sidecar merge command.**  *(implemented as `--pgo-auto`)*  A new `--pgo-auto` build mode merges
    the base profile and sidecars, deduplicates by workload identity, and
    requires each record to reproduce its recorded output.  Sidecars that
    fail parity are quarantined, never used.
@@ -266,11 +275,91 @@ XDG_CACHE_HOME=$CACHE JANET_AUTO_PGO=1 build/ttfx-cli-autopgo decrypt --bench ..
 python3 bench-cli-packed-path-vs-rust.py
 ```
 
+## Implemented: sidecar provenance and `--pgo-auto`
+
+Proposal items 1 and 2 are implemented.
+
+**Provenance** (`src/core/vm.c`, `src/core/io.c`, `tools/mkimage.janet`).
+The AOT launcher passes its exact argv to the VM
+(`janet_profile_auto_workload`).  Whenever the VM publishes an auto-PGO
+profile it writes a companion `<profile>.workload` JDN record beside it,
+using the same vocabulary as the explicit `--pgo` cache record
+(`:args`, `:argv`, `:has-stdin`, `:stdin-bytes`) plus `:replayable`,
+`:reason`, `:binary`, `:image-bytes`, `:stdout-hash`, `:stdout-bytes`.
+It is a companion file rather than part of the `.jdn` because that payload
+is a bare profile row array consumed by `tools/profile-merge.janet`.
+
+Replayability is decided, never assumed:
+
+| run shape | verdict |
+|---|---|
+| stdin never read | replayable, `:has-stdin false` |
+| stdin read from a seekable regular file <= 1 MiB | replayable, bytes captured |
+| stdin read from a tty or pipe, or an oversized file | `:replayable false :reason :stdin-not-replayable` |
+| an argv element that cannot round-trip the space-joined `:args` string | `:replayable false :reason :unquotable-argv` |
+
+`io.c` reports stdin consumption from the single `read_chunk` choke point
+and hashes bytes reaching `stdout`; both are inert unless the launcher
+armed auto-PGO.
+
+**`--pgo-auto`** (`src/boot/boot.janet`).  Requires `--native` and a real
+binary build; incompatible with `--pgo`, `--release`, `--no-auto-pgo`,
+`-c/-S/-E`.  It loads `<key>.jdn` plus every sidecar, refuses with a
+per-profile reason anything that lacks a workload record, is malformed, is
+non-replayable, or is older than the sources, then groups the survivors by
+workload identity (argv + stdin bytes).  Each workload keeps its own
+merged evidence through the same `profile-merge --accumulate` machinery
+`--pgo` uses -- per-workload evidence, not one anonymous union -- and is
+replayed through the existing parity gate against an oracle regenerated
+from the current sources.  The recorded `:stdout-hash` is provenance, not
+authority.  Evidence that fails parity is quarantined
+(`<profile>.quarantine-<pid>`, with its workload record) and no binary is
+installed.  On success one gateable v3 record per workload is published
+through the `--pgo` publication path, so a later `--release` succeeds.
+
+`--release` is unchanged and still instrumentation-free
+(`-DJANET_NO_PGO -DJANET_NATIVE_TELEMETRY=0`); a release binary writes no
+profile.
+
+Verified end to end (no `janet-port` checkout exists in this repo, so an
+equivalent in-repo CLI fixture with two argv workloads was used):
+
+```text
+# training build, then 3 runs of "decrypt --seed 42" and 2 of "bench --seed 17"
+bender --aot: --pgo-auto merging 5 auto profiles over 2 workloads
+bender --aot: --pgo-auto workload 0 runs=3 argv="decrypt --seed 42"
+bender --aot: --pgo-auto workload 1 runs=2 argv="bench --seed 17"
+bender --aot: cached PGO profiles for 2 workloads
+bender --aot: --pgo-auto published 2 gateable workloads
+bender --aot: pgo parity ok, installed tmp/e2e/app-autopgo
+# then --release from the same cache
+bender --aot: verifying 2 cached workloads
+bender --aot: pgo parity ok, installed tmp/e2e/app-autopgo
+```
+
+Known limitations:
+
+- Stdin capture covers only a seekable regular file up to 1 MiB; piped or
+  interactive stdin marks the run non-gateable rather than guessing.
+- `:image-bytes`/`:stdout-hash` are recorded as provenance but are not yet
+  gate criteria; freshness still uses source mtime plus the parity replay.
+  A build-emitted image identity would make binary-to-source binding
+  exact.
+- A workload whose argv is parsed positionally cannot pass the gate at
+  all, because an AOT binary's `main` receives argv without `argv[0]`
+  while the interpreter prepends the script path.  This predates
+  `--pgo-auto` and applies equally to `--pgo`; CLIs that scan flags (like
+  ttfx) are unaffected.
+- `--pgo-auto` refuses to promote a legacy v2 cache record; run `--pgo`
+  once first.
+
 ## Honest status
 
 The CLI is still **~22x slower than Rust** in this end-to-end protocol.
 Packing removed meaningful table/GC overhead, but the dominant remaining
-budget is VM execution and non-continuable native calls.  Auto-PGO exists
-and collects runtime evidence, but it is not yet wired into a verified
-release build.  No claim of Rust parity or full automatic self-optimization
+budget is VM execution and non-continuable native calls.  Auto-PGO exists,
+collects runtime evidence, and now feeds a verified release build through
+`--pgo-auto`; that closes the plumbing gap but does not by itself move the
+~22x figure, because the remaining budget is VM execution and
+non-continuable native calls (proposal items 5-9).  No claim of Rust parity or full automatic self-optimization
 is justified yet.
