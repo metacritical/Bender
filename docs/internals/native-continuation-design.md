@@ -884,3 +884,187 @@ promise of this feature until the measurement exists.
     call — it replaces a zero-exit inline load. Accessor-based APIs become
     viable only after v2.2 plus v3 (§8), and that should be measured, not
     assumed.
+
+---
+
+## Implementation Notes (v1 as built, 2026-10-23)
+
+Code landed in `b5d87d06` (VM mechanism), `786b2c00` (executor emission),
+`3db27d20` (tests). This section records where the build diverged from the
+design above, and the measured outcome. **Where they disagree, the code and
+these notes are authoritative.**
+
+### What was built
+
+Exactly §2's flat trampoline, §3's refusal list, and §5's v1 scope.
+`JANET_NATIVE_FRAME`, `janet_native_call_enter`, `janet_native_ret_pop`,
+`janet_native_trampoline` (budget 64, no C recursion) and the third
+`vm_native()` arm. Steps 8-11 of §7 (`:calledges` in the profile, profile-driven
+`continuation-pcs` selection) were **not** built: emission is unconditional at
+every non-terminal call PC, as §7 says steps 1-7 deliver.
+
+### Divergences from the design text
+
+1. **`vm_native()` reloads `func` unconditionally, not only on
+   `JANET_NATIVE_FRAME`.** §2.2c proposes a third arm doing `vm_restore()`.
+   The trampoline can change frames and still return `JANET_NATIVE_VM` (it
+   chains up through a native return, or runs out of budget inside a chained
+   callee), so a step-value-keyed restore would be wrong. The macro now always
+   does `stack = fiber->data + fiber->frame; func = janet_stack_frame(stack)->func;`.
+   This is inside the block that only runs when an executor actually
+   dispatched, so it is per executor-exit, not per instruction. **R3 is closed
+   by this line.**
+
+2. **`janet_native_ret_pop` decides everything before the pop.** §2.2e's
+   sketch pops the frame and then inspects the caller's word, which cannot
+   refuse cleanly if the word turns out not to be a `JOP_CALL`. The built
+   version reads the caller frame through `frame->prevframe` first and refuses
+   with the fiber untouched. It also refuses `JANET_STACKFRAME_TAILCALL`
+   frames and `prevframe < JANET_FRAME_SIZE` explicitly.
+
+3. **The chain-up and chain-down paths share one re-gate.** After either
+   transition the trampoline re-runs `region_allowed` + the epoch-cached
+   `revalidate` for the new frame. `maybe_collect()` can run a finalizer, so
+   re-proving after a push is not redundant.
+
+4. **A native return does not require a continuation to have happened.**
+   `ret_pop` fires whenever an executor stops at an unexecuted `ret`/`retn`
+   and the caller's committed word is a `JOP_CALL` — including frames the
+   interpreter pushed. On ttfx decrypt this is 45,719 edges even with zero
+   chained calls, and 150,549 with the leaf tier on.
+
+5. **New: `JANET_NATIVE_NO_CONTINUATION`.** A runtime off-switch read once in
+   `janet_init`. The design has no equivalent; it exists so one binary can run
+   both halves of an A/B with a provably identical executor set, which turned
+   out to matter (see the measurement).
+
+6. **Telemetry.** Four `janet_vm` counters (`native_continuations`,
+   `native_continuation_refusals`, `native_returns`, `native_interp_calls`) at
+   `janet_native_stat` indexes 5..8 and `executor-global-stats` 6..9, plus a
+   per-definition `nx_<id>_conts` at `executor-stats` index 5. The global
+   `native_interp_calls` increment sits in `JOP_CALL`'s Janet-function branch;
+   it is one increment next to `janet_fiber_funcframe` and is the only
+   always-on cost this work adds to the interpreter.
+
+### Environment finding that invalidated the first measurement round
+
+`JANET_NATIVE_EXECUTORS` is **not** set by this repository's `Makefile`.
+A plain `make` produces a runtime in which the whole executor tier is inert:
+`janet_native_register` refuses every descriptor, `janet_native_stat` returns
+zero, and `test/suite-native-executor.sh` fails at its AOT-image assertions.
+`docs/internals/native-loop-executors.md` states both opt-ins are required;
+it is easy to satisfy only the environment-variable one. Every result below
+used `make CFLAGS="-O2 -g -DJANET_NATIVE_EXECUTORS"`. With that flag,
+`make test` and `test/suite-native-executor.sh` are green at `HEAD` and after
+this change.
+
+### Fixture finding: structural ambiguity silently disables a chain fixture
+
+Attachment is a structural match, and `janet_native_try_attach` refuses an
+*ambiguous* one. A natural set of chain fixtures —
+`(while (< i n) (+= s (callee i)) (++ i))` with different callees — compiles
+to byte-identical definitions (the callee is an opaque constant), so none of
+them attach and the fixture proves nothing while appearing to pass. The
+committed fixtures therefore carry deliberately distinct shapes. Their `&opt`
+tails also exercise §3.5's `min_arity < max_arity` case with the optional
+arguments omitted.
+
+### Validation
+
+All gates below ran on `ruby-port/logo.txt`, `COLUMNS=80 LINES=24`,
+`JANET_NO_PROFILE=1`, 6 seeds (42, 1337, 7, 13, 99, 2026), 400 frames.
+
+| Gate | Result |
+|---|---|
+| `make test` (executor build) | green |
+| `test/suite-native-executor.sh` (incl. ASan/UBSan matrix) | green |
+| In-repo chain fixture, continuation on vs off | identical values; identity 306 == 306; 88 edges vs 0 |
+| ttfx 37-effect Bender-vs-Bender, loop tier only | **37/37 exact, 2208/2208 cases** |
+| ttfx 37-effect Bender-vs-Bender, leaf tier (`--pgo`, 96 executors both sides) | **37/37 exact, 2208/2208 cases** |
+| Counter identity, decrypt, loop tier | 653,838 == 653,838 (0 chained edges) |
+| Counter identity, decrypt, leaf tier | **653,839 == 653,839** (90,041 chained edges on, 0 off) |
+
+Executor binding reports were identical on both sides of every A/B pair
+(81/81 then 96/96 bound, **no refusals on either side**).
+
+### The result: no measurable speedup
+
+Two independent timing legs, 5 paired alternating `--bench` rounds, medians:
+
+*Cross-binary (candidate vs pre-change build, same compiler lineage, identical
+96-executor sets):* **geomean candidate/baseline = 1.0100**. Motion-dominated
+effects: `binarypath` 1.000, `rings` 1.021, `waves` 1.011 — i.e. at or just
+below parity, not the predicted 10-25%.
+
+*Same binary, continuation toggled at runtime (the cleaner comparison: byte-identical
+code, identical executor set, only the `janet_vm.native_continuation` load differs):*
+
+| effect | cont ON ms | cont OFF ms | ratio |
+|---|---|---|---|
+| binarypath | 901.8 | 898.6 | 1.004 |
+| rings | 2478.6 | 2488.7 | 0.996 |
+| waves | 372.0 | 374.8 | 0.992 |
+| decrypt | 334.5 | 334.3 | 1.001 |
+| swarm | 396.7 | 394.4 | 1.006 |
+| matrix | 15610.7 | 15652.3 | 0.997 |
+| fireworks | 432.4 | 431.3 | 1.002 |
+| laseretch | 402.6 | 403.0 | 0.999 |
+
+**geomean ON/OFF = 0.9996.** That is a null result inside noise, and it is the
+figure to believe: the 1.0100 cross-binary number is build-to-build variation
+(code layout), since the same-binary comparison on the same effects shows no
+such gap.
+
+**§5's estimate of 10-25% on motion-dominated effects is not supported by the
+measurement and should be treated as withdrawn.** The honest reading is
+§5's own bound 1: `janet_fiber_funcframe` + `janet_fiber_popframe` stay on
+every edge, and the epoch-cached `revalidate` still runs per trampoline
+iteration. What v1 removes — `JOP_CALL`/`JOP_RETURN` dispatch, the alias
+probe, the duplicated poll, two executor prologue re-entries — is apparently
+small next to what it keeps. Nothing here says the mechanism is wrong; it says
+the mechanism alone is not where the time is.
+
+### Why so few edges chain, measured
+
+Refusal reasons on decrypt, loop tier only (throwaway instrumentation,
+563,564 refusals):
+
+| reason | count | share |
+|---|---|---|
+| callee is not a `JANET_FUNCTION` (cfunction, keyword, container) | 447,151 | 79% |
+| callee has no `native_code` | 114,956 | 20% |
+| callee not region-allowed at PC 0 | 1,060 | 0.2% |
+| argc outside `[min_arity, max_arity]` | 396 | — |
+| captured environments | 1 | — |
+
+So with only the loop tier, **nothing chains at all**: the hot callees are
+small straight-line functions, and the straight-line (leaf) tier is gated by
+`JANET_EXECUTOR_LEAF_MIN_CALLS`, which is unset by default. Continuation has
+nothing to chain into until that tier is enabled, which is a real dependency
+the design does not call out. With `--pgo` plus `JANET_EXECUTOR_LEAF_MIN_CALLS=500`
+(96 executors, 15 leaf), 90,041 edges chain on decrypt — and the timing is
+still flat.
+
+### What this implies for the sequencing in §5 and §8
+
+The next features should be chosen on the evidence that frame bookkeeping,
+not dispatch, is the residual cost: v2.2 (the monomorphic per-PC inline cache,
+which removes `revalidate` from the edge) and v3 (lazy frames, which removes
+`funcframe`/`popframe`) attack what v1 left behind, whereas v2.1 (tail calls)
+and v2.3 do not. §8's conclusion is unchanged and now has a measurement behind
+it: v1 does **not** make per-tick accessors cheap, because the frame push and
+pop it keeps are exactly their cost.
+
+### Limitations
+
+- No per-edge profile field (`:calledges`) and no profile-driven emission
+  narrowing: the guard is emitted at every non-terminal call PC. Generated-C
+  size grows accordingly, and profile-free builds are **not** byte-identical
+  to pre-change output (R11's "no change without a profile" property was a
+  property of steps 8-11, which are not built).
+- The 37/37 parity and counter-identity runs used 6 seeds x 400 frames on one
+  input; `--rust` was not run (this feature's gate is Bender-vs-Bender).
+- Timing was measured on one machine, 5 rounds, medians, no CPU pinning.
+- `janet_vm.native_interp_calls` is incremented unconditionally in `JOP_CALL`.
+  It is one increment beside `janet_fiber_funcframe`; it was not separately
+  A/B'd and is assumed below the noise floor shown above.
