@@ -975,6 +975,7 @@ typedef struct {
     Janet sig;
     JanetArray *edges;
     JanetArray *receivers;
+    JanetArray *pce;
 } JanetProfileCache;
 /* Phase C: the fast-path cache is per-thread. Worker VMs share this
  * translation unit across OS threads; a single global would let two
@@ -1031,6 +1032,8 @@ static void janet_profile_cache_fill(JanetTable *pt, JanetFuncDef *def, JanetTab
         c->edges = janet_checktype(edge, JANET_ARRAY) ? janet_unwrap_array(edge) : NULL;
         edge = janet_table_get(e, janet_ckeywordv("receivers"));
         c->receivers = janet_checktype(edge, JANET_ARRAY) ? janet_unwrap_array(edge) : NULL;
+        edge = janet_table_get(e, janet_ckeywordv("calledges"));
+        c->pce = janet_checktype(edge, JANET_ARRAY) ? janet_unwrap_array(edge) : NULL;
     }
     c->live = 1;
 }
@@ -1159,6 +1162,22 @@ static JanetTable *janet_profile_entry(JanetFunction *func) {
                 janet_array_push(receivers, janet_wrap_integer(0));
             janet_table_put_raw(e, janet_ckeywordv("receivers"), janet_wrap_array(receivers));
             janet_gcunroot(janet_wrap_array(receivers));
+            /* One call-edge attribution slot per original bytecode PC:
+             * nil = unobserved, [calleeName total native] = exactly one
+             * callee NAME observed at this PC, true = open (a second
+             * distinct callee, or an unnamed one). Same discipline as
+             * :elems above -- this is a per-PC heuristic sample that
+             * decides WHERE a guard is emitted, never what a guard may
+             * skip. It is NOT a type or identity proof: a name is not a
+             * FuncDef, and the slot can be rebound between the profiled
+             * run and the build. Consumers must still verify the callee
+             * at run time (janet_native_call_enter does). */
+            JanetArray *calledges = janet_array(func->def->bytecode_length);
+            janet_gcroot(janet_wrap_array(calledges));
+            for (i = 0; i < func->def->bytecode_length; i++)
+                janet_array_push(calledges, janet_wrap_nil());
+            janet_table_put_raw(e, janet_ckeywordv("calledges"), janet_wrap_array(calledges));
+            janet_gcunroot(janet_wrap_array(calledges));
         }
         /* Joint, full-arity tag vectors; true denotes OPEN. The entry
          * owns this array and every nested vector across GC. */
@@ -1475,6 +1494,71 @@ static void janet_profile_receiver(JanetFunction *func, int32_t pc, Janet receiv
         janet_profile_receiver(func, (int32_t)(pc - func->def->bytecode), (receiver)); \
 } while (0)
 
+/* Record (callerDef, callPC) -> callee NAME attribution for the caller's
+ * :calledges slot. Shaping evidence only, exactly like :elems: it tells the
+ * build at WHICH call PCs a native continuation guard is worth emitting. It
+ * authorizes nothing -- the emitted guard still proves the live callee
+ * (§3 of docs/internals/native-continuation-design.md), so a stale or wrong
+ * slot can only cost performance, never correctness.
+ *
+ * Bounded exactly like :edges/:receivers (JANET_PROFILE_EDGE_MAXPC), and
+ * lookup-only: it never creates a profile entry. A caller that has not been
+ * profiled yet simply records nothing. The one allocation is the 3-element
+ * monomorphic record, created at most once per PC. */
+static void janet_profile_calledge(JanetFunction *func, int32_t pc, JanetFunction *callee) {
+    if (pc < 0 || pc >= JANET_PROFILE_EDGE_MAXPC ||
+        func->def->bytecode_length > JANET_PROFILE_EDGE_MAXPC) return;
+    JanetProfileCache *hit = janet_profile_hit(func);
+    JanetArray *sites = NULL;
+    if (NULL != hit) {
+        sites = hit->pce;
+    } else {
+        Janet entry = janet_table_get(janet_vm.profile_table, janet_wrap_pointer(func->def));
+        if (janet_checktype(entry, JANET_TABLE)) {
+            Janet field = janet_table_get(janet_unwrap_table(entry), janet_ckeywordv("calledges"));
+            if (janet_checktype(field, JANET_ARRAY)) sites = janet_unwrap_array(field);
+        }
+    }
+    if (NULL == sites || sites->count != func->def->bytecode_length) return;
+    Janet slot = sites->data[pc];
+    /* Already open: nothing more to learn at this PC. Booleans can never be
+     * a recorded record, so `true` is an unambiguous marker (the same
+     * discipline as :vals / :shapes). */
+    if (janet_checktype(slot, JANET_BOOLEAN)) return;
+    /* An unnamed callee cannot be resolved by the build's name-keyed
+     * selection, so it opens the slot rather than being recorded. */
+    const uint8_t *name = callee->def->name;
+    if (NULL == name) {
+        sites->data[pc] = janet_wrap_true();
+        return;
+    }
+    if (janet_checktype(slot, JANET_ARRAY)) {
+        JanetArray *rec = janet_unwrap_array(slot);
+        if (rec->count != 3) return;
+        if (janet_unwrap_string(rec->data[0]) != name &&
+                !janet_string_equal(janet_unwrap_string(rec->data[0]), name)) {
+            sites->data[pc] = janet_wrap_true();
+            return;
+        }
+        int64_t total = janet_unwrap_integer(rec->data[1]);
+        if (total < INT32_MAX) rec->data[1] = janet_wrap_integer(total + 1);
+        if (NULL != callee->def->native_code) {
+            int64_t nat = janet_unwrap_integer(rec->data[2]);
+            if (nat < INT32_MAX) rec->data[2] = janet_wrap_integer(nat + 1);
+        }
+        return;
+    }
+    /* First observation at this PC. Root the floating record: the pushes
+     * below can collect, and the slot store happens only afterwards. */
+    JanetArray *rec = janet_array(3);
+    janet_gcroot(janet_wrap_array(rec));
+    janet_array_push(rec, janet_wrap_string(name));
+    janet_array_push(rec, janet_wrap_integer(1));
+    janet_array_push(rec, janet_wrap_integer(NULL != callee->def->native_code ? 1 : 0));
+    sites->data[pc] = janet_wrap_array(rec);
+    janet_gcunroot(janet_wrap_array(rec));
+}
+
 static void janet_profile_return(JanetFunction *func, Janet retval) {
     JanetProfileCache *hit = janet_profile_hit(func);
     if (NULL == hit) {
@@ -1594,6 +1678,25 @@ JanetArray *janet_profile_rows(void) {
                             janet_array_push(decoded, mask ? janet_profile_mask_types(mask) : janet_wrap_nil());
                         }
                         janet_table_put(info, janet_ckeywordv("receivers"), janet_wrap_array(decoded));
+                        janet_gcunroot(janet_wrap_array(decoded));
+                    }
+                    /* Call-edge attribution per original bytecode PC:
+                     * nil = unobserved, [name total native] = the single
+                     * observed callee name, :open = polymorphic/unnamed.
+                     * Same dump discipline as :vals / :shapes. */
+                    Janet ce = janet_table_get(e, janet_ckeywordv("calledges"));
+                    if (janet_checktype(ce, JANET_ARRAY)) {
+                        JanetArray *raw = janet_unwrap_array(ce);
+                        JanetArray *decoded = janet_array(raw->count);
+                        janet_gcroot(janet_wrap_array(decoded));
+                        for (int32_t ci = 0; ci < raw->count; ci++) {
+                            Janet slot = raw->data[ci];
+                            if (janet_checktype(slot, JANET_BOOLEAN))
+                                janet_array_push(decoded, janet_ckeywordv("open"));
+                            else
+                                janet_array_push(decoded, slot);
+                        }
+                        janet_table_put(info, janet_ckeywordv("calledges"), janet_wrap_array(decoded));
                         janet_gcunroot(janet_wrap_array(decoded));
                     }
                 }
@@ -2530,6 +2633,12 @@ static JanetSignal run_vm(JanetFiber *fiber, Janet in) {
                 stack[A] = ret;
                 vm_checkgc_pcnext();
             }
+            /* Caller identity for the :calledges attribution, captured
+             * BEFORE `func` is rebound to the callee. `pc` still points at
+             * this call word and is not moved by the frame push below, so
+             * the slot index stays the caller's call PC. */
+            JanetFunction *calledge_caller = func;
+            int32_t calledge_pc = (int32_t)(pc - func->def->bytecode);
             func = callee_func;
             /* Counter-identity half: every Janet-function call the
              * interpreter dispatches here. janet_vm.native_continuations
@@ -2553,11 +2662,13 @@ static JanetSignal run_vm(JanetFiber *fiber, Janet in) {
                  * args live at fiber->data + fiber->frame afterwards.
                  * For vararg defs the trailing spread args are consolidated
                  * into one tuple at index def->arity, so sample arity+1. */
-                if (NULL != janet_vm.profile_table)
+                if (NULL != janet_vm.profile_table) {
                     janet_profile_call(func, fiber->data + fiber->frame,
                                        (func->def->flags & JANET_FUNCDEF_FLAG_VARARG)
                                        ? func->def->arity + 1
                                        : callargc);
+                    janet_profile_calledge(calledge_caller, calledge_pc, func);
+                }
             }
             stack = fiber->data + fiber->frame;
             pc = func->def->bytecode;
