@@ -36,6 +36,11 @@ Executor-equal A/Bs with byte-identical generated C: **geomean 0.9992 (37 effect
 ## Parked
 Continuation v2.2 (inline cache) / v3 (lazy frames) — the only paths attacking `funcframe`/`revalidate`. Packed animation state 1–3 (1–3%, at/below floor; value = clearing slots that block type proofs). Free win: dead `geom-lerp-point` call at ttfx `ctx-coord-on-line:289-292`. 26 Bender-vs-Rust engine divergences (app correctness). 67 gate-blocked cases = 256-colour palette gap at `src/color.janet:145` (deliberately unfixed — changes rendered colours). Serializer kernel DROPPED (construction poison + backward-jump veto; prior A/B 0.948×).
 
+## Honest ceiling (from `typed-unboxed-roadmap.md`, 469c5260)
+Amdahl on the ≈42% `run_vm` share: removing it ENTIRELY caps at **1.72×**; a realistic 25–50% reduction gives **1.12–1.27× total**. No roadmap item is a step change — the case for the typed path is cumulative coverage, and the 338 hint-addressable refusals are a CEILING, not a forecast. Ranked order: (0) safety/telemetry gate [prerequisite], (1) CFG/SSA per-PC typed value versions + separate emitted C temporaries, (2) scalar-pair return ABI then cross-function table-flat escape analysis (targets boxed motion coordinates), (3) narrowly-rooted native string/buffer constructors, (4) constant-offset ptr-add + guarded unsafe ops, (5) advisor, (6) zero-arg kernels, (7) build flags, (8) per-tick regions — rank 8 carries the highest disappointment risk absent allocation attribution.
+
+**Queue item 5 is now a MEASURED NULL**: O2-vs-O3 runtime, 7 alternating interpreter microbenchmark runs, median 0.11s each, identical output — no credible O3 advantage. LTO/`-march` untested, deprioritised.
+
 ## Facts for any agent
 - `make NATIVE_EXECUTORS=1`; export `JANET_NATIVE_EXECUTORS=1`. Plain `make` proves nothing. `make test` globs `test/suite*.janet` and never runs the shell executor suite — use `make test-executors`.
 - Binary is `build/bender`, NOT `build/janet`. The 37-effect gate lives in ML/ttfx, not janet.
