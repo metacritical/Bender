@@ -472,6 +472,38 @@ next compiler target remains native-to-native continuation/inlining for the
 hot helpers and a lower-overhead batched FFI draw path; another merged PGO
 profile is not the answer.
 
+### Runtime sampling correction: the release is not the interpreter PGO profile
+
+The PGO profiles above are collected by the interpreter. A 1 ms `sample`
+of the current **AOT release** running `--bench` shows a different hot set;
+the release already uses native kernels and executors, so interpreter rows
+such as the RNG limb helpers are not the main cost.
+
+| Effect | Samples | Dominant release stacks |
+|---|---:|---|
+| rings | 1,388 | `run_vm` 433; `janet_gc_barrier` 103; `janet_dict_find` 78; `janet_equals` 75; `ctx-fire-event` executor 68; `janet_in` 67; `janet_next_impl` 48; `janet_mark` 39; `janet_native_poll` 37; container-call fast 35; `native_structure_matches` 31; `ctx-path-step` 23; `ctx-frame-string` 16 |
+| vhstape | 382 | `run_vm` 117; `janet_gc_barrier` 47; `janet_dict_find` 18; `janet_hash` 13; `janet_in` 13; `native_structure_matches` 12; `ctx-frame-string` 10; `ctx-path-step` 6; `ctx-fire-event` 6 |
+| decrypt | 94 | `run_vm` 21; `ctx-frame-string` 9; `janet_dict_find` 8; buffer-push fast 7; `janet_core_string` 6; `janet_gc_barrier` 6 |
+
+The hot release paths are therefore **table/event operations, GC write
+barriers, VM excursions from already-native frame functions, and frame
+string/color serialization**, not the boxed RNG helpers that dominate the
+interpreter profile. `ctx-update`, `ctx-fire-event`, `ctx-path-step`,
+`scene-reset`, `ctx-active-include`, and `ctx-frame-string` are already
+executors; their cost is in their table/array accesses and their calls back
+into the VM. This changes the next implementation order:
+
+1. unbox scene/animation frame state from per-frame tables into packed
+   arrays or typed records, eliminating the hot `put`/GC-barrier traffic;
+2. stop executor calls to already-native state helpers from falling back to
+   the VM (native-to-native continuation);
+3. give the frame-string/color serializer a native vectorized path;
+4. only then revisit interpreter-profile-only helpers such as the limb RNG.
+
+A merged PGO profile cannot see this because collection runs before the
+executor decides which calls stay native. Runtime sampling, not PGO call
+counts, must gate the next change.
+
 ### Final artifacts
 
 - `janet-port/build/ttfx-cli-container-rel`: 83 loop executors, 9 kernels,
