@@ -24,6 +24,8 @@ grep -q 'janet_native_table_put_fast' "$root/generated/native.c"
 grep -q 'janet_native_buffer_push_string_ready' "$root/generated/native.c"
 grep -q 'janet_native_core_predicate' "$root/generated/native.c"
 grep -q 'janet_native_register_predicates' "$root/generated/native.c"
+grep -q 'janet_native_call_enter' "$root/generated/native.c"
+grep -q 'return JANET_NATIVE_FRAME' "$root/generated/native.c"
 JANET_NATIVE_EXECUTORS=1 ./build/bender --aot test/fixtures/native-executor.janet --native --no-auto-pgo -o "$root/image" > "$root/image-build.log" 2>&1
 "$root/image" > "$root/image.log" 2>&1
 grep 'image-executor' "$root/image.log"
@@ -58,6 +60,35 @@ NATIVE_OPS_STATS=1 "$root/ops-native" > "$root/ops-native.out" 2> "$root/ops-nat
 cmp "$root/ops-boxed.out" "$root/ops-native.out"
 grep 'native-ops-global' "$root/ops-native.err"
 echo "native geti/next/scratch/alias/GC image parity passed"
+# Native-to-native continuation: a 3-deep executor->executor chain, a
+# side-effecting callee (exactly-once), a callee that boundary-exits inside
+# its own body (stale-`func` detector), a panic three frames deep, recursion
+# past the trampoline's chain budget, and an allocating callee.
+#
+# Two runs of the SAME binary, with the continuation path enabled and
+# disabled. Every assertion inside the image must hold both times -- that is
+# the differential -- and the counter identity
+#   chained call edges + interpreted Janet JOP_CALLs
+# must come out to the same total, which is what catches a call executed
+# twice or skipped when the callee is pure enough for output to agree.
+JANET_NATIVE_EXECUTORS=1 ./build/bender --aot test/fixtures/native-continuation.janet \
+    --native --no-auto-pgo -o "$root/cont" > "$root/cont-build.log" 2>&1
+"$root/cont" > "$root/cont-on.log" 2>&1
+JANET_NATIVE_NO_CONTINUATION=1 "$root/cont" > "$root/cont-off.log" 2>&1
+grep 'native-continuation image passed' "$root/cont-on.log"
+grep 'native-continuation image passed' "$root/cont-off.log"
+cont_total() { sed -n 's/.*cont-identity total=\([0-9]*\) .*/\1/p' "$1"; }
+cont_edges() { sed -n 's/.*continuations=\([0-9]*\) .*/\1/p' "$1"; }
+on_total=$(cont_total "$root/cont-on.log")
+off_total=$(cont_total "$root/cont-off.log")
+on_edges=$(cont_edges "$root/cont-on.log")
+off_edges=$(cont_edges "$root/cont-off.log")
+echo "continuation identity: on=$on_total off=$off_total edges on=$on_edges off=$off_edges"
+test -n "$on_total"
+test "$on_total" = "$off_total"
+test "$off_edges" = "0"
+test "$on_edges" -gt 0
+echo "native continuation chain and counter identity passed"
 build_case() {
     name=$1
     shift
