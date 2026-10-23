@@ -533,7 +533,25 @@ A follow-up changed `ctx :events` from a hash table keyed by character id
 to a direct array. It also passed 37/37 parity, but the three-round all-37
 A/B against the packed release was **1.0082** (median 1.0039, only 13/37
 faster; `blackhole` 1.062 and `swarm` 1.061 regressed). That experiment was
-reverted; the packed-frame release remains the candidate.
+reverted.
+
+### Packed scene state (accepted)
+
+Scene state (`:name :ease :sync :looping :all :queue :head :map :total
+:estep`) was also a per-tick hash table. It is now a packed array with
+index constants; effects do not access scene fields directly. Three-round
+all-37 A/B against the packed-frame release: **0.9779** geomean, median
+**0.9796**, faster in **32/37**. Largest gains: `waves` 0.917, `rings` 0.922,
+`burn` 0.946, `decrypt` 0.947, `errorcorrect` 0.950, `unstable` 0.954,
+`smoke` 0.957. Remaining regressions: `spotlights` 1.056, `scattered` 1.055,
+`sweep` 1.007, `middleout` 1.004. Candidate:
+`janet-port/build/ttfx-cli-packed-scene-pgo`; source commit
+`ttfx: pack scene state into arrays`.
+
+The combined packed-frame + packed-scene candidate is about **4.7% faster**
+than the previous CLI release at the all-37 geomean level. This is still far
+from Rust, so the next targets remain animation/path state and native
+continuation.
 
 ### Final artifacts
 
