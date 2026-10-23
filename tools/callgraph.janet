@@ -5535,20 +5535,29 @@
       "default: break; } if (!ok) fprintf(stderr, \"native executor registration refused id=%d\\n\", (int) janet_getinteger(argv,0));\n"
       "return janet_wrap_boolean(ok); }\n"
       "static Janet cfun_executor_stats(int32_t argc, Janet *argv) {\n"
-      "janet_fixarity(argc,1); uint64_t a=0,b=0,c=0,d=0,e=0; switch(janet_getinteger(argv,0)) {\n")
+      "janet_fixarity(argc,1); uint64_t a=0,b=0,c=0,d=0,e=0,g=0; switch(janet_getinteger(argv,0)) {\n")
     (each id executors
-      (buffer/push-string cout (string "case " id ": a=nx_" id "_entries; b=nx_" id "_edges; c=nx_" id "_fallbacks; d=nx_" id "_ops; e=nx_" id "_vmexits; break;\n")))
+      (buffer/push-string cout (string "case " id ": a=nx_" id "_entries; b=nx_" id "_edges; c=nx_" id "_fallbacks; d=nx_" id "_ops; e=nx_" id "_vmexits; g=nx_" id "_conts; break;\n")))
     (buffer/push-string cout
-      "} Janet *t=janet_tuple_begin(5); t[0]=janet_wrap_number(a); t[1]=janet_wrap_number(b); t[2]=janet_wrap_number(c); t[3]=janet_wrap_number(d); t[4]=janet_wrap_number(e); return janet_wrap_tuple(janet_tuple_end(t)); }\n"
+      # Index 5 (chained call edges from THIS definition) is appended, never
+      # renumbered: existing consumers index 0..4 positionally.
+      "} Janet *t=janet_tuple_begin(6); t[0]=janet_wrap_number(a); t[1]=janet_wrap_number(b); t[2]=janet_wrap_number(c); t[3]=janet_wrap_number(d); t[4]=janet_wrap_number(e); t[5]=janet_wrap_number(g); return janet_wrap_tuple(janet_tuple_end(t)); }\n"
       "static Janet cfun_executor_global_stats(int32_t argc, Janet *argv) {\n"
       "(void)argv; janet_fixarity(argc,0);\n"
-      "Janet *t=janet_tuple_begin(6);\n"
+      "Janet *t=janet_tuple_begin(10);\n"
       "t[0]=janet_wrap_number(janet_native_stat(JANET_NATIVE_STAT_ATTACH_ATTEMPTS));\n"
       "t[1]=janet_wrap_number(janet_native_stat(JANET_NATIVE_STAT_ATTACH_ATTACHED));\n"
       "t[2]=janet_wrap_number(janet_native_stat(JANET_NATIVE_STAT_ATTACH_AMBIGUOUS));\n"
       "t[3]=janet_wrap_number(janet_native_stat(JANET_NATIVE_STAT_ATTACH_NOMATCH));\n"
       "t[4]=janet_wrap_number(janet_native_stat(JANET_NATIVE_STAT_VM_EXITS));\n"
       "t[5]=janet_wrap_number(janet_native_registry_count());\n"
+      # Continuation accounting, appended at 6..9. The counter-identity gate
+      # is t[6] + t[9] (chained edges + interpreted Janet JOP_CALLs), which
+      # must not change when JANET_NATIVE_NO_CONTINUATION is set.
+      "t[6]=janet_wrap_number(janet_native_stat(JANET_NATIVE_STAT_CONTINUATIONS));\n"
+      "t[7]=janet_wrap_number(janet_native_stat(JANET_NATIVE_STAT_CONTINUATION_REFUSALS));\n"
+      "t[8]=janet_wrap_number(janet_native_stat(JANET_NATIVE_STAT_NATIVE_RETURNS));\n"
+      "t[9]=janet_wrap_number(janet_native_stat(JANET_NATIVE_STAT_INTERP_CALLS));\n"
       "return janet_wrap_tuple(janet_tuple_end(t)); }\n"
       "static Janet cfun_executor_exit_stat(int32_t argc, Janet *argv) {\n"
       "janet_fixarity(argc,1); int32_t op=janet_getinteger(argv,0);\n"

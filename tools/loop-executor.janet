@@ -163,7 +163,7 @@
   (out "#ifdef __FAST_MATH__\n#error Native executors require strict floating-point semantics\n#endif\n#pragma STDC FP_CONTRACT OFF")
   (out "#if defined(__GNUC__) && !defined(__clang__)\n#pragma GCC push_options\n#pragma GCC optimize (\"fp-contract=off\")\n#endif")
   (out "static JANET_THREAD_LOCAL uint64_t " tag "_entries, " tag "_edges, " tag "_fallbacks, "
-       tag "_ops, " tag "_vmexits;")
+       tag "_ops, " tag "_vmexits, " tag "_conts;")
   (out "static const uint32_t " tag "_words[] = {"
        (string/join (map string (d :bytecode-words)) ",") "};")
   (out "static const JanetNativeConstant " tag "_constants[] = {")
@@ -187,9 +187,13 @@
        "#define NX_TICK() (" tag "_ops++)\n"
        "#define NX_FALLBACK() (" tag "_fallbacks++)\n"
        "#define NX_VMEXIT() (" tag "_vmexits++)\n"
+       # Per-definition attribution of chained call edges. The global
+       # janet_native_stat counter is the one the counter-identity gate
+       # uses; this one answers WHICH caller chained.
+       "#define NX_CONT() (" tag "_conts++)\n"
        "#else\n#define NX_ENTRY() ((void)0)\n#define NX_EDGE() ((void)0)\n"
        "#define NX_TICK() ((void)0)\n#define NX_FALLBACK() ((void)0)\n"
-       "#define NX_VMEXIT() ((void)0)\n#endif\n"
+       "#define NX_VMEXIT() ((void)0)\n#define NX_CONT() ((void)0)\n#endif\n"
        "NX_ENTRY();"
        "\n#define NX_EXIT(K,R) do { *pc = d->bytecode + (K); return (R); } while (0)"
        "\n#define NX_NUM(S,K) do { if (!janet_checktype(s[S], JANET_NUMBER)) { NX_FALLBACK(); NX_EXIT(K,JANET_NATIVE_VM); } } while (0)"
@@ -430,7 +434,25 @@
           (out "      s[" (string a) "] = nxret_;")
           (out "      janet_native_alias_after_call();")
           (out "      NX_VMEXIT(); NX_EXIT(" (string (+ k 1)) ", JANET_NATIVE_VM);")
-          (out "  } else { NX_EXIT(" (string k) ", JANET_NATIVE_VM); } }")))
+          # Native-to-native continuation. The callee is read from a runtime
+          # slot, so its identity is proven at run time, never statically:
+          # janet_native_call_enter re-checks the whole safety list and is
+          # all-or-nothing. On 1 it has done exactly what JOP_CALL's function
+          # branch does (caller PC committed, janet_fiber_funcframe, GC
+          # check) and we hand the NEW frame's PC 0 back with
+          # JANET_NATIVE_FRAME; the trampoline then runs the callee's own
+          # executor with no interpreter bounce. On 0 nothing was touched and
+          # the ordinary VM exit below performs the call exactly once --
+          # including its interrupt poll, which is why only the committed
+          # path (1 or 2) is ever polled here.
+          (out "  } else {")
+          (out "      uint32_t *nxnpc_ = NULL;")
+          (out "      int nxcont_ = janet_native_call_enter(f, nxcallee_, nxargc_,")
+          (out "                                            d->bytecode + " (string k) ", &nxnpc_);")
+          (out "      if (nxcont_ == 1) { NX_CONT(); *pc = nxnpc_; return JANET_NATIVE_FRAME; }")
+          (out "      if (nxcont_ == 2) { NX_EXIT(" (string k) ", JANET_NATIVE_INTERRUPT); }")
+          (out "      NX_EXIT(" (string k) ", JANET_NATIVE_VM);")
+          (out "  } }")))
 
       # Native `next` for arrays, tuples, strings, and buffers. This is the
       # iterator used by `each`; tables, structs, abstracts, fibers, and
