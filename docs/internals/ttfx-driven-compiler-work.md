@@ -343,7 +343,11 @@ actually attach and execute. Paired leaf-vs-loop release runs gave 0.9846
 time geomean across six effects (1.5% faster, 25/60 rows), but a 20-round
 `decrypt` rerun gave 1.0002 (neutral). The GUI leaf A/B was inconclusive
 (leaf/noexec 0.9604 versus leaf/loop 1.0201 across different sittings), so
-the leaf tier remains opt-in and is **not** in the final release.
+the leaf tier remains opt-in and is **not** in the final release. A later
+full 37-effect leaf-vs-loop release A/B (two rounds, complete bounded
+dumps, startup included) gave a leaf/loop time geomean of **0.9978** (median
+0.9910, leaf faster 25/37). That is not a material win, and `waves` was a
+1.204 outlier; the leaf release was not promoted.
 
 A more aggressive follow-up relaxed the entry rule to allow any native region
 (not only one starting at PC 0) and admitted unused environment slots. It
