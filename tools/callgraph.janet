@@ -5528,7 +5528,11 @@
     (each id executors
       (buffer/push-string cout (string "case " id ": ok = janet_native_register(f, &nx_" id "_code); break;\n")))
     (buffer/push-string cout
-      "default: break; } if (!ok) fprintf(stderr, \"native executor registration refused\\n\");\n"
+      # Name the refusal: Tier-B binds by exact bytecode compare, so a refusal
+      # is the signal that a definition silently lost its executor. Without the
+      # id, an A/B harness cannot tell WHICH function is no longer bound
+      # (native-executors.txt maps id -> name).
+      "default: break; } if (!ok) fprintf(stderr, \"native executor registration refused id=%d\\n\", (int) janet_getinteger(argv,0));\n"
       "return janet_wrap_boolean(ok); }\n"
       "static Janet cfun_executor_stats(int32_t argc, Janet *argv) {\n"
       "janet_fixarity(argc,1); uint64_t a=0,b=0,c=0,d=0,e=0; switch(janet_getinteger(argv,0)) {\n")
