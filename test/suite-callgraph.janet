@@ -345,6 +345,22 @@
 (assert (not (nil? (string/find "double k_fmod(double p0, double p1)" fmtext)))
         "reserved name fmod prefixed")
 
+# math/hypot must lower to libm hypot, not sqrt(x*x+y*y): the latter
+# overflows for finite 1e308 inputs. Compare hexadecimal float output
+# against the interpreter over deterministic varied-magnitude pairs.
+(spit "/tmp/cg-hypot.janet" (string
+  "(defn h {:hint {:params [:double :double] :returns :double}} [x y] (math/hypot x y))\n"
+  "(defn main [] (h 3.0 4.0))\n"))
+(assert (= 0 (os/execute ["/bin/sh" "-c"
+  "rm -rf /tmp/cg-hypot-em && ./build/bender tools/callgraph.janet /tmp/cg-hypot.janet --emit-native /tmp/cg-hypot-em > /tmp/cg-hypot-em.log"] :p))
+  "hypot kernel emits")
+(def hypot-c (slurp "/tmp/cg-hypot-em/native.c"))
+(assert (not (nil? (string/find "return hypot((double)(p0), (double)(p1));" hypot-c)))
+  "hypot calls libm directly")
+(assert (= 0 (os/execute ["/bin/sh" "-c"
+  "cc -O2 /tmp/cg-hypot-em/native.c -lm -o /tmp/cg-hypot-em/native"] :p))
+  "hypot kernel compiles and links")
+
 # refusal: divf/mod/rem on int widths (C trunc vs floor-mod divergence)
 (spit "/tmp/cg-imod.janet" (string
   "(defn imod {:hint {:params [:long :long] :returns :long}} [a b] (mod a b))\n"

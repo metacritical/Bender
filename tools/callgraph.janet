@@ -2062,7 +2062,7 @@
   @{"fmod" true "modf" true "floor" true "ceil" true "round" true
     "trunc" true "fdiv" true "div" true "rem" true "frem" true
     "sin" true "cos" true "tan" true "exp" true "log" true "pow" true
-    "sqrt" true "fabs" true "fma" true "fmax" true "fmin" true
+    "sqrt" true "hypot" true "fabs" true "fma" true "fmax" true "fmin" true
     "abs" true "labs" true "main" true "malloc" true "free" true
     "abort" true "exit" true "printf" true "auto" true "break" true
     "case" true "char" true "const" true "continue" true "default" true

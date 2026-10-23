@@ -161,7 +161,8 @@
     "math/ceil" {:c "ceil" :params [:double] :returns :double}
     "math/sqrt" {:c "sqrt" :params [:double] :returns :double}
     "math/abs" {:c "fabs" :params [:double] :returns :double}
-    "math/pow" {:c "pow" :params [:double :double] :returns :double}})
+    "math/pow" {:c "pow" :params [:double :double] :returns :double}
+    "math/hypot" {:c "hypot" :params [:double :double] :returns :double}})
 
 # ---------------------------------------------------------------------------
 # Phase 5 (type-generator plan): closed-shape LOCAL table detection.
