@@ -86,3 +86,22 @@ The published floor (**geomean 0.9992 / 1.0025, ±3% per effect**) came from pai
 **Why this was invisible:** with the stub, every registration fails, but only entry-file `defn`s are registered EAGERLY and therefore PRINT. `validate-bender.py` infers `bound = manifest − printed_refusals`, so a totally inert runtime reports a confident "79/81 bound". `bench/bender-37-gate.md` is corrected (ML/ttfx `3e81a7f`): the 79/81-vs-81/81 pipeline story is marked SUPERSEDED, `REFUSED: none` is no longer treated as proof of binding, and the 1.0205 "executor inequality" explanation is withdrawn.
 **Claims under review:** the floor itself; the typed pilot's null (0.9917 + control-test failure); the stop-gate's occupancy figures. Note the stop-gate build is probably SAFE — it reported non-zero `nx_*` counters and 81 active Tier-B executors, which is positive evidence of a live tier. Continuation v2 is also probably safe — `639be9a5` verified 96/96 with `REFUSED: none` on opted-in builds. Treat every other timing number as unqualified until the audit reports.
 **Rule going forward: no performance claim without positive proof the tier is live** — non-zero per-definition executor counters at runtime, not an inferred binding count.
+
+## FLOOR AUDIT RESULT (ML/ttfx 9f05751, `docs/floor-audit.md`) — the old floor was INTERPRETER-MODE
+Verified by disassembly (`otool` on the actual `_janet_native_register`), not inference: **`ttfx-cli-s0a`, `s0b`, `autopgo-v2` and `packed-path-pgo2` all carry the STUB** — the registration function clears the native pointer and unconditionally returns 0, so **ZERO Tier-B executors were bound** in any of them, despite each printing a confident `available 81, REFUSED 188,190`. The frozen baseline hashes match those binaries. The original `packed-path-pgo` is non-stub (its registration calls the structure matcher/verifier), so capability is established there, but runtime activity was never counted — explicitly unverified.
+**THE PUBLISHED ±3% / 0.9992 / 1.0025 FLOOR IS INVALID AS A NATIVE FLOOR.** It measured interpreter-mode binaries.
+
+### The real verified-native floor is MUCH WIDER
+New pair `ttfx-floor-a` / `ttfx-floor-b`: same source, same pinned compiler (d5a24e5d, `NATIVE_EXECUTORS=1`), independent caches, **identical generated native C**, `REFUSED: none`, non-stub registration, and liveness PROVEN by probe (`nx_92`: 1,248 entries / 47,524 ops on a two-frame decrypt, stdout byte-identical to the uninstrumented build). Four alternating paired rounds, 37/37 bare-effect byte parity:
+- **37-effect geomean 1.0063**; historical five-effect subset **1.0218**.
+- **Only 23/37 effects land within ±3%; 14 fall outside.** Range **0.8821 (slice) … 1.2256 (orbittingvolley)**.
+So on live-tier builds the per-effect spread is roughly **±12–23%**, not ±3%, and even the geomean sits 0.6% off unity for two builds of identical C. One session is not a universal threshold, but the direction is unambiguous: this bench is far noisier than believed.
+
+### Per-claim disposition
+- **Floor (±3%/0.1–0.3%)**: INVALID for native work. Any sub-2% claim previously accepted on it is unsupported.
+- **Continuation v2 (1.0064→0.9881/0.9834)**: the regression-removal claim now rests on a ~1.8% geomean delta against ~0.6% geomean build noise — SUGGESTIVE, NOT PROVEN. The implementer's own "at or below the floor, not a 1.2% win" caveat was the right instinct; it now needs a stronger protocol to confirm.
+- **Typed pilot (0.9917, control faster than treatment)**: the conservative verdict — no attributable end-to-end win — SURVIVES on its own internal control, and its builds were opted-in. Its significance argument against the old floor is void.
+- **Loop stop-gate**: SURVIVES. Its build had direct non-zero `nx_*` counters (1,632,623 entries / 47,116,287 ops on decrypt) and its NO-GO rests on SHAPE, not on a marginal timing delta. Only its citation of the old floor needs qualification.
+
+### Consequence — measurement methodology is now the critical path
+No further performance work is meaningful until a protocol exists that can resolve ~1% on this machine: CPU pinning/affinity, many more paired rounds, per-effect confidence intervals rather than single medians, outlier policy, and a declared minimum detectable effect. **Rule: no performance claim without (a) positive proof the tier is live — non-zero per-definition counters, never an inferred binding count — and (b) an effect larger than the protocol's stated MDE.**
