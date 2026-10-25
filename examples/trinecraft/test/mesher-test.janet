@@ -219,6 +219,84 @@
 (check "culling discards most faces on real terrain"
        (< (get tm :face-count) (* 0.25 naive)))
 
+#
+# --- Incremental editing ------------------------------------------------
+#
+# Breaking and placing blocks must change the mesh, and an edit on a chunk
+# boundary must change the NEIGHBOUR's mesh too -- that is the whole reason
+# the renderer re-meshes seam neighbours instead of only the touched chunk.
+(print "\nincremental edits:")
+
+(def ew (world/world-new))
+(for cz 0 2 (for cx 0 2 (worldgen/generate-chunk ew cx cz seed)))
+(def ea (world/world-get-chunk ew 0 0))
+(def eb (world/world-get-chunk ew 1 0))
+
+(def before-a (mesher/count-faces ea ew))
+(def before-b (mesher/count-faces eb ew))
+
+# Break a block in the middle of chunk A: exposes its neighbours, so the face
+# count must rise.
+(var surface 0)
+(for y 0 world/chunk-y
+  (when (not= world/block-air (world/world-get-block ew 8 y 8))
+    (set surface y)))
+(world/world-set-block ew 8 surface 8 world/block-air)
+(def after-break (mesher/count-faces ea ew))
+(check "breaking a surface block changes the chunk mesh"
+       (not= before-a after-break)
+       (string before-a " -> " after-break))
+(check "breaking a block does not disturb a non-adjacent chunk"
+       (= before-b (mesher/count-faces eb ew)))
+
+# Place a block in mid-air: adds exactly 6 faces.
+(def pre-place (mesher/count-faces ea ew))
+(world/world-set-block ew 8 (+ surface 6) 8 world/block-stone)
+(check "placing an isolated block adds six faces"
+       (= (+ pre-place 6) (mesher/count-faces ea ew))
+       (string pre-place " -> " (mesher/count-faces ea ew)))
+
+# An edit on the shared seam must change BOTH chunks. Chunk A's x=15 column
+# touches chunk B's x=16 column.
+#
+# The edit has to be one that actually matters to the neighbour: placing a
+# block beside AIR in B changes nothing there, because air cells emit no
+# faces at all. Breaking a block in A that was HIDING one of B's solid faces
+# does change B -- that newly exposed face must now be drawn. So find a depth
+# where both sides are solid.
+(var seam-y -1)
+(for y 1 world/chunk-y
+  (when (and (= seam-y -1)
+             (not= world/block-air (world/world-get-block ew 15 y 8))
+             (not= world/block-air (world/world-get-block ew 16 y 8)))
+    (set seam-y y)))
+(check "found a depth where both sides of the seam are solid" (>= seam-y 0))
+
+(def seam-a (mesher/count-faces ea ew))
+(def seam-b (mesher/count-faces eb ew))
+(world/world-set-block ew 15 seam-y 8 world/block-air)
+(check "a seam edit changes the edited chunk"
+       (not= seam-a (mesher/count-faces ea ew)))
+(check "a seam edit exposes a face in the neighbouring chunk"
+       (= (+ seam-b 1) (mesher/count-faces eb ew))
+       (string seam-b " -> " (mesher/count-faces eb ew)))
+
+# Restoring it must return both chunks exactly: meshing is a pure function of
+# world state, so an edit and its inverse round-trip.
+(world/world-set-block ew 15 seam-y 8 world/block-stone)
+(check "undoing a seam edit restores the edited chunk"
+       (= seam-a (mesher/count-faces ea ew)))
+(check "undoing a seam edit restores the neighbour"
+       (= seam-b (mesher/count-faces eb ew)))
+
+# world-set-block must flag the neighbour dirty on a seam, or the renderer
+# never learns it has to re-upload.
+(put ea :dirty false)
+(put eb :dirty false)
+(world/world-set-block ew 15 (+ surface 7) 8 world/block-stone)
+(check "a seam edit marks the edited chunk dirty" (ea :dirty))
+(check "a seam edit marks the neighbour dirty" (eb :dirty))
+
 (print "\nthroughput:")
 (def reps 20)
 (def t0 (os/clock))
