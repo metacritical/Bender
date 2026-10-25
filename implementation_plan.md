@@ -1,10 +1,12 @@
-# Janet compiler-to-Rust parity continuation
+# NOT THE PLAN — see docs/internals/ORCHESTRATOR-PLAN.md
 
-1. Preserve clean baseline, opt-in executor, source-qualified PGO and byte-exact ttfx parity gates. Treat CLI numeric, container, allocation, call and I/O workloads alongside GUI.
-2. Attribute representative CLI costs with equivalent inputs and current verified releases: profile whole-process startup versus steady-state frames, collect main-thread stacks, counts and controlled workload ablations, and compare Rust/LuaJIT where feasible. Distinguish observed costs from hypotheses.
-3. Audit what the integrated AOT compiler actually emits for the hot ttfx loops and why PGO feedback does or does not become native unboxed operations. Inspect effect, aliasing, GC-root, quantum and deoptimization barriers before choosing a bounded optimization.
-4. Finish one bounded, safe native-unboxing slice: establish a concrete function/bytecode contract, implement it opt-in with exact VM safepoints and fail-closed fallback, run narrow correctness and sanitizer/preemption checks, and commit verified code immediately. If a proposed hot-loop lowering cannot be proven safe, choose a smaller provable slice rather than claiming success prematurely.
-5. Repeat differential correctness, executor-enabled sanitizer/preemption checks, and interleaved two-PGO verified-release CLI+GUI measurements against an unchanged control before claiming speed. Keep the executor opt-in without a measured win.
-6. Record exact evidence, uncertainty and pending IR/GC/root/deopt/record/startup work in the optimizer plan; commit documentation separately. Retain unimplemented phases in the standing todo tree.
-7. For language comparisons, use equivalent parity-gated effect/seed/input/frame/output workloads and report actual FPS plus ratios rather than unqualified microbenchmarks.
-8. Build and harden a reproducible ttfx-specific diagnostic probe, distinct from optimization PGO: sustain identical effects in one process long enough for main-thread sampling; count original-PC opcode execution and attributed function/call-site traffic without changing VM semantics; validate counter totals, frame parity and profiling-off behavior; ensure function identity cannot alias recycled pointers, counters saturate/report loss, and concurrent VM threads cannot race; add hand-counted computed-goto/switch and long-function tests. Collect repeatable raw evidence and report sampling/identity limits. Commit each verified diagnostic fix atomically, keeping unrelated worktrees untouched.
+This file is the default write target of the `plan_write` tool, so any agent
+that records a plan overwrites it. It has been clobbered repeatedly and its
+contents are ephemeral scratch, not project direction.
+
+**The canonical plan is `docs/internals/ORCHESTRATOR-PLAN.md`** (committed, and
+carrying the measurement rules, the evidence-ranked queue, and the retractions).
+
+If you are an agent: write your own plan to the gitignored `tmp/` directory, not
+here. If you find this file modified, `git checkout -- implementation_plan.md`
+restores this notice; nothing of value is lost.
