@@ -300,11 +300,30 @@
   (when (mesh-uploaded? mesh)
     (draw-mesh (mesh :value) material (or xform identity-matrix))))
 
+(def- null-pointer "\0\0\0\0\0\0\0\0")
+
+(def- mesh-data-pointers
+  [:vertices :texcoords :texcoords2 :normals :tangents :colors :indices
+   :bone-indices :bone-weights :anim-vertices :anim-normals])
+
 (defn mesh-unload
-  "Release GPU buffers. Safe to call on a never-uploaded mesh."
+  ``Release the GPU-side buffers. Safe to call on a never-uploaded mesh.
+
+  raylib's UnloadMesh calls free() on mesh.vertices, texcoords, normals and
+  indices -- but in Trinecraft those point at JANET buffers owned by the
+  garbage collector. Handing them to free() corrupts the heap and aborts the
+  process, which is exactly what happened the first time a block edit
+  triggered a re-mesh.
+
+  So unload through a copy of the struct with every CPU-side data pointer
+  nulled. RL_FREE(NULL) is a no-op, which leaves UnloadMesh releasing only
+  what raylib itself allocated: the VAO and its vertex buffer objects.``
   [mesh]
   (when (mesh-uploaded? mesh)
-    (unload-mesh-raw (mesh :value))
+    (def scratch (buffer/slice (mesh :struct)))
+    (each field mesh-data-pointers
+      (buffer/blit scratch null-pointer (mesh-offset field)))
+    (unload-mesh-raw (ffi/read mesh-type scratch))
     (put mesh :uploaded false)
     (put mesh :vao-id 0))
   mesh)
