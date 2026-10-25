@@ -231,12 +231,22 @@
 (def identity-matrix [1 0 0 0  0 1 0 0  0 0 1 0  0 0 0 1])
 
 (defn translation-matrix
-  "Column-major translation matrix, the layout raylib's DrawMesh expects."
+  ``Translation matrix in raylib's memory order.
+
+  raylib declares Matrix as `float m0, m4, m8, m12;` for the FIRST ROW, so the
+  16 floats sit in memory as m0,m4,m8,m12, m1,m5,m9,m13, m2,m6,m10,m14,
+  m3,m7,m11,m15. The translation components m12/m13/m14 are therefore at
+  memory indices 3, 7 and 11 -- NOT 12, 13, 14, which are m3/m7/m11, the
+  projective row. Writing the offset there instead produces wildly distorted
+  geometry rather than a moved mesh.
+
+  Identity is unaffected because m0/m5/m10/m15 land on indices 0/5/10/15
+  either way, so this bug stays invisible until the first non-zero offset.``
   [x y z]
-  [1 0 0 0
-   0 1 0 0
-   0 0 1 0
-   x y z 1])
+  [1 0 0 x
+   0 1 0 y
+   0 0 1 z
+   0 0 0 1])
 
 #
 # --- Mesh helpers ------------------------------------------------------
@@ -301,11 +311,18 @@
 
 (defn material-set-texture
   ``Point a material's albedo map at a texture. Material.maps is a pointer to
-  an array of MaterialMap; the albedo map is index 0 and its Texture2D sits at
-  offset 0 within it, so the texture is written straight into maps[0].``
+  a raylib-allocated array of MaterialMap; the albedo map is index 0 and its
+  Texture2D sits at offset 0 within it, so the texture is written straight
+  into maps[0].
+
+  This writes through a raw pointer into memory raylib owns, so it uses
+  unsafe/poke rather than ffi/write -- ffi/write only targets Janet buffers,
+  and the maps array is not one.``
   [material texture]
   (def maps-ptr (get material 1))
-  (ffi/write texture-type texture maps-ptr 0)
+  (unless maps-ptr
+    (error "material has no maps array; was it created before InitWindow?"))
+  (unsafe/poke texture-type maps-ptr texture 0)
   material)
 
 (defn camera3d

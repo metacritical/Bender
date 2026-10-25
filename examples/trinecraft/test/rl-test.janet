@@ -111,8 +111,15 @@
 (check "identity is 16 floats" (= 16 (length rl/identity-matrix)))
 (def tm (rl/translation-matrix 5 6 7))
 (check "translation is 16 floats" (= 16 (length tm)))
-(check "translation puts x,y,z in slots 12..14"
-       (and (= 5 (get tm 12)) (= 6 (get tm 13)) (= 7 (get tm 14))))
+# raylib's Matrix memory order is m0,m4,m8,m12 / m1,m5,m9,m13 / ... so the
+# translation components m12,m13,m14 are at indices 3, 7 and 11. Indices
+# 12,13,14 are m3,m7,m11 -- the projective row -- and must stay zero.
+(check "translation puts x,y,z at m12,m13,m14 (indices 3,7,11)"
+       (and (= 5 (get tm 3)) (= 6 (get tm 7)) (= 7 (get tm 11))))
+(check "translation leaves the projective row zero"
+       (and (zero? (get tm 12)) (zero? (get tm 13)) (zero? (get tm 14))))
+(check "translation keeps the diagonal at 1"
+       (and (= 1 (get tm 0)) (= 1 (get tm 5)) (= 1 (get tm 10)) (= 1 (get tm 15))))
 
 (def cam (rl/camera3d [1 2 3] [0 0 0] [0 1 0] 70))
 (check "camera3d has 5 fields" (= 5 (length cam)))
