@@ -100,6 +100,15 @@ static void retirement_fixture(JanetFunction *sum) {
         for (int i = 0; i < retired_count; i++) assert(retired[i] == expected[i]);
         janet_gcunroot(janet_wrap_fiber(done));
     }
+    /* Out-of-range input rejects the fused region at unexecuted PC2.
+     * Boxed execution may finish, but must not emit native retirements. */
+    JanetFiber *guarded = spawn(sum, -1);
+    uint64_t fallbacks_before = nx_10_fallbacks;
+    retired_count = 0;
+    assert(janet_continue(guarded, janet_wrap_nil(), &out) == JANET_SIGNAL_OK);
+    assert(janet_unwrap_number(out) == 0 && retired_count == 0);
+    assert(nx_10_fallbacks == fallbacks_before + 1);
+    janet_gcunroot(janet_wrap_fiber(guarded));
     JanetFiber *f;
 
 #ifndef JANET_NO_INTERPRETER_INTERRUPT
