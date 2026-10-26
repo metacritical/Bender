@@ -29,6 +29,11 @@
 (emit 121 {:arity 1 :slotcount 4
            :bytecode '[(ldi 1 0) (ldi 2 1) (push 2) (push 1)
                        (mktab 3) (ret 3) (jmp 0)]})
+# Guarded bitwise operations belong to an attached loop; the backedge
+# polls at its original PC and leaves live state in the scanned VM frame.
+(emit 122 {:arity 1 :slotcount 5
+           :bytecode '[(ldi 1 0) (ldi 2 0) (lt 3 1 0) (jmpno 3 4)
+                       (bor 2 2 1) (addim 1 1 1) (jmp -4) (ret 2)]})
 # Exact structural numeric loop emits one raw-double accumulator and counter
 # across the backedge, while all other bytecode shapes remain generic.
 (file/flush output)

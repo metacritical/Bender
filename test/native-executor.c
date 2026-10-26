@@ -159,6 +159,16 @@ int main(int argc, char **argv) {
     assert(nx_121_entries > 0 && nx_121_vmexits > 0);
     janet_gcunroot(janet_wrap_fiber(table_fiber));
     janet_gcunroot(janet_wrap_function(table));
+    JanetFunction *bits = assembled(&nx_122_code);
+    attach(bits, &nx_122_code);
+    Janet bit_arg = janet_wrap_integer(4), result_bits;
+    JanetFiber *bit_fiber = janet_fiber(bits, 64, 1, &bit_arg);
+    janet_gcroot(janet_wrap_fiber(bit_fiber));
+    assert(janet_continue(bit_fiber, janet_wrap_nil(), &result_bits) == JANET_SIGNAL_OK);
+    assert(janet_equals(result_bits, janet_wrap_integer(3)));
+    assert(nx_122_entries > 0 && nx_122_edges >= 4 && nx_122_ops > 0);
+    janet_gcunroot(janet_wrap_fiber(bit_fiber));
+    janet_gcunroot(janet_wrap_function(bits));
     assert(!janet_native_register(lookup(env, "unsupported-loop"), &nx_10_code));
     assert(!lookup(env, "boxed-caller")->def->native_code);
     /* A boxed caller must actually reach the generated executor. */

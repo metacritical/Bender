@@ -2034,13 +2034,16 @@ static int native_structure_matches(JanetFuncDef *d, const JanetNativeCode *n) {
             /* Stage 2: exact words for guarded native ops and VM boundaries. */
             case JOP_CALL: case JOP_TAILCALL:
             case JOP_PUSH: case JOP_PUSH_2: case JOP_PUSH_3:
-            case JOP_GET: case JOP_IN: case JOP_GET_INDEX:
+            case JOP_GET: case JOP_IN: case JOP_IN_IMMEDIATE: case JOP_GET_INDEX:
             case JOP_LENGTH: case JOP_NEXT:
             case JOP_PUT:
             case JOP_MAKE_ARRAY: case JOP_MAKE_BUFFER:
             case JOP_MAKE_TUPLE: case JOP_MAKE_SCRATCH_TUPLE:
             case JOP_MAKE_STRING: case JOP_MAKE_STRUCT:
             case JOP_MAKE_TABLE: case JOP_MAKE_BRACKET_TUPLE:
+            case JOP_BAND: case JOP_BOR: case JOP_BXOR: case JOP_BNOT:
+            case JOP_SHIFT_LEFT: case JOP_SHIFT_LEFT_IMMEDIATE:
+            case JOP_SHIFT_RIGHT: case JOP_SHIFT_RIGHT_IMMEDIATE:
             case JOP_DIVIDE: case JOP_DIVIDE_IMMEDIATE: case JOP_DIVIDE_FLOOR:
             case JOP_MODULO: case JOP_REMAINDER: break;
             default: return 0; /* Includes every breakpoint bit. */
