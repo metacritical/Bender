@@ -328,10 +328,16 @@ test-build-mode:
 # fails on inert counters rather than on a defect. Run it explicitly:
 #   make NATIVE_EXECUTORS=1 test-executors
 # Do not omit the flag in the second make invocation: mode switches now rebuild.
-test-executors: $(JANET_TARGET) test-build-mode
+test-executors: $(JANET_TARGET) test-build-mode test-forced-quantum
 	@JANET_AOT_TEST_ROOT=$${JANET_AOT_TEST_ROOT:-$$(mktemp -d)} \
 	 XDG_CACHE_HOME=$${XDG_CACHE_HOME:-$$(mktemp -d)} \
 	 sh test/suite-native-executor.sh
+
+# Explicit native opt-in must be on this same make invocation.
+test-forced-quantum: $(JANET_TARGET)
+	@JANET_AOT_TEST_ROOT=$${JANET_AOT_TEST_ROOT:-$$(mktemp -d)} \
+	 XDG_CACHE_HOME=$${XDG_CACHE_HOME:-$$(mktemp -d)} \
+	 sh test/suite-forced-quantum.sh
 
 # Phase 1.1b: C call-chain suspension proof (tools/fiber-c-test.c).
 # Builds against the static library and runs the embedder assertions.
