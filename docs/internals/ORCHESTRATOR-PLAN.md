@@ -359,3 +359,27 @@ The prediction on record was: `nx28` exit-dense (~25–35 ops/exit) → Task 1's
 ### TRAP: never nest a git worktree under the main checkout
 `profile-source-matches?` (`tools/callgraph.janet:1250-1270`) deliberately walks analyzed-source ancestors when a recorded profile path is relative. If a worktree lives INSIDE the main checkout (e.g. `janet/tmp/stack-worktree/`), the same fixture path exists in both the nested tree and its ancestor, producing **TWO realpath hits**; the ambiguity makes the matcher refuse profile provenance, so edge selection finds nothing and `native-continuations.txt` comes out EMPTY. The failure looks like a code regression in whatever you are testing — it reproduced identically on a clean pinned comparator with no candidate code at all.
 **Always place throwaway worktrees at a NON-DESCENDANT path** (`/tmp/...`, never `<repo>/tmp/...`). Add this to the infrastructure list below; it is the fifth distinct way this harness converts environment into apparent defect, alongside hardcoded `/tmp` scratch collisions, the unreclaimable mkdir-lock, the unpruned 57,827-entry PGO cache, and `bench/kernels.janet` printing timings on stdout.
+
+## ★ THE STACKED RESULT — Task 1's NO-GO is REVERSED when stacked on the allowlist fix
+The experiment specified earlier (both arms at the allowlist fix, prediction stated in advance) has been run, after all correctness gates passed.
+
+**Timing, five alternating pairs, allowlist-only vs allowlist+Task1:**
+| kernel | allowlist-only p50 | stacked p50 | ratio |
+|---|---:|---:|---:|
+| **mesh** | 5.146 ms | **4.238 ms** | **0.81756** (range 0.81656–0.84389) |
+| worldgen | — | — | 0.92719 |
+| raycast | — | — | 0.99466 (unchanged, as expected) |
+| palette | — | — | 0.99390 (unchanged) |
+Pairs: 5.197→4.311, 5.190→4.241, 5.146→4.202, 5.022→4.238, 5.136→4.199.
+
+**Cumulative on mesh-chunk: 6.240 ms (pre-allowlist) → 5.046 (T1) → 4.238 (stacked) ≈ 0.679, i.e. roughly a third faster than baseline.**
+
+**The opcode histogram proves the mechanism exactly:** `JOP_GET` 7,924,250 → **0** and `JOP_PUT` 2,162,688 → **0**, while `JOP_CALL` remains 8,250,836 and `JOP_DIVIDE`/`JOP_MAKE_TABLE`/`JOP_RETURN` are unchanged. `nx28` generated boundary exits 7,924,375 → 125. Work: −12.422M interpreted dispatches, −10,086,938 VM exits (−53.4%), +2.336M native ops.
+
+### What this overturns
+**Task 1's NO-GO (worldgen −5.41%, mesh −0.57%) was an ARTIFACT of measuring buffer admission while `mesh-chunk` was not in the tier at all.** Its mesh figure could never have shown anything, as noted at the time. Stacked on the constructor fix — which is what admits `mesh-chunk` — the same six-file change is worth ~18% on the heaviest kernel. The two changes are **synergistic**: the allowlist fix brings a buffer-dominated kernel into the tier, and buffer admission then removes the boundary exits that admission creates.
+This also retires my own caution that a large exit reduction would under-deliver on time, as it did for Task 1 alone (86.5% of exits → 5.4%). It did not here: 53.4% of exits → ~18% on mesh. The difference is qualitative — these are GET exits inside a hot, now-native region, not puts in a loop that was already cheap.
+
+### Consequence
+The artifact preserved on `task1-buffer-regions` (`1462595a`, fully validated — see its git note) is **no longer a parked null**; it is half of a combined ~32% improvement on TrineXraft's heaviest kernel, pending a decision to land it. Had it been deleted for failing to reach 10% in isolation, this result would have required re-deriving it from scratch.
+Remaining exit population is dominated by `JOP_CALL` (8.25M), which buffer admission cannot touch. That is native-to-native continuation's territory — measured as a small net regression on ttfx, but **never evaluated in this regime**, where `mesh-chunk` and `raycast` run natively and generate ~8M CALL exits that did not previously exist.
