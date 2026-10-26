@@ -605,3 +605,21 @@ Buffer admission (`02b32d24`) is **net positive but NOT uniformly**: `worldgen/c
 **Cause is call density.** `generate-into` calls `height-at` → `fbm-signed-2d` → `value-noise-2d` → `hash2` once per column; calls are explicit VM boundaries, so the region exits constantly and the guard is pure overhead. The mesher is buffer reads with arithmetic between them — the shape fusion actually wants.
 **This is directly measurable with data we already have:** ops per generated-boundary exit. `nx28` mesh 33.3 → ~2,128,763 after admission; `generate-into` 25.266; `fbm-signed-2d` 82.517. **Low ops-per-exit predicts the regression.**
 **NEXT ACTION, highest value remaining: a low-yield region decline heuristic.** If a region's expected native run length between boundary exits falls below a threshold, decline to emit it. That converts a known regression into a win using a metric already computed, and it is far cheaper than SSA, Task 2 or Task 3. Gate it on per-effect timing, not exit counts.
+
+## ★★ LOW-YIELD DECLINE HEURISTIC — NO-GO, AND THE PREMISE WAS INVERTED
+The heuristic was my idea and the premise was my error. **Correcting it here because it propagated into this plan and into a task brief.**
+
+**My mistake:** I compared `nx28` mesh **post**-admission (~2,128,763 ops/exit) against `generate-into` **pre**-admission (25.266) and concluded low yield predicted the regression. Apples to oranges, unlabelled. Current figures: `generate-into` ID21 is 54,645,175 ops / **132** generated exits ≈ **413,979 ops/exit**; mesh ID28 266,095,434 / 125 ≈ 2,128,763. **Both are excellent.** A yield heuristic on current data would KEEP `generate-into`.
+
+**No honest estimator exists.** Static boundary PCs per (1+hard+calls): `generate-into` **38.5**, mesh **16.5**, ttfx winners ID454 **3.667**, ID92 **5.8** — the ranking is INVERTED, so any minimum threshold refusing `generate-into` kills mesh and the ttfx winners first. PGO call-edge frequency alone does not establish net loss. Full 12+81 distribution in `tmp/low-yield/{trinexraft,ttfx}-calibration.csv`.
+
+**The decisive ablation inverts the theory outright.** A throwaway generated-C variant disabled ONLY ID21's two registration sites (restoration diff verified byte-identical otherwise), retaining mesh liveness. Eleven alternating pairs, median paired decline/native worldgen p50 **1.08762 [1.07415, 1.15847]** — **declining `generate-into` makes worldgen 8.8% SLOWER.** The region HELPS worldgen by ~8.8%. Mesh 0.99748 and palette 0.99130 unaffected, as expected.
+
+### What the regression actually is — a NON-REGION AOT overhead
+Native vs fully-boxed, nine pairs: worldgen **1.04150 [1.03289,1.08262]**; mesh **0.79230 [0.78319,0.81983]**; palette **1.11446 [0.99909,1.25562]**.
+Decomposing worldgen: its region contributes **−8.8%**, yet native is **+4% slower overall** — so roughly **13% of cost sits elsewhere in the native path**. The control is decisive: **`palette/pack` emits NO region at all** (ID38 absent from the 12 emitted) and is ~11% slower natively by the same mechanism. **A kernel with no region cannot be slowed by region fusion.**
+**Therefore: regions are not the regression. There is a per-kernel AOT overhead that regions partly MASK rather than cause.** The documented claim that "`worldgen/chunk` and `palette pack` got slower [because] a region that pays its guard and then deopts is worse than no fusion" is **mis-attributed and should be read as superseded by this section.**
+
+### Next investigation (replaces the heuristic)
+Characterise the non-region AOT overhead: what does the native path cost a kernel *before any region runs*? Candidates — image/runtime initialisation amortised per kernel, FFI alias installation, allocation or GC behaviour differences, code layout. Measure with `palette/pack` as the clean control, since it has no region and shows the effect in isolation. That is where worldgen's remaining 13% lives, and it is worth more than any region-selection work.
+**Gates on this study:** ttfx explicit native-vs-fully-boxed 37/37 effects, 368/368 runnable byte-exact; TrineXraft 12 suites; `suite-callgraph` 256/256. **No source changed; nothing shipped.**
