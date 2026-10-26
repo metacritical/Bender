@@ -275,7 +275,7 @@ Superseded the earlier combined `cbb8e716`. Split into two atomic commits on `c0
 | VM exits | 2,500,740 | 18,885,615 (+16,384,875 — the cost) |
 | mesh-chunk p50 | 6.240 ms | **5.046 ms (ratio 0.8071, range 0.8023–0.8139)** |
 
-**ttfx also gains** — correcting an earlier claim that it "gained nothing": the emitted manifest is unchanged at 81, but `nx373 canvas-build-neighbor-map` now ATTACHES and runs (4,038 entries / 55,974 ops), interpreted dispatches 11,480,396 → 11,428,417 (−51,979) on an 8-frame decrypt profile. **A manifest count is not a coverage measure** — the same inferred-vs-live distinction that made "79/81 bound" mean zero.
+**ttfx also gains** — correcting an earlier claim that it "gained nothing": the emitted manifest is unchanged at 81, but `nx373 canvas-build-neighbor-map` now ATTACHES and runs (4,038 entries / 55,974 ops), interpreted dispatches 11,480,396 → 11,428,417 (−51,979, ≈−0.45%) on an 8-frame decrypt profile; VM exits rise 831,964 → 835,962. **A manifest count is not a coverage measure** — the same inferred-vs-live distinction that made "79/81 bound" mean zero.
 
 **`c132175d` — nine guarded-native opcodes** (`band bor bxor bnot`, `sl slim sr srim`, `inim`): **contract completeness only.** 64/64 emitter mnemonics now admitted; TrineXraft 4→4 live, ttfx deterministic vector identical, generated C identical, mesh 1.0126 (claimed as nothing). A test `bor` definition does attach and execute, so the capability is real — it simply buys no coverage on these workloads. Justified by correctness and by preventing the next silent divergence, NOT by performance. The deliberate `sru`/`sruim` uint32-domain exclusion is preserved.
 
