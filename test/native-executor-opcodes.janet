@@ -24,6 +24,11 @@
            :constants [-0.0 0.0 1.7976931348623157e308 -1.7976931348623157e308
                        2.2250738585072014e-308 4.9406564584124654e-324]
            :bytecode '[(ldc 0 0) (ret 0) (jmp 0)]})
+# A VM-only constructor at the tail may coexist with a useful native prefix.
+# The VM, not generated C, owns its allocation and GC at the original PC.
+(emit 121 {:arity 1 :slotcount 4
+           :bytecode '[(ldi 1 0) (ldi 2 1) (push 2) (push 1)
+                       (mktab 3) (ret 3) (jmp 0)]})
 # Exact structural numeric loop emits one raw-double accumulator and counter
 # across the backedge, while all other bytecode shapes remain generic.
 (file/flush output)

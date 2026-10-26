@@ -2039,6 +2039,8 @@ static int native_structure_matches(JanetFuncDef *d, const JanetNativeCode *n) {
             case JOP_PUT:
             case JOP_MAKE_ARRAY: case JOP_MAKE_BUFFER:
             case JOP_MAKE_TUPLE: case JOP_MAKE_SCRATCH_TUPLE:
+            case JOP_MAKE_STRING: case JOP_MAKE_STRUCT:
+            case JOP_MAKE_TABLE: case JOP_MAKE_BRACKET_TUPLE:
             case JOP_DIVIDE: case JOP_DIVIDE_IMMEDIATE: case JOP_DIVIDE_FLOOR:
             case JOP_MODULO: case JOP_REMAINDER: break;
             default: return 0; /* Includes every breakpoint bit. */

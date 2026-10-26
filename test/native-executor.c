@@ -146,6 +146,19 @@ int main(int argc, char **argv) {
     janet_deinit(); return 0;
 #endif
     attach(sum, &nx_10_code); attach(nested, &nx_11_code);
+    /* A VM-only allocation at a later PC must not veto the native prefix. */
+    JanetFunction *table = assembled(&nx_121_code);
+    attach(table, &nx_121_code);
+    Janet arg = janet_wrap_integer(3), result_table;
+    JanetFiber *table_fiber = janet_fiber(table, 64, 1, &arg);
+    janet_gcroot(janet_wrap_fiber(table_fiber));
+    assert(janet_continue(table_fiber, janet_wrap_nil(), &result_table) == JANET_SIGNAL_OK);
+    assert(janet_checktype(result_table, JANET_TABLE));
+    assert(janet_equals(janet_table_get(janet_unwrap_table(result_table), janet_wrap_integer(1)),
+                        janet_wrap_integer(0)));
+    assert(nx_121_entries > 0 && nx_121_vmexits > 0);
+    janet_gcunroot(janet_wrap_fiber(table_fiber));
+    janet_gcunroot(janet_wrap_function(table));
     assert(!janet_native_register(lookup(env, "unsupported-loop"), &nx_10_code));
     assert(!lookup(env, "boxed-caller")->def->native_code);
     /* A boxed caller must actually reach the generated executor. */
