@@ -259,3 +259,37 @@ That is a **0.71–1.15 range from a binary compared to ITSELF** — no code dif
 ### Provenance of the gap — a half-finished commit
 `efe625e5` admitted table/struct/string/tuple allocation opcodes as VM boundaries **in the emitter** and never made the parallel **verifier** allowlist update. One side of a two-sided contract was extended; nothing in the build or the suites noticed. That is the definitive support for the oversight verdict (alongside `0c051c35`, which documents the exact-word VM-boundary contract both sides are meant to honour).
 Consequence worth stating: from `efe625e5` until `cbb8e716`, `mesh-chunk` and `raycast` were silently refused, so **every performance investigation on TrineXraft in that window was measuring a program with two of its heaviest kernels locked out of the native tier** — including the 1.3–2.9% Phase 10 result that motivated `trinexraft-workload-tasks.md` in the first place. The contract test added with `cbb8e716` exists precisely so a future half-finished commit fails loudly instead of silently refusing definitions.
+
+## THE VERIFIER ALLOWLIST FIX — corrected record (eb78257e, c132175d)
+Superseded the earlier combined `cbb8e716`. Split into two atomic commits on `c0e5085e`, and the split is what made the attribution below knowable — **the orchestrator argued against splitting and was wrong.**
+
+**Root cause:** `efe625e5` (2026-10-22, "native: guard fast paths for table/array/buffer access and container calls") extended the EMITTER to treat allocation opcodes as VM boundaries and never made the parallel VERIFIER update. One side of a two-sided contract. Nothing in the build or the suites noticed, so `native_structure_matches`' allowlist silently refused ENTIRE DEFINITIONS containing one such opcode — no diagnostic, no error. TrineXraft's `mesh-chunk` (462 PCs) was rejected over a single trailing `JOP_MAKE_TABLE` at PC460 (`src/mesher.janet:231:3`). Every TrineXraft performance investigation between those two commits — including the 1.3–2.9% Phase 10 result that motivated `trinexraft-workload-tasks.md` — measured a program with its two heaviest kernels locked out of the native tier.
+
+### Attribution: tranche 1 owns the entire win
+**`eb78257e` — four VM-only constructors** (`mkstr`, `mkstu`, `mktab`, `mkbtp`):
+| metric | baseline | T1 |
+|---|---:|---:|
+| TrineXraft live definitions | 2 (of 12 emitted) | **4** (+`nx28` mesh-chunk 11,148,347 entries / 263,759,471 ops; +`nx43` raycast 5,295,273 / 71,044,820) |
+| interpreted dispatches | 726,510,340 | **401,401,294 (−325,109,046)** |
+| native ops | 60,222,026 | **395,026,326 (+334,804,300)** |
+| VM exits | 2,500,740 | 18,885,615 (+16,384,875 — the cost) |
+| mesh-chunk p50 | 6.240 ms | **5.046 ms (ratio 0.8071, range 0.8023–0.8139)** |
+
+**ttfx also gains** — correcting an earlier claim that it "gained nothing": the emitted manifest is unchanged at 81, but `nx373 canvas-build-neighbor-map` now ATTACHES and runs (4,038 entries / 55,974 ops), interpreted dispatches 11,480,396 → 11,428,417 (−51,979) on an 8-frame decrypt profile. **A manifest count is not a coverage measure** — the same inferred-vs-live distinction that made "79/81 bound" mean zero.
+
+**`c132175d` — nine guarded-native opcodes** (`band bor bxor bnot`, `sl slim sr srim`, `inim`): **contract completeness only.** 64/64 emitter mnemonics now admitted; TrineXraft 4→4 live, ttfx deterministic vector identical, generated C identical, mesh 1.0126 (claimed as nothing). A test `bor` definition does attach and execute, so the capability is real — it simply buys no coverage on these workloads. Justified by correctness and by preventing the next silent divergence, NOT by performance. The deliberate `sru`/`sruim` uint32-domain exclusion is preserved.
+
+### Why the timing is stated as observed, not causal
+Generated `native.c` is byte-identical across all three arms (TrineXraft `c36d6357…`, ttfx `09f460ce…`), so there is no codegen confound, and the mechanism was measured independently. But it remains cross-build on one host where identical-binary A/A swung 0.71–1.15 per effect. **Report "observed ~19% p50 reduction", never "securely attributable speedup". Counters are WORK, not TIME.** The +16.4M VM exits may be a real cost; only ~8.4M are accounted for as generated boundary exits, leaving ~8M unattributed.
+
+### Per-opcode safety argument
+Constructors never execute natively: `NX_BOUNDARY` sets the original unexecuted PC before effects, and the VM performs allocation and GC exactly once. The bitwise/shift ops use `NX_INT32` on operands, narrow to the exact int32 domain, and wrap/mask shift counts; a failed guard leaves the original PC and an unmodified result slot so the boxed VM raises identically. `inim` reads only valid array/tuple indices, all other routes exiting before effects at the original PC. All operate in GC-scanned fiber slots; polls, backedge materialisation and exact descriptor re-entry validation are unchanged.
+
+### Corrected per-exit cost model (earlier text overstated it)
+A boundary crossing does NOT pay per-exit descriptor revalidation (epoch-cached; full compare only on invalidation), does NOT bulk-materialise slots (generated code already uses fiber slots), and does NOT redispatch the loop head on successful reentry. The real cost is PC/frame/stack/func restore, the exit count, the boxed op plus conditional GC, and the gate check. **That is why removing 86.5% of VM exits in Task 1 bought only ~5.4%: those exits were cheap.** Also: tick-count invariance is NOT proof of identical machine work — in the baseline a guard tick precedes each failed put.
+
+### Known evidence limits (do not overstate)
+`nx28`'s explicit registration return was not re-probed post-fix; liveness is proven by counters, and explicit registration only for the matching fixture. Workload-level global attach/no-match deltas were NOT collected (`--work-profile` lacks them; the `-e` path reports initial state). Top-10 listings cannot establish an exhaustive active-count delta. The validator's "81 bound" is inference, not liveness.
+
+### Gates (both tranches, isolated HOME/XDG cache, serial)
+Clean `make NATIVE_EXECUTORS=1` + full `make test` green; clean plain `make` + full `make test` green; `make test-executors` matrix green incl. sanitizer and forced quantum; `suite-callgraph` 256/256; TrineXraft 12/12; **ttfx 37/37 effects, 368/368 runnable cases byte-exact, 0 FAIL** (67 common BLOCKED, 1 VACUOUS). A **contract test** now asserts emitter/verifier agreement with fixtures mirroring the real shapes and asserting nonzero entries/ops/exits/backedges — liveness proven, never inferred.
