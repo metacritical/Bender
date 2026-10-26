@@ -317,13 +317,18 @@ test: $(JANET_TARGET) $(TEST_SCRIPTS) $(EXAMPLE_SCRIPTS)
 	for f in test/suite*.janet; do $(RUN) ./$(JANET_TARGET) "$$f" || exit; done
 	for f in examples/*.janet; do $(RUN) ./$(JANET_TARGET) -k "$$f"; done
 
+# Build-mode transitions run in a disposable source tree, independent of the
+# caller's build products and safe alongside other suite processes.
+test-build-mode:
+	@sh test/native-executor-build-mode.sh
+
 # The native executor suite is a shell script, so `make test` (which globs
 # test/suite*.janet) never runs it. It asserts real executor entry counts and
 # therefore REQUIRES a NATIVE_EXECUTORS=1 build; against a plain build it
 # fails on inert counters rather than on a defect. Run it explicitly:
 #   make NATIVE_EXECUTORS=1 test-executors
 # Do not omit the flag in the second make invocation: mode switches now rebuild.
-test-executors: $(JANET_TARGET)
+test-executors: $(JANET_TARGET) test-build-mode
 	@JANET_AOT_TEST_ROOT=$${JANET_AOT_TEST_ROOT:-$$(mktemp -d)} \
 	 XDG_CACHE_HOME=$${XDG_CACHE_HOME:-$$(mktemp -d)} \
 	 sh test/suite-native-executor.sh
@@ -487,6 +492,8 @@ help:
 	@echo '   make repl       Start a REPL from a built Janet'
 	@echo
 	@echo '   make test       Test a built Janet'
+	@echo '   make test-build-mode  Test plain/native build transitions in isolation'
+	@echo '   make NATIVE_EXECUTORS=1 test-executors  Test native executors and build mode'
 	@echo '   make valgrind   Assess Janet with Valgrind'
 	@echo '   make callgrind  Assess Janet with Valgrind, using Callgrind'
 	@echo '   make valtest    Run the test suite and examples with Valgrind to check for memory leaks'
@@ -505,4 +512,4 @@ help:
 	@echo
 
 .PHONY: clean install install-jpm-git install-spork-git repl debug valgrind test \
-	valtest callgrind callgrind-test dist uninstall docs grammar format help compile-commands
+	test-build-mode test-executors valtest callgrind callgrind-test dist uninstall docs grammar format help compile-commands
