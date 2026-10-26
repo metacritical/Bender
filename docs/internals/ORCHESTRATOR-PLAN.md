@@ -337,3 +337,21 @@ Earlier text said workload-level attach/no-match deltas were unavailable. They w
 **Report `attached` and `executed` SEPARATELY, never as equal** — they differ in ttfx (12 vs 13) because the lazy attach counter excludes eagerly explicit-registered definitions, while the execution rows prove actual execution. This is the same inferred-vs-live distinction as "81 bound", now resolved with real counters on both axes.
 Validity checks: ttfx copied-probe frame dumps byte-identical across all arms AND against the original pinned images; ttfx deterministic work vectors equal the original pinned profiles. TrineXraft stdout differs only in timing fields between repeated runs, and its deterministic work numbers carry small run jitter (≤1,390 dispatches, ≤75 ops) while VM exits and active IDs are stable.
 **Do NOT reuse the earlier 4→527 / 524 global figures** — they came from a different probe and run.
+
+### Exit attribution — the +16.4M exits are now FULLY decomposed
+Matched baseline → constructor (T1), TrineXraft, VM-global exit delta **+16,384,875** breaks down exactly as:
+| opcode | delta |
+|---|---:|
+| `JOP_CALL` (53) | **+7,980,500** |
+| `JOP_GET` (59) | **+7,924,250** |
+| `JOP_DIVIDE` (12) | +320,000 |
+| `JOP_MAKE_TABLE` (68) | +80,125 |
+| `JOP_RETURN` (3) | +80,000 |
+| `JOP_PUT` (60) | **unchanged** at 2,162,688 |
+Opcode counts sum exactly to the VM-global exit total. The generated-boundary counter rose only **+8,404,375**, and the residual **+7,980,500 corresponds precisely to the CALL category** — so the previously "unattributed ~8M" are non-generated-boundary CALL exits. Note also that the voxel-count coincidence (delta ÷ 16,384 = 1000.053) is real arithmetic but is NOT evidence that buffer access dominates.
+
+**Ops per generated-boundary exit:** `nx28` mesh-chunk 263,759,394 / 7,924,375 = **33.285**; `nx43` raycast 71,044,819 / 480,000 = **148.01**; baseline `generate-into` 25.266; `fbm-signed-2d` 82.517.
+
+### Consequence: the stacked-experiment prediction is REVISED DOWNWARD
+The prediction on record was: `nx28` exit-dense (~25–35 ops/exit) → Task 1's buffer admission gains on top of T1. `nx28` measures **33.285**, so that branch resolves TRUE — but the attribution adds a constraint that halves the expected benefit. Buffer admission addresses the **GET** half (+7,924,250) and leaves the **CALL** half (+7,980,500) untouched, since `JOP_CALL` exits are not a collection-access boundary. `JOP_PUT` is unchanged at 2,162,688, so the write path gains nothing further here either.
+**So: the stack is still worth testing, but its remedy cannot be presumed to address CALL exits, and any gain should be expected at roughly half the naive estimate.** The CALL half is instead the province of native-to-native continuation — which was measured as a small net regression on ttfx (see Continuation v1/v2 above) but has NEVER been evaluated in this regime, where `mesh-chunk` and `raycast` are natively executing and generating ~8M CALL exits that did not previously exist.
