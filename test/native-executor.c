@@ -88,13 +88,18 @@ static void parity(JanetFunction *fn, const JanetNativeCode *code, int budget, i
 }
 static void retirement_fixture(JanetFunction *sum) {
     Janet out;
-    JanetFiber *f = spawn(sum, 3);
-    retired_count = 0; retirement_enabled = 1;
+    retirement_enabled = 1;
     janet_vm.quantum = 0;
-    assert(janet_continue(f, janet_wrap_nil(), &out) == JANET_SIGNAL_OK);
-    assert(janet_unwrap_number(out) == 3 && retired_count == 6);
-    for (int i = 0; i < retired_count; i++) assert(retired[i] == (i % 2 ? 5 : 4));
-    janet_gcunroot(janet_wrap_fiber(f));
+    for (int n = 0; n <= 2; n += 2) {
+        JanetFiber *done = spawn(sum, n);
+        retired_count = 0;
+        assert(janet_continue(done, janet_wrap_nil(), &out) == JANET_SIGNAL_OK);
+        assert(janet_unwrap_number(out) == (n ? 1 : 0));
+        assert(retired_count == 2 * n);
+        for (int i = 0; i < retired_count; i++) assert(retired[i] == (i % 2 ? 5 : 4));
+        janet_gcunroot(janet_wrap_fiber(done));
+    }
+    JanetFiber *f;
 
 #ifndef JANET_NO_INTERPRETER_INTERRUPT
     f = spawn(sum, 4);
