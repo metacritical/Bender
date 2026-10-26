@@ -321,3 +321,19 @@ Each turned a killed or concurrent run into a PERSISTENT failure that looked lik
 - **One owner per repo — including the orchestrator.** Documentation commits landing during another agent's history rewrite caused a reset that dropped the session's main fix off the branch.
 - **Give every agent its own worktree up front**, and preserve recovered work as a COMMIT, not a patch in `tmp/` — a commit survives working-tree resets; a patch does not.
 - **Cleanup against stale state is more dangerous than the untidiness.** Three separate near-losses came from well-intentioned restores and rewrites, not from the mess they targeted.
+
+### Coverage counters — gap CLOSED, measured not inferred
+Earlier text said workload-level attach/no-match deltas were unavailable. They were subsequently obtained with non-production AOT probes: each generated `native.c` copied to an ignored path with **only the exit-time JSON reporter modified** to emit `janet_native_stat(ATTACH_ATTEMPTS/ATTACHED/AMBIGUOUS/NOMATCH)` plus exhaustive all-descriptor execution rows, with the prefix and suffix around the reporter verified byte-identical to the original generated C, linked against native static libs from each archived commit, all six probe binaries hash-pinned.
+
+| workload | arm | emitted | attempts | attached | no-match | executed |
+|---|---|---:|---:|---:|---:|---:|
+| TrineXraft | baseline | 12 | 40 | 2 | 38 | 2 |
+| TrineXraft | **T1** | 12 | 40 | **4** | 36 | **4** (+`nx28` mesh, +`nx43` raycast) |
+| TrineXraft | T2 | 12 | 40 | 4 | 36 | 4 (unchanged) |
+| ttfx | baseline | 81 | 100 | 11 | 89 | 12 |
+| ttfx | **T1** | 81 | 100 | **12** | 88 | **13** (+`nx373`) |
+| ttfx | T2 | 81 | 100 | 12 | 88 | 13 (unchanged) |
+
+**Report `attached` and `executed` SEPARATELY, never as equal** — they differ in ttfx (12 vs 13) because the lazy attach counter excludes eagerly explicit-registered definitions, while the execution rows prove actual execution. This is the same inferred-vs-live distinction as "81 bound", now resolved with real counters on both axes.
+Validity checks: ttfx copied-probe frame dumps byte-identical across all arms AND against the original pinned images; ttfx deterministic work vectors equal the original pinned profiles. TrineXraft stdout differs only in timing fields between repeated runs, and its deterministic work numbers carry small run jitter (≤1,390 dispatches, ≤75 ops) while VM exits and active IDs are stable.
+**Do NOT reuse the earlier 4→527 / 524 global figures** — they came from a different probe and run.
