@@ -532,3 +532,29 @@ Read-only study, full report `/tmp/task2-feasibility.md`. Verdict: do not attemp
 1. **An instrument that does not exist**: per-definition/per-opcode executed numeric candidacy and per-PC liveness. STOP GATE: if provable numeric candidates are under ~5% of native-region dynamic operations, publish the negative and stop.
 2. **The forced-tiny-quantum interrupt mode**, which does not cover the new workload paths (only focused fixture budget-1/2 builds exist). Generalized Task 2 must NOT ship without that interrupt/parity/scheduler gate.
 If both clear, the narrowest first increment is a **guarded double induction variable for an exact counted-loop shape** with spill/re-entry and differential IEEE tests. Note `NX_INT32` protects the int32-domain bitwise conversion but does NOT cover arbitrary IEEE-double spills, NaN, negative zero, or values above 2^53.
+
+## CONTINUATION RE-EVALUATED IN THE POST-ALLOWLIST REGIME (6ec3a083, 19e3df94)
+### Part A — the orphaned build-mode test is now wired, and wiring it found a real bug
+`make test-build-mode` added and made a prerequisite of `test-executors` (`6ec3a083`). Doing so immediately exposed a defect invisible while the script was hand-run: **parent `MAKEFLAGS`/`MFLAGS` propagated a command-line `NATIVE_EXECUTORS=1` into the script's nested plain `make`**, so it passed standalone and failed inside `test-executors`. Fixed by unsetting `MAKEFLAGS MFLAGS NATIVE_EXECUTORS` at script start (`19e3df94`) — a script whose purpose is controlling build mode across transitions cannot inherit an ambient one. **Lesson: an unrun test is not merely unprotective, it can be silently broken in ways only invocation reveals.**
+
+### Part B — the old verdict is STALE IN WORK TERMS, but default-on is still not justified
+Prediction recorded before toggling (`tmp/continuation-recheck-6ec3a083/prediction.md`). Same-binary `JANET_NATIVE_NO_CONTINUATION` toggle — identical binary, the strongest control available.
+**Work (TrineXraft trained replay image):** 6,898,749 chained edges; interpreted calls 29,238,229 → 22,339,480 (**exact** chain conservation); **CALL exits 18,045,664 → 11,112,224 (−38.42%)**; global exits 44,769,575 → 30,864,384; interpreted dispatches −5.48%; native ops (517,923,955) and entries (44,840,509) INVARIANT; ON/OFF stdout equal.
+**Work (ttfx merged 3-workload image):** chains 89,775 / 216,823 / 136,743 for decrypt/binarypath/rings; CALL exits −13.01% / −23.50% / −17.46%; global exits −8.53% / −17.93% / −15.09%; interpreted dispatches only −1.31% / −0.76% / −0.29%; exact conservation, invariants held, byte-identical dumps.
+**Time: no robust advantage.** Seven alternating same-binary pairs, median paired ON/OFF ratio [range]: TrineXraft 0.98197 [0.9216, 1.0487]; ttfx decrypt 0.93527 [0.5558, 1.0699]; binarypath 0.99904 [0.9214, 1.0249]; rings 1.01261 [0.8823, 1.1719]. **Every range overlaps unity**, and the timing was instrumentation-enabled.
+**VERDICT: the earlier categorical "small net regression" is stale** — millions of chained edges and a 38% CALL-exit reduction establish the mechanism in today's regime. But **time does not follow, so continuation stays OPT-IN**, pending better per-edge attribution.
+
+### Caveats that must travel with these numbers
+- The four selected TrineXraft edges are **world/chunk indexing — NOT proof that `mesh-chunk`'s own CALL sites chained.**
+- The trained image's OFF baseline CALL population rose from the original 8,250,836 to 18,045,664 **because of leaf selection**. Never credit cross-image differences to continuation.
+- `--pgo-auto` parity on original TrineXraft FAILS because `os/clock` makes stdout nondeterministic; a `/tmp` replay fixture preserving kernel work but replacing clock values was used for training. ttfx merged three real 400-frame workloads, parity 3/3, 13 PCs.
+- Distinct application source provenance cannot be merged into one image; report as independent images.
+
+## ★ THE PATTERN, NOW THREE-FOR-THREE: EXIT REDUCTION CONVERTS POORLY TO TIME
+| change | exits removed | wall-clock result |
+|---|---|---|
+| Task 1 buffer admission (alone) | 86.5% of global | ~5.4% on worldgen |
+| Task 1 stacked on allowlist fix | 53.4% of global | ≈13–18% on mesh |
+| Continuation (this study) | 38.4% of CALL | none measurable |
+The unifying explanation is already recorded in the corrected per-exit cost model: a boundary crossing does NOT pay per-exit descriptor revalidation (epoch-cached), does NOT bulk-materialise slots (generated code already uses fiber slots), and does NOT redispatch the loop head on successful re-entry. **Exits on this architecture are cheap.** Note what distinguishes the one success: the stacked result also removed the WORK (GET/PUT executing natively), whereas continuation removes only the CROSSING — interpreted dispatches fell just 5.48% / 0.29–1.31%, and time tracks dispatches, not exits.
+**Strategic consequence: stop optimising boundary crossings.** The remaining time is in interpretation itself and in memory behaviour. That redirects effort to coverage (what executes natively at all) and to the ttfx queue — `ctx-frame-string`/construction poison, SSA per-PC slot typing, context-table parameters.
