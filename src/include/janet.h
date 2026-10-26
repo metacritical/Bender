@@ -1339,18 +1339,19 @@ JANET_API void janet_native_set_pc(JanetFiber *fiber, uint32_t *pc);
  * never calls it. The ordinary ABI and hot path are unchanged when disabled. */
 #if defined(JANET_NATIVE_COMMIT_PROBE) && JANET_NATIVE_COMMIT_PROBE
 typedef void (*JanetNativeCommitHook)(void *context);
-#define JANET_NATIVE_COMMIT_ARGS , JanetNativeCommitHook commit, void *context
-#define JANET_NATIVE_COMMIT() do { if (commit) commit(context); } while (0)
-#else
-#define JANET_NATIVE_COMMIT_ARGS
-#define JANET_NATIVE_COMMIT() ((void)0)
+JANET_API int janet_native_buffer_put_fast_probe(Janet ds, Janet key, Janet value,
+        JanetNativeCommitHook commit, void *context);
+JANET_API int janet_native_array_put_fast_probe(Janet ds, Janet key, Janet value,
+        JanetNativeCommitHook commit, void *context);
+JANET_API int janet_native_table_put_fast_probe(Janet ds, Janet key, Janet value,
+        JanetNativeCommitHook commit, void *context);
 #endif
-JANET_API int janet_native_buffer_put_fast(Janet ds, Janet key, Janet value JANET_NATIVE_COMMIT_ARGS);
-JANET_API int janet_native_array_put_fast(Janet ds, Janet key, Janet value JANET_NATIVE_COMMIT_ARGS);
+JANET_API int janet_native_buffer_put_fast(Janet ds, Janet key, Janet value);
+JANET_API int janet_native_array_put_fast(Janet ds, Janet key, Janet value);
 JANET_API int janet_native_table_get_fast(Janet ds, Janet key, Janet *out);
 JANET_API int janet_native_container_call_fast(Janet callee, int32_t argc,
         const Janet *argv, Janet *out);
-JANET_API int janet_native_table_put_fast(Janet ds, Janet key, Janet value JANET_NATIVE_COMMIT_ARGS);
+JANET_API int janet_native_table_put_fast(Janet ds, Janet key, Janet value);
 JANET_API int janet_native_buffer_push_string_ready(Janet callee, int32_t argc,
         const Janet *argv, const uint8_t **bytes, int32_t *len);
 JANET_API Janet janet_native_buffer_push_string_commit(int32_t argc,

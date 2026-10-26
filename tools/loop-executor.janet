@@ -199,7 +199,7 @@
        "#else\n#define NX_ENTRY() ((void)0)\n#define NX_EDGE() ((void)0)\n"
        "#define NX_TICK() ((void)0)\n#define NX_FALLBACK() ((void)0)\n"
        "#define NX_VMEXIT() ((void)0)\n#define NX_CONT() ((void)0)\n#endif\n"
-       "#if defined(JANET_NATIVE_COMMIT_PROBE) && JANET_NATIVE_COMMIT_PROBE\n#define NX_COMMIT_NONE , 0, 0\n#else\n#define NX_COMMIT_NONE\n#endif\n"
+       "#if defined(JANET_NATIVE_COMMIT_PROBE) && JANET_NATIVE_COMMIT_PROBE\n#define NX_ARRAY_PUT janet_native_array_put_fast_probe\n#define NX_BUFFER_PUT janet_native_buffer_put_fast_probe\n#define NX_TABLE_PUT janet_native_table_put_fast_probe\n#define NX_COMMIT_NONE , 0, 0\n#else\n#define NX_ARRAY_PUT janet_native_array_put_fast\n#define NX_BUFFER_PUT janet_native_buffer_put_fast\n#define NX_TABLE_PUT janet_native_table_put_fast\n#define NX_COMMIT_NONE\n#endif\n"
        "NX_ENTRY();"
        "\n#define NX_EXIT(K,R) do { *pc = d->bytecode + (K); return (R); } while (0)"
        "\n#define NX_NUM(S,K) do { if (!janet_checktype(s[S], JANET_NUMBER)) { NX_FALLBACK(); NX_EXIT(K,JANET_NATIVE_VM); } } while (0)"
@@ -354,9 +354,9 @@
         (out "NX_TICK();")
         (out "{ Janet nxds_ = s[" (string a) "]; Janet nxkey_ = s[" (string c) "]; Janet nxval_ = s[" (string z) "];")
         (out "  janet_native_set_pc(f, d->bytecode + " (string k) ");")
-        (out "  if (!janet_native_array_put_fast(nxds_, nxkey_, nxval_ NX_COMMIT_NONE) &&")
-        (out "      !janet_native_buffer_put_fast(nxds_, nxkey_, nxval_ NX_COMMIT_NONE) &&")
-        (out "      !janet_native_table_put_fast(nxds_, nxkey_, nxval_ NX_COMMIT_NONE)) {")
+        (out "  if (!NX_ARRAY_PUT(nxds_, nxkey_, nxval_ NX_COMMIT_NONE) &&")
+        (out "      !NX_BUFFER_PUT(nxds_, nxkey_, nxval_ NX_COMMIT_NONE) &&")
+        (out "      !NX_TABLE_PUT(nxds_, nxkey_, nxval_ NX_COMMIT_NONE)) {")
         (out "    NX_BOUNDARY(" (string k) ");")
         (out "  } }"))
 
@@ -597,7 +597,7 @@
       (= op 'noop) nil
       (out "NX_BOUNDARY(" (string k) "); /* unsupported, before effects */")))
   (out "#undef NX_NUM\n#undef NX_EXIT\n#undef NX_BOUNDARY\n"
-       "#undef NX_COMMIT_NONE\n#undef NX_ENTRY\n#undef NX_EDGE\n#undef NX_TICK\n#undef NX_FALLBACK\n#undef NX_VMEXIT\n}")
+       "#undef NX_COMMIT_NONE\n#undef NX_ARRAY_PUT\n#undef NX_BUFFER_PUT\n#undef NX_TABLE_PUT\n#undef NX_ENTRY\n#undef NX_EDGE\n#undef NX_TICK\n#undef NX_FALLBACK\n#undef NX_VMEXIT\n}")
   (out "#if defined(__GNUC__) && !defined(__clang__)\n#pragma GCC pop_options\n#endif")
   (out "static const JanetNativeCode " tag "_code = {" tag "," tag "_words," tag "_constants,"
        (if (empty? mask) "NULL," (string tag "_mask,"))

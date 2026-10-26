@@ -827,7 +827,11 @@ void janet_put(Janet ds, Janet key, Janet value) {
  * current JanetBuffer on every access; never retain it across a call, poll, or
  * a VM fallback. Refuse BEFORE mutation for invalid keys/values or growth, so
  * the original JOP_PUT produces precisely its own error or zero-fill. */
-JANET_API int janet_native_buffer_put_fast(Janet ds, Janet key, Janet value JANET_NATIVE_COMMIT_ARGS) {
+static int native_buffer_put_fast_impl(Janet ds, Janet key, Janet value
+#if defined(JANET_NATIVE_COMMIT_PROBE) && JANET_NATIVE_COMMIT_PROBE
+        , JanetNativeCommitHook commit, void *context
+#endif
+) {
     JanetBuffer *buffer;
     int32_t index;
     if (!janet_checktype(ds, JANET_BUFFER) || !janet_checkint(key) ||
@@ -837,15 +841,35 @@ JANET_API int janet_native_buffer_put_fast(Janet ds, Janet key, Janet value JANE
     buffer = janet_unwrap_buffer(ds);
     if (index >= buffer->count) return 0;
     buffer->data[index] = (uint8_t)(janet_unwrap_integer(value) & 0xFF);
-    JANET_NATIVE_COMMIT();
+#if defined(JANET_NATIVE_COMMIT_PROBE) && JANET_NATIVE_COMMIT_PROBE
+    if (commit) commit(context);
+#endif
     return 1;
 }
+
+JANET_API int janet_native_buffer_put_fast(Janet ds, Janet key, Janet value) {
+#if defined(JANET_NATIVE_COMMIT_PROBE) && JANET_NATIVE_COMMIT_PROBE
+    return native_buffer_put_fast_impl(ds, key, value, NULL, NULL);
+#else
+    return native_buffer_put_fast_impl(ds, key, value);
+#endif
+}
+#if defined(JANET_NATIVE_COMMIT_PROBE) && JANET_NATIVE_COMMIT_PROBE
+JANET_API int janet_native_buffer_put_fast_probe(Janet ds, Janet key, Janet value,
+        JanetNativeCommitHook commit, void *context) {
+    return native_buffer_put_fast_impl(ds, key, value, commit, context);
+}
+#endif
 
 /* Native-executor array write fast path. Only an in-range non-negative
  * integer index is handled: janet_put's store plus generational barrier.
  * Growth (which allocates and fills intermediates), other receivers and
  * abstract setters stay in the VM at the original PC. */
-JANET_API int janet_native_array_put_fast(Janet ds, Janet key, Janet value JANET_NATIVE_COMMIT_ARGS) {
+static int native_array_put_fast_impl(Janet ds, Janet key, Janet value
+#if defined(JANET_NATIVE_COMMIT_PROBE) && JANET_NATIVE_COMMIT_PROBE
+        , JanetNativeCommitHook commit, void *context
+#endif
+) {
     JanetArray *array;
     int32_t index;
     if (!janet_checktype(ds, JANET_ARRAY)) return 0;
@@ -855,7 +879,23 @@ JANET_API int janet_native_array_put_fast(Janet ds, Janet key, Janet value JANET
     array = janet_unwrap_array(ds);
     if (index >= array->count) return 0;
     array->data[index] = value;
-    JANET_NATIVE_COMMIT();
+#if defined(JANET_NATIVE_COMMIT_PROBE) && JANET_NATIVE_COMMIT_PROBE
+    if (commit) commit(context);
+#endif
     janet_gc_barrier(array, value);
     return 1;
 }
+
+JANET_API int janet_native_array_put_fast(Janet ds, Janet key, Janet value) {
+#if defined(JANET_NATIVE_COMMIT_PROBE) && JANET_NATIVE_COMMIT_PROBE
+    return native_array_put_fast_impl(ds, key, value, NULL, NULL);
+#else
+    return native_array_put_fast_impl(ds, key, value);
+#endif
+}
+#if defined(JANET_NATIVE_COMMIT_PROBE) && JANET_NATIVE_COMMIT_PROBE
+JANET_API int janet_native_array_put_fast_probe(Janet ds, Janet key, Janet value,
+        JanetNativeCommitHook commit, void *context) {
+    return native_array_put_fast_impl(ds, key, value, commit, context);
+}
+#endif

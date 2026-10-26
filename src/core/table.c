@@ -257,10 +257,24 @@ JANET_API int janet_native_container_call_fast(Janet callee, int32_t argc,
  * primitive key. janet_table_put's existing-key branch is just a value
  * store plus both generational barriers; insertion (which may rehash and
  * allocate) and nil removal stay in the VM. */
-JANET_API int janet_native_table_put_fast(Janet ds, Janet key, Janet value JANET_NATIVE_COMMIT_ARGS) {
+static int native_table_put_fast_impl(Janet ds, Janet key, Janet value
+#if defined(JANET_NATIVE_COMMIT_PROBE) && JANET_NATIVE_COMMIT_PROBE
+        , JanetNativeCommitHook commit, void *context
+#endif
+) {
     if (!janet_checktype(ds, JANET_TABLE)) return 0;
-    if (janet_checktype(key, JANET_NIL)) { JANET_NATIVE_COMMIT(); return 1; } /* janet_table_put no-op */
-    if (janet_checktype(key, JANET_NUMBER) && isnan(janet_unwrap_number(key))) { JANET_NATIVE_COMMIT(); return 1; }
+    if (janet_checktype(key, JANET_NIL)) { /* janet_table_put no-op */
+#if defined(JANET_NATIVE_COMMIT_PROBE) && JANET_NATIVE_COMMIT_PROBE
+        if (commit) commit(context);
+#endif
+        return 1;
+    }
+    if (janet_checktype(key, JANET_NUMBER) && isnan(janet_unwrap_number(key))) {
+#if defined(JANET_NATIVE_COMMIT_PROBE) && JANET_NATIVE_COMMIT_PROBE
+        if (commit) commit(context);
+#endif
+        return 1;
+    }
     if (janet_checktype(value, JANET_NIL)) return 0;
     switch (janet_type(key)) {
         case JANET_NUMBER:
@@ -277,12 +291,28 @@ JANET_API int janet_native_table_put_fast(Janet ds, Janet key, Janet value JANET
         JanetKV *bucket = janet_table_find(t, key);
         if (NULL == bucket || janet_checktype(bucket->key, JANET_NIL)) return 0;
         bucket->value = value;
-        JANET_NATIVE_COMMIT();
+#if defined(JANET_NATIVE_COMMIT_PROBE) && JANET_NATIVE_COMMIT_PROBE
+        if (commit) commit(context);
+#endif
         janet_gc_barrier(t, key);
         janet_gc_barrier(t, value);
         return 1;
     }
 }
+
+JANET_API int janet_native_table_put_fast(Janet ds, Janet key, Janet value) {
+#if defined(JANET_NATIVE_COMMIT_PROBE) && JANET_NATIVE_COMMIT_PROBE
+    return native_table_put_fast_impl(ds, key, value, NULL, NULL);
+#else
+    return native_table_put_fast_impl(ds, key, value);
+#endif
+}
+#if defined(JANET_NATIVE_COMMIT_PROBE) && JANET_NATIVE_COMMIT_PROBE
+JANET_API int janet_native_table_put_fast_probe(Janet ds, Janet key, Janet value,
+        JanetNativeCommitHook commit, void *context) {
+    return native_table_put_fast_impl(ds, key, value, commit, context);
+}
+#endif
 
 /* Used internally for compiler stuff */
 Janet janet_table_get_keyword(JanetTable *t, const char *keyword) {
