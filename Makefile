@@ -71,6 +71,9 @@ BUILD_CFLAGS:=$(CFLAGS) $(COMMON_CFLAGS)
 # docs/internals/native-loop-executors.md and `make test-executors`.
 ifdef NATIVE_EXECUTORS
 BUILD_CFLAGS+=-DJANET_NATIVE_EXECUTORS
+NATIVE_EXECUTORS_MODE=enabled
+else
+NATIVE_EXECUTORS_MODE=disabled
 endif
 
 # Disable amalgamated build
@@ -234,7 +237,20 @@ build/c/janet.c: $(JANET_BOOT) src/boot/boot.janet
 ##### Quicky #####
 ##################
 
-build/%.bin.o: src/%.c $(JANET_HEADERS) $(JANET_LOCAL_HEADERS) Makefile
+# Make does not track changes to BUILD_CFLAGS. Check the effective native mode
+# on every invocation, changing the stamp only when its value changes; all
+# objects compiled with BUILD_CFLAGS must then rebuild in either direction.
+# The phony prerequisite runs the check; the stamp recipe is a no-op when
+# the value already matches, so same-mode builds remain incremental.
+.PHONY: native-executors-mode-check
+native-executors-mode-check:
+
+build/.native-executors-mode: native-executors-mode-check
+	@mode='$(NATIVE_EXECUTORS_MODE)'; stamp=$@; \
+	 if test -f "$$stamp" && test "$$(cat "$$stamp")" = "$$mode"; then :; \
+	 else printf '%s\n' "$$mode" > "$$stamp.tmp" && mv -f "$$stamp.tmp" "$$stamp"; fi
+
+build/%.bin.o: src/%.c $(JANET_HEADERS) $(JANET_LOCAL_HEADERS) Makefile build/.native-executors-mode
 	$(HOSTCC) $(BUILD_CFLAGS) -o $@ -c $<
 
 ########################
@@ -261,10 +277,10 @@ build/janet.h: $(JANET_TARGET) src/include/janet.h $(JANETCONF_HEADER)
 build/janetconf.h: $(JANETCONF_HEADER)
 	cp $< $@
 
-build/janet.o: build/c/janet.c $(JANETCONF_HEADER) src/include/janet.h
+build/janet.o: build/c/janet.c $(JANETCONF_HEADER) src/include/janet.h build/.native-executors-mode
 	$(HOSTCC) $(BUILD_CFLAGS) -c $< -o $@
 
-build/shell.o: build/c/shell.c $(JANETCONF_HEADER) src/include/janet.h
+build/shell.o: build/c/shell.c $(JANETCONF_HEADER) src/include/janet.h build/.native-executors-mode
 	$(HOSTCC) $(BUILD_CFLAGS) -c $< -o $@
 
 $(JANET_TARGET): $(JANET_TARGET_OBJECTS)
@@ -305,7 +321,8 @@ test: $(JANET_TARGET) $(TEST_SCRIPTS) $(EXAMPLE_SCRIPTS)
 # test/suite*.janet) never runs it. It asserts real executor entry counts and
 # therefore REQUIRES a NATIVE_EXECUTORS=1 build; against a plain build it
 # fails on inert counters rather than on a defect. Run it explicitly:
-#   make NATIVE_EXECUTORS=1 && make test-executors
+#   make NATIVE_EXECUTORS=1 test-executors
+# Do not omit the flag in the second make invocation: mode switches now rebuild.
 test-executors: $(JANET_TARGET)
 	@JANET_AOT_TEST_ROOT=$${JANET_AOT_TEST_ROOT:-$$(mktemp -d)} \
 	 XDG_CACHE_HOME=$${XDG_CACHE_HOME:-$$(mktemp -d)} \
