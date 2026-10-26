@@ -6,6 +6,7 @@ set -eu
 root=$(mktemp -d "$JANET_AOT_TEST_ROOT/native-executor-XXXXXXXX")
 export JANET_NO_PROFILE=1
 echo "native executor evidence: $root"
+python3 test/native-executor-allowlist.py
 JANET_NATIVE_EXECUTORS=1 ./build/bender tools/callgraph.janet test/fixtures/native-executor.janet --emit-native-lib "$root/generated" > "$root/emitter.log" 2>&1
 ./build/bender test/native-executor-opcodes.janet "$root/generated/native.c"
 test ! -s "$root/generated/native-names.txt"
