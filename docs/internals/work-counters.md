@@ -6,10 +6,10 @@ The headline is **interpreted bytecode instructions retired per rendered frame**
 
 ## Invocation
 
-Build the compiler with `make NATIVE_EXECUTORS=1`, set `JANET_NATIVE_EXECUTORS=1` for AOT compilation **and** execution, and compile a telemetry-enabled native image (`--aot ... --native`, **not `--release`**). A normal image supports:
+Build the compiler with `make NATIVE_EXECUTORS=1`, set `JANET_NATIVE_EXECUTORS=1` while **emitting** the AOT image, and compile a telemetry-enabled native image (`--aot ... --native`, **not `--release`**). An already-built image with linked native descriptors and a native-enabled runtime does **not** require that environment variable at execution; it is not a runtime toggle. A normal image supports:
 
 ```sh
-JANET_NATIVE_EXECUTORS=1 JANET_NO_PROFILE=1 ./effect \
+JANET_NO_PROFILE=1 ./effect \
   --work-profile /tmp/effect-work.json decrypt --dump-frames \
   --max-frames 400 --input-file ../ruby-port/logo.txt --seed 42 \
   > /tmp/effect-frames.out
@@ -22,7 +22,7 @@ JANET_NATIVE_EXECUTORS=1 JANET_NO_PROFILE=1 ./effect \
 | Counter | Counting site and interpretation |
 |---|---|
 | Interpreted dispatches (new) | `src/core/vm.c` `VM_START` and `vm_next` in both computed-goto and switch forms: increment immediately before an interpreter opcode dispatch, including first dispatch after re-entry. `vm_native` may run native instructions before the tick; those instructions are not falsely counted as VM dispatches. |
-| Native ops, entries, backedges, fallbacks, VM boundary exits and chained edges (existing) | `tools/loop-executor.janet` emits `NX_TICK/ENTRY/EDGE/FALLBACK/VMEXIT/CONT` for each Tier-B descriptor. `tools/callgraph.janet` exposes `executor-stats(id)` tuple `[entries, backedges, fallbacks, ops, vmexits, continuations]`; `native-executors.txt` maps ID to name. `NX_TICK` means a generated, actually executed operation; guard failures before a tick are not retired native ops. `NX_VMEXIT` is a particular generated boundary site; global VM exits also include other native-to-VM exits, so their totals need not agree. |
+| Native ops, entries, backedges, fallbacks, VM boundary exits and chained edges (existing) | `tools/loop-executor.janet` emits `NX_TICK/ENTRY/EDGE/FALLBACK/VMEXIT/CONT` for each Tier-B descriptor. `tools/callgraph.janet` exposes `executor-stats(id)` tuple `[entries, backedges, fallbacks, ops, vmexits, continuations]`; `native-executors.txt` maps ID to name. `NX_TICK` is a generated work tick, **not a sound retired-per-PC count**: some ticks precede later guards or polls, and fused operations cover multiple original PCs. Never use it as the numerator of the numeric-opportunity stop gate. `NX_VMEXIT` is a particular generated boundary site; global VM exits also include other native-to-VM exits, so their totals need not agree. |
 | Native-to-VM exits and exit-opcode histogram (existing) | `src/core/vm.c` `vm_native` increments `native_vm_exits` and `native_exit_opcodes[*pc & 0xFF]` on trampoline `JANET_NATIVE_VM`; `executor-exit-stat(opcode)` and global tuple index 4 expose them. Native entry/re-entry proxy is the sum of per-definition `entries`: entries include resumes and chaining, not just exits' one-to-one inverse. |
 | Interpreted Janet-function calls, native chains, refusal, native returns (existing) | `src/core/vm.c` JOP_CALL and `janet_native_call_enter`/`janet_native_ret_pop`; `executor-global-stats()` indices 9,6,7,8 respectively; per-definition `conts` attributes chains to caller. `interpreted_calls + chained_calls` is the call-edge conservation check in the tested continuation workload; interpreter calls exclude C-function calls and tail calls. |
 | Native kernel invocations (existing, separate tier) | `tools/callgraph.janet` generates per-kernel `*_telemetry_calls` (plus guard failures) or dispatcher variants/fallbacks and `atexit` stderr lines `native-telemetry id=...`; these are wrapper calls, not Tier-B `NX_TICK` operations. The JSON currently covers Tier-B executors, **not** kernel call totals; parse these separate lines when kernel activity matters. |

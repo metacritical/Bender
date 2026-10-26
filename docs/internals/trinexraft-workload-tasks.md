@@ -186,15 +186,22 @@ parallelism across lanes instead, which is its current fallback plan.
 
 ## Task 1 — RESULT (measured 2026-10-26, bender `02b32d24`)
 
-Buffer admission landed and **works**. Measured on the TrineXraft benchmark,
-p50 of three runs each:
+Buffer admission landed and **works**, but the following table is a
+**historical native-versus-interpreted/no-tier observation**, p50 of three
+runs per arm—not a matched before/after measurement of Task 1 itself:
 
-| kernel | interpreted | native, no tier | native + executors | vs interpreted |
+| kernel | interpreted | native, no tier | native + executors | vs interpreted (historical) |
 |---|---|---|---|---|
 | **mesh-chunk** | 5.47-5.55 | 5.38-5.46 | **4.28-4.38** | **21% faster** |
-| worldgen/chunk | 5.14-5.20 | 5.19-5.22 | 5.39-5.65 | **4-8% slower** |
+| worldgen/chunk | 5.14-5.20 | 5.19-5.22 | 5.39-5.65 | **4-8% slower vs interpreted in these arms; not a Task 1 delta** |
 | palette pack | 1.81 | — | 2.22 | **23% slower** |
 | raycast | 11.4 us | — | 11.6 us | flat |
+
+The actual narrowed-base Task 1 paired control (`da207b6a` before versus
+`02b32d24` after; equal 12-ID manifests) recorded worldgen post/pre
+**0.96563** (~3.44% faster) and mesh **0.84830** across five alternating
+pairs (`ORCHESTRATOR-PLAN.md:485-498`). These are observed cross-build timings,
+not a precisely isolated wall-time mechanism.
 
 The tail matters more than the median for a game, and it moved further:
 mesh-chunk p90 8.85 -> 4.37 ms, max 28.4 -> **4.43 ms** (6.4x better worst
