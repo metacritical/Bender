@@ -201,27 +201,27 @@ mesh-chunk p90 8.85 -> 4.37 ms, max 28.4 -> **4.43 ms** (6.4x better worst
 case). The game emits 32 executors; spawn meshing 169 -> 140 ms; all twelve
 TrineXraft suites pass.
 
-### Two regressions worth your attention
+### Observed native-vs-boxed differences; earlier causal account retracted
 
-`worldgen/chunk` and `palette pack` got **slower**. This is the failure mode
-`aot-loop-codegen-feasibility.md` predicts: a region that pays its guard and
-then deopts is worse than no fusion.
+The original run reported slower `worldgen/chunk` and `palette pack`, but its
+attribution to call-dense, low-yield fusion was **wrong**. The 25.266
+`generate-into` native ops per generated boundary exit belonged to the
+**pre-buffer-admission** build. On the current build, it runs 54,645,175 ops
+across 132 exits (~413,979 ops/exit). A two-registration-site ablation that
+removes only its Tier-B region makes worldgen **8.76% slower** (11 alternating
+pairs; median decline/native p50 ratio 1.08762, range 1.07415–1.15847).
+The region helps worldgen; declining it is not a fix.
 
-Probable cause is **call density**. `generate-into` calls `height-at` ->
-`fbm-signed-2d` -> `value-noise-2d` -> `hash2` once per column, and calls are
-explicit VM boundaries, so the region exits constantly and the guard is pure
-overhead. The mesher by contrast is buffer reads with arithmetic between them
-— the shape fusion wants — which is why it gains 21% and worldgen loses 8%.
-
-Suggested follow-up, in preference order:
-1. **Detect low-yield regions and decline them.** If a region's expected
-   native run length between boundary exits is below some threshold, not
-   emitting is strictly better than emitting and deopting.
-2. Consider whether small pure leaf calls (`hash2`, `value-noise-2d`) can be
-   inlined into the region, which would convert worldgen from the bad shape
-   to the good one.
-
-Both are measurable directly against `bench/kernels.janet`.
+`palette/pack` has **no emitted Tier-B region**. Its native-vs-boxed slower
+observation reproduced on these arms (9 paired runs, median ratio 1.11446,
+range 0.99909–1.25562; 8/9 pairs slower), but cannot result from its *own*
+region guard. No common cause with worldgen has been established: image or
+initialization, FFI, GC/data state, neighbouring benchmark work, code layout,
+and clock contention remain possible. Ratios from independently paired trials
+must not be combined into a derived overhead. The original suggestions to
+decline low-yield regions or inline leaves as a remedy for this supposed
+fusion regression are withdrawn. See `ORCHESTRATOR-PLAN.md` for the calibrated
+12+81 region distribution, counter evidence, ablation and gate provenance.
 
 ### A trap that cost an afternoon
 
