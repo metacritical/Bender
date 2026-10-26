@@ -480,3 +480,20 @@ Two framings above were loose; the pinned JSON (`tmp/verifier-split-t1-trinecraf
 1. **The removals sum exactly, with no residual to explain.** `nx28` exits 7,924,375 → 125 = **−7,924,250**; `nx21 generate-into` 2,162,820 → 132 = **−2,162,688**; together **−10,086,938**, matching both the global VM-exit delta (18,885,615 − 8,798,677) and the generated-boundary delta (10,634,779 − 547,841) exactly. Earlier text predicted 7,924,375 + 2,162,688 = 10,087,063 and then explained away a 125 gap — that was wrong framing: 7,924,375 was ALL original `nx28` boundary exits, not all REMOVABLE ones. The 125 are simply non-removed boundary exits that remain.
 2. **The entry drop is near one-to-one, NOT exact.** `nx28` entries 11,148,347 → 3,224,075 = −7,924,272, which is **22 more** than the exit reduction of 7,924,250. Do not claim an exact one-for-one exit↔re-entry correspondence from this; the direction and magnitude support the re-entry explanation, the precise equality does not hold.
 Also reconfirmed: dispatches −12,422,161 (−3.0957%), native ops +2,335,978, VM exits −53.4%. And the CALL attribution of the +7,980,500 gap comes from the separate measured opcode histogram, NOT from these work JSONs, which do not serialize per-opcode counts.
+
+## ★★ BUFFER ADMISSION LANDED ON BRANCH (02b32d24) — Task 1 shipped, three independent timings
+The six-file Task 1 treatment was ported from the old nine-op worktree onto the current narrowed five-op HEAD and committed as `02b32d24 feat(native): admit guarded buffer reads and writes`. This retires the provenance gap noted above: the effect is now measured on the ACTUAL current base, not inferred to transfer.
+
+**Three independent measurements of the stacked mesh effect, different bases and build pairs:**
+| experiment | base | median paired ratio |
+|---|---|---:|
+| split-T2 arms | `c132175d` | 0.81756 (−18.24%) |
+| `cbb8e716` arms | `cbb8e716` | 0.86728 (−13.27%) |
+| **current narrowed base** | control `da207b6a` vs stack `02b32d24` | **0.84830 (−15.17%)**, pairs [.85956, .84830, .81564, .86270, .84194], range .81564–.86270 |
+Worldgen paired median 0.96563 (−3.44%); raycast 1.01191 (no win, as expected). Ratio-of-arm-medians 0.84030 — again note the aggregation distinction. **Quote the stacked mesh effect as ≈−13% to −18%, central ≈−15%.**
+
+**Counters reproduce exactly on the current base:** VM exits **−10,086,938** (identical to both prior runs), dispatches −3.0947%, native ops +0.5914%. ttfx: +20 exits, +211 native ops, −201 dispatches, parity exact — consistent with no hot buffer site in that profile, which is not proof of absence.
+
+**Gates on the exact landed HEAD:** clean native build + full `make test` exit 0 (callgraph 256/256, DCE strip 61/61); native executor matrix exit 0 incl. sanitizer and forced quantum; TrineXraft 12/12 at HEAD `8b86a5af`; ttfx 37/37 effects, 368/368 runnable byte-exact against the narrowed baseline (67 BLOCKED, 1 VACUOUS). Matched control and stack compilers both clean-built, equal 12-ID manifests, no work profiling during timing.
+
+**Cumulative on TrineXraft's heaviest kernel:** pre-allowlist 6.240 ms → constructors 5.046 → +buffer admission ≈4.28 (applying −15.17%), i.e. roughly **a third faster** than the pre-allowlist baseline, from two changes totalling ~50 lines of compiler source.
