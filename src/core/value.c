@@ -827,7 +827,7 @@ void janet_put(Janet ds, Janet key, Janet value) {
  * current JanetBuffer on every access; never retain it across a call, poll, or
  * a VM fallback. Refuse BEFORE mutation for invalid keys/values or growth, so
  * the original JOP_PUT produces precisely its own error or zero-fill. */
-JANET_API int janet_native_buffer_put_fast(Janet ds, Janet key, Janet value) {
+JANET_API int janet_native_buffer_put_fast(Janet ds, Janet key, Janet value JANET_NATIVE_COMMIT_ARGS) {
     JanetBuffer *buffer;
     int32_t index;
     if (!janet_checktype(ds, JANET_BUFFER) || !janet_checkint(key) ||
@@ -837,6 +837,7 @@ JANET_API int janet_native_buffer_put_fast(Janet ds, Janet key, Janet value) {
     buffer = janet_unwrap_buffer(ds);
     if (index >= buffer->count) return 0;
     buffer->data[index] = (uint8_t)(janet_unwrap_integer(value) & 0xFF);
+    JANET_NATIVE_COMMIT();
     return 1;
 }
 
@@ -844,7 +845,7 @@ JANET_API int janet_native_buffer_put_fast(Janet ds, Janet key, Janet value) {
  * integer index is handled: janet_put's store plus generational barrier.
  * Growth (which allocates and fills intermediates), other receivers and
  * abstract setters stay in the VM at the original PC. */
-JANET_API int janet_native_array_put_fast(Janet ds, Janet key, Janet value) {
+JANET_API int janet_native_array_put_fast(Janet ds, Janet key, Janet value JANET_NATIVE_COMMIT_ARGS) {
     JanetArray *array;
     int32_t index;
     if (!janet_checktype(ds, JANET_ARRAY)) return 0;
@@ -854,6 +855,7 @@ JANET_API int janet_native_array_put_fast(Janet ds, Janet key, Janet value) {
     array = janet_unwrap_array(ds);
     if (index >= array->count) return 0;
     array->data[index] = value;
+    JANET_NATIVE_COMMIT();
     janet_gc_barrier(array, value);
     return 1;
 }

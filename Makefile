@@ -76,6 +76,13 @@ else
 NATIVE_EXECUTORS_MODE=disabled
 endif
 
+# Research-only fast-PUT commit protocol. Normal builds have no hook args,
+# callback checks, or counters. This flag does not enable a census reporter.
+ifdef NATIVE_COMMIT_PROBE
+BUILD_CFLAGS+=-DJANET_NATIVE_COMMIT_PROBE=1
+NATIVE_EXECUTORS_MODE:=$(NATIVE_EXECUTORS_MODE)-commit-probe
+endif
+
 # Disable amalgamated build
 ifeq ($(JANET_NO_AMALG), 1)
 	JANET_TARGET_OBJECTS+=$(patsubst src/%.c,build/%.bin.o,$(JANET_CORE_SOURCES))
@@ -332,6 +339,11 @@ test-executors: $(JANET_TARGET) test-build-mode test-forced-quantum
 	@JANET_AOT_TEST_ROOT=$${JANET_AOT_TEST_ROOT:-$$(mktemp -d)} \
 	 XDG_CACHE_HOME=$${XDG_CACHE_HOME:-$$(mktemp -d)} \
 	 sh test/suite-native-executor.sh
+
+# Keep the probe-only runtime and fixture under /tmp, without touching the
+# caller's ordinary build products. The script builds both ABI modes.
+test-native-commit-probe:
+	@sh test/native-commit-probe.sh
 
 # Explicit native opt-in must be on this same make invocation.
 test-forced-quantum: $(JANET_TARGET)

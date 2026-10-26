@@ -257,10 +257,10 @@ JANET_API int janet_native_container_call_fast(Janet callee, int32_t argc,
  * primitive key. janet_table_put's existing-key branch is just a value
  * store plus both generational barriers; insertion (which may rehash and
  * allocate) and nil removal stay in the VM. */
-JANET_API int janet_native_table_put_fast(Janet ds, Janet key, Janet value) {
+JANET_API int janet_native_table_put_fast(Janet ds, Janet key, Janet value JANET_NATIVE_COMMIT_ARGS) {
     if (!janet_checktype(ds, JANET_TABLE)) return 0;
-    if (janet_checktype(key, JANET_NIL)) return 1; /* janet_table_put no-op */
-    if (janet_checktype(key, JANET_NUMBER) && isnan(janet_unwrap_number(key))) return 1;
+    if (janet_checktype(key, JANET_NIL)) { JANET_NATIVE_COMMIT(); return 1; } /* janet_table_put no-op */
+    if (janet_checktype(key, JANET_NUMBER) && isnan(janet_unwrap_number(key))) { JANET_NATIVE_COMMIT(); return 1; }
     if (janet_checktype(value, JANET_NIL)) return 0;
     switch (janet_type(key)) {
         case JANET_NUMBER:
@@ -277,6 +277,7 @@ JANET_API int janet_native_table_put_fast(Janet ds, Janet key, Janet value) {
         JanetKV *bucket = janet_table_find(t, key);
         if (NULL == bucket || janet_checktype(bucket->key, JANET_NIL)) return 0;
         bucket->value = value;
+        JANET_NATIVE_COMMIT();
         janet_gc_barrier(t, key);
         janet_gc_barrier(t, value);
         return 1;
