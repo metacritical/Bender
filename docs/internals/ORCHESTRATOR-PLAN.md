@@ -383,3 +383,10 @@ This also retires my own caution that a large exit reduction would under-deliver
 ### Consequence
 The artifact preserved on `task1-buffer-regions` (`1462595a`, fully validated — see its git note) is **no longer a parked null**; it is half of a combined ~32% improvement on TrineXraft's heaviest kernel, pending a decision to land it. Had it been deleted for failing to reach 10% in isolation, this result would have required re-deriving it from scratch.
 Remaining exit population is dominated by `JOP_CALL` (8.25M), which buffer admission cannot touch. That is native-to-native continuation's territory — measured as a small net regression on ttfx, but **never evaluated in this regime**, where `mesh-chunk` and `raycast` run natively and generate ~8M CALL exits that did not previously exist.
+
+### Precision correction: "no codegen OR layout confound" was overstated
+Earlier text in this plan says the allowlist timing has "no codegen or layout confound". The accurate statement is narrower:
+- **Generated `native.c` IS byte-identical** across baseline/T1/T2 — TrineXraft `c36d6357ae3464fe7b95eac0db795ba239a9881ff3c1b1a36524817a0d9a6dfa`, ttfx `09f460cef09e061e31bc7a1d87c4998a1a450d1a03f29ab5a60b0cc18d6b1502`. That isolates the emitter and the descriptor set, and establishes the change as purely verifier-driven attachment.
+- **But the final AOT binaries are NOT identical**: the linked runtime source changed, so binary SHAs differ and a code-layout effect cannot be excluded. Say "no CODEGEN confound; layout confound not excluded", never "no confound".
+- For the stacked experiment the generated C legitimately DIFFERS (stack `0957cab1` vs `c36d6357`), because Task 1 modifies the emitter itself — so that comparison carries both caveats and its ~18% is likewise "observed", not securely attributed.
+This matters because the whole measurement discipline of this session rests on not overstating what a control actually controls for.
