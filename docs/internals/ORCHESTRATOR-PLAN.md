@@ -505,3 +505,7 @@ That is the same defect that hid the executor suite at the start of this session
 
 ### Working-tree note
 `implementation_plan.md` shows as modified by an external actor and was deliberately never touched, staged, restored, or committed by any agent. Do not describe the tree as clean without that qualification; `git checkout -- implementation_plan.md` restores the committed pointer notice if ever wanted.
+
+### Correction to the working-tree note
+An earlier section attributes the dirty `implementation_plan.md` solely to a pre-existing/external modification. That is INACCURATE and is corrected here: at least one subagent under this effort (`bb4899ca`) inadvertently wrote ~338 bytes to it through `plan_write`'s DEFAULT path during a read-only audit, and at least one other concurrent agent also wrote it. No agent restored or staged it, per standing instruction, so the file remains dirty.
+The underlying hazard is unchanged and is the real lesson: `implementation_plan.md` is `plan_write`'s default target and a TRACKED file, so any agent recording a plan clobbers it even when it intends to write elsewhere. Its committed content is only a pointer notice; `git checkout -- implementation_plan.md` restores that losslessly. **The durable fix is to point the plan tool's default at an ignored path**, which would remove this entire class of accidental writes — it caused a lost plan, contributed to a mis-targeted `git commit --amend`, and produced several false "external actor" attributions including this one.
