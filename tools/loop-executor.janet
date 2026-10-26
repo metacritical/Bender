@@ -223,7 +223,11 @@
     (out "if (!janet_checktype(s[0], JANET_NUMBER) || !janet_checktype(s[1], JANET_NUMBER) || !janet_checktype(s[2], JANET_NUMBER)) { NX_FALLBACK(); NX_EXIT(2,JANET_NATIVE_VM); }")
     (out "double nxn_ = janet_unwrap_number(s[0]), nxsum_ = janet_unwrap_number(s[1]), nxi_ = janet_unwrap_number(s[2]);")
     (out "if (!(nxn_ >= 0.0 && nxn_ <= 1000000.0 && nxn_ == floor(nxn_) && nxi_ >= 0.0 && nxi_ <= nxn_ && nxi_ == floor(nxi_) && nxsum_ >= 0.0 && nxsum_ <= 500000000000.0 && nxsum_ == floor(nxsum_))) { NX_FALLBACK(); NX_EXIT(2,JANET_NATIVE_VM); }")
-    (out "while (nxi_ < nxn_) {")
+    # The guarded comparison and conditional branch retire on both paths.
+    (out "while (1) {")
+    (out "  int nxcondition_ = nxi_ < nxn_;")
+    (out "#ifdef JANET_NATIVE_RETIRE_HOOK\n  JANET_NATIVE_RETIRE_HOOK(2); JANET_NATIVE_RETIRE_HOOK(3);\n#endif")
+    (out "  if (!nxcondition_) break;")
     # Test-only original-PC retirement, strictly after each arithmetic commit.
     (out "  nxsum_ += nxi_;\n#ifdef JANET_NATIVE_RETIRE_HOOK\n  JANET_NATIVE_RETIRE_HOOK(4);\n#endif")
     (out "  nxi_ += 1.0;\n#ifdef JANET_NATIVE_RETIRE_HOOK\n  JANET_NATIVE_RETIRE_HOOK(5);\n#endif")
@@ -235,6 +239,7 @@
     (out "    s[1] = janet_wrap_number(nxsum_); s[2] = janet_wrap_number(nxi_);")
     (out "    s[3] = janet_wrap_true(); NX_EXIT(6,JANET_NATIVE_INTERRUPT);")
     (out "  }")
+    (out "#ifdef JANET_NATIVE_RETIRE_HOOK\n  JANET_NATIVE_RETIRE_HOOK(6);\n#endif")
     (out "}")
     (out "s[1] = janet_wrap_number(nxsum_); s[2] = janet_wrap_number(nxi_);")
     (out "s[3] = janet_wrap_false(); NX_EXIT(7,JANET_NATIVE_VM);")

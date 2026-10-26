@@ -95,8 +95,9 @@ static void retirement_fixture(JanetFunction *sum) {
         retired_count = 0;
         assert(janet_continue(done, janet_wrap_nil(), &out) == JANET_SIGNAL_OK);
         assert(janet_unwrap_number(out) == (n ? 1 : 0));
-        assert(retired_count == 2 * n);
-        for (int i = 0; i < retired_count; i++) assert(retired[i] == (i % 2 ? 5 : 4));
+        int expected[13] = {2, 3, 4, 5, 6, 2, 3, 4, 5, 6, 2, 3};
+        assert(retired_count == 5 * n + 2);
+        for (int i = 0; i < retired_count; i++) assert(retired[i] == expected[i]);
         janet_gcunroot(janet_wrap_fiber(done));
     }
     JanetFiber *f;
@@ -106,14 +107,17 @@ static void retirement_fixture(JanetFunction *sum) {
     retired_count = 0;
     janet_vm.quantum = 2;
     assert(janet_continue(f, janet_wrap_nil(), &out) == JANET_SIGNAL_INTERRUPT);
-    assert(pc_of(f) == 6 && retired_count == 2 * JANET_QUANTUM_BUDGET);
-    for (int i = 0; i < retired_count; i++) assert(retired[i] == (i % 2 ? 5 : 4));
+    assert(pc_of(f) == 6 && retired_count == 5 * JANET_QUANTUM_BUDGET - 1);
+    for (int i = 0; i < retired_count; i++) {
+        int expected[] = {2, 3, 4, 5, 6};
+        assert(retired[i] == expected[i % 5]);
+    }
     /* Force the resumed operation through the VM: its pre-effect guard and
      * poll cannot report a retirement, nor can subsequent boxed execution. */
     sum->def->native_code = NULL;
     janet_vm.quantum = 0;
     assert(janet_continue(f, janet_wrap_nil(), &out) == JANET_SIGNAL_OK);
-    assert(janet_unwrap_number(out) == 6 && retired_count == 2 * JANET_QUANTUM_BUDGET);
+    assert(janet_unwrap_number(out) == 6 && retired_count == 5 * JANET_QUANTUM_BUDGET - 1);
     attach(sum, &nx_10_code);
     janet_gcunroot(janet_wrap_fiber(f));
 #endif
