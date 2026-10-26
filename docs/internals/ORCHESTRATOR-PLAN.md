@@ -293,3 +293,31 @@ A boundary crossing does NOT pay per-exit descriptor revalidation (epoch-cached;
 
 ### Gates (both tranches, isolated HOME/XDG cache, serial)
 Clean `make NATIVE_EXECUTORS=1` + full `make test` green; clean plain `make` + full `make test` green; `make test-executors` matrix green incl. sanitizer and forced quantum; `suite-callgraph` 256/256; TrineXraft 12/12; **ttfx 37/37 effects, 368/368 runnable cases byte-exact, 0 FAIL** (67 common BLOCKED, 1 VACUOUS). A **contract test** now asserts emitter/verifier agreement with fixtures mirroring the real shapes and asserting nonzero entries/ops/exits/backedges — liveness proven, never inferred.
+
+## ⚠ THE BUILD-MODE TRAP — the costliest defect of the session (STILL UNFIXED)
+`NATIVE_EXECUTORS=1` injects `-DJANET_NATIVE_EXECUTORS` into `BUILD_CFLAGS`, but **make has no dependency on the flag's value.** After a plain build, `make NATIVE_EXECUTORS=1` recompiles nothing and silently links a **stub runtime** while appearing to honour the request. Only `make clean && make NATIVE_EXECUTORS=1` switches modes.
+With the stub, `janet_native_register` returns 0 so EVERY registration fails — but only AOT entry-file definitions are registered eagerly and only the eager path PRINTS, so a wholly dead runtime reports a confident `available 81, REFUSED 188/190`, which reads as "79 of 81 bound" and actually means ZERO.
+
+**Phantom results this one defect plausibly produced, all retracted or corrected:**
+- the published ±3% / 0.9992 noise floor — measured on stub binaries, verified later by `otool` disassembly of `_janet_native_register`; withdrawn
+- "79/81 bound" meaning zero bound
+- the `--pgo-auto`/`--release` descriptor bug — bisected to the stub, never a pipeline transform; retracted
+- `trinexraft-workload-tasks.md`'s "Tier B matched ZERO regions" premise — falsified by measuring 12 emitted executors
+- Task 1's validation, which ran against a candidate-era interpreter and a post-revert binary
+The implementer hit it twice more in one session, and `d5a24e5d` made the opt-in EXPRESSIBLE but not RELIABLE.
+
+**FIX (highest-value remaining work):** make the mode a tracked dependency — write the flag into a generated header the objects already depend on, or stamp `build/.native-executors` that object rules depend on, or at minimum FAIL LOUDLY when the request cannot be honoured. Silence is the bug. Pairs with `591049a3`, which closed the same hole at run time.
+
+## Test-infrastructure defects found while using the suites
+Each turned a killed or concurrent run into a PERSISTENT failure that looked like a code defect and cost a rerun to disprove:
+1. **Hardcoded `/tmp` scratch paths** — `/tmp/janet-dce-strip-suite`, `/tmp/cg-*` collide between concurrent harnesses. `test/suite-native-executor.sh` does it correctly via `JANET_AOT_TEST_ROOT` + `XDG_CACHE_HOME`; the rest inherited fixed paths. Derive every scratch root from `mktemp -d`.
+2. **Unreclaimable mkdir-lock** — `~/.cache/janet/pgo/cg-nn-bin.lock` is a directory, so it holds no file descriptor and `lsof` can NEVER prove it held; a killed run orphans it and blocks every subsequent `suite-callgraph` forever. One sat orphaned for hours this session, failing two agents, until removed by process-age argument. Needs a timeout or reclaim.
+3. **No PGO cache pruning** — `~/.cache/janet/pgo` holds **57,827 entries**; every PGO operation pays directory-lookup cost in there.
+4. **`bench/kernels.janet` prints `os/clock` timings on stdout** (`:24-29,38-58`), so its stdout can NEVER be a byte-output oracle; a line-1 timing difference is not a semantic failure. A deterministic state-dump harness is needed for TrineXraft AOT-vs-interpreter byte comparison.
+
+## Orchestration lessons (cost real time this session)
+- **"Stand down" must propagate to the whole subtree.** Releasing a parent left ~30 descendants running; one grandchild kept writing into another agent's checkout for several cycles. Use `list_agents --scope descendants` and interrupt the actual mutator.
+- **Never let a piped git command gate an `&&` chain.** `git checkout X | tail -1` masks the abort; a chained `git commit --amend` then rewrote the wrong commit's message (recorded in `8e87abb2`).
+- **One owner per repo — including the orchestrator.** Documentation commits landing during another agent's history rewrite caused a reset that dropped the session's main fix off the branch.
+- **Give every agent its own worktree up front**, and preserve recovered work as a COMMIT, not a patch in `tmp/` — a commit survives working-tree resets; a patch does not.
+- **Cleanup against stale state is more dangerous than the untidiness.** Three separate near-losses came from well-intentioned restores and rewrites, not from the mess they targeted.
