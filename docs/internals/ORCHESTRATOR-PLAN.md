@@ -398,3 +398,15 @@ The orchestrator earlier suggested these runs would compare a native candidate a
 - stack `0a4148…` vs T2 `c882853…`
 `runtime_available=81` on both arms of each pair, and exhaustive 8-frame exit-time counters establish actual execution (archived baseline 12 active descriptors / 3,173,094 native ops / 831,964 native VM exits; T1 and T2 13 active / 3,229,068 ops). So these gates validate the **changed tier paths themselves**, step by step — the correct regression test for an incremental change. The historical frozen 368/368 (default inert binaries) predates all of this and serves only as population precedent (436 sets, 368 runnable, 67 BLOCKED, 1 VACUOUS).
 A native-vs-BOXED parity run would be a different and semantically stronger test, and it is not absent from the record: the Task 1 candidate has byte-equal boxed-vs-native guard output across all five invalid cases, and TrineXraft three-way parity (baseline AOT = candidate AOT = candidate interpreter, 4,897,880 bytes, SHA `be3b00a6…`). Semantic equivalence is therefore demonstrated; the incremental ttfx gates are not a substitute for it and were never claimed to be.
+
+### Corroboration: two INDEPENDENT pair sets, and the native-op accounting closes to 3
+The allowlist timing rests on two separately-built comparisons, not one:
+| pair set | baseline p50s (ms) | candidate p50s (ms) | median ratio | separation |
+|---|---|---|---|---|
+| original `verifier-*` | 6.317 6.319 6.307 6.335 6.289 | 5.231 5.196 5.172 5.171 5.158 | **0.82016** (0.81626–0.82808) | min baseline 6.289 > max candidate 5.231 by 1.058 ms |
+| clean `verifier-split-t1` | 6.309 6.234 6.240 6.237 6.277 | 5.064 5.074 5.046 5.034 5.036 | **0.80712** (0.80229–0.81392) | min baseline 6.234 > max candidate 5.074 by 1.160 ms |
+Neither set overlaps at all, and both were produced from the **identical generated `native.c`** (`c36d6357…`), so verifier admission is the operative code-path change. Provenance caveat: the original `verifier-*` binaries came from differing compiler build stamps (`e64aa244` vs `8e87abb2`); the `verifier-split-*` set is the clean independently-pinned one. The layout caveat still cannot be erased — the linked runtimes differ.
+
+**Native-op accounting closes almost exactly:** newly-live `nx28` mesh-chunk 263,759,412 ops + `nx43` raycast 71,044,820 ops = **334,804,232**, against a measured global increase of **+334,804,229** — a difference of 3 in 335 million. So the two newly-attached definitions account for essentially ALL new native execution, and `mesh-chunk` alone is **78.78%** of it, which matches the selective speedup appearing on mesh and not on raycast/palette.
+
+**Limit to respect:** there is NO per-definition interpreted-dispatch counter, so the −44.75% dispatch figure is workload-GLOBAL. Do not convert it into a mesh-specific claim. The timing, native-execution and boundary counts corroborate direction and site; they do not constitute a quantitative wall-time model.
