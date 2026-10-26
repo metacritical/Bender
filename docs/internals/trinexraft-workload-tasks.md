@@ -16,6 +16,63 @@ what would actually move it.
 
 ---
 
+## Getting started (read this before touching anything)
+
+### Build
+
+```sh
+cd /Users/pankajdoharey/Development/Projects/janet
+make                     # -> build/bender   (JANET_TARGET, Makefile:33)
+```
+
+**Keep a known-good `build/bender` somewhere safe before you start.** It is
+the interpreter TrineXraft runs on; a regression there breaks the game
+immediately, and you will want a binary to bisect against.
+
+### Repo conventions and one trap
+
+- The canonical plan is `docs/internals/ORCHESTRATOR-PLAN.md`. Design notes
+  live in `docs/internals/`, not `docs/`.
+- **`implementation_plan.md` at the repo root is a decoy.** It is the default
+  target of the `plan_write` tool and has been clobbered repeatedly; its own
+  contents say so. If you record a plan, pass an explicit path under the
+  gitignored `tmp/`. If you find it modified,
+  `git checkout -- implementation_plan.md` restores it losslessly.
+
+### Prerequisites for the acceptance benchmark
+
+The benchmark lives in a sibling repo and needs raylib on the system:
+
+- `/Users/pankajdoharey/Development/Projects/ML/trinecraft` present
+- raylib 6.2 (`brew install raylib`) — the engine resolves it at runtime
+  through the FFI
+
+`bench/kernels.janet` is **headless**: it imports the atlas, which imports the
+raylib binding module, but the FFI context is lazy and no window is opened. It
+runs fine over SSH or in CI.
+
+### Establish your own baseline first
+
+Do not trust the numbers below as absolutes — they are from an M2 Pro. Before
+changing anything, reproduce them on your machine and record the result. Every
+later claim should be relative to *your* baseline.
+
+### Your main feedback loop
+
+The build prints its lowering decisions. This is the fastest signal that a
+change is working:
+
+```sh
+bender --aot bench/kernels.janet --native -o build/b 2>&1 | grep -E "native-skip|native-lib"
+wc -l build/b-native/native-names.txt build/b-native/native-executors.txt
+grep -c janet_native_poll build/b-native/native.c
+```
+
+Today those are 0, 0 and 0, with 161 `native-skip` lines. Any of them becoming
+non-zero is progress worth measuring.
+
+---
+
 ## The measurement
 
 ```sh

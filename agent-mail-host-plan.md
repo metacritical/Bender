@@ -1,0 +1,5 @@
+# Secure Host Agent Mail authorization and RPC
+1. Inspect current apiproxy RPC contracts, dispatch, session and queue lifecycles, and existing native consent primitives; settle a private native challenge transport contract with native agent.
+2. Add Host-owned challenge, redemption, revocation and scoped grant logic bound to exact live Agent identity/generation, request origin and operations, with fail-closed absence of native seed.
+3. Expose narrowly validated Agent Mail RPC methods for local/direct address, inbox, send and acknowledgement through existing API carrier, checking grants at execution and queue-service membership.
+4. Add focused unit/integration security and queue tests, run type/lint/build checks, commit atomic verified concerns, report contract and any remaining native integration requirements. No install/restart.

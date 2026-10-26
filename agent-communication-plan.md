@@ -1,0 +1,5 @@
+# Agent communication queue
+1. Inspect Mail, session/subagent lifecycle, workspace identity, and streaming seams. The linked IMAP Mail plugin remains independent; the queue owns a new shared host service, not an IMAP folder.
+2. Define `WorkspaceId` stream and durable `SessionId` addresses, explicit workspace subscriptions, multi-recipient fan-out, workspace-visible messages, independent cursors, bounded reads, and live notifications. Authorize send/read/subscribe against the exact live caller and canonical workspace membership; reject cross-workspace targets. Delivery is visible at a natural model step or via a read tool, never mid-inference; ordinary traffic must not wake or interrupt turns.
+3. Implement a host queue package backed by storage-domain, an agent tool contribution usable by roots and continuable children, and composition/package wiring. Test persistence, addressing, isolation, fan-out, concurrency, cursors, live subscriptions, and cleanup.
+4. Run focused and integration/build checks, review the change, commit verified concerns atomically, and report activation/deployment constraints.
