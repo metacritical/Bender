@@ -16,6 +16,7 @@ EMITTER = ROOT / "tools/loop-executor.janet"
 VERIFIER = ROOT / "src/core/bytecode.c"
 ASSEMBLER = ROOT / "src/core/asm.c"
 EXCLUDED = {"sru", "sruim"}  # uint32 domain; no corresponding native guard yet.
+EMITTER_ONLY = {"sl", "slim", "sr", "srim"}  # VM signed-shift parity unprovable outside defined domain.
 
 
 def one(pattern, text, source):
@@ -68,7 +69,9 @@ def main():
         return 1
     failures = []
     for label, difference in (
-        ("emitter-only (verifier rejects whole definitions)", emitted - verified),
+        ("unexpected emitter-only opcodes", (emitted - verified) - EMITTER_ONLY),
+        ("deliberately emitter-only signed shifts missing from emitter", EMITTER_ONLY - emitted),
+        ("deliberately emitter-only signed shifts admitted by verifier", EMITTER_ONLY & verified),
         ("verifier-only (emitter never admits)", verified - emitted),
         ("excluded uint32 opcodes admitted by emitter", emitted & EXCLUDED),
         ("excluded uint32 opcodes admitted by verifier", verified & EXCLUDED),
@@ -78,7 +81,8 @@ def main():
     if failures:
         print("native opcode contract mismatch:\n  " + "\n  ".join(failures), file=sys.stderr)
         return 1
-    print(f"native opcode contract: {len(emitted)} emitter/verifier opcodes agree; sru/sruim excluded")
+    print(f"native opcode contract: {len(verified)}/{len(emitted)} emitter opcodes admitted; "
+          "sl/slim/sr/srim deliberately emitter-only; sru/sruim excluded")
     return 0
 
 

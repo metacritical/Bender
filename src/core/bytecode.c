@@ -2042,8 +2042,8 @@ static int native_structure_matches(JanetFuncDef *d, const JanetNativeCode *n) {
             case JOP_MAKE_STRING: case JOP_MAKE_STRUCT:
             case JOP_MAKE_TABLE: case JOP_MAKE_BRACKET_TUPLE:
             case JOP_BAND: case JOP_BOR: case JOP_BXOR: case JOP_BNOT:
-            case JOP_SHIFT_LEFT: case JOP_SHIFT_LEFT_IMMEDIATE:
-            case JOP_SHIFT_RIGHT: case JOP_SHIFT_RIGHT_IMMEDIATE:
+            /* Signed shifts remain emitter-only: VM C semantics are undefined
+             * outside the defined signed-shift domain; do not attach them. */
             case JOP_DIVIDE: case JOP_DIVIDE_IMMEDIATE: case JOP_DIVIDE_FLOOR:
             case JOP_MODULO: case JOP_REMAINDER: break;
             default: return 0; /* Includes every breakpoint bit. */
