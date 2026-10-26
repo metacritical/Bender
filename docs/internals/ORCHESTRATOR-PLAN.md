@@ -390,3 +390,11 @@ Earlier text in this plan says the allowlist timing has "no codegen or layout co
 - **But the final AOT binaries are NOT identical**: the linked runtime source changed, so binary SHAs differ and a code-layout effect cannot be excluded. Say "no CODEGEN confound; layout confound not excluded", never "no confound".
 - For the stacked experiment the generated C legitimately DIFFERS (stack `0957cab1` vs `c36d6357`), because Task 1 modifies the emitter itself — so that comparison carries both caveats and its ~18% is likewise "observed", not securely attributed.
 This matters because the whole measurement discipline of this session rests on not overstating what a control actually controls for.
+
+### Correction: the ttfx parity gates were NATIVE-vs-NATIVE, not against an inert baseline
+The orchestrator earlier suggested these runs would compare a native candidate against the validator's inert DEFAULT baseline, and described "368/368 against an inert baseline" as the claim. **That is false for this evidence.** `--baseline` was passed explicitly on every run, comparing consecutive native-tier-ACTIVE arms:
+- T1 `510e67…` vs archived pre-change native-tier-active baseline `a67e718…`
+- T2 `c882853…` vs T1 `510e67…`
+- stack `0a4148…` vs T2 `c882853…`
+`runtime_available=81` on both arms of each pair, and exhaustive 8-frame exit-time counters establish actual execution (archived baseline 12 active descriptors / 3,173,094 native ops / 831,964 native VM exits; T1 and T2 13 active / 3,229,068 ops). So these gates validate the **changed tier paths themselves**, step by step — the correct regression test for an incremental change. The historical frozen 368/368 (default inert binaries) predates all of this and serves only as population precedent (436 sets, 368 runnable, 67 BLOCKED, 1 VACUOUS).
+A native-vs-BOXED parity run would be a different and semantically stronger test, and it is not absent from the record: the Task 1 candidate has byte-equal boxed-vs-native guard output across all five invalid cases, and TrineXraft three-way parity (baseline AOT = candidate AOT = candidate interpreter, 4,897,880 bytes, SHA `be3b00a6…`). Semantic equivalence is therefore demonstrated; the incremental ttfx gates are not a substitute for it and were never claimed to be.
