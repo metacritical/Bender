@@ -410,3 +410,16 @@ Neither set overlaps at all, and both were produced from the **identical generat
 **Native-op accounting closes almost exactly:** newly-live `nx28` mesh-chunk 263,759,412 ops + `nx43` raycast 71,044,820 ops = **334,804,232**, against a measured global increase of **+334,804,229** — a difference of 3 in 335 million. So the two newly-attached definitions account for essentially ALL new native execution, and `mesh-chunk` alone is **78.78%** of it, which matches the selective speedup appearing on mesh and not on raycast/palette.
 
 **Limit to respect:** there is NO per-definition interpreted-dispatch counter, so the −44.75% dispatch figure is workload-GLOBAL. Do not convert it into a mesh-specific claim. The timing, native-execution and boundary counts corroborate direction and site; they do not constitute a quantitative wall-time model.
+
+## ✅ BUILD-MODE TRAP — FIXED (f6613dbb)
+Supersedes the "STILL UNFIXED / highest-value remaining work" status above.
+`build/.native-executors-mode` is now a **normal prerequisite** of `janet.o`, `shell.o` and the non-amalgamated core objects, force-checked against the effective `ifdef NATIVE_EXECUTORS` value. Switching modes in either direction invalidates the objects and triggers the `bender`/static/shared relinks; same-mode builds are untouched, so incremental builds stay incremental.
+Regression test `test/native-executor-build-mode.sh` archives HEAD, overlays the candidate Makefile in a private tmp, and builds **plain → native → plain at -j2 WITHOUT `make clean`**, asserting nanosecond timestamps on both objects and all three products at each transition, same-mode timestamp stability, and AOT fixture native registration versus the plain stub diagnostic. All three phases green.
+
+**The test earned its keep before the commit existed:** the first attempt used an ORDER-ONLY prerequisite, which does not force a rebuild — native silently reused the plain object, i.e. the fix reproduced the exact bug it was written to prevent, and the test caught it.
+
+**NEW INVOCATION REQUIREMENT (behaviour change, documented in the Makefile):** the mode is now sticky to the invocation, so the flag must be passed on EVERY invocation including test targets. `make NATIVE_EXECUTORS=1 && make test-executors` now deliberately switches back to plain on the second command and fails. Use a single invocation: **`make NATIVE_EXECUTORS=1 test-executors`**. Same for `make NATIVE_EXECUTORS=1 test`.
+
+Together with `d5a24e5d` (opt-in expressible) and `591049a3` (a stub runtime announces itself in `native_init`), the hole is now closed from three directions: expressible, detectable at run time, and impossible to produce by accident at build time. None alone was sufficient.
+
+**Attribution hedge, per the implementer:** the historical floor and Task 1 mismeasurements are *consistent with* stale build mode; they are not *proven* to have been entirely caused by it. Keep that wording.
