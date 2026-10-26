@@ -184,6 +184,63 @@ parallelism across lanes instead, which is its current fallback plan.
 
 ---
 
+## Task 1 — RESULT (measured 2026-10-26, bender `02b32d24`)
+
+Buffer admission landed and **works**. Measured on the TrineXraft benchmark,
+p50 of three runs each:
+
+| kernel | interpreted | native, no tier | native + executors | vs interpreted |
+|---|---|---|---|---|
+| **mesh-chunk** | 5.47-5.55 | 5.38-5.46 | **4.28-4.38** | **21% faster** |
+| worldgen/chunk | 5.14-5.20 | 5.19-5.22 | 5.39-5.65 | **4-8% slower** |
+| palette pack | 1.81 | — | 2.22 | **23% slower** |
+| raycast | 11.4 us | — | 11.6 us | flat |
+
+The tail matters more than the median for a game, and it moved further:
+mesh-chunk p90 8.85 -> 4.37 ms, max 28.4 -> **4.43 ms** (6.4x better worst
+case). The game emits 32 executors; spawn meshing 169 -> 140 ms; all twelve
+TrineXraft suites pass.
+
+### Two regressions worth your attention
+
+`worldgen/chunk` and `palette pack` got **slower**. This is the failure mode
+`aot-loop-codegen-feasibility.md` predicts: a region that pays its guard and
+then deopts is worse than no fusion.
+
+Probable cause is **call density**. `generate-into` calls `height-at` ->
+`fbm-signed-2d` -> `value-noise-2d` -> `hash2` once per column, and calls are
+explicit VM boundaries, so the region exits constantly and the guard is pure
+overhead. The mesher by contrast is buffer reads with arithmetic between them
+— the shape fusion wants — which is why it gains 21% and worldgen loses 8%.
+
+Suggested follow-up, in preference order:
+1. **Detect low-yield regions and decline them.** If a region's expected
+   native run length between boundary exits is below some threshold, not
+   emitting is strictly better than emitting and deopting.
+2. Consider whether small pure leaf calls (`hash2`, `value-noise-2d`) can be
+   inlined into the region, which would convert worldgen from the bad shape
+   to the good one.
+
+Both are measurable directly against `bench/kernels.janet`.
+
+### A trap that cost an afternoon
+
+The first Phase 10 verdict ("AOT gives 1.3-2.9%, nothing lowers") was taken
+against a plain `make` build, where the tier is compiled out. `Makefile:64-71`
+does warn about this, but the failure is silent at the call site — the build
+succeeds, emits `native-executors.txt` with zero lines, and reports a
+plausible small gain.
+
+Worth making louder: if `--aot --native` is invoked and
+`JANET_NATIVE_EXECUTORS` is unset, or the binary lacks the compile-time
+define, **say so on stderr**. A one-line warning would have saved the wrong
+conclusion, and anyone benchmarking bender from the outside will hit this.
+
+Also note `make NATIVE_EXECUTORS=1` alone is not enough after a plain build —
+make does not notice the CFLAGS change, so `make clean` is required first.
+
+---
+
 ## Task 2 — Unboxed numeric locals inside emitted code
 
 A Janet value is NaN-boxed into 8 bytes (`janet.h:324`, `JANET_NANBOX_64`).
