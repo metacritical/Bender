@@ -423,3 +423,20 @@ Regression test `test/native-executor-build-mode.sh` archives HEAD, overlays the
 Together with `d5a24e5d` (opt-in expressible) and `591049a3` (a stub runtime announces itself in `native_init`), the hole is now closed from three directions: expressible, detectable at run time, and impossible to produce by accident at build time. None alone was sufficient.
 
 **Attribution hedge, per the implementer:** the historical floor and Task 1 mismeasurements are *consistent with* stale build mode; they are not *proven* to have been entirely caused by it. Keep that wording.
+
+### Stacked result REPLICATED at the exact `cbb8e716` base — magnitude is a BAND, not a point
+A second, independently-built two-arm experiment (both worktrees detached at `cbb8e716`; arm B = the six-file Task 1 patch `aab08cba…`; both clean-built with `-DJANET_NATIVE_EXECUTORS`; identical descriptor manifest `e9f332a9…`; images A `6269f993…` / B `e7d455d5…`):
+
+**Counters replicate EXACTLY** — `nx28` 33.28457 → **2,128,763** ops per boundary exit; boundary exits 7,924,375 → **125**; global VM exits 18,885,615 → 8,798,677 (−10,086,938); mesh boundary −7,924,250 and `generate-into` −2,162,688, with `raycast`/`fbm` unchanged.
+
+**Timing is directionally identical but SMALLER than the first stack run:**
+| kernel | A p50 | B p50 | median pair ratio |
+|---|---:|---:|---:|
+| mesh | 5.229 ms | 4.535 ms | **0.86728 (−13.27%)**, all 5 pairs < 1, range 0.78731–0.89179 |
+| worldgen | 5.810 ms | 5.477 ms | 0.93494 (−6.51%) |
+| raycast | — | — | 1.03051 (noisy) |
+| palette | — | — | 0.97035 (noisy) |
+
+**So quote the stacked mesh effect as a BAND of roughly −13% to −18%, not as 18%.** The two runs differ only in which build pair was used (split-T2 arms vs consolidated-`cbb8e716` arms) on source-identical trees, which is exactly the residual binary-layout variance we have refused to claim away all session. What replicates robustly is the DIRECTION (every paired ratio < 1 in both runs) and the MECHANISM (identical counters to the opcode); the magnitude does not pin down better than that band on this hardware.
+Also note aggregation labels precisely: ratio-of-medians and median-of-paired-ratios differ (e.g. 0.82355 vs 0.81756 on the first run, 0.6pp apart). The paired-ratio median is the better statistic here because the pairing is the control.
+Correctness for both arms: TrineXraft suites pass; native executor matrices pass incl. forced quantum and sanitizer (B adding buffer tests); ttfx 37 effects / 368 byte-exact runnable cases on both. The `cbb8e716` base predates the build-mode fix `f6613dbb`, but both arms were clean-built and compiler flags were verified.
