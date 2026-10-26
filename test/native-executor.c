@@ -4,14 +4,30 @@
 #include "fiber.h"
 #include <assert.h>
 #include <stdio.h>
+#include <stdint.h>
+#include <inttypes.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-/* Generated numeric-sum callbacks exist only in this test compilation unit. */
+/* Generated numeric-sum callbacks exist only in this test compilation unit.
+ * This flag is absent from release builds; only the numeric-sum fused region
+ * invokes the hook, so these counters have deliberately partial coverage. */
+#define JANET_TEST_FUSED_SUM_RETIRE_COUNTS 1
+#if JANET_TEST_FUSED_SUM_RETIRE_COUNTS
 static int retired[64], retired_count, retirement_enabled;
+static uint64_t sum_retired[5]; /* native id 10, original PCs 2..6 */
+static int sum_retired_overflow[5];
+static void count_sum_retirement(int pc) {
+    assert(pc >= 2 && pc <= 6);
+    int index = pc - 2;
+    if (sum_retired[index] == UINT64_MAX) sum_retired_overflow[index] = 1;
+    else sum_retired[index]++;
+}
 #define JANET_NATIVE_RETIRE_HOOK(pc) do { if (retirement_enabled) { \
     assert(retired_count < 64); retired[retired_count++] = (pc); \
+    count_sum_retirement(pc); \
 } } while (0)
+#endif
 #include NATIVE_EXECUTOR_C
 
 static JanetFunction *lookup(JanetTable *env, const char *name) {
@@ -98,6 +114,8 @@ static void retirement_fixture(JanetFunction *sum) {
         int expected[13] = {2, 3, 4, 5, 6, 2, 3, 4, 5, 6, 2, 3};
         assert(retired_count == 5 * n + 2);
         for (int i = 0; i < retired_count; i++) assert(retired[i] == expected[i]);
+        for (int pc = 2; pc <= 6; pc++)
+            assert(sum_retired[pc - 2] == (uint64_t)(n + (pc <= 3 ? 1 + (n > 0) : 0)));
         janet_gcunroot(janet_wrap_fiber(done));
     }
     /* Out-of-range input rejects the fused region at unexecuted PC2.
@@ -108,6 +126,8 @@ static void retirement_fixture(JanetFunction *sum) {
     assert(janet_continue(guarded, janet_wrap_nil(), &out) == JANET_SIGNAL_OK);
     assert(janet_unwrap_number(out) == 0 && retired_count == 0);
     assert(nx_10_fallbacks == fallbacks_before + 1);
+    for (int pc = 2; pc <= 6; pc++)
+        assert(sum_retired[pc - 2] == (uint64_t)(2 + 2 * (pc <= 3)));
     janet_gcunroot(janet_wrap_fiber(guarded));
     JanetFiber *f;
 
@@ -121,17 +141,43 @@ static void retirement_fixture(JanetFunction *sum) {
         int expected[] = {2, 3, 4, 5, 6};
         assert(retired[i] == expected[i % 5]);
     }
+    for (int pc = 2; pc <= 6; pc++) {
+        uint64_t expected_count = 2 + 2 * (pc <= 3);
+        for (int i = 0; i < retired_count; i++) expected_count += retired[i] == pc;
+        assert(sum_retired[pc - 2] == expected_count);
+    }
     /* Force the resumed operation through the VM: its pre-effect guard and
      * poll cannot report a retirement, nor can subsequent boxed execution. */
     sum->def->native_code = NULL;
     janet_vm.quantum = 0;
     assert(janet_continue(f, janet_wrap_nil(), &out) == JANET_SIGNAL_OK);
     assert(janet_unwrap_number(out) == 6 && retired_count == 5 * JANET_QUANTUM_BUDGET - 1);
+    for (int pc = 2; pc <= 6; pc++) {
+        uint64_t expected_count = 2 + 2 * (pc <= 3);
+        for (int i = 0; i < retired_count; i++) expected_count += retired[i] == pc;
+        assert(sum_retired[pc - 2] == expected_count);
+    }
     attach(sum, &nx_10_code);
     janet_gcunroot(janet_wrap_fiber(f));
 #endif
     janet_vm.quantum = 0;
     retirement_enabled = 0;
+    /* Only the generated numeric-sum region is instrumented. The runtime
+     * unresolved population is unknown; never infer a complete histogram or
+     * a numeric performance gate from these observed retirements. */
+    puts("fused numeric-sum id=10 original-pc=2..6 coverage=partial gate=unavailable INCOMPLETE unresolved=unknown");
+    for (int pc = 2; pc <= 6; pc++)
+        printf("fused id=10 pc=%d retired=%" PRIu64 " overflow=%d\n",
+               pc, sum_retired[pc - 2], sum_retired_overflow[pc - 2]);
+    uint64_t previous = sum_retired[0];
+    sum_retired[0] = UINT64_MAX - 1;
+    count_sum_retirement(2);
+    assert(sum_retired[0] == UINT64_MAX && !sum_retired_overflow[0]);
+    count_sum_retirement(2);
+    assert(sum_retired[0] == UINT64_MAX && sum_retired_overflow[0]);
+    count_sum_retirement(2);
+    assert(sum_retired[0] == UINT64_MAX && sum_retired_overflow[0]);
+    sum_retired[0] = previous;
 }
 static int overloaded;
 static Janet add_once(int32_t argc, Janet *argv) {
