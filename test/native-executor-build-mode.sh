@@ -2,6 +2,10 @@
 # Run the real Makefile in a disposable source tree; never switch the caller's
 # build artifacts while another test or agent might be using them.
 set -eu
+# A parent `make NATIVE_EXECUTORS=1 test-executors` propagates command-line
+# assignments through MAKEFLAGS. Clear them so the inner plain phases really
+# are plain, rather than silently inheriting the parent's native opt-in.
+unset MAKEFLAGS MFLAGS NATIVE_EXECUTORS
 root=$(mktemp -d "${TMPDIR:-/tmp}/janet-native-mode-XXXXXXXX")
 trap 'rm -rf "$root"' EXIT HUP INT TERM
 mkdir "$root/repo"
