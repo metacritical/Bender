@@ -7,6 +7,11 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+/* Generated numeric-sum callbacks exist only in this test compilation unit. */
+static int retired[64], retired_count, retirement_enabled;
+#define JANET_NATIVE_RETIRE_HOOK(pc) do { if (retirement_enabled) { \
+    assert(retired_count < 64); retired[retired_count++] = (pc); \
+} } while (0)
 #include NATIVE_EXECUTOR_C
 
 static JanetFunction *lookup(JanetTable *env, const char *name) {
@@ -81,6 +86,35 @@ static void parity(JanetFunction *fn, const JanetNativeCode *code, int budget, i
     janet_gcunroot(janet_wrap_fiber(a)); janet_gcunroot(janet_wrap_fiber(b));
     janet_vm.quantum = 0;
 }
+static void retirement_fixture(JanetFunction *sum) {
+    Janet out;
+    JanetFiber *f = spawn(sum, 3);
+    retired_count = 0; retirement_enabled = 1;
+    janet_vm.quantum = 0;
+    assert(janet_continue(f, janet_wrap_nil(), &out) == JANET_SIGNAL_OK);
+    assert(janet_unwrap_number(out) == 3 && retired_count == 6);
+    for (int i = 0; i < retired_count; i++) assert(retired[i] == (i % 2 ? 5 : 4));
+    janet_gcunroot(janet_wrap_fiber(f));
+
+#ifndef JANET_NO_INTERPRETER_INTERRUPT
+    f = spawn(sum, 4);
+    retired_count = 0;
+    janet_vm.quantum = 2;
+    assert(janet_continue(f, janet_wrap_nil(), &out) == JANET_SIGNAL_INTERRUPT);
+    assert(pc_of(f) == 6 && retired_count == 2 * JANET_QUANTUM_BUDGET);
+    for (int i = 0; i < retired_count; i++) assert(retired[i] == (i % 2 ? 5 : 4));
+    /* Force the resumed operation through the VM: its pre-effect guard and
+     * poll cannot report a retirement, nor can subsequent boxed execution. */
+    sum->def->native_code = NULL;
+    janet_vm.quantum = 0;
+    assert(janet_continue(f, janet_wrap_nil(), &out) == JANET_SIGNAL_OK);
+    assert(janet_unwrap_number(out) == 6 && retired_count == 2 * JANET_QUANTUM_BUDGET);
+    attach(sum, &nx_10_code);
+    janet_gcunroot(janet_wrap_fiber(f));
+#endif
+    janet_vm.quantum = 0;
+    retirement_enabled = 0;
+}
 static int overloaded;
 static Janet add_once(int32_t argc, Janet *argv) {
     assert(argc == 2);
@@ -146,6 +180,7 @@ int main(int argc, char **argv) {
     janet_deinit(); return 0;
 #endif
     attach(sum, &nx_10_code); attach(nested, &nx_11_code);
+    retirement_fixture(sum);
     /* A VM-only allocation at a later PC must not veto the native prefix. */
     JanetFunction *table = assembled(&nx_121_code);
     attach(table, &nx_121_code);

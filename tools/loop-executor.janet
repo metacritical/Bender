@@ -224,7 +224,9 @@
     (out "double nxn_ = janet_unwrap_number(s[0]), nxsum_ = janet_unwrap_number(s[1]), nxi_ = janet_unwrap_number(s[2]);")
     (out "if (!(nxn_ >= 0.0 && nxn_ <= 1000000.0 && nxn_ == floor(nxn_) && nxi_ >= 0.0 && nxi_ <= nxn_ && nxi_ == floor(nxi_) && nxsum_ >= 0.0 && nxsum_ <= 500000000000.0 && nxsum_ == floor(nxsum_))) { NX_FALLBACK(); NX_EXIT(2,JANET_NATIVE_VM); }")
     (out "while (nxi_ < nxn_) {")
-    (out "  nxsum_ += nxi_; nxi_ += 1.0;")
+    # Test-only original-PC retirement, strictly after each arithmetic commit.
+    (out "  nxsum_ += nxi_;\n#ifdef JANET_NATIVE_RETIRE_HOOK\n  JANET_NATIVE_RETIRE_HOOK(4);\n#endif")
+    (out "  nxi_ += 1.0;\n#ifdef JANET_NATIVE_RETIRE_HOOK\n  JANET_NATIVE_RETIRE_HOOK(5);\n#endif")
     # The VM polls *after* the completed additions and *before* the jump.
     # On interruption, materialize the scanned VM slots and leave PC at
     # the unexecuted backedge. Without interruption, the doubles stay raw.
