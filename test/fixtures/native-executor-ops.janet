@@ -42,6 +42,27 @@
     (++ i))
   total)
 
+# Existing-index buffer/array stores are native; buffer growth, invalid keys
+# and invalid values must fall back to the original JOP_PUT before mutation.
+(defn buffer-loop [xs n]
+  (var i 0)
+  (while (< i n)
+    (put xs i (+ i 257))
+    (++ i))
+  (var total 0)
+  (set i 0)
+  (while (< i n)
+    (+= total (get xs i))
+    (++ i))
+  total)
+
+(defn buffer-guard-loop [xs key value]
+  (var i 0)
+  (while (< i 3)
+    (put xs key value)
+    (++ i))
+  xs)
+
 (defn tuple-alias-loop [n]
   (def pair (tuple 2 3))
   (var i 0)

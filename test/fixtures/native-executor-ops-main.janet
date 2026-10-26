@@ -5,8 +5,11 @@
 (def index-ops (map |($0 0) ((disasm O/indexed-loop) :bytecode)))
 (def scratch-ops (map |($0 0) ((disasm O/scratch-loop) :bytecode)))
 (def get-ops (map |($0 0) ((disasm O/get-loop) :bytecode)))
+(def buffer-ops (map |($0 0) ((disasm O/buffer-loop) :bytecode)))
 (assert (index-of 'geti index-ops) "geti was not compiled")
 (assert (index-of 'get get-ops) "register-key get was not compiled")
+(assert (index-of 'put buffer-ops) "buffer put was not compiled")
+(assert (index-of 'get buffer-ops) "buffer get was not compiled")
 (assert (index-of 'next index-ops) "next was not compiled")
 (assert (index-of 'eq index-ops) "string equality was not compiled")
 (assert (index-of 'mkscr scratch-ops) "scratch tuple was not compiled")
@@ -28,6 +31,30 @@
 (assert (= 20 (O/get-loop get-table 12)))
 (assert (= nil (get @[99] :non-index)))
 (assert (= nil (get (tuple 99) :non-index)))
+
+# Identical buffer and array loops exercise the new register-key read and
+# existing-index write fast paths; 257..258 wrap to byte 1..2 on buffers.
+(def bytes (buffer/new-filled 8 0))
+(assert (= 36 (O/buffer-loop bytes 8)))
+(assert (= 1 (get bytes 0)))
+(assert (= 8 (get bytes 7)))
+(assert (= nil (get bytes -1)))
+(assert (= nil (get bytes :bad)))
+(assert (= nil (get bytes 99)))
+(assert (= 2084 (O/buffer-loop (array/new-filled 8 0) 8)))
+
+# The rejected cases are deliberately executed after a native loop prefix:
+# errors must originate in JOP_PUT, leave prior bytes alone, and growth must
+# still be performed by the VM (including zero-filled intermediate bytes).
+(def bad-index (try (O/buffer-guard-loop bytes -1 9) ([e] (string e))))
+(def bad-type (try (O/buffer-guard-loop bytes 0 :bad) ([e] (string e))))
+(assert (string/find "expected integer key for buffer" bad-index) bad-index)
+(assert (string/find "can only put integers in buffers" bad-type) bad-type)
+(assert (= 1 (get bytes 0)))
+(O/buffer-guard-loop bytes 10 260)
+(assert (= 11 (length bytes)))
+(assert (= 0 (get bytes 8)))
+(assert (= 4 (get bytes 10)))
 
 # Force frequent GC checks in the alias-call path. The temporary tuple
 # argument is a per-site scratch array; the struct result is GC allocated.

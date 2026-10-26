@@ -19,6 +19,7 @@ grep 'unsupported-loop' "$root/generated/native-executors.txt"
 if grep 'unsupported-bit' "$root/generated/native-executors.txt"; then exit 1; fi
 # Fast-path calls must be emitted, not just the generic VM boundaries.
 grep -q 'janet_native_array_put_fast' "$root/generated/native.c"
+grep -q 'janet_native_buffer_put_fast' "$root/generated/native.c"
 grep -q 'janet_native_table_get_fast' "$root/generated/native.c"
 grep -q 'janet_native_container_call_fast' "$root/generated/native.c"
 grep -q 'janet_native_table_put_fast' "$root/generated/native.c"
@@ -60,6 +61,8 @@ JANET_NATIVE_EXECUTORS=1 ./build/bender --aot \
 grep 'indexed-loop' "$root/ops-native-native/native-executors.txt"
 grep 'scratch-loop' "$root/ops-native-native/native-executors.txt"
 grep 'get-loop' "$root/ops-native-native/native-executors.txt"
+grep 'buffer-loop' "$root/ops-native-native/native-executors.txt"
+grep 'buffer-guard-loop' "$root/ops-native-native/native-executors.txt"
 # The same generated primitive struct writer must accept the scratch array
 # fast path and an immutable tuple, with other indexables still going through
 # the ordinary janet_getindexed fallback.

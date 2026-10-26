@@ -822,9 +822,27 @@ void janet_put(Janet ds, Janet key, Janet value) {
     }
 }
 
+/* Native-executor buffer write fast path. The in-range integer subset of
+ * janet_put cannot grow or reallocate its backing bytes. Obtain data from the
+ * current JanetBuffer on every access; never retain it across a call, poll, or
+ * a VM fallback. Refuse BEFORE mutation for invalid keys/values or growth, so
+ * the original JOP_PUT produces precisely its own error or zero-fill. */
+JANET_API int janet_native_buffer_put_fast(Janet ds, Janet key, Janet value) {
+    JanetBuffer *buffer;
+    int32_t index;
+    if (!janet_checktype(ds, JANET_BUFFER) || !janet_checkint(key) ||
+            !janet_checkint(value)) return 0;
+    index = janet_unwrap_integer(key);
+    if (index < 0) return 0;
+    buffer = janet_unwrap_buffer(ds);
+    if (index >= buffer->count) return 0;
+    buffer->data[index] = (uint8_t)(janet_unwrap_integer(value) & 0xFF);
+    return 1;
+}
+
 /* Native-executor array write fast path. Only an in-range non-negative
  * integer index is handled: janet_put's store plus generational barrier.
- * Growth (which allocates and fills intermediates), buffers, tables and
+ * Growth (which allocates and fills intermediates), other receivers and
  * abstract setters stay in the VM at the original PC. */
 JANET_API int janet_native_array_put_fast(Janet ds, Janet key, Janet value) {
     JanetArray *array;

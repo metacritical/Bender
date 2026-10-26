@@ -35,12 +35,10 @@
 # `next` iteration, `geti`, and primitive equality are handled by
 # `native-control` / explicit emitters below; they fall back to their own PC
 # when their fast path does not apply.
-# `in` and guarded array/tuple `get` are pure reads: neither allocates,
-# needs a GC write barrier, or triggers collection. `put` stays a boundary --
-# JOP_PUT does vm_commit, sets RESUME_NO_USEVAL, may GROW the array
-# (allocation), and ends with vm_checkgc, none of which an executor is
-# permitted to do. Other `get` receivers exit at the original PC;
-# invalid array/tuple keys return nil, whereas `in` raises.
+# Guarded array/tuple/buffer `get` is a pure read. In-range array/buffer
+# `put` cannot grow or allocate; any write that could grow exits at its
+# original PC for JOP_PUT's commit, zero-fill, GC and error semantics.
+# Invalid `get` indices return nil, whereas `in` raises.
 (def boundaries {'tcall true
                  'len true 'put true
                  'mkarr true 'mkbuf true 'mktup true
@@ -93,7 +91,7 @@
   (while (>= i 0)
     (def op ((bytecode i) 0))
     (set (runs i) (cond
-                    (or (get boundaries op) (= op 'call)) 0
+                    (or (and (get boundaries op) (not= op 'put)) (= op 'call)) 0
                     (or (= op 'ret) (= op 'retn)) 0
                     (= i (- n 1)) 1
                     (+ 1 (runs (+ i 1)))))
@@ -299,6 +297,14 @@
         (out "      int32_t nxi_ = janet_unwrap_integer(nxkey_);")
         (out "      s[" (string a) "] = ((uint32_t)nxi_ < (uint32_t)janet_tuple_length(nxt_)) ? nxt_[nxi_] : janet_wrap_nil();")
         (out "    } else s[" (string a) "] = janet_wrap_nil();")
+        # Buffer reads mirror janet_get's nil-on-invalid rule. Re-derive
+        # data at each access, never retain a pointer across a call or put.
+        (out "  } else if (janet_checktype(nxds_, JANET_BUFFER)) {")
+        (out "    JanetBuffer *nxb_ = janet_unwrap_buffer(nxds_);")
+        (out "    if (janet_checkint(nxkey_)) {")
+        (out "      int32_t nxi_ = janet_unwrap_integer(nxkey_);")
+        (out "      s[" (string a) "] = ((uint32_t)nxi_ < (uint32_t)nxb_->count) ? janet_wrap_integer(nxb_->data[nxi_]) : janet_wrap_nil();")
+        (out "    } else s[" (string a) "] = janet_wrap_nil();")
         # Table reads with primitive keys are pure: janet_table_get walks
         # the table/prototype hashes without allocating or calling Janet.
         # Non-primitive keys (abstract hashing callbacks) stay in the VM.
@@ -336,9 +342,10 @@
       # Guarded `put`: an in-range array index performs exactly janet_put's
       # store plus generational barrier. An already-present primitive table
       # key performs exactly the existing-key branch of janet_table_put
-      # (value store plus both barriers). Array growth, table insertion/
-      # removal/rehash, buffers, abstract setters, non-integer array keys and
-      # non-primitive table keys exit before any mutation. The PC is
+      # (value store plus both barriers). Buffer writes are restricted to
+      # existing indices and integer values. Array/buffer growth, table
+      # insertion/removal/rehash, abstract setters and invalid keys/values
+      # exit before any mutation. The PC is
       # committed before the barrier so a strict-heap panic still reports
       # this instruction.
       (= op 'put)
@@ -347,6 +354,7 @@
         (out "{ Janet nxds_ = s[" (string a) "]; Janet nxkey_ = s[" (string c) "]; Janet nxval_ = s[" (string z) "];")
         (out "  janet_native_set_pc(f, d->bytecode + " (string k) ");")
         (out "  if (!janet_native_array_put_fast(nxds_, nxkey_, nxval_) &&")
+        (out "      !janet_native_buffer_put_fast(nxds_, nxkey_, nxval_) &&")
         (out "      !janet_native_table_put_fast(nxds_, nxkey_, nxval_)) {")
         (out "    NX_BOUNDARY(" (string k) ");")
         (out "  } }"))

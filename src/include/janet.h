@@ -1334,6 +1334,7 @@ JANET_API int janet_native_ret_pop(JanetFiber *fiber, uint32_t **pc);
  * performing exactly the boxed operation's mutation/read, or 0 without
  * touching the target so the executor can fall back at the original PC. */
 JANET_API void janet_native_set_pc(JanetFiber *fiber, uint32_t *pc);
+JANET_API int janet_native_buffer_put_fast(Janet ds, Janet key, Janet value);
 JANET_API int janet_native_array_put_fast(Janet ds, Janet key, Janet value);
 JANET_API int janet_native_table_get_fast(Janet ds, Janet key, Janet *out);
 JANET_API int janet_native_container_call_fast(Janet callee, int32_t argc,
