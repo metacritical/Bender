@@ -203,12 +203,20 @@ TrineXraft suites pass.
 
 ### Observed native-vs-boxed differences; earlier causal account retracted
 
-The original run reported slower `worldgen/chunk` and `palette pack`, but its
-attribution to call-dense, low-yield fusion was **wrong**. The 25.266
+The original native-vs-interpreted run reported slower `worldgen/chunk` and
+`palette pack`, but its attribution to Task 1 buffer admission or call-dense,
+low-yield fusion was **wrong**. A directly paired, source-comparable Task 1
+control (`da207b6a` pre vs `02b32d24` post, equal 12-ID manifests) already
+recorded worldgen **post/pre 0.96563** (~3.44% faster) and mesh **0.84830**
+in `ORCHESTRATOR-PLAN.md:485-498`. Native-vs-interpreted and buffer-admission
+post/pre are different comparisons; neither alone identifies a cause for
+remaining native-vs-interpreted differences. The 25.266
 `generate-into` native ops per generated boundary exit belonged to the
-**pre-buffer-admission** build. On the current build, it runs 54,645,175 ops
-across 132 exits (~413,979 ops/exit). A two-registration-site ablation that
-removes only its Tier-B region makes worldgen **8.76% slower** (11 alternating
+**pre-buffer-admission** build. On the current build, it records 54,645,175
+ops and 132 **NX_VMEXIT-tagged generated exits** (~413,979 ops per tagged
+event); bare CALL fallbacks are not counted, so this is **not** all-exit yield.
+A two-registration-site ablation that removes only its Tier-B region makes
+worldgen **8.76% slower** (11 alternating
 pairs; median decline/native p50 ratio 1.08762, range 1.07415–1.15847).
 The region helps worldgen; declining it is not a fix.
 
