@@ -44,6 +44,7 @@
 extern const JanetAbstractType janet_proc_type;
 /* Forward: pid-tuple resolver (defined with proc/pid, used by send). */
 static JanetChannel *janet_proc_resolve_mbox(Janet x);
+static int janet_proc_is_pid_tuple(Janet x);
 static Janet cfun_proc_spawn_impl(JanetFunction *func, int32_t cap, int isolated);
 static uint32_t janet_proc_next_serial(void);
 
@@ -780,8 +781,41 @@ JANET_CORE_FN(cfun_proc_lanes_stop,
 
 /* JanetProcess lives in proc.h (shared with gc.c for P3.4 majors). */
 
+/* Resolve a handle argument to a LOCAL process object.
+ *
+ * A handle is either a core/proc object or a [:pid lane serial chan] tuple.
+ * Object-form callers (monitor/kill/stash/...) need the C object, so a tuple
+ * naming THIS lane (node 0) is resolved through the lane-local registry. That
+ * is what makes handles uniform, and it is why proc/pid? accepts both shapes.
+ * A tuple naming ANOTHER lane cannot be resolved here: those operations
+ * manipulate C lists and fibers living in that VM, so it raises instead of
+ * guessing. */
 static JanetProcess *janet_getproc(const Janet *argv, int32_t n) {
-    return janet_getabstract(argv, n, &janet_proc_type);
+    Janet x = argv[n];
+    if (janet_checktype(x, JANET_ABSTRACT) &&
+            janet_abstract_type(janet_unwrap_abstract(x)) == &janet_proc_type) {
+        return (JanetProcess *) janet_unwrap_abstract(x);
+    }
+    if (janet_proc_is_pid_tuple(x)) {
+        const Janet *tup = janet_unwrap_tuple(x);
+        int32_t node = (int32_t) janet_unwrap_number(tup[1]);
+        if (0 != node) {
+            janet_panicf("this operation needs a local process, but the pid "
+                         "names lane %d (objects live in that VM; use "
+                         "proc/send or proc/monitor to interact with it)",
+                         (int) node);
+        }
+        if (NULL != janet_lane_local) {
+            Janet hit = janet_table_get(janet_lane_local,
+                    janet_wrap_number((double) janet_unwrap_number(tup[2])));
+            if (janet_checktype(hit, JANET_ABSTRACT) &&
+                    janet_abstract_type(janet_unwrap_abstract(hit)) == &janet_proc_type) {
+                return (JanetProcess *) janet_unwrap_abstract(hit);
+            }
+        }
+        janet_panic("pid does not name a live local process");
+    }
+    janet_panicf("expected a proc or pid, got %v", x);
 }
 
 /* B6 spawn-cost: materialize the mailbox on first real use. Called
@@ -1387,12 +1421,31 @@ JANET_CORE_FN(cfun_proc_alive,
                               janet_fiber_can_resume(proc->fiber));
 }
 
+/* Is `x` a [:pid node serial chan] tuple? Shared so a remote handle can be
+ * treated as a handle rather than as an unknown type. */
+static int janet_proc_is_pid_tuple(Janet x) {
+    if (!janet_checktype(x, JANET_TUPLE)) return 0;
+    const Janet *tup = janet_unwrap_tuple(x);
+    return 4 == janet_tuple_length(tup) &&
+           janet_checktype(tup[0], JANET_KEYWORD) &&
+           janet_unwrap_keyword(tup[0]) == janet_unwrap_keyword(janet_ckeywordv("pid")) &&
+           janet_checktype(tup[1], JANET_NUMBER) &&
+           janet_checktype(tup[2], JANET_NUMBER) &&
+           janet_checktype(tup[3], JANET_ABSTRACT);
+}
+
 JANET_CORE_FN(cfun_proc_pid,
               "(proc/pid? x)",
-              "True for core/proc process handles.") {
+              "True for a process handle of EITHER shape: a local core/proc\n"
+              "object, or the [:pid lane serial chan] tuple that proc/spawn\n"
+              "returns once lanes are active. Branch on this instead of the\n"
+              "type; proc/pid, proc/serial and proc/alive? accept both.") {
     janet_fixarity(argc, 1);
-    return janet_wrap_boolean(janet_checktype(argv[0], JANET_ABSTRACT) &&
-        janet_abstract_type(janet_unwrap_abstract(argv[0])) == &janet_proc_type);
+    if (janet_checktype(argv[0], JANET_ABSTRACT) &&
+            janet_abstract_type(janet_unwrap_abstract(argv[0])) == &janet_proc_type) {
+        return janet_wrap_true();
+    }
+    return janet_wrap_boolean(janet_proc_is_pid_tuple(argv[0]));
 }
 
 /* P1.3 pid interop: a proc's portable face is a [:pid node serial
@@ -1429,6 +1482,9 @@ JANET_CORE_FN(cfun_proc_pid_of,
               "Sends to it deliver via the carried mailbox; monitor/kill\n"
               "need the object.") {
     janet_fixarity(argc, 1);
+    /* A pid tuple is already the portable face: return it unchanged so
+     * proc/pid is idempotent across handle shapes. */
+    if (janet_proc_is_pid_tuple(argv[0])) return argv[0];
     JanetProcess *proc = janet_getproc(argv, 0);
     Janet tup[4];
     tup[0] = janet_ckeywordv("pid");
@@ -1442,8 +1498,10 @@ JANET_CORE_FN(cfun_proc_pid_of,
 
 JANET_CORE_FN(cfun_proc_serial,
               "(proc/serial p)",
-              "P1.3: the process's numeric serial (pid tuple slot 2).") {
+              "P1.3: the process's numeric serial (pid tuple slot 2).\n"
+              "Accepts a local core/proc or a pid tuple.") {
     janet_fixarity(argc, 1);
+    if (janet_proc_is_pid_tuple(argv[0])) return janet_unwrap_tuple(argv[0])[2];
     JanetProcess *proc = janet_getproc(argv, 0);
     return janet_wrap_integer((int64_t) proc->serial);
 }

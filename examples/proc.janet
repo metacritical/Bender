@@ -112,15 +112,16 @@
   Remote watches RPC the lane (:proc-monitor); unknown/dead remote
   serials answer [:down tag :noproc] from the lane. Returns `ch`."
   [watched tag ch]
-  (if (proc/pid? watched)
+  # proc/pid? accepts BOTH shapes now, so it cannot decide local-vs-remote.
+  # The discriminator is the node field: an object is always local, and a
+  # tuple is local only when its node is 0.
+  (def is-tuple (tuple? watched))
+  (if (and is-tuple (not= 0 (watched 1)))
+    (ev/give (watched 3) [:proc-monitor (watched 2) tag ch])
     (if (proc/done? watched)
       (ev/give ch [:down tag (proc/exit-reason watched)])
       (do (proc/monitor watched ch tag)
-        (ensure-reaper watched)))
-    (do (def node (watched 1))
-      (when (= 0 node)
-        (error "local tuple pid needs its proc object (or monitor-chan a remote one)"))
-      (ev/give (watched 3) [:proc-monitor (watched 2) tag ch])))
+        (ensure-reaper watched))))
   ch)
 
 (defn link
