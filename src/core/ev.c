@@ -494,8 +494,38 @@ void janet_async_start(JanetStream *stream, JanetAsyncMode mode, JanetEVCallback
     janet_await();
 }
 
+static void handle_timeout_worker(JanetTimeout to, int cancel);
+
+/* Remove every operation-scoped deadline owned by `fiber`.
+ *
+ * A timed wait arms a deadline, and the wait usually completes long before it.
+ * sched_id alone cannot retire that entry: it only blocks *delivery* while the
+ * ids differ, so a later schedule that lands on the captured id fires a
+ * deadline for an operation that already finished. That is how a completed
+ * `net/accept` used to abort unrelated arithmetic thousands of instructions
+ * later, and why the same expiry could be delivered more than once.
+ *
+ * Resuming is the authoritative "that operation is over" event, so retiring
+ * here keeps the queue bounded by genuinely pending waits. `curr_fiber` entries
+ * are ev/deadline's explicit user-armed cancellations, not operation waits, and
+ * are left alone. The heap holds one entry per concurrently waiting fiber, so
+ * this scan is tiny and paid only on resume. */
+static void janet_drop_deadlines_for(JanetFiber *fiber) {
+    size_t i = 0;
+    while (i < janet_vm.tq_count) {
+        JanetTimeout t = janet_vm.tq[i];
+        if (t.curr_fiber == NULL && t.fiber == fiber) {
+            pop_timeout(i);
+            handle_timeout_worker(t, 1);
+            continue;
+        }
+        i++;
+    }
+}
+
 void janet_fiber_did_resume(JanetFiber *fiber) {
     janet_async_end(fiber);
+    janet_drop_deadlines_for(fiber);
 }
 
 static void janet_stream_checktoclose(JanetStream *stream) {
@@ -894,7 +924,12 @@ void janet_await(void) {
     janet_signalv(JANET_SIGNAL_EVENT, janet_wrap_nil());
 }
 
-/* Set timeout for the current root fiber */
+/* Set timeout for the operation that is about to suspend.
+ *
+ * The task identity is root_fiber: only it carries the scheduler flag that
+ * janet_cancel requires, and a deadline to a non-task child fiber can never be
+ * delivered. What must be operation-scoped is the lifetime of the entry, not
+ * this pointer -- see janet_drop_deadlines_for. */
 void janet_addtimeout(double sec) {
     JanetFiber *fiber = janet_vm.root_fiber;
     JanetTimeout to;
@@ -2363,6 +2398,11 @@ int janet_loop_done(void) {
              janet_atomic_load(&janet_vm.listener_count));
 }
 
+/* Sample expired timers and ready I/O without blocking or running tasks.
+ * Used by ev/pump, which must never re-enter the task scheduler from inside a
+ * live fiber. */
+static void janet_loop1_poll_now(void);
+
 JanetFiber *janet_loop1(void) {
     /* Schedule expired timers */
     JanetTimeout to;
@@ -2442,7 +2482,16 @@ JanetFiber *janet_loop1(void) {
              * otherwise starve timers/channel-polling forever — the
              * spawn queue never drains). No supervisor event: nothing
              * completed. Resume value ignored via RESUME_NO_USEVAL. */
-            janet_schedule_signal(task.fiber, task.value, task.sig);
+            /* Re-queue transparently. The wake signal has ALREADY been
+             * consumed by the resume above: re-arming it would replay a
+             * JANET_SIGNAL_ERROR into the fiber's next resume, and once
+             * janet_continue_signal has smuggled that error into the status
+             * bits it is re-raised on every later turn. Under quanta that
+             * turned one expired deadline into a permanently replaying
+             * "timeout" that surfaced in unrelated arithmetic (and, for
+             * JANET_SIGNAL_OK, could overwrite a real wake value). Resume
+             * with a plain OK and no value. */
+            janet_schedule_signal(task.fiber, janet_wrap_nil(), JANET_SIGNAL_OK);
             break;
         }
         if (NULL == sv) {
@@ -2461,7 +2510,8 @@ JanetFiber *janet_loop1(void) {
         }
     }
 
-    /* Poll for events */
+    /* Poll for events. A non-blocking turn still samples ready I/O, but with
+     * a zero deadline so the OS can never delay the caller. */
     if (janet_vm.tq_count || janet_atomic_load(&janet_vm.listener_count)) {
         JanetTimeout to;
         memset(&to, 0, sizeof(to));
@@ -2499,6 +2549,33 @@ JanetFiber *janet_loop1(void) {
 
     /* No fiber was interrupted */
     return NULL;
+}
+
+/* Expire due deadlines and sample ready I/O once, with a zero deadline so the
+ * OS can never delay the caller. Task fibers are deliberately NOT run: resuming
+ * them swaps janet_vm.fiber and the C stack, which is only safe from the top of
+ * the scheduler loop. */
+static void janet_loop1_poll_now(void) {
+    JanetTimeout to;
+    JanetTimestamp now = ts_now();
+    while (peek_timeout(&to) && to.when <= now) {
+        pop_timeout(0);
+        if (to.curr_fiber != NULL) {
+            if (janet_fiber_can_resume(to.curr_fiber)) {
+                janet_cancel(to.fiber, janet_cstringv("deadline expired"));
+            }
+        } else if (to.fiber->sched_id == to.sched_id) {
+            if (to.is_error) {
+                janet_cancel(to.fiber, janet_cstringv("timeout"));
+            } else {
+                janet_schedule(to.fiber, janet_wrap_nil());
+            }
+        }
+        handle_timeout_worker(to, 0);
+    }
+    if (janet_vm.tq_count || janet_atomic_load(&janet_vm.listener_count)) {
+        janet_loop1_impl(1, ts_now());
+    }
 }
 
 /* Same as janet_interpreter_interrupt, but will also
@@ -3995,7 +4072,14 @@ JANET_CORE_FN(cfun_ev_go,
               "can be provided as a supervisor. When various events occur "
               "in the newly scheduled fiber, an event will be pushed to the "
               "supervisor. If not provided, the new fiber will inherit the "
-              "current supervisor.") {
+              "current supervisor.\n\n"
+              "The fiber does NOT start immediately. Queued fibers make "
+              "progress only when the event loop runs, which happens when the "
+              "current fiber suspends or when the loop is pumped explicitly. "
+              "A main fiber that loops without suspending therefore starves "
+              "every `ev/go` fiber. Call `(ev/pump)` once per iteration to "
+              "drive the queue from a non-yielding loop such as a render "
+              "frame, or `(ev/sleep 0)` to also yield the current fiber.") {
     janet_arity(argc, 1, 3);
     Janet value = argc >= 2 ? argv[1] : janet_wrap_nil();
     void *supervisor = janet_optabstract(argv, argc, 2, &janet_channel_type, janet_vm.root_fiber->supervisor_channel);
@@ -6600,6 +6684,32 @@ JANET_NO_RETURN void janet_sleep_await(double sec) {
     janet_await();
 }
 
+JANET_CORE_FN(cfun_ev_pump,
+              "(ev/pump)",
+              "Run one non-blocking turn of the event loop and return. Any ready "
+              "task fiber runs, and ready I/O is sampled with a zero deadline, "
+              "but the call never waits: it cannot be delayed by a pending "
+              "timer or an idle stream. Call it once per frame from a render "
+              "loop to let `ev/go` fibers and `ev` listeners make progress "
+              "without suspending the caller. Returns nil. `ev/sleep 0` is the "
+              "suspending alternative; it additionally yields the current "
+              "fiber.") {
+    janet_fixarity(argc, 0);
+    (void) argv;
+    /* Run one non-blocking scheduler turn.
+     *
+     * This must not re-enter janet_loop1 inside the calling frame: the loop
+     * resumes task fibers, which swaps janet_vm.fiber and the C stack out from
+     * under the caller (observed as a bus error). So pump never runs a task
+     * directly. It first samples expired timers and ready I/O with a
+     * zero-deadline poll that cannot block, then suspends with a zero-duration
+     * sleep. Once parked, the ordinary driver resumes queued task fibers and
+     * the timer wakes us immediately, so a pump costs one scheduler round trip
+     * and stays in the microseconds. */
+    janet_loop1_poll_now();
+    janet_sleep_await(0.0);
+}
+
 JANET_CORE_FN(cfun_ev_sleep,
               "(ev/sleep sec)",
               "Suspend the current fiber for sec seconds without blocking the event loop.") {
@@ -6700,7 +6810,11 @@ JANET_CORE_FN(janet_cfun_stream_read,
               "stream. `n` can also be `:all` to read into the buffer until "
               "end of stream. Optionally provide a buffer, `buf`, to write "
               "into and `timeout` in seconds after which to cancel the "
-              "operation and raise an error. Returns the buffer if the read "
+              "operation and raise an error. The timeout applies to this read "
+              "alone: expiry resumes only the waiting fiber, and a completed "
+              "read retires its own deadline, so repeated polling never "
+              "accumulates timers that fire into unrelated work. Returns the "
+              "buffer if the read "
               "was successful or nil if end-of-stream reached. Raises "
               "an error if there were problems with the IO operation.") {
     janet_arity(argc, 2, 4);
@@ -6964,6 +7078,7 @@ void janet_lib_ev(JanetTable *env) {
         JANET_CORE_REG("ev/give-supervisor", cfun_ev_give_supervisor),
         JANET_CORE_REG("ev/interrupt", cfun_ev_interrupt),
         JANET_CORE_REG("ev/timeslice", cfun_ev_timeslice),
+        JANET_CORE_REG("ev/pump", cfun_ev_pump),
         JANET_CORE_REG("ev/sleep", cfun_ev_sleep),
         JANET_CORE_REG("ev/deadline", cfun_ev_deadline),
         JANET_CORE_REG("ev/cancel", cfun_ev_cancel),

@@ -1013,6 +1013,12 @@ JANET_CORE_FN(cfun_stream_accept,
               "(net/accept stream &opt timeout)",
               "Get the next connection on a server stream. This would usually be called in a loop in a dedicated fiber. "
               "Takes an optional timeout in seconds, after which will raise an error. "
+              "The timeout belongs to THIS call: when it expires the waiting "
+              "fiber is resumed with an error, and a completed wait retires its "
+              "own deadline, so an expired poll cannot raise into unrelated "
+              "code later. To poll without arming an exception, omit the "
+              "timeout and drive the wait from a fiber you cancel yourself, or "
+              "use `ev/pump` to sample listeners from a render loop. "
               "Returns a new duplex stream which represents a connection to the client.") {
     janet_arity(argc, 1, 2);
     JanetStream *stream = janet_getabstract(argv, 0, &janet_stream_type);
@@ -1027,7 +1033,9 @@ JANET_CORE_FN(cfun_stream_read,
               "Read up to n bytes from a stream, suspending the current fiber until the bytes are available. "
               "`n` can also be the keyword `:all` to read into the buffer until end of stream. "
               "If less than n bytes are available (and more than 0), will push those bytes and return early. "
-              "Takes an optional timeout in seconds, after which will raise an error. "
+              "Takes an optional timeout in seconds, after which will raise an error for "
+              "this read only. A completed read retires its own deadline, so polling "
+              "repeatedly does not accumulate timers that fire into later, unrelated work. "
               "Returns a buffer with up to n more bytes in it, or raises an error if the read failed.") {
     janet_arity(argc, 2, 4);
     JanetStream *stream = janet_getabstract(argv, 0, &janet_stream_type);

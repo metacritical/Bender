@@ -1840,8 +1840,21 @@ JANET_API void janet_schedule_soon(JanetFiber *fiber, Janet value, JanetSignal s
 JANET_NO_RETURN JANET_API void janet_await(void);
 JANET_NO_RETURN JANET_API void janet_sleep_await(double sec);
 
-/* For use inside listeners - adds a timeout to the current fiber, such that
- * it will be resumed after sec seconds if no other event schedules the current fiber. */
+/* Arm an operation-scoped deadline for the wait the current fiber is about to
+ * suspend on. If no other event schedules that fiber first, the loop resumes it
+ * after `sec` seconds: janet_addtimeout raises an error, janet_addtimeout_nil
+ * resumes with nil.
+ *
+ * Scope: the deadline belongs to THIS operation. Expiry cancels the waiting
+ * task fiber (never an arbitrary C stack), and resuming that fiber retires its
+ * pending deadlines, so a completed wait leaves nothing behind to fire into
+ * later, unrelated work. A timeout therefore cannot interrupt the root fiber
+ * mid-computation, and repeated poll-shaped calls cannot accumulate live
+ * timers. Arm it immediately before suspending - the deadline is not tied to
+ * the operation object, only to the fiber that suspends.
+ *
+ * The task identity is janet_vm.root_fiber because only a task fiber carries
+ * the scheduler flag janet_cancel requires. */
 JANET_API void janet_addtimeout(double sec);
 JANET_API void janet_addtimeout_nil(double sec);
 JANET_API void janet_ev_inc_refcount(void);
