@@ -1082,7 +1082,17 @@ static void janet_chan_init(JanetChannel *chan, int32_t limit, int threaded, int
     /* Step 4.1: isolated channels pin to the home lane (this thread's
      * VM — one VM per thread, so the address is the lane identity).
      * Unmarshal re-inits, so ownership follows the value. */
-    chan->owner = isolated ? &janet_vm : NULL;
+    /* Home-lane pin. Isolated channels were already pinned (lock-free
+     * single-VM contract). Plain channels get the same pin for a
+     * different and much worse reason: a plain channel has NO lock and
+     * NO marshal copy, so a worker lane pushing into a main-VM channel
+     * corrupts the queue header of a VM it does not own -- and because
+     * the value is never copied the reader can never see it. Observed
+     * as a silent hang (no error, no data) when one proc spawned on a
+     * lane pushed to a plain ev/chan. Pinning turns that into the same
+     * loud "use ev/thread-chan" panic isolated channels already give.
+     * Threaded channels stay unpinned: they take the lock and copy. */
+    chan->owner = (isolated || (!threaded)) ? &janet_vm : NULL;
     janet_q_init(&chan->items);
     janet_q_init(&chan->read_pending);
     janet_q_init(&chan->write_pending);
@@ -1779,16 +1789,27 @@ static int janet_channel_push_with_lock(JanetChannel *channel, Janet x, int mode
     return 0;
 }
 
+/* A channel is home-lane pinned when it takes no lock and copies nothing
+ * (plain and isolated). Touching one from another lane is corruption, not
+ * merely a lost value, and for a zero-capacity channel it parks a fiber into
+ * a pending queue whose owning VM is not polling this thread -- an unkillable
+ * silent hang. One predicate so push, try-push and pop agree. */
+static int janet_chan_foreign_lane(JanetChannel *channel) {
+    return NULL != channel->owner && channel->owner != &janet_vm;
+}
+
+static JANET_NO_RETURN void janet_chan_foreign_lane_panic(JanetChannel *channel) {
+    janet_panic(channel->isolated
+                ? "isolated channel used from a foreign lane (pinned to its home lane; use ev/thread-chan across lanes)"
+                : "plain ev/chan used from a foreign lane (it takes no lock and copies nothing, so a blocking write parks forever and a buffered one silently loses the value -- use ev/thread-chan across lanes)");
+}
+
 int janet_channel_push(JanetChannel *channel, Janet x, int mode) {
     /* Step 4.1 home-lane pin: isolated channels are lock-free, so a
      * foreign thread would race silently — refuse loudly instead
      * (use ev/thread-chan across threads). One predictable branch on
      * the non-isolated fast path. */
-    if (channel->isolated && channel->owner != &janet_vm) {
-        janet_panic("isolated channel used from a foreign thread "
-                    "(pinned to its home lane; use ev/thread-chan "
-                    "across threads)");
-    }
+    if (janet_chan_foreign_lane(channel)) janet_chan_foreign_lane_panic(channel);
     janet_chan_lock(channel);
     return janet_channel_push_with_lock(channel, x, mode);
 }
@@ -1882,11 +1903,7 @@ static int janet_channel_pop_with_lock(JanetChannel *channel, Janet *item, int i
 
 int janet_channel_pop(JanetChannel *channel, Janet *item, int is_choice) {
     /* Step 4.1 home-lane pin (see push). */
-    if (channel->isolated && channel->owner != &janet_vm) {
-        janet_panic("isolated channel used from a foreign thread "
-                    "(pinned to its home lane; use ev/thread-chan "
-                    "across threads)");
-    }
+    if (janet_chan_foreign_lane(channel)) janet_chan_foreign_lane_panic(channel);
     janet_chan_lock(channel);
     return janet_channel_pop_with_lock(channel, item, is_choice);
 }
