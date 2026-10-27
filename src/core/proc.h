@@ -41,6 +41,16 @@ typedef struct JanetProcess {
     int isolated_heap;
 } JanetProcess;
 
+/* Depth cap for transitive proc->fiber->env->proc marking inside a SCOPED
+ * minor (see janet_procat_mark). A chain of proc captures would otherwise be
+ * walked to its full length on every per-owner minor, which is O(N^2) across a
+ * spawn burst. Global collections ignore this and mark transitively.
+ * 16 comfortably covers genuine shared state between neighbouring procs while
+ * making the per-minor walk independent of chain length. */
+#define JANET_PROC_MARK_CHAIN_DEPTH 16
+
+extern JANET_THREAD_LOCAL int janet_proc_mark_depth;
+
 /* Abstract type (defined in proc.c, registered with the core). */
 extern const JanetAbstractType janet_proc_type;
 

@@ -184,6 +184,10 @@ static Janet janet_proc_spawn_routed(JanetFunction *func, int32_t cap) {
 }
 
 /* Worker-local: spawn-serial -> local proc abstract. */
+/* Current proc->fiber->proc nesting depth during marking (see
+ * janet_procat_mark and JANET_PROC_MARK_CHAIN_DEPTH). */
+JANET_THREAD_LOCAL int janet_proc_mark_depth = 0;
+
 static JANET_THREAD_LOCAL JanetTable *janet_lane_local;
 
 static int32_t janet_os_cpu_count(void) {
@@ -765,7 +769,37 @@ static int janet_procat_mark(void *p, size_t size) {
         abort();
     }
 #endif
-    if (NULL != proc->fiber) janet_mark(janet_wrap_fiber(proc->fiber));
+    if (NULL != proc->fiber) {
+        /* Proc captures proc is a real GC edge, so a full transitive walk is
+         * correct -- but only a GLOBAL collection needs it.
+         *
+         * A scoped minor (gc_minor_phase) sweeps one owner's heap and must
+         * only stop blocks on THAT heap from being freed. Proving a foreign
+         * fiber's full reachability is the job of the collection that owns and
+         * sweeps it. Since every proc is its own fiber with its own gc_owner, a
+         * chain of "each proc captures the next" made this line walk the entire
+         * remaining chain on EVERY minor: O(remaining) per minor x N minors =
+         * O(N^2). Measured on the trampoline wave, the identical computation
+         * wired through channels ran 204x faster at n=32000 (60.0ms vs
+         * 12260.8ms), isolating this edge as the cause.
+         *
+         * Marking the fiber shallowly instead is UNSOUND (suite-proc loses a
+         * parked fiber's in-flight recv value). So keep the edge and bound its
+         * depth: proc -> fiber -> closure env -> proc -> ... is walked transitively
+         * for the first JANET_PROC_MARK_CHAIN_DEPTH hops and shallow after that.
+         * The blocks are still marked, so nothing reachable through a bounded
+         * prefix is freed, and the quadratic collapses because depth -- not
+         * chain length -- caps the walk. */
+
+        if (!janet_vm.gc_minor_phase ||
+                janet_proc_mark_depth < JANET_PROC_MARK_CHAIN_DEPTH) {
+            janet_proc_mark_depth++;
+            janet_mark(janet_wrap_fiber(proc->fiber));
+            janet_proc_mark_depth--;
+        } else {
+            janet_gc_mark_fiber_shallow(proc->fiber);
+        }
+    }
     /* Tombstoned (type == NULL) mbox/sup are gone forever: prune the
      * stale pointer instead of marking freed memory. A live fiber's
      * env can hold a proc value whose channels were torn down after
