@@ -1,8 +1,16 @@
 # Known issue: child-fiber completion minor sweeps captured parent locals
 
 ## Status
-OPEN. Reproduced deterministically on 14b66fb3 (and on 2421de6e, so
-pre-existing, not caused by the d220b6d0/14b66fb3 ev deadline fixes).
+FIXED (b4a28cb1). Reproduced deterministically on 14b66fb3 and on 2421de6e,
+so pre-existing; not caused by the d220b6d0/14b66fb3 ev deadline fixes.
+
+Root cause: janet_gc_barrier recorded a cross-owner edge only under the
+CONTAINER's owner bucket, while janet_xfb_mark_owned looks up the SWEEPING
+fiber's owner bucket. A parent-heap array holding values born on a child
+fiber's heap was therefore invisible to that child's minor, which swept the
+parent's array as its own garbage. Recording the edge under the value's owner
+as well makes marking symmetric. Regression: test/suite-fiber-capture.janet
+(fails 5/7 before, passes 7/7 after). suite-proc 98/99 -> 99/99.
 
 ## Minimal reproducer (no channels, no procs, no strings-from-IO)
 
