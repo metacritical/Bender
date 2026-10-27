@@ -1064,8 +1064,16 @@ void janet_sweep(void) {
  * distinguishes per object, not per page. See janet_gc_barrier and
  * janet_collect_minor. */
 
-#define JANET_SLAB_PAGE_SIZE 16384
-#define JANET_SLAB_PAGE_MASK (~(uintptr_t)0x3FFF)
+/* Page size is a power of two so janet_slab_page_for can mask a pointer down
+ * to its page base. 4 KB (one OS page) is the smallest safe choice: the header
+ * (sizeof(JanetSlabPage) ~ 48 bytes) plus at least one 512-byte slot still fit
+ * in JANET_SLAB_USABLE, and aligned allocation at 4 KB is universally
+ * supported. This is what makes a fresh process cost ~4 KB instead of ~16 KB.
+ * Second pages are only claimed when a class actually needs more room, so a
+ * short-lived process that allocates a few hundred bytes never pays the old
+ * 16 KB-per-claim price. */
+#define JANET_SLAB_PAGE_SIZE 4096
+#define JANET_SLAB_PAGE_MASK (~(uintptr_t)0xFFF)
 #define JANET_SLAB_MAGIC 0x4A534C41u
 #define JANET_SLAB_OLD_AGE 2
 
