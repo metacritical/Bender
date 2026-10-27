@@ -2398,13 +2398,11 @@ int janet_loop_done(void) {
              janet_atomic_load(&janet_vm.listener_count));
 }
 
-/* Sample expired timers and ready I/O without blocking or running tasks.
- * Used by ev/pump, which must never re-enter the task scheduler from inside a
- * live fiber. */
-static void janet_loop1_poll_now(void);
-
-JanetFiber *janet_loop1(void) {
-    /* Schedule expired timers */
+/* Service every deadline that has come due. A deadline either cancels the
+ * waiting task fiber (operation timeouts, ev/deadline) or wakes it with nil.
+ * Shared by the blocking loop and by ev/pump's non-blocking sample so both
+ * deliver identical semantics. */
+static void janet_expire_timeouts(void) {
     JanetTimeout to;
     JanetTimestamp now = ts_now();
     while (peek_timeout(&to) && to.when <= now) {
@@ -2413,18 +2411,25 @@ JanetFiber *janet_loop1(void) {
             if (janet_fiber_can_resume(to.curr_fiber)) {
                 janet_cancel(to.fiber, janet_cstringv("deadline expired"));
             }
-        } else {
-            /* This is a timeout (for a function call, not a whole fiber) */
-            if (to.fiber->sched_id == to.sched_id) {
-                if (to.is_error) {
-                    janet_cancel(to.fiber, janet_cstringv("timeout"));
-                } else {
-                    janet_schedule(to.fiber, janet_wrap_nil());
-                }
+        } else if (to.fiber->sched_id == to.sched_id) {
+            /* A timeout for a suspended operation, not a whole fiber. */
+            if (to.is_error) {
+                janet_cancel(to.fiber, janet_cstringv("timeout"));
+            } else {
+                janet_schedule(to.fiber, janet_wrap_nil());
             }
         }
         handle_timeout_worker(to, 0);
     }
+}
+
+/* Sample expired timers and ready I/O without blocking or running tasks.
+ * Used by ev/pump, which must never re-enter the task scheduler from inside a
+ * live fiber. */
+static void janet_loop1_poll_now(void);
+
+JanetFiber *janet_loop1(void) {
+    janet_expire_timeouts();
 
     /* Run scheduled fibers unless interrupts need to be handled. */
     while (janet_vm.spawn.head != janet_vm.spawn.tail) {
@@ -2556,23 +2561,7 @@ JanetFiber *janet_loop1(void) {
  * them swaps janet_vm.fiber and the C stack, which is only safe from the top of
  * the scheduler loop. */
 static void janet_loop1_poll_now(void) {
-    JanetTimeout to;
-    JanetTimestamp now = ts_now();
-    while (peek_timeout(&to) && to.when <= now) {
-        pop_timeout(0);
-        if (to.curr_fiber != NULL) {
-            if (janet_fiber_can_resume(to.curr_fiber)) {
-                janet_cancel(to.fiber, janet_cstringv("deadline expired"));
-            }
-        } else if (to.fiber->sched_id == to.sched_id) {
-            if (to.is_error) {
-                janet_cancel(to.fiber, janet_cstringv("timeout"));
-            } else {
-                janet_schedule(to.fiber, janet_wrap_nil());
-            }
-        }
-        handle_timeout_worker(to, 0);
-    }
+    janet_expire_timeouts();
     if (janet_vm.tq_count || janet_atomic_load(&janet_vm.listener_count)) {
         janet_loop1_impl(1, ts_now());
     }
