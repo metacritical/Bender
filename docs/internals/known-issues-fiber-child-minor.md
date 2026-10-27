@@ -78,3 +78,58 @@ can collide with a live proc serial and misroute mail. A strict identity
 check (`(= (e :mbx) (t 3))`) fixes routing but HANGS suite-tasklet, because
 a marshalled tasklet pid legitimately carries a COPY of the channel. A
 correct fix needs a distinct namespace discriminator in the pid shape.
+
+---
+
+# Correction: the "spawn queue walked per minor" quadratic does not exist
+
+Status: my earlier claim (to the user and in the standing plan) was WRONG on
+this second point. Defect 1 (proc-capture transitive mark) was real and is
+fixed in 77536ea9. "Defect 2 -- spawn queue walked in full per minor" is **not**
+a real bottleneck, and no fix should be implemented for it.
+
+## Evidence
+
+Instrumented `janet_ev_mark_shallow` to record queue depth across a 40k spawn
+burst:
+
+    [EVS] calls=10000 maxq=100 avgq=-1.5 cur=42
+    [EVS] calls=20000 maxq=100 avgq=-1.2 cur=-98
+    [EVS] calls=30000 maxq=100 avgq=-0.4 cur=-147
+    [EVS] calls=40000 maxq=100 avgq=-0.2 cur=2
+    40000 215.4
+
+The spawn queue **never exceeds 100 entries** during a 40k burst: each spawned
+fiber runs to completion almost immediately, so the queue drains as fast as it
+fills. The per-minor walk is O(1) in practice.
+
+## Why the earlier reading was wrong
+
+I inferred a quadratic from noisy wall-clock readings at increasing N. Those
+were dominated by **swap pressure** (7.5GB/8GB swap in use, OrbStack holding
+1.7GB), not algorithmic cost. Best-of-N on the same binaries shows spawn is
+roughly FLAT:
+
+    n=20000: 3.57 us/proc
+    n=40000: 17.90 us/proc   <- swap spike
+    n=80000: 4.97 us/proc
+    n=100000: 6.91 us/proc
+
+On this machine any scaling claim must use min-of-N across fresh processes and
+be checked against `vm.swapusage` first.
+
+## What is still superlinear
+
+Post-defect-1 wave timings are stable and reproducible:
+
+    n=32000  wave ~171-216ms   (~6 us/hop)
+    n=100000 wave ~1.9-2.2s    (~20 us/hop)
+
+Per-hop cost still rises with N, so *something* remains superlinear, but it is
+NOT the spawn-queue walk. Untested candidates: xfb remember-set bucket growth
+with cross-proc edges, per-fiber minor setup cost, swap/page-fault cost at
+large live-set sizes.
+
+Do NOT implement an owner-bucketed spawn-queue mark: there is nothing to win,
+and the owner-filtered variant additionally proved UNSOUND -- it dropped a
+monitored proc's queued crash-reason wakeup and failed suite-proc test 125.
