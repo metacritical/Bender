@@ -25,13 +25,25 @@
 (ev/sleep 0.4)
 (assert (= :ran (ev/take ran)) "worker lane ran the thunk (observed via thread-chan)")
 
-# The value pushed from a foreign lane is NOT observable here: this is the
-# documented hazard, and thread-chan is the supported mechanism.
+# A worker lane receives a MARSHALLED COPY of captured values, so a plain
+# channel it looks at belongs to another lane. Using it must raise, not
+# silently swallow the value.
 (def plain (ev/chan 8))
-(proc/spawn (fn [] (ev/give plain :lost)) 8)
-(ev/sleep 0.4)
+(def err-ch (ev/thread-chan 4))
+(proc/spawn (fn []
+              (try (ev/give plain :lost)
+                   ([e] (ev/give err-ch (string e)))))
+            8)
+(ev/sleep 0.5)
 (assert (nil? (ev/try-take plain))
-        "a plain channel written from a worker lane is detached (use ev/thread-chan)")
+        "a worker lane's write never reaches the original plain channel")
+(def emsg (ev/take err-ch))
+(assert (string/find "MARSHALLED COPY" emsg)
+        (string "plain channel from a worker lane must error loudly, got: " emsg))
+
+# A same-thread marshal round-trip on the MAIN VM stays legal.
+(def rt (-> (do (def rtch (ev/chan 4)) (ev/give rtch :v) rtch) marshal unmarshal))
+(assert (= :v (ev/take rt)) "main-VM marshal round-trip of a channel still works")
 
 # thread-chan DOES cross lanes.
 (def tchan (ev/thread-chan 8))

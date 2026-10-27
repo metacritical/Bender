@@ -257,6 +257,12 @@ struct JanetChannel {
      * ones (same transit ownership) but take no lock: single-VM by
      * contract (tasklet mailboxes). Cross-thread use is user error. */
     int isolated;
+    /* True when this channel arrived by UNMARSHAL, i.e. it is a private
+     * copy of a channel that really lives in another lane. A plain (unlocked,
+     * uncopied) channel in that state is a trap: writes land in the copy and
+     * the original owner never observes them, with no error. Set from the
+     * unmarshal path only; cleared on fresh construction. */
+    int detached_copy;
     /* Step 4.1 home-lane pin: the creating/unmarshalling thread's VM.
      * Isolated channels are lock-free, so foreign-thread use would be
      * a silent race; push/pop refuse it loudly instead. Plain and
@@ -1092,6 +1098,7 @@ static void janet_chan_init(JanetChannel *chan, int32_t limit, int threaded, int
      * lane pushed to a plain ev/chan. Pinning turns that into the same
      * loud "use ev/thread-chan" panic isolated channels already give.
      * Threaded channels stay unpinned: they take the lock and copy. */
+    chan->detached_copy = 0;
     chan->owner = (isolated || (!threaded)) ? &janet_vm : NULL;
     janet_q_init(&chan->items);
     janet_q_init(&chan->read_pending);
@@ -1795,13 +1802,20 @@ static int janet_channel_push_with_lock(JanetChannel *channel, Janet x, int mode
  * a pending queue whose owning VM is not polling this thread -- an unkillable
  * silent hang. One predicate so push, try-push and pop agree. */
 static int janet_chan_foreign_lane(JanetChannel *channel) {
+    /* A detached copy of a plain channel is the marshalled echo of a channel
+     * that lives in another lane: using it would move values into a queue its
+     * real owner never reads, silently. Treat that exactly like a foreign
+     * lane, because that is what it is. */
+    if (channel->detached_copy && !channel->is_threaded) return 1;
     return NULL != channel->owner && channel->owner != &janet_vm;
 }
 
 static JANET_NO_RETURN void janet_chan_foreign_lane_panic(JanetChannel *channel) {
     janet_panic(channel->isolated
                 ? "isolated channel used from a foreign lane (pinned to its home lane; use ev/thread-chan across lanes)"
-                : "plain ev/chan used from a foreign lane (it takes no lock and copies nothing, so a blocking write parks forever and a buffered one silently loses the value -- use ev/thread-chan across lanes)");
+                : (channel->detached_copy
+                   ? "plain ev/chan arrived as a MARSHALLED COPY of a channel owned by another lane; writes to it would be lost silently (pass messages to the worker's own mailbox, or use ev/thread-chan across lanes)"
+                   : "plain ev/chan used from a foreign lane (it takes no lock and copies nothing, so a blocking write parks forever and a buffered one silently loses the value -- use ev/thread-chan across lanes)"));
 }
 
 int janet_channel_push(JanetChannel *channel, Janet x, int mode) {
@@ -2359,6 +2373,16 @@ static void *janet_chanat_unmarshal(JanetMarshalContext *ctx) {
     if (count < 0) janet_panic("invalid negative channel count");
     if (count > limit) janet_panic("invalid channel count");
     janet_chan_init(abst, limit, is_threaded, isolated);
+    /* Detached only when this unmarshal happens ON A WORKER LANE. Every
+     * proc/spawn onto a lane sends the closure through a threaded control
+     * channel, so the worker receives marshal copies of captured values. A
+     * plain (unlocked, uncopied) channel copy in that position is a trap:
+     * writes land in the copy and the real owner never sees them.
+     *
+     * A same-thread marshal round-trip on the MAIN VM is a supported pattern
+     * (suite-ev marshals a channel and drains it), so it must stay legal --
+     * hence the is_lane_vm test rather than flagging every unmarshal. */
+    abst->detached_copy = janet_vm.is_lane_vm ? 1 : 0;
     abst->closed = !!is_closed;
     int needs_pack = (is_threaded || isolated);
     for (int32_t i = 0; i < count; i++) {
