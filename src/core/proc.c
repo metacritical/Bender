@@ -123,7 +123,65 @@ return NULL;
  * [:pid lane serial ctl] (resolve_mbox speaks tuples, so proc/send
  * works unchanged). Local spawns (proc/spawn-local, lane-internal
  * spawns) call the impl directly. */
+static int32_t janet_os_cpu_count(void);
+static int32_t janet_lanes_start_impl(int32_t count, int affinity);
+
+/* Lazily start the multi-core runtime the first time a proc is spawned.
+ *
+ * The lane machinery only activates once lanes exist, so without this a plain
+ * proc/spawn loop silently uses one core forever while Go and Erlang start
+ * their schedulers at boot. Autostart lives HERE rather than in boot.janet
+ * because boot.janet also runs during image generation, where spawning lanes
+ * hangs the build (observed: janet_boot stuck in the lane join).
+ *
+ * Opt out with JANET_LANES=0; pin a count with JANET_LANES=<n>. Each VM
+ * autostarts once; a failed start leaves lanes at 0 rather than erroring, so a
+ * sandboxed embedder that forbids threads keeps working single-threaded. */
+static void janet_lanes_maybe_autostart(void) {
+    static JANET_THREAD_LOCAL int attempted = 0;
+    if (attempted || janet_lane_count > 0) return;
+    attempted = 1;
+    /* OPT-IN for now, not default-on.
+     *
+     * Autostart is deliberately gated behind JANET_LANES=<n> because turning it
+     * on by default changes proc/spawn's RETURN TYPE from a core/proc object to
+     * a [:pid lane serial ctl] tuple for every caller (measured: it breaks
+     * suite-proc's "spawn returns a proc"). That is a real API break, and it
+     * must not happen silently to code written against the single-VM shape.
+     *
+     * =0 keeps the historic single-VM behaviour, which is also what the test
+     * suite assumes. Once proc handles are uniform across lanes (a local proc
+     * proxy, or a pid tuple that satisfies proc/pid?), the default can flip. */
+    const char *raw = getenv("JANET_LANES");
+    if (NULL == raw || 0 == strcmp(raw, "0")) return;
+    int32_t count = -1;
+    {
+        long v = strtol(raw, NULL, 10);
+        if (v > 0) count = (int32_t) v;
+    }
+    if (count < 0) {
+        count = janet_os_cpu_count() - 1;
+        if (count < 1) count = 1;
+    }
+    if (count > 64) count = 64;
+    /* The worker dispatcher comes from boot; without it we cannot run lanes. */
+    {
+        Janet w = janet_wrap_nil();
+        if (NULL != janet_vm.root_fiber && NULL != janet_vm.root_fiber->env) {
+            w = janet_table_get(janet_vm.root_fiber->env,
+                    janet_ckeywordv("proc-lane-worker"));
+        }
+        if (janet_checktype(w, JANET_NIL) && NULL != janet_vm.top_dyns) {
+            w = janet_table_get(janet_vm.top_dyns,
+                    janet_ckeywordv("proc-lane-worker"));
+        }
+        if (!janet_checktype(w, JANET_FUNCTION)) return;
+    }
+    (void) janet_lanes_start_impl(count, 0);
+}
+
 static Janet janet_proc_spawn_routed(JanetFunction *func, int32_t cap) {
+    janet_lanes_maybe_autostart();
     if (0 == janet_lane_count) return cfun_proc_spawn_impl(func, cap, 0);
     int32_t lane = (janet_lane_rr % janet_lane_count);
     janet_lane_rr++;
@@ -403,6 +461,12 @@ JANET_CORE_FN(cfun_proc_lanes_start,
         if (count < 1) count = 1;
     }
     if (count > 64) count = 64;
+    return janet_wrap_number(janet_lanes_start_impl(count, affinity));
+}
+
+/* The actual lane startup, shared by proc/lanes-start and the lazy autostart.
+ * `count`/`affinity` are already resolved by the caller. */
+static int32_t janet_lanes_start_impl(int32_t count, int affinity) {
     /* Resolve the boot-level dispatcher via the root dyn table
      * (boot.janet stores it: (setdyn :proc-lane-worker ...)). The
      * worker is a Janet function — the thread body accepts a
@@ -536,7 +600,7 @@ JANET_CORE_FN(cfun_proc_lanes_start,
         janet_schedule(disp, janet_wrap_nil());
     }
     janet_lane_count = count;
-    return janet_wrap_number(count);
+    return count;
 }
 
 JANET_CORE_FN(cfun_proc_lanes_policy,
