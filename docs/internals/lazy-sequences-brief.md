@@ -1,8 +1,26 @@
 # Lazy sequences in Janet — design brief and implementation prompt
 
-Status: investigation complete. Every claim below was verified on a live
-`build/bender` (arm64, macOS, `1.43.0-dev`). Two probes crashed the process;
-those crashes are the central finding, not an aside.
+Status: **SHIPPED.** The GC fix landed in `b169bdf0`, the lazy sequence API in
+`08ef950a`, and the design record in `1a2a5b71`; `test/suite-lazy.janet` covers
+all 37 behaviours below and the full suite is green. Every claim in this document
+was verified on a live `build/bender` (arm64, macOS, `1.43.0-dev`) before it was
+written; two probes crashed the process, and those crashes were the central
+finding, not an aside.
+
+What changed during implementation, versus the plan originally recorded here:
+
+- **Only the closure-environment edge needed to be iterative.** The original plan
+  called for a full worklist over every container. Measuring showed every other
+  container marker recurses a fixed number of frames and is bounded by its own
+  size, so the one unbounded edge was sufficient and far less invasive.
+- **A VM-global worklist does not work.** Resetting it at collection entry let an
+  inner collection (marking re-enters: `janet_env_maybe_detach` allocates) discard
+  the outer pass's pending work and sweep live objects. It crashed `suite-lanes`
+  in `janet_dict_find`. The shipped queue is thread-local and saved/restored
+  around each drain.
+- **`recur` remains unnecessary**, as predicted: tail calls already run in
+  constant stack for consumers, and the collector no longer recurses for the
+  structure.
 
 ---
 
