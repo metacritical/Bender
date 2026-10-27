@@ -115,12 +115,20 @@ static void census_fixture(JanetFunction *sum) {
     assert(janet_continue(f, janet_wrap_nil(), &out) == JANET_SIGNAL_OK);
     assert(janet_unwrap_number(out) == 1);
     janet_gcunroot(janet_wrap_fiber(f));
-    /* Only the general PC0 `ldi` retires. PC1 is the specialization's fused
-     * entry jump into L2, and PCs 2..6 are uncounted entirely: that missing
-     * population is why this census cannot produce an upper bound or a
-     * stop-gate verdict. */
+    /* PC0 is the general `ldi`; PC1 is the specialization's fused entry jump
+     * and retires nothing. Inside L2 the guarded test retires PCs 2/3 on every
+     * completed test (twice, plus once for the final false test), the two
+     * arithmetic PCs retire per true iteration, and PC6 only after the poll
+     * passes. Everything else -- calls, branches and other fused regions --
+     * stays uncounted, so no upper bound or gate verdict is available. */
     assert(nx_10_retired[0] == before[0] + 1);
-    for (int pc = 1; pc < 8; pc++) assert(nx_10_retired[pc] == before[pc]);
+    assert(nx_10_retired[1] == before[1]);
+    assert(nx_10_retired[2] == before[2] + 3);
+    assert(nx_10_retired[3] == before[3] + 3);
+    assert(nx_10_retired[4] == before[4] + 2);
+    assert(nx_10_retired[5] == before[5] + 2);
+    assert(nx_10_retired[6] == before[6] + 2);
+    assert(nx_10_retired[7] == before[7]);
     /* Saturation is sticky: a full PC counter reports overflow, never wraps. */
     nx_10_retired[0] = UINT64_MAX;
     nx_10_retired_overflow[0] = 0;
@@ -129,7 +137,7 @@ static void census_fixture(JanetFunction *sum) {
     janet_gcunroot(janet_wrap_fiber(f));
     assert(nx_10_retired[0] == UINT64_MAX);
     assert(nx_10_retired_overflow[0] == 1);
-    puts("native census id=10 coverage=partial gate=unavailable unresolved=fused-pcs,calls,branches");
+    puts("native census id=10 coverage=partial gate=unavailable unresolved=calls,branches,other-fused");
 }
 #endif
 static void retirement_fixture(JanetFunction *sum) {
