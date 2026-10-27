@@ -58,6 +58,49 @@ static void janet_mark_string(const uint8_t *str);
 static void janet_mark_fiber(JanetFiber *fiber);
 static void janet_mark_abstract(void *adata);
 
+/* ------------------------------------------------------------------------
+ * Iterative closure-environment marking.
+ *
+ * Marking used to recurse one C frame per object edge:
+ *   janet_mark -> mark_function -> mark_funcenv -> mark_many -> janet_mark
+ * so a deep chain of closures (a lazy sequence, a recursive builder, deeply
+ * nested generated code) exhausted the C stack inside a collection and
+ * crashed on the guard page instead of raising an error. Measured onset was
+ * ~150k-180k links.
+ *
+ * Only the closure-environment edge needs to be iterative to remove that
+ * unbounded recursion: every other container marker (tuple, array, table,
+ * struct, buffer) recurses through a fixed number of frames and its children
+ * are bounded by the container's own size, whereas an environment chain is
+ * unbounded by construction. Enqueuing environments here makes mark depth
+ * constant for the one edge that grows without limit.
+ *
+ * The queue is thread-local and saved/restored around each drain: marking can
+ * re-enter (janet_env_maybe_detach allocates, which may itself collect), so an
+ * inner operation must not observe or clobber the outer operation's pending
+ * work. It grows with raw realloc for the same reason janet_gcroot does -- a
+ * push must never be able to trigger the collection it is protecting against.
+ * ---------------------------------------------------------------------- */
+static JANET_THREAD_LOCAL JanetFuncEnv **env_queue = NULL;
+static JANET_THREAD_LOCAL size_t env_queue_count = 0;
+static JANET_THREAD_LOCAL size_t env_queue_capacity = 0;
+static JANET_THREAD_LOCAL int env_queue_draining = 0;
+
+static void janet_drain_env_queue(void);
+
+static void janet_env_queue_push(JanetFuncEnv *env) {
+    size_t newcount = env_queue_count + 1;
+    if (newcount > env_queue_capacity) {
+        size_t newcap = env_queue_capacity ? env_queue_capacity * 2 : 64;
+        if (newcap < newcount) newcap = newcount;
+        env_queue = janet_realloc(env_queue, sizeof(JanetFuncEnv *) * newcap);
+        if (NULL == env_queue) JANET_OUT_OF_MEMORY;
+        env_queue_capacity = newcap;
+    }
+    env_queue[env_queue_count] = env;
+    env_queue_count = newcount;
+}
+
 #ifdef JANET_EV
 /* Phase 2b-iii + Erlang-parity residual O(n) fix: a minor's mark phase
  * can flip a threaded abstract's registry "visited this cycle" marker
@@ -393,6 +436,55 @@ static void janet_mark_funcenv(JanetFuncEnv *env) {
     }
 }
 
+/* Drain enqueued closure environments iteratively.
+ *
+ * The outermost caller owns the drain. Nested calls (a marker reached from
+ * inside this loop) only enqueue, so recursion depth stays constant however
+ * long the closure chain is. Marking can re-enter -- janet_env_maybe_detach
+ * allocates, which may collect -- so the queue is saved and restored around
+ * the drain: an inner operation must never consume or discard the outer
+ * operation's pending work.
+ *
+ * env_queue grows with raw realloc, so pushing can never trigger a collection
+ * (the same rule janet_gcroot follows). */
+static void janet_drain_env_queue(void) {
+    JanetFuncEnv **outer_queue;
+    size_t outer_count;
+    size_t outer_capacity;
+    if (env_queue_draining) return;
+    /* Take ownership of what is queued so far. */
+    outer_queue = env_queue;
+    outer_count = env_queue_count;
+    /* Install a fresh private queue for this drain. */
+    env_queue = NULL;
+    env_queue_count = 0;
+    env_queue_capacity = 0;
+    env_queue_draining = 1;
+    while (outer_count) {
+        JanetFuncEnv *env = outer_queue[--outer_count];
+        /* Any recursion inside this call enqueues onto the private queue. */
+        janet_mark_funcenv(env);
+        /* Absorb whatever the private queue accumulated. */
+        if (env_queue_count) {
+            size_t need = outer_count + env_queue_count;
+            if (need > outer_count) {
+                JanetFuncEnv **grown = janet_realloc(outer_queue, sizeof(JanetFuncEnv *) * need);
+                if (NULL == grown) JANET_OUT_OF_MEMORY;
+                outer_queue = grown;
+            }
+            memcpy(outer_queue + outer_count, env_queue, sizeof(JanetFuncEnv *) * env_queue_count);
+            outer_count += env_queue_count;
+            env_queue_count = 0;
+        }
+    }
+    /* Restore the caller's queue state. */
+    janet_free(env_queue);
+    env_queue = outer_queue;
+    env_queue_count = outer_count;
+    env_queue_capacity = outer_count;
+    env_queue_draining = 0;
+}
+
 /* GC helper to mark a FuncDef */
 static void janet_mark_funcdef(JanetFuncDef *def) {
     int32_t i;
@@ -425,9 +517,10 @@ static void janet_mark_function(JanetFunction *func) {
         /* this should always be true, except if function is only partially constructed */
         numenvs = func->def->environments_length;
         for (i = 0; i < numenvs; ++i) {
-            janet_mark_funcenv(func->envs[i]);
+            janet_env_queue_push(func->envs[i]);
         }
         janet_mark_funcdef(func->def);
+        janet_drain_env_queue();
     }
 }
 
