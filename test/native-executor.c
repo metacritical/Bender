@@ -102,6 +102,36 @@ static void parity(JanetFunction *fn, const JanetNativeCode *code, int budget, i
     janet_gcunroot(janet_wrap_fiber(a)); janet_gcunroot(janet_wrap_fiber(b));
     janet_vm.quantum = 0;
 }
+#ifdef JANET_NATIVE_RETIRE_CENSUS
+/* The generated per-definition census is driven directly, so this block also
+ * documents its deliberate incompleteness: only general emitter branches call
+ * NX_RETIRE, so the fused numeric-sum loop retires no PCs here at all. */
+static void census_fixture(JanetFunction *sum) {
+    Janet out;
+    uint64_t before[8];
+    memcpy(before, nx_10_retired, sizeof before);
+    JanetFiber *f = spawn(sum, 2);
+    janet_vm.quantum = 0;
+    assert(janet_continue(f, janet_wrap_nil(), &out) == JANET_SIGNAL_OK);
+    assert(janet_unwrap_number(out) == 1);
+    janet_gcunroot(janet_wrap_fiber(f));
+    /* Only the general PC0 `ldi` retires. PC1 is the specialization's fused
+     * entry jump into L2, and PCs 2..6 are uncounted entirely: that missing
+     * population is why this census cannot produce an upper bound or a
+     * stop-gate verdict. */
+    assert(nx_10_retired[0] == before[0] + 1);
+    for (int pc = 1; pc < 8; pc++) assert(nx_10_retired[pc] == before[pc]);
+    /* Saturation is sticky: a full PC counter reports overflow, never wraps. */
+    nx_10_retired[0] = UINT64_MAX;
+    nx_10_retired_overflow[0] = 0;
+    f = spawn(sum, 0);
+    assert(janet_continue(f, janet_wrap_nil(), &out) == JANET_SIGNAL_OK);
+    janet_gcunroot(janet_wrap_fiber(f));
+    assert(nx_10_retired[0] == UINT64_MAX);
+    assert(nx_10_retired_overflow[0] == 1);
+    puts("native census id=10 coverage=partial gate=unavailable unresolved=fused-pcs,calls,branches");
+}
+#endif
 static void retirement_fixture(JanetFunction *sum) {
     Janet out;
     retirement_enabled = 1;
@@ -245,6 +275,9 @@ int main(int argc, char **argv) {
 #endif
     attach(sum, &nx_10_code); attach(nested, &nx_11_code);
     retirement_fixture(sum);
+#ifdef JANET_NATIVE_RETIRE_CENSUS
+    census_fixture(sum);
+#endif
     /* A VM-only allocation at a later PC must not veto the native prefix. */
     JanetFunction *table = assembled(&nx_121_code);
     attach(table, &nx_121_code);

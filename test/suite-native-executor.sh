@@ -134,6 +134,10 @@ build_case budget1 -DJANET_NATIVE_EXECUTORS -DJANET_QUANTUM_BUDGET=1
 build_case budget2 -DJANET_NATIVE_EXECUTORS -DJANET_QUANTUM_BUDGET=2
 build_case portable -DJANET_NATIVE_EXECUTORS -DJANET_QUANTUM_BUDGET=2 -DJANET_NO_COMPUTED_GOTOS
 build_case nointerrupt -DJANET_NATIVE_EXECUTORS -DJANET_NO_INTERPRETER_INTERRUPT
+# Opt-in per-PC retirement census: counts only general emitter branches and
+# explicitly reports partial coverage with no gate, so the fused numeric-sum
+# region stays uncounted here.
+build_case census -DJANET_NATIVE_EXECUTORS -DJANET_QUANTUM_BUDGET=2 -DJANET_NATIVE_RETIRE_CENSUS
 build_case disabled -DTEST_NATIVE_DISABLED
 build_case sanitized -DJANET_NATIVE_EXECUTORS -DJANET_QUANTUM_BUDGET=2 -fsanitize=address,undefined -fno-omit-frame-pointer
 echo "native executor matrix passed: $root"

@@ -169,6 +169,9 @@
   (out "#if defined(__GNUC__) && !defined(__clang__)\n#pragma GCC push_options\n#pragma GCC optimize (\"fp-contract=off\")\n#endif")
   (out "static JANET_THREAD_LOCAL uint64_t " tag "_entries, " tag "_edges, " tag "_fallbacks, "
        tag "_ops, " tag "_vmexits, " tag "_conts;")
+  (out "#if defined(JANET_NATIVE_RETIRE_CENSUS) && JANET_NATIVE_RETIRE_CENSUS\n"
+       "static JANET_THREAD_LOCAL uint64_t " tag "_retired[" (string (length (d :bytecode))) "];\n"
+       "static JANET_THREAD_LOCAL uint8_t " tag "_retired_overflow[" (string (length (d :bytecode))) "];\n#endif")
   (out "static const uint32_t " tag "_words[] = {"
        (string/join (map string (d :bytecode-words)) ",") "};")
   (out "static const JanetNativeConstant " tag "_constants[] = {")
@@ -199,6 +202,9 @@
        "#else\n#define NX_ENTRY() ((void)0)\n#define NX_EDGE() ((void)0)\n"
        "#define NX_TICK() ((void)0)\n#define NX_FALLBACK() ((void)0)\n"
        "#define NX_VMEXIT() ((void)0)\n#define NX_CONT() ((void)0)\n#endif\n"
+       "#if defined(JANET_NATIVE_RETIRE_CENSUS) && JANET_NATIVE_RETIRE_CENSUS\n"
+       "#define NX_RETIRE(K) do { if (" tag "_retired[K] == UINT64_MAX) " tag "_retired_overflow[K] = 1; else " tag "_retired[K]++; } while (0)\n"
+       "#else\n#define NX_RETIRE(K) ((void)0)\n#endif\n"
        "#if defined(JANET_NATIVE_COMMIT_PROBE) && JANET_NATIVE_COMMIT_PROBE\n#define NX_ARRAY_PUT janet_native_array_put_fast_probe\n#define NX_BUFFER_PUT janet_native_buffer_put_fast_probe\n#define NX_TABLE_PUT janet_native_table_put_fast_probe\n#define NX_COMMIT_NONE , 0, 0\n#else\n#define NX_ARRAY_PUT janet_native_array_put_fast\n#define NX_BUFFER_PUT janet_native_buffer_put_fast\n#define NX_TABLE_PUT janet_native_table_put_fast\n#define NX_COMMIT_NONE\n#endif\n"
        "NX_ENTRY();"
        "\n#define NX_EXIT(K,R) do { *pc = d->bytecode + (K); return (R); } while (0)"
@@ -594,17 +600,17 @@
         (out "goto L" (string (+ k delta)) ";")
         (unless (= op 'jmp) (out "}")))
       (or (= op 'ret) (= op 'retn)) (out "NX_BOUNDARY(" (string k) ");")
-      (= op 'movn) (do (out "NX_TICK();") (out "s[" (string a) "] = s[" (string c) "];"))
-      (= op 'movf) (do (out "NX_TICK();") (out "s[" (string c) "] = s[" (string a) "];"))
-      (= op 'ldc) (do (out "NX_TICK();") (out "s[" (string a) "] = d->constants[" (string c) "];"))
-      (= op 'ldi) (do (out "NX_TICK();") (out "s[" (string a) "] = janet_wrap_integer(" (string c) ");"))
-      (= op 'ldn) (do (out "NX_TICK();") (out "s[" (string a) "] = janet_wrap_nil();"))
-      (= op 'ldt) (do (out "NX_TICK();") (out "s[" (string a) "] = janet_wrap_true();"))
-      (= op 'ldf) (do (out "NX_TICK();") (out "s[" (string a) "] = janet_wrap_false();"))
+      (= op 'movn) (do (out "NX_TICK();") (out "s[" (string a) "] = s[" (string c) "]; NX_RETIRE(" (string k) ");"))
+      (= op 'movf) (do (out "NX_TICK();") (out "s[" (string c) "] = s[" (string a) "]; NX_RETIRE(" (string k) ");"))
+      (= op 'ldc) (do (out "NX_TICK();") (out "s[" (string a) "] = d->constants[" (string c) "]; NX_RETIRE(" (string k) ");"))
+      (= op 'ldi) (do (out "NX_TICK();") (out "s[" (string a) "] = janet_wrap_integer(" (string c) "); NX_RETIRE(" (string k) ");"))
+      (= op 'ldn) (do (out "NX_TICK();") (out "s[" (string a) "] = janet_wrap_nil(); NX_RETIRE(" (string k) ");"))
+      (= op 'ldt) (do (out "NX_TICK();") (out "s[" (string a) "] = janet_wrap_true(); NX_RETIRE(" (string k) ");"))
+      (= op 'ldf) (do (out "NX_TICK();") (out "s[" (string a) "] = janet_wrap_false(); NX_RETIRE(" (string k) ");"))
       (= op 'noop) nil
       (out "NX_BOUNDARY(" (string k) "); /* unsupported, before effects */")))
   (out "#undef NX_NUM\n#undef NX_EXIT\n#undef NX_BOUNDARY\n"
-       "#undef NX_COMMIT_NONE\n#undef NX_ARRAY_PUT\n#undef NX_BUFFER_PUT\n#undef NX_TABLE_PUT\n#undef NX_ENTRY\n#undef NX_EDGE\n#undef NX_TICK\n#undef NX_FALLBACK\n#undef NX_VMEXIT\n}")
+       "#undef NX_RETIRE\n#undef NX_COMMIT_NONE\n#undef NX_ARRAY_PUT\n#undef NX_BUFFER_PUT\n#undef NX_TABLE_PUT\n#undef NX_ENTRY\n#undef NX_EDGE\n#undef NX_TICK\n#undef NX_FALLBACK\n#undef NX_VMEXIT\n}")
   (out "#if defined(__GNUC__) && !defined(__clang__)\n#pragma GCC pop_options\n#endif")
   (out "static const JanetNativeCode " tag "_code = {" tag "," tag "_words," tag "_constants,"
        (if (empty? mask) "NULL," (string tag "_mask,"))
