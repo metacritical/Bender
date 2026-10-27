@@ -450,7 +450,6 @@ static void janet_mark_funcenv(JanetFuncEnv *env) {
 static void janet_drain_env_queue(void) {
     JanetFuncEnv **outer_queue;
     size_t outer_count;
-    size_t outer_capacity;
     if (env_queue_draining) return;
     /* Take ownership of what is queued so far. */
     outer_queue = env_queue;
