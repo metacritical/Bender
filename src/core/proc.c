@@ -181,9 +181,71 @@ static void janet_lanes_maybe_autostart(void) {
     (void) janet_lanes_start_impl(count, 0);
 }
 
+/* Does this captured value denote mutable cross-lane state?
+ *
+ * Remote spawn marshals the closure, so a captured array/table/buffer/fiber (or
+ * a plain channel) becomes a detached copy in the worker: mutations the worker
+ * makes are invisible to the spawner and vice versa. That is silent, which is
+ * how it broke suite-proc's "body ran". Detect it so the spawn can say so
+ * instead of quietly doing the wrong thing.
+ *
+ * Immutable values (nil/bool/number/string/symbol/keyword/tuple-of-these) are
+ * fine to copy. Threaded channels and abstract handles are explicit carriers,
+ * so they are allowed too. */
+static int janet_proc_capture_is_mutable(Janet x) {
+    switch (janet_type(x)) {
+        case JANET_ARRAY:
+        case JANET_TABLE:
+        case JANET_BUFFER:
+        case JANET_FIBER:
+        case JANET_STRUCT:
+            return 1;
+        default:
+            return 0;
+    }
+}
+
+/* Return the index of the first mutable capture in `func`'s environments, or
+ * -1 when the closure captures only copy-safe values. */
+static int32_t janet_proc_find_mutable_capture(JanetFunction *func) {
+    if (NULL == func || NULL == func->def) return -1;
+    int32_t numenvs = func->def->environments_length;
+    int32_t slot = 0;
+    for (int32_t e = 0; e < numenvs; e++) {
+        JanetFuncEnv *env = func->envs[e];
+        if (NULL == env) continue;
+        int32_t len = env->length;
+        for (int32_t i = 0; i < len; i++) {
+            Janet v;
+            if (env->offset > 0 && NULL != env->as.fiber) {
+                v = env->as.fiber->data[env->offset + i];
+            } else if (NULL != env->as.values) {
+                v = env->as.values[i];
+            } else {
+                continue;
+            }
+            if (janet_proc_capture_is_mutable(v)) return slot;
+            slot++;
+        }
+    }
+    return -1;
+}
+
 static Janet janet_proc_spawn_routed(JanetFunction *func, int32_t cap) {
     janet_lanes_maybe_autostart();
     if (0 == janet_lane_count) return cfun_proc_spawn_impl(func, cap, 0);
+    /* About to cross a lane boundary, which marshals the closure. A mutable
+     * capture would silently become a detached copy in the worker, so refuse
+     * with an explanation instead: this is the difference between "my array
+     * didn't update" and a debuggable error. proc/spawn-local keeps the escape
+     * hatch for code that deliberately wants a same-VM process. */
+    if (janet_proc_find_mutable_capture(func) >= 0) {
+        janet_panic("proc/spawn would cross a lane, which MARSHALS the closure: "
+                    "a captured array/table/buffer/fiber would become a detached "
+                    "copy in the worker, so mutations would be invisible. Pass "
+                    "data through proc/send, return results on an ev/thread-chan, "
+                    "or use proc/spawn-local to stay on this VM.");
+    }
     int32_t lane = (janet_lane_rr % janet_lane_count);
     janet_lane_rr++;
     JanetChannel *ctl = janet_lane_ctls[lane];

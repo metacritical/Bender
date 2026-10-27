@@ -51,6 +51,25 @@
 (ev/sleep 0.5)
 (assert (= :kept (ev/take tchan)) "thread-chan carries values across lanes")
 
+# A cross-lane spawn MARSHALS the closure, so a mutable capture would become a
+# detached copy: the worker's mutations would be invisible. That must error
+# rather than silently doing the wrong thing.
+(defn make-mutator []
+  (def seen @[])
+  (fn [] (array/push seen 1)))
+
+(defn spawn-error [f]
+  (try (do (proc/spawn f 8) :ok) ([e] (string e))))
+
+(def capture-msg (spawn-error (make-mutator)))
+(assert (and capture-msg (string/find "MARSHALS the closure" capture-msg))
+        (string "cross-lane spawn with a mutable capture must refuse, got: " capture-msg))
+
+# A closure with no mutable capture spawns fine across lanes.
+(defn spawn-ok? [f] (try (do (proc/spawn f 8) true) ([_e] false)))
+(def clean-ok (spawn-ok? (fn [] 7)))
+(assert clean-ok "a capture-free closure still spawns across lanes")
+
 (proc/lanes-stop)
 
 (end-suite)
