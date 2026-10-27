@@ -17,9 +17,9 @@ Bottom to top, each tier multiplexing the one below: OS processes
 pool (§6) → procs (§11: Erlang-style, isolated heaps) → tasklets
 (§6b: actors over fibers) → ev tasks/fibers (cooperative). Fibers stay
 pinned (no migration); M:N exists only at job level over one shared
-queue. There is no thread-affinity control (only an `os/cpu-count`
-query) — workers float; pinning is deferred to a workload that shows
-migration costs (risky on Apple Silicon E/P cores).
+queue. Lane workers float by default; `proc/lanes-start` accepts
+`{:affinity true}` to pin them to cores (best-effort, and usually the wrong
+choice on Apple Silicon E/P cores — the OS scheduler is better informed).
 
 ## 1. One-shot tasks: `thread/new`, `thread/join`, `thread/alive?`
 
@@ -415,6 +415,12 @@ anticipation of cross-node routing.
 ```
 
 ## 11. First-class procs: `core/proc` + lanes
+
+**Read `docs/internals/lanes-and-captured-state.md` before crossing lanes.** A
+proc spawned onto a lane receives a marshalled COPY of its closure, so captured
+mutable state (arrays, plain `ev/chan`) is detached: writes from the worker are
+invisible to the spawner. Lanes are opt-in via `proc/lanes-start` or
+`JANET_LANES=<n>`, and use `ev/thread-chan` (not `ev/chan`) to return results.
 
 One GC object per process (mailbox fiber + supervisor channel +
 serial). Same-lane basics, M:N lanes via `examples/proc-lane.janet`

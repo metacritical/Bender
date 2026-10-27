@@ -1117,14 +1117,14 @@ JANET_CORE_FN(cfun_proc_spawn,
               "mailbox (capacity `capacity`, default 16). The process "
               "reads its own mailbox with proc/recv and learns itself "
               "via proc/self. Returns the proc (a core/proc distinct "
-              "type; refuses marshal — same-VM only for now). WARNING: "
-              "do not keep a flat array (or any other large collection) "
-              "of every spawned proc's handle reachable from the scope "
-              "that spawns them -- e.g. a top-level `(def procs @[])` "
-              "filled across a spawn burst -- until the env-proto-chain "
-              "redesign in docs/internals/proc-lanes.md lands. It makes "
-              "every spawned proc's own minor collection re-mark every "
-              "sibling in that array, which is O(n^2) for n procs.") {
+              "type; refuses marshal — same-VM only). The historic O(n^2) "
+              "hazard for keeping every handle in one flat array is GONE: the "
+              "child env no longer proto-chains to the spawner (see "
+              "docs/internals/proc-lanes.md) and a flat-array spawn burst now "
+              "measures linear (2k/5k/10k procs in 212/234/274 ms). Keeping "
+              "handles in an array to join on them is safe. With lanes active "
+              "the handle is a [:pid lane serial ctl] tuple instead of an "
+              "object -- see docs/internals/lanes-and-captured-state.md.") {
     janet_arity(argc, 1, 2);
     JanetFunction *func = janet_getfunction(argv, 0);
     if (func->def->min_arity > 0) {

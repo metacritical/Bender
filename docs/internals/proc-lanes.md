@@ -1,5 +1,9 @@
 # proc/lanes: VM-per-Core Process Parallelism
 
+> Practical operator guide (captured-state semantics, `JANET_LANES`,
+> per-process memory, measurement discipline):
+> `docs/internals/lanes-and-captured-state.md`.
+
 Implementation notes for the `proc/lanes` feature (landed through milestone 1,
 `fc32f7c5`) and the work-stealing design for milestone 2. Audience: maintainers
 extending the scheduler, debugging lane behavior, or building the next slices.
