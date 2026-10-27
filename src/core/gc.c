@@ -2222,6 +2222,26 @@ void janet_gc_barrier(void *obj, Janet value) {
      * above, no extra lookup). The main array above is unaffected;
      * this is purely additive. */
     janet_xfb_bucket_append(ss, own_o, cobj);
+    /* Bucket keyed by the VALUE's owner as well.
+     *
+     * janet_xfb_mark_owned(ss, f->gc_owner) is called from a fiber's own
+     * minor and looks up ITS owner's bucket, then marks those entries to
+     * keep foreign young blocks alive. The append above keys on the
+     * CONTAINER's owner (own_o), so it only protects the container. That
+     * asymmetry loses the container itself whenever a parent-heap
+     * container holds a value born on a child fiber's heap: the child's
+     * minor looks up the child's bucket, finds nothing recorded for the
+     * parent's array, and sweeps the parent's array (or its young
+     * elements) as its own garbage.
+     *
+     * Observed: a captured function-scope array mutated inside an ev/go
+     * fiber reads correctly on every iteration and turns to garbage at
+     * completion (docs/internals/known-issues-fiber-child-minor.md).
+     * Recording the edge under the value's owner too makes the marking
+     * symmetric, so whichever of the two heaps runs a minor finds it. */
+    if (own_v != own_o) {
+        janet_xfb_bucket_append(ss, own_v, cobj);
+    }
 }
 
 void *janet_gcalloc(enum JanetMemoryType type, size_t size) {
