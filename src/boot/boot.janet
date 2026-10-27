@@ -1522,6 +1522,296 @@
   [pred ind]
   (drop-until (complement pred) ind))
 
+###
+###
+### Lazy sequences
+###
+###
+
+# A lazy sequence is a memoizing pull cell: a function of no arguments that
+# returns either `nil` (the end) or a tuple of `[value rest-cell]`, computing
+# its body at most once.
+#
+# Why a cell and not the obvious alternatives, all measured:
+#
+#   * A fiber is pull-based, but it is ONE-SHOT. A second traversal of the same
+#     fiber yields nothing, and it does not memoize. A lazy seq must be
+#     re-traversable, so a fiber is a cursor, not a sequence.
+#   * Janet's `map` is eager over every source, so `(map f (lazy-range))` would
+#     realize the whole sequence -- and hang outright on an infinite one.
+#   * An abstract type would make a seq a first-class iterable, but abstract
+#     types are defined in C only; that is a bigger, less reversible change.
+#
+# The cell costs one closure per element and cannot cross a process boundary
+# (closures do not marshal); pass an array across a process, not a sequence.
+# Use `lazy-to-array` or `lazy-to-fiber` at the boundary.
+#
+# Traversal is iterative -- `lazy-to-array` and friends walk with `while` --
+# so consuming a long sequence does not grow the stack. Building one is also
+# stack-safe: the GC marks closure environments with an explicit worklist
+# (see janet_drain_env_queue in gc.c), which is what makes a chain of any
+# depth survivable.
+
+(defn delay1
+  ``Memoize a thunk: call `f` at most once, then return its value. The
+  primitive every lazy cell is built from.``
+  [f]
+  (var value nil)
+  (var done false)
+  (fn []
+    (if done
+      value
+      (do
+        (set done true)
+        (set value (f))
+        value))))
+
+(defn lazy-cell
+  "A lazy sequence from a thunk returning nil or `[value rest-cell]`."
+  [f]
+  (delay1 f))
+
+(defn lazy-nil
+  "The empty lazy sequence."
+  [] (lazy-cell (fn [] nil)))
+
+(defn lazy-cons
+  "Prepend `x` to lazy sequence `s` without realizing `s`."
+  [x s]
+  (lazy-cell (fn [] (tuple x s))))
+
+(defn lazy-from-array
+  "A lazy sequence over the elements of `ind`, index by index."
+  [ind &opt start]
+  (def i (if (nil? start) 0 start))
+  (lazy-cell (fn []
+               (if (>= i (length ind))
+                 nil
+                 (tuple (in ind i) (lazy-from-array ind (+ i 1)))))))
+
+(defn lazy-to-array
+  "Realize all of `s` into an array. Traversal is iterative, so a long
+  sequence does not grow the stack. An infinite sequence would hang here --
+  bound it with `lazy-take` first."
+  [s]
+  (def out @[])
+  (var cell s)
+  (var cont true)
+  (while cont
+    (def c (cell))
+    (if c
+      (do (array/push out (get c 0)) (set cell (get c 1)))
+      (set cont false)))
+  out)
+
+(defn realize
+  "Realize all of lazy sequence `s` into an array. See `lazy-to-array`."
+  [s]
+  (lazy-to-array s))
+
+(defn lazy-each
+  "Call `f` on each element of `s` for its side effects, iteratively. Returns nil."
+  [f s]
+  (var cell s)
+  (var cont true)
+  (while cont
+    (def c (cell))
+    (if c
+      (do (f (get c 0)) (set cell (get c 1)))
+      (set cont false)))
+  nil)
+
+(defn lazy-reduce
+  "Reduce `s` with `f` from `init`, iteratively."
+  [f init s]
+  (var acc init)
+  (lazy-each (fn [x] (set acc (f acc x))) s)
+  acc)
+
+(defn lazy-to-fiber
+  ``A fiber view over `s` so ordinary `each` works: `(each v (lazy-to-fiber s) ...)`.
+
+  The fiber is ONE-SHOT -- a second traversal yields nothing. The sequence it
+  came from stays re-traversable, so build a new fiber for each pass.``
+  [s]
+  (fiber/new (fn []
+               (var cell s)
+               (var cont true)
+               (while cont
+                 (def c (cell))
+                 (if c
+                   (do (yield (get c 0)) (set cell (get c 1)))
+                   (set cont false))))))
+
+(defn lazy-peek
+  "Realize the head of `s` once, returning its `[value rest]` tuple or nil."
+  [s]
+  (s))
+
+(defn lazy-empty?
+  "Whether `s` is exhausted. Realizes the head."
+  [s]
+  (nil? (s)))
+
+(defn lazy-first
+  "The first value of `s`, or nil when empty. Realizes the head."
+  [s]
+  (def c (s))
+  (if c (get c 0)))
+
+(defn lazy-rest
+  "Everything after the first value of `s`. Realizes the head."
+  [s]
+  (def c (s))
+  (if c (get c 1) (lazy-nil)))
+
+(defn lazy-range
+  ``Integers in `[start, end)`. With one argument, `[0, start)`.
+  Elements are realized on demand, so the sequence may be enormous.``
+  [start &opt end step]
+  (def lo (if (nil? end) 0 start))
+  (def hi (if (nil? end) start end))
+  (def by (if (nil? step) 1 step))
+  (if (<= by 0)
+    (error "lazy-range expects a positive step")
+    (lazy-cell (fn []
+                 (if (>= lo hi)
+                   nil
+                   (tuple lo (lazy-range (+ lo by) hi by)))))))
+
+(defn lazy-repeat
+  "An infinite sequence of `x`, or `x` repeated `n` times when `n` is given."
+  [x &opt n]
+  (if n
+    (lazy-cell (fn [] (if (<= n 0) nil (tuple x (lazy-repeat x (- n 1))))))
+    (lazy-cell (fn [] (tuple x (lazy-repeat x))))))
+
+(defn lazy-iterate
+  "An infinite sequence of `x`, `(f x)`, `(f (f x))`, ..."
+  [f x]
+  (lazy-cell (fn [] (tuple x (lazy-iterate f (f x))))))
+
+(defn lazy-map
+  ``Lazily map `f` over `s`. Nothing is computed until an element is asked
+  for, and each element is computed at most once.``
+  [f s]
+  (lazy-cell (fn []
+               (def c (s))
+               (if (not c)
+                 nil
+                 (tuple (f (get c 0)) (lazy-map f (get c 1)))))))
+
+(defn lazy-filter
+  ``Lazily keep the elements of `s` satisfying `pred`. Elements are tested on
+  demand, so this terminates on an infinite source while matches keep occurring.``
+  [pred s]
+  (lazy-cell (fn []
+               (var c (s))
+               (while (and c (not (pred (get c 0))))
+                 (def next-cell (get c 1))
+                 (set c (next-cell)))
+               (if (not c)
+                 nil
+                 (tuple (get c 0) (lazy-filter pred (get c 1)))))))
+
+(defn lazy-take
+  ``At most the first `n` elements of `s`.
+
+  The remaining count is tested BEFORE the cell is realized, so `n` elements
+  cost exactly `n` realizations -- taking 5 from an infinite sequence never
+  computes a 6th.``
+  [n s]
+  (lazy-cell (fn []
+               (if (<= n 0)
+                 nil
+                 (do
+                   (def c (s))
+                   (if (not c)
+                     nil
+                     (tuple (get c 0) (lazy-take (- n 1) (get c 1)))))))))
+
+(defn lazy-drop
+  "Skip the first `n` elements of `s`, realizing and discarding them."
+  [n s]
+  (if (<= n 0)
+    s
+    (lazy-cell (fn []
+                 (var c (s))
+                 (var left n)
+                 (while (and c (> left 0))
+                   (def next-cell (get c 1))
+                   (set c (next-cell))
+                   (-- left))
+                 c))))
+
+(defn lazy-take-while
+  "The prefix of `s` whose elements satisfy `pred`."
+  [pred s]
+  (lazy-cell (fn []
+               (def c (s))
+               (if (not c)
+                 nil
+                 (do
+                   (def v (get c 0))
+                   (if (pred v)
+                     (tuple v (lazy-take-while pred (get c 1)))
+                     nil))))))
+
+(defn lazy-drop-while
+  "`s` without its leading elements that satisfy `pred`."
+  [pred s]
+  (lazy-cell (fn []
+               (var c (s))
+               (while (and c (pred (get c 0)))
+                 (def next-cell (get c 1))
+                 (set c (next-cell)))
+               (if (not c) nil (tuple (get c 0) (get c 1))))))
+
+(var- lazy-cat-more nil)
+
+(defn- lazy-cat-start
+  "Internal: the lazy sequence beginning at index `i` of `seqs`."
+  [seqs i]
+  (lazy-cell (fn []
+               (var out nil)
+               (if (< i (length seqs))
+                 (do
+                   (def d ((in seqs i)))
+                   (if d
+                     (set out (tuple (get d 0) (lazy-cat-more seqs i (get d 1)))))))
+               out)))
+
+(set lazy-cat-more (fn lazy-cat-more
+  [seqs i rest]
+  (lazy-cell (fn []
+               (var out nil)
+               (def c (rest))
+               (if c
+                 (set out (tuple (get c 0) (lazy-cat-more seqs i (get c 1))))
+                 (set out ((lazy-cat-start seqs (+ i 1)))))
+               out))))
+(defn lazy-cat
+  "Concatenate lazy sequences left to right, without realizing the tail."
+  [& seqs]
+  (lazy-cat-start seqs 0))
+
+(defn lazy-mapcat
+  "Lazily map `f` over `s` and concatenate the resulting sequences."
+  [f s]
+  (lazy-cell (fn []
+               (var c (s))
+               (var head nil)
+               (var tail nil)
+               (while (and c (nil? head))
+                 (def inner (f (get c 0)))
+                 (if (lazy-empty? inner)
+                   (def next-cell (get c 1))
+                   (do
+                     (set head (lazy-first inner))
+                     (set tail (lazy-cat (lazy-rest inner)
+                                         (lazy-mapcat f (get c 1)))))))
+               (if (nil? head) nil (tuple head tail)))))
+
 (defn juxt*
   ``Returns the juxtaposition of functions. In other words,
   `((juxt* a b c) x)` evaluates to `[(a x) (b x) (c x)]`.``
