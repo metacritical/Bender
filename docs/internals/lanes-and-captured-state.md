@@ -347,6 +347,31 @@ For comparison, Erlang does 5000000 processes in 823-1043 MB total
 anything cleverer per process; it simply does not pay a cross-boundary tax for
 a process that stays on its scheduler.
 
+**Closing in.** Modelling RSS as `fixed + per*n` over the measurements
+(n=1000 -> 13 MB, n=5000 -> 39 MB, n=20000 -> 138 MB) fits:
+
+    per lane-hosted proc = 6.66 KB
+    fixed lane overhead  = 6.5 MB
+
+So the tax is genuinely per-process, and the earlier "it decreases with n"
+reading was just the small fixed term divided by a small n. Same-VM procs
+measure 1.53 KB, so a lane proc costs ~5.1 KB more.
+
+Ruled out so far, each by measurement:
+
+- the ctl channel capacity (4096 -> 64 changed nothing: 6.83 vs 7.07 KB)
+- closure allocation: a SHARED closure with no captures measures the same
+  7.08 KB/proc as a per-item closure
+- the work or the results: a spawn-only loop with an immediate `lanes-stop` shows
+  the full tax (1.52 KB at lanes=0 against 6.83 KB at lanes=4)
+- proc/send: 1000000 consecutive cross-lane sends completed with zero errors
+
+Best remaining hypothesis: a lane-hosted proc claims its own slab page on the
+LANE's heap (a 4 KB page per proc, since each proc owns a heap) plus a native
+stack commitment -- roughly the 5.1 KB delta. Testing that means making lane
+heaps share pages the way ordinary construction already does (see 5c), which is
+a GC change that needs the full suite as its gate.
+
 Not yet diagnosed: which part of the lane path allocates. Candidates worth
 measuring next: the marshal transit buffer created per routed spawn (the
 closure is marshalled on every spawn), a per-lane native stack plus heap that
