@@ -234,17 +234,26 @@ static int32_t janet_proc_find_mutable_capture(JanetFunction *func) {
 static Janet janet_proc_spawn_routed(JanetFunction *func, int32_t cap) {
     janet_lanes_maybe_autostart();
     if (0 == janet_lane_count) return cfun_proc_spawn_impl(func, cap, 0);
-    /* About to cross a lane boundary, which marshals the closure. A mutable
-     * capture would silently become a detached copy in the worker, so refuse
-     * with an explanation instead: this is the difference between "my array
-     * didn't update" and a debuggable error. proc/spawn-local keeps the escape
-     * hatch for code that deliberately wants a same-VM process. */
+    /* Crossing a lane boundary marshals the closure, so a MUTABLE capture
+     * would arrive as a detached copy: the worker's writes would be invisible
+     * to the spawner. Rather than erroring, place such a proc on THIS VM.
+     *
+     * That is the semantically correct choice, not a compromise: capturing a
+     * mutable value is how a caller says "this process shares state with me",
+     * and only a same-VM spawn honours it. The proc still runs concurrently
+     * with the spawner (same VM, cooperative scheduling), and every proc that
+     * does NOT capture mutable state still distributes across lanes. So a
+     * program mixing shared-state workers with independent workers uses all
+     * cores and stays correct, with nothing to learn or opt into.
+     *
+     * JANET_PROC_SHARE_TRACE=1 reports the decision for each spawn, since the
+     * placement is otherwise invisible. */
     if (janet_proc_find_mutable_capture(func) >= 0) {
-        janet_panic("proc/spawn would cross a lane, which MARSHALS the closure: "
-                    "a captured array/table/buffer/fiber would become a detached "
-                    "copy in the worker, so mutations would be invisible. Pass "
-                    "data through proc/send, return results on an ev/thread-chan, "
-                    "or use proc/spawn-local to stay on this VM.");
+        if (NULL != getenv("JANET_PROC_SHARE_TRACE")) {
+            fprintf(stderr, "[proc-spawn] shared capture -> local placement "
+                            "(a lane would marshal the closure and detach it)\n");
+        }
+        return cfun_proc_spawn_impl(func, cap, 0);
     }
     int32_t lane = (janet_lane_rr % janet_lane_count);
     janet_lane_rr++;
@@ -1476,8 +1485,29 @@ JANET_CORE_FN(cfun_proc_kill,
 
 JANET_CORE_FN(cfun_proc_alive,
               "(proc/alive? p)",
-              "True while the process fiber can still resume.") {
+              "True while the process fiber can still resume. Accepts a local\n"
+              "core/proc object or a node-0 pid tuple. A tuple naming ANOTHER\n"
+              "lane cannot be inspected from here -- its fiber lives in that VM\n"
+              "and there is no remote-query op -- so it reports true (it is not\n"
+              "known-dead) and monitor/kill are the supported cross-lane verbs.") {
     janet_fixarity(argc, 1);
+    if (janet_proc_is_pid_tuple(argv[0])) {
+        const Janet *tup = janet_unwrap_tuple(argv[0]);
+        int32_t node = (int32_t) janet_unwrap_number(tup[1]);
+        if (0 == node && NULL != janet_lane_local) {
+            Janet hit = janet_table_get(janet_lane_local,
+                    janet_wrap_number((double) janet_unwrap_number(tup[2])));
+            if (janet_checktype(hit, JANET_ABSTRACT) &&
+                    janet_abstract_type(janet_unwrap_abstract(hit)) == &janet_proc_type) {
+                JanetProcess *proc = (JanetProcess *) janet_unwrap_abstract(hit);
+                return janet_wrap_boolean(NULL != proc->fiber &&
+                                          janet_fiber_can_resume(proc->fiber));
+            }
+            return janet_wrap_false();
+        }
+        /* Remote lane: not inspectable, and not known-dead. */
+        return janet_wrap_true();
+    }
     JanetProcess *proc = janet_getproc(argv, 0);
     return janet_wrap_boolean(NULL != proc->fiber &&
                               janet_fiber_can_resume(proc->fiber));

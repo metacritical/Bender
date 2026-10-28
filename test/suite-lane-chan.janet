@@ -51,23 +51,37 @@
 (ev/sleep 0.5)
 (assert (= :kept (ev/take tchan)) "thread-chan carries values across lanes")
 
-# A cross-lane spawn MARSHALS the closure, so a mutable capture would become a
-# detached copy: the worker's mutations would be invisible. That must error
-# rather than silently doing the wrong thing.
+# A cross-lane spawn MARSHALS the closure, so a mutable capture would arrive
+# detached. Rather than erroring, such a proc is placed on THIS VM: capturing a
+# mutable value means "I share state with you", and only a same-VM spawn honours
+# that. The proc still runs concurrently; only independent procs use lanes.
 (defn make-mutator []
   (def seen @[])
   (fn [] (array/push seen 1)))
 
-(defn spawn-error [f]
-  (try (do (proc/spawn f 8) :ok) ([e] (string e))))
+# NOTE: the capture must be LEXICAL -- the array has to be LOCAL to an enclosing
+# function. A top-level (def seen @[]) is a global lookup even when referenced
+# from inside a defn, so it is (rightly) not a capture at all.
+(defn spawn-with-shared-capture []
+  (def seen @[])
+  (def p (proc/spawn (fn [] (array/push seen 7)) 8))
+  [p seen])
 
-(def capture-msg (spawn-error (make-mutator)))
-(assert (and capture-msg (string/find "MARSHALS the closure" capture-msg))
-        (string "cross-lane spawn with a mutable capture must refuse, got: " capture-msg))
+(def pair (spawn-with-shared-capture))
+(def placed (pair 0))
+(def seen (pair 1))
 
-# A closure with no mutable capture spawns fine across lanes.
-(defn spawn-ok? [f] (try (do (proc/spawn f 8) true) ([_e] false)))
-(def clean-ok (spawn-ok? (fn [] 7)))
+# Placement is the observable: a local core/proc object means this VM (sharing
+# the capture), a tuple would mean a lane (and a detached copy).
+(assert (not (tuple? placed))
+        "a proc capturing mutable state must be placed on this VM, not a lane")
+
+(ev/sleep 0.1)
+(assert (deep= @[7] seen)
+        (string "the shared capture must actually be mutated, got: " seen))
+
+# A capture-free closure still distributes across lanes.
+(def clean-ok (try (do (proc/spawn (fn [] 7) 8) true) ([_e] false)))
 (assert clean-ok "a capture-free closure still spawns across lanes")
 
 (proc/lanes-stop)
