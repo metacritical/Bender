@@ -1,0 +1,18 @@
+{
+  "repo": "/tmp/janet-wave-controlled-35671ede",
+  "output_dir": "/tmp/janet-wave-evidence-35671ede/runner-matrix",
+  "sizes": [1000, 2000],
+  "repeats": 3,
+  "timeout_s": 15,
+  "env": {"JANET_NO_PROFILE":"1", "JANET_NATIVE_EXECUTORS":"1", "JANET_LANE_FASTPOST":"0", "XDG_CACHE_HOME":"/tmp/janet-wave-evidence-35671ede/cache"},
+  "variants": [
+    {"name":"script-local","argv":["/tmp/janet-wave-controlled-35671ede/build/bender","/tmp/janet-wave-controlled-35671ede/bench/cross-runtime/wave.janet","{n}"],"env":{"JANET_LANES":"0"},"env_unset":["JANET_PROFILE"]},
+    {"name":"plain-local","argv":["/tmp/janet-wave-evidence-35671ede/plain","{n}"],"env":{"JANET_LANES":"0"},"env_unset":["JANET_PROFILE"]},
+    {"name":"native-local","argv":["/tmp/janet-wave-evidence-35671ede/nopgo","{n}"],"env":{"JANET_LANES":"0"},"env_unset":["JANET_PROFILE"]},
+    {"name":"release-local","argv":["/tmp/janet-wave-evidence-35671ede/trained","{n}"],"env":{"JANET_LANES":"0"},"env_unset":["JANET_PROFILE"]},
+    {"name":"script-lanes2","argv":["/tmp/janet-wave-controlled-35671ede/build/bender","/tmp/janet-wave-controlled-35671ede/bench/cross-runtime/wave.janet","{n}"],"env":{"JANET_LANES":"2"},"env_unset":["JANET_PROFILE"]},
+    {"name":"plain-lanes2","argv":["/tmp/janet-wave-evidence-35671ede/plain","{n}"],"env":{"JANET_LANES":"2"},"env_unset":["JANET_PROFILE"]},
+    {"name":"native-lanes2","argv":["/tmp/janet-wave-evidence-35671ede/nopgo","{n}"],"env":{"JANET_LANES":"2"},"env_unset":["JANET_PROFILE"]},
+    {"name":"release-lanes2","argv":["/tmp/janet-wave-evidence-35671ede/trained","{n}"],"env":{"JANET_LANES":"2"},"env_unset":["JANET_PROFILE"]}
+  ]
+}

@@ -1,0 +1,1802 @@
+{
+  "groups": [
+    {
+      "failed_count": 0,
+      "failures": [],
+      "metrics": {
+        "procs": {
+          "count": 3,
+          "max": 1000,
+          "mean": 1000.0,
+          "median": 1000,
+          "min": 1000,
+          "stdev": 0.0
+        },
+        "result": {
+          "count": 3,
+          "max": 1000,
+          "mean": 1000.0,
+          "median": 1000,
+          "min": 1000,
+          "stdev": 0.0
+        },
+        "spawn_ms": {
+          "count": 3,
+          "max": 8,
+          "mean": 7.333333333333333,
+          "median": 7,
+          "min": 7,
+          "stdev": 0.5773502691896257
+        },
+        "total_ms": {
+          "count": 3,
+          "max": 14,
+          "mean": 13.333333333333334,
+          "median": 14,
+          "min": 12,
+          "stdev": 1.1547005383792515
+        },
+        "wave_ms": {
+          "count": 3,
+          "max": 7,
+          "mean": 6.0,
+          "median": 6,
+          "min": 5,
+          "stdev": 1.0
+        }
+      },
+      "n": 1000,
+      "ok": true,
+      "ok_count": 3,
+      "samples": [
+        {
+          "exit_status": 0,
+          "failures": [],
+          "metrics": {
+            "procs": 1000,
+            "result": 1000,
+            "spawn_ms": 7,
+            "total_ms": 12,
+            "wave_ms": 5
+          },
+          "ok": true,
+          "repeat": 1,
+          "term_signal": null,
+          "timed_out": false,
+          "trial_dir": "/tmp/janet-wave-evidence-35671ede/runner-matrix/native-lanes2/n1000/rep1",
+          "wall_s": 0.019758
+        },
+        {
+          "exit_status": 0,
+          "failures": [],
+          "metrics": {
+            "procs": 1000,
+            "result": 1000,
+            "spawn_ms": 7,
+            "total_ms": 14,
+            "wave_ms": 7
+          },
+          "ok": true,
+          "repeat": 2,
+          "term_signal": null,
+          "timed_out": false,
+          "trial_dir": "/tmp/janet-wave-evidence-35671ede/runner-matrix/native-lanes2/n1000/rep2",
+          "wall_s": 0.022233
+        },
+        {
+          "exit_status": 0,
+          "failures": [],
+          "metrics": {
+            "procs": 1000,
+            "result": 1000,
+            "spawn_ms": 8,
+            "total_ms": 14,
+            "wave_ms": 6
+          },
+          "ok": true,
+          "repeat": 3,
+          "term_signal": null,
+          "timed_out": false,
+          "trial_dir": "/tmp/janet-wave-evidence-35671ede/runner-matrix/native-lanes2/n1000/rep3",
+          "wall_s": 0.02428
+        }
+      ],
+      "trials": 3,
+      "variant": "native-lanes2",
+      "wall_s": {
+        "count": 3,
+        "max": 0.02428,
+        "mean": 0.022090333333333333,
+        "median": 0.022233,
+        "min": 0.019758,
+        "stdev": 0.002264373276059698
+      }
+    },
+    {
+      "failed_count": 0,
+      "failures": [],
+      "metrics": {
+        "procs": {
+          "count": 3,
+          "max": 2000,
+          "mean": 2000.0,
+          "median": 2000,
+          "min": 2000,
+          "stdev": 0.0
+        },
+        "result": {
+          "count": 3,
+          "max": 2000,
+          "mean": 2000.0,
+          "median": 2000,
+          "min": 2000,
+          "stdev": 0.0
+        },
+        "spawn_ms": {
+          "count": 3,
+          "max": 18,
+          "mean": 16.0,
+          "median": 16,
+          "min": 14,
+          "stdev": 2.0
+        },
+        "total_ms": {
+          "count": 3,
+          "max": 31,
+          "mean": 30.0,
+          "median": 30,
+          "min": 29,
+          "stdev": 1.0
+        },
+        "wave_ms": {
+          "count": 3,
+          "max": 15,
+          "mean": 13.666666666666666,
+          "median": 13,
+          "min": 13,
+          "stdev": 1.1547005383792515
+        }
+      },
+      "n": 2000,
+      "ok": true,
+      "ok_count": 3,
+      "samples": [
+        {
+          "exit_status": 0,
+          "failures": [],
+          "metrics": {
+            "procs": 2000,
+            "result": 2000,
+            "spawn_ms": 16,
+            "total_ms": 30,
+            "wave_ms": 13
+          },
+          "ok": true,
+          "repeat": 1,
+          "term_signal": null,
+          "timed_out": false,
+          "trial_dir": "/tmp/janet-wave-evidence-35671ede/runner-matrix/native-lanes2/n2000/rep1",
+          "wall_s": 0.043027
+        },
+        {
+          "exit_status": 0,
+          "failures": [],
+          "metrics": {
+            "procs": 2000,
+            "result": 2000,
+            "spawn_ms": 18,
+            "total_ms": 31,
+            "wave_ms": 13
+          },
+          "ok": true,
+          "repeat": 2,
+          "term_signal": null,
+          "timed_out": false,
+          "trial_dir": "/tmp/janet-wave-evidence-35671ede/runner-matrix/native-lanes2/n2000/rep2",
+          "wall_s": 0.039619
+        },
+        {
+          "exit_status": 0,
+          "failures": [],
+          "metrics": {
+            "procs": 2000,
+            "result": 2000,
+            "spawn_ms": 14,
+            "total_ms": 29,
+            "wave_ms": 15
+          },
+          "ok": true,
+          "repeat": 3,
+          "term_signal": null,
+          "timed_out": false,
+          "trial_dir": "/tmp/janet-wave-evidence-35671ede/runner-matrix/native-lanes2/n2000/rep3",
+          "wall_s": 0.038355
+        }
+      ],
+      "trials": 3,
+      "variant": "native-lanes2",
+      "wall_s": {
+        "count": 3,
+        "max": 0.043027,
+        "mean": 0.040333666666666664,
+        "median": 0.039619,
+        "min": 0.038355,
+        "stdev": 0.0024166003669066466
+      }
+    },
+    {
+      "failed_count": 0,
+      "failures": [],
+      "metrics": {
+        "procs": {
+          "count": 3,
+          "max": 1000,
+          "mean": 1000.0,
+          "median": 1000,
+          "min": 1000,
+          "stdev": 0.0
+        },
+        "result": {
+          "count": 3,
+          "max": 1000,
+          "mean": 1000.0,
+          "median": 1000,
+          "min": 1000,
+          "stdev": 0.0
+        },
+        "spawn_ms": {
+          "count": 3,
+          "max": 1,
+          "mean": 1.0,
+          "median": 1,
+          "min": 1,
+          "stdev": 0.0
+        },
+        "total_ms": {
+          "count": 3,
+          "max": 333,
+          "mean": 301.3333333333333,
+          "median": 286,
+          "min": 285,
+          "stdev": 27.42869543622761
+        },
+        "wave_ms": {
+          "count": 3,
+          "max": 332,
+          "mean": 300.3333333333333,
+          "median": 285,
+          "min": 284,
+          "stdev": 27.42869543622761
+        }
+      },
+      "n": 1000,
+      "ok": true,
+      "ok_count": 3,
+      "samples": [
+        {
+          "exit_status": 0,
+          "failures": [],
+          "metrics": {
+            "procs": 1000,
+            "result": 1000,
+            "spawn_ms": 1,
+            "total_ms": 286,
+            "wave_ms": 285
+          },
+          "ok": true,
+          "repeat": 1,
+          "term_signal": null,
+          "timed_out": false,
+          "trial_dir": "/tmp/janet-wave-evidence-35671ede/runner-matrix/native-local/n1000/rep1",
+          "wall_s": 0.293944
+        },
+        {
+          "exit_status": 0,
+          "failures": [],
+          "metrics": {
+            "procs": 1000,
+            "result": 1000,
+            "spawn_ms": 1,
+            "total_ms": 285,
+            "wave_ms": 284
+          },
+          "ok": true,
+          "repeat": 2,
+          "term_signal": null,
+          "timed_out": false,
+          "trial_dir": "/tmp/janet-wave-evidence-35671ede/runner-matrix/native-local/n1000/rep2",
+          "wall_s": 0.292795
+        },
+        {
+          "exit_status": 0,
+          "failures": [],
+          "metrics": {
+            "procs": 1000,
+            "result": 1000,
+            "spawn_ms": 1,
+            "total_ms": 333,
+            "wave_ms": 332
+          },
+          "ok": true,
+          "repeat": 3,
+          "term_signal": null,
+          "timed_out": false,
+          "trial_dir": "/tmp/janet-wave-evidence-35671ede/runner-matrix/native-local/n1000/rep3",
+          "wall_s": 0.340548
+        }
+      ],
+      "trials": 3,
+      "variant": "native-local",
+      "wall_s": {
+        "count": 3,
+        "max": 0.340548,
+        "mean": 0.30909566666666666,
+        "median": 0.293944,
+        "min": 0.292795,
+        "stdev": 0.02724457752165252
+      }
+    },
+    {
+      "failed_count": 0,
+      "failures": [],
+      "metrics": {
+        "procs": {
+          "count": 3,
+          "max": 2000,
+          "mean": 2000.0,
+          "median": 2000,
+          "min": 2000,
+          "stdev": 0.0
+        },
+        "result": {
+          "count": 3,
+          "max": 2000,
+          "mean": 2000.0,
+          "median": 2000,
+          "min": 2000,
+          "stdev": 0.0
+        },
+        "spawn_ms": {
+          "count": 3,
+          "max": 2,
+          "mean": 2.0,
+          "median": 2,
+          "min": 2,
+          "stdev": 0.0
+        },
+        "total_ms": {
+          "count": 3,
+          "max": 782,
+          "mean": 770.3333333333334,
+          "median": 773,
+          "min": 756,
+          "stdev": 13.203534880225574
+        },
+        "wave_ms": {
+          "count": 3,
+          "max": 780,
+          "mean": 768.0,
+          "median": 770,
+          "min": 754,
+          "stdev": 13.114877048604
+        }
+      },
+      "n": 2000,
+      "ok": true,
+      "ok_count": 3,
+      "samples": [
+        {
+          "exit_status": 0,
+          "failures": [],
+          "metrics": {
+            "procs": 2000,
+            "result": 2000,
+            "spawn_ms": 2,
+            "total_ms": 756,
+            "wave_ms": 754
+          },
+          "ok": true,
+          "repeat": 1,
+          "term_signal": null,
+          "timed_out": false,
+          "trial_dir": "/tmp/janet-wave-evidence-35671ede/runner-matrix/native-local/n2000/rep1",
+          "wall_s": 0.765579
+        },
+        {
+          "exit_status": 0,
+          "failures": [],
+          "metrics": {
+            "procs": 2000,
+            "result": 2000,
+            "spawn_ms": 2,
+            "total_ms": 773,
+            "wave_ms": 770
+          },
+          "ok": true,
+          "repeat": 2,
+          "term_signal": null,
+          "timed_out": false,
+          "trial_dir": "/tmp/janet-wave-evidence-35671ede/runner-matrix/native-local/n2000/rep2",
+          "wall_s": 0.780845
+        },
+        {
+          "exit_status": 0,
+          "failures": [],
+          "metrics": {
+            "procs": 2000,
+            "result": 2000,
+            "spawn_ms": 2,
+            "total_ms": 782,
+            "wave_ms": 780
+          },
+          "ok": true,
+          "repeat": 3,
+          "term_signal": null,
+          "timed_out": false,
+          "trial_dir": "/tmp/janet-wave-evidence-35671ede/runner-matrix/native-local/n2000/rep3",
+          "wall_s": 0.790472
+        }
+      ],
+      "trials": 3,
+      "variant": "native-local",
+      "wall_s": {
+        "count": 3,
+        "max": 0.790472,
+        "mean": 0.7789653333333333,
+        "median": 0.780845,
+        "min": 0.765579,
+        "stdev": 0.012552498649007404
+      }
+    },
+    {
+      "failed_count": 0,
+      "failures": [],
+      "metrics": {
+        "procs": {
+          "count": 3,
+          "max": 1000,
+          "mean": 1000.0,
+          "median": 1000,
+          "min": 1000,
+          "stdev": 0.0
+        },
+        "result": {
+          "count": 3,
+          "max": 1000,
+          "mean": 1000.0,
+          "median": 1000,
+          "min": 1000,
+          "stdev": 0.0
+        },
+        "spawn_ms": {
+          "count": 3,
+          "max": 8,
+          "mean": 7.333333333333333,
+          "median": 7,
+          "min": 7,
+          "stdev": 0.5773502691896257
+        },
+        "total_ms": {
+          "count": 3,
+          "max": 14,
+          "mean": 13.333333333333334,
+          "median": 13,
+          "min": 13,
+          "stdev": 0.5773502691896257
+        },
+        "wave_ms": {
+          "count": 3,
+          "max": 6,
+          "mean": 6.0,
+          "median": 6,
+          "min": 6,
+          "stdev": 0.0
+        }
+      },
+      "n": 1000,
+      "ok": true,
+      "ok_count": 3,
+      "samples": [
+        {
+          "exit_status": 0,
+          "failures": [],
+          "metrics": {
+            "procs": 1000,
+            "result": 1000,
+            "spawn_ms": 7,
+            "total_ms": 13,
+            "wave_ms": 6
+          },
+          "ok": true,
+          "repeat": 1,
+          "term_signal": null,
+          "timed_out": false,
+          "trial_dir": "/tmp/janet-wave-evidence-35671ede/runner-matrix/plain-lanes2/n1000/rep1",
+          "wall_s": 0.020355
+        },
+        {
+          "exit_status": 0,
+          "failures": [],
+          "metrics": {
+            "procs": 1000,
+            "result": 1000,
+            "spawn_ms": 8,
+            "total_ms": 14,
+            "wave_ms": 6
+          },
+          "ok": true,
+          "repeat": 2,
+          "term_signal": null,
+          "timed_out": false,
+          "trial_dir": "/tmp/janet-wave-evidence-35671ede/runner-matrix/plain-lanes2/n1000/rep2",
+          "wall_s": 0.022802
+        },
+        {
+          "exit_status": 0,
+          "failures": [],
+          "metrics": {
+            "procs": 1000,
+            "result": 1000,
+            "spawn_ms": 7,
+            "total_ms": 13,
+            "wave_ms": 6
+          },
+          "ok": true,
+          "repeat": 3,
+          "term_signal": null,
+          "timed_out": false,
+          "trial_dir": "/tmp/janet-wave-evidence-35671ede/runner-matrix/plain-lanes2/n1000/rep3",
+          "wall_s": 0.019893
+        }
+      ],
+      "trials": 3,
+      "variant": "plain-lanes2",
+      "wall_s": {
+        "count": 3,
+        "max": 0.022802,
+        "mean": 0.021016666666666666,
+        "median": 0.020355,
+        "min": 0.019893,
+        "stdev": 0.0015633049393299217
+      }
+    },
+    {
+      "failed_count": 0,
+      "failures": [],
+      "metrics": {
+        "procs": {
+          "count": 3,
+          "max": 2000,
+          "mean": 2000.0,
+          "median": 2000,
+          "min": 2000,
+          "stdev": 0.0
+        },
+        "result": {
+          "count": 3,
+          "max": 2000,
+          "mean": 2000.0,
+          "median": 2000,
+          "min": 2000,
+          "stdev": 0.0
+        },
+        "spawn_ms": {
+          "count": 3,
+          "max": 16,
+          "mean": 15.333333333333334,
+          "median": 15,
+          "min": 15,
+          "stdev": 0.5773502691896257
+        },
+        "total_ms": {
+          "count": 3,
+          "max": 34,
+          "mean": 30.0,
+          "median": 31,
+          "min": 25,
+          "stdev": 4.58257569495584
+        },
+        "wave_ms": {
+          "count": 3,
+          "max": 18,
+          "mean": 14.666666666666666,
+          "median": 16,
+          "min": 10,
+          "stdev": 4.163331998932265
+        }
+      },
+      "n": 2000,
+      "ok": true,
+      "ok_count": 3,
+      "samples": [
+        {
+          "exit_status": 0,
+          "failures": [],
+          "metrics": {
+            "procs": 2000,
+            "result": 2000,
+            "spawn_ms": 16,
+            "total_ms": 34,
+            "wave_ms": 18
+          },
+          "ok": true,
+          "repeat": 1,
+          "term_signal": null,
+          "timed_out": false,
+          "trial_dir": "/tmp/janet-wave-evidence-35671ede/runner-matrix/plain-lanes2/n2000/rep1",
+          "wall_s": 0.042701
+        },
+        {
+          "exit_status": 0,
+          "failures": [],
+          "metrics": {
+            "procs": 2000,
+            "result": 2000,
+            "spawn_ms": 15,
+            "total_ms": 25,
+            "wave_ms": 10
+          },
+          "ok": true,
+          "repeat": 2,
+          "term_signal": null,
+          "timed_out": false,
+          "trial_dir": "/tmp/janet-wave-evidence-35671ede/runner-matrix/plain-lanes2/n2000/rep2",
+          "wall_s": 0.032684
+        },
+        {
+          "exit_status": 0,
+          "failures": [],
+          "metrics": {
+            "procs": 2000,
+            "result": 2000,
+            "spawn_ms": 15,
+            "total_ms": 31,
+            "wave_ms": 16
+          },
+          "ok": true,
+          "repeat": 3,
+          "term_signal": null,
+          "timed_out": false,
+          "trial_dir": "/tmp/janet-wave-evidence-35671ede/runner-matrix/plain-lanes2/n2000/rep3",
+          "wall_s": 0.053087
+        }
+      ],
+      "trials": 3,
+      "variant": "plain-lanes2",
+      "wall_s": {
+        "count": 3,
+        "max": 0.053087,
+        "mean": 0.042824,
+        "median": 0.042701,
+        "min": 0.032684,
+        "stdev": 0.010202056116293424
+      }
+    },
+    {
+      "failed_count": 0,
+      "failures": [],
+      "metrics": {
+        "procs": {
+          "count": 3,
+          "max": 1000,
+          "mean": 1000.0,
+          "median": 1000,
+          "min": 1000,
+          "stdev": 0.0
+        },
+        "result": {
+          "count": 3,
+          "max": 1000,
+          "mean": 1000.0,
+          "median": 1000,
+          "min": 1000,
+          "stdev": 0.0
+        },
+        "spawn_ms": {
+          "count": 3,
+          "max": 1,
+          "mean": 1.0,
+          "median": 1,
+          "min": 1,
+          "stdev": 0.0
+        },
+        "total_ms": {
+          "count": 3,
+          "max": 293,
+          "mean": 287.3333333333333,
+          "median": 290,
+          "min": 279,
+          "stdev": 7.371114795831994
+        },
+        "wave_ms": {
+          "count": 3,
+          "max": 292,
+          "mean": 286.3333333333333,
+          "median": 289,
+          "min": 278,
+          "stdev": 7.371114795831994
+        }
+      },
+      "n": 1000,
+      "ok": true,
+      "ok_count": 3,
+      "samples": [
+        {
+          "exit_status": 0,
+          "failures": [],
+          "metrics": {
+            "procs": 1000,
+            "result": 1000,
+            "spawn_ms": 1,
+            "total_ms": 293,
+            "wave_ms": 292
+          },
+          "ok": true,
+          "repeat": 1,
+          "term_signal": null,
+          "timed_out": false,
+          "trial_dir": "/tmp/janet-wave-evidence-35671ede/runner-matrix/plain-local/n1000/rep1",
+          "wall_s": 0.303493
+        },
+        {
+          "exit_status": 0,
+          "failures": [],
+          "metrics": {
+            "procs": 1000,
+            "result": 1000,
+            "spawn_ms": 1,
+            "total_ms": 279,
+            "wave_ms": 278
+          },
+          "ok": true,
+          "repeat": 2,
+          "term_signal": null,
+          "timed_out": false,
+          "trial_dir": "/tmp/janet-wave-evidence-35671ede/runner-matrix/plain-local/n1000/rep2",
+          "wall_s": 0.286912
+        },
+        {
+          "exit_status": 0,
+          "failures": [],
+          "metrics": {
+            "procs": 1000,
+            "result": 1000,
+            "spawn_ms": 1,
+            "total_ms": 290,
+            "wave_ms": 289
+          },
+          "ok": true,
+          "repeat": 3,
+          "term_signal": null,
+          "timed_out": false,
+          "trial_dir": "/tmp/janet-wave-evidence-35671ede/runner-matrix/plain-local/n1000/rep3",
+          "wall_s": 0.297507
+        }
+      ],
+      "trials": 3,
+      "variant": "plain-local",
+      "wall_s": {
+        "count": 3,
+        "max": 0.303493,
+        "mean": 0.29597066666666666,
+        "median": 0.297507,
+        "min": 0.286912,
+        "stdev": 0.008396584444482975
+      }
+    },
+    {
+      "failed_count": 0,
+      "failures": [],
+      "metrics": {
+        "procs": {
+          "count": 3,
+          "max": 2000,
+          "mean": 2000.0,
+          "median": 2000,
+          "min": 2000,
+          "stdev": 0.0
+        },
+        "result": {
+          "count": 3,
+          "max": 2000,
+          "mean": 2000.0,
+          "median": 2000,
+          "min": 2000,
+          "stdev": 0.0
+        },
+        "spawn_ms": {
+          "count": 3,
+          "max": 2,
+          "mean": 2.0,
+          "median": 2,
+          "min": 2,
+          "stdev": 0.0
+        },
+        "total_ms": {
+          "count": 3,
+          "max": 780,
+          "mean": 775.0,
+          "median": 777,
+          "min": 768,
+          "stdev": 6.244997998398398
+        },
+        "wave_ms": {
+          "count": 3,
+          "max": 777,
+          "mean": 772.6666666666666,
+          "median": 775,
+          "min": 766,
+          "stdev": 5.8594652770823155
+        }
+      },
+      "n": 2000,
+      "ok": true,
+      "ok_count": 3,
+      "samples": [
+        {
+          "exit_status": 0,
+          "failures": [],
+          "metrics": {
+            "procs": 2000,
+            "result": 2000,
+            "spawn_ms": 2,
+            "total_ms": 777,
+            "wave_ms": 775
+          },
+          "ok": true,
+          "repeat": 1,
+          "term_signal": null,
+          "timed_out": false,
+          "trial_dir": "/tmp/janet-wave-evidence-35671ede/runner-matrix/plain-local/n2000/rep1",
+          "wall_s": 0.785504
+        },
+        {
+          "exit_status": 0,
+          "failures": [],
+          "metrics": {
+            "procs": 2000,
+            "result": 2000,
+            "spawn_ms": 2,
+            "total_ms": 780,
+            "wave_ms": 777
+          },
+          "ok": true,
+          "repeat": 2,
+          "term_signal": null,
+          "timed_out": false,
+          "trial_dir": "/tmp/janet-wave-evidence-35671ede/runner-matrix/plain-local/n2000/rep2",
+          "wall_s": 0.789516
+        },
+        {
+          "exit_status": 0,
+          "failures": [],
+          "metrics": {
+            "procs": 2000,
+            "result": 2000,
+            "spawn_ms": 2,
+            "total_ms": 768,
+            "wave_ms": 766
+          },
+          "ok": true,
+          "repeat": 3,
+          "term_signal": null,
+          "timed_out": false,
+          "trial_dir": "/tmp/janet-wave-evidence-35671ede/runner-matrix/plain-local/n2000/rep3",
+          "wall_s": 0.777287
+        }
+      ],
+      "trials": 3,
+      "variant": "plain-local",
+      "wall_s": {
+        "count": 3,
+        "max": 0.789516,
+        "mean": 0.7841023333333332,
+        "median": 0.785504,
+        "min": 0.777287,
+        "stdev": 0.006233828064145948
+      }
+    },
+    {
+      "failed_count": 0,
+      "failures": [],
+      "metrics": {
+        "procs": {
+          "count": 3,
+          "max": 1000,
+          "mean": 1000.0,
+          "median": 1000,
+          "min": 1000,
+          "stdev": 0.0
+        },
+        "result": {
+          "count": 3,
+          "max": 1000,
+          "mean": 1000.0,
+          "median": 1000,
+          "min": 1000,
+          "stdev": 0.0
+        },
+        "spawn_ms": {
+          "count": 3,
+          "max": 9,
+          "mean": 8.666666666666666,
+          "median": 9,
+          "min": 8,
+          "stdev": 0.5773502691896257
+        },
+        "total_ms": {
+          "count": 3,
+          "max": 16,
+          "mean": 15.666666666666666,
+          "median": 16,
+          "min": 15,
+          "stdev": 0.5773502691896257
+        },
+        "wave_ms": {
+          "count": 3,
+          "max": 7,
+          "mean": 6.666666666666667,
+          "median": 7,
+          "min": 6,
+          "stdev": 0.5773502691896257
+        }
+      },
+      "n": 1000,
+      "ok": true,
+      "ok_count": 3,
+      "samples": [
+        {
+          "exit_status": 0,
+          "failures": [],
+          "metrics": {
+            "procs": 1000,
+            "result": 1000,
+            "spawn_ms": 9,
+            "total_ms": 16,
+            "wave_ms": 7
+          },
+          "ok": true,
+          "repeat": 1,
+          "term_signal": null,
+          "timed_out": false,
+          "trial_dir": "/tmp/janet-wave-evidence-35671ede/runner-matrix/release-lanes2/n1000/rep1",
+          "wall_s": 0.023682
+        },
+        {
+          "exit_status": 0,
+          "failures": [],
+          "metrics": {
+            "procs": 1000,
+            "result": 1000,
+            "spawn_ms": 8,
+            "total_ms": 15,
+            "wave_ms": 7
+          },
+          "ok": true,
+          "repeat": 2,
+          "term_signal": null,
+          "timed_out": false,
+          "trial_dir": "/tmp/janet-wave-evidence-35671ede/runner-matrix/release-lanes2/n1000/rep2",
+          "wall_s": 0.022093
+        },
+        {
+          "exit_status": 0,
+          "failures": [],
+          "metrics": {
+            "procs": 1000,
+            "result": 1000,
+            "spawn_ms": 9,
+            "total_ms": 16,
+            "wave_ms": 6
+          },
+          "ok": true,
+          "repeat": 3,
+          "term_signal": null,
+          "timed_out": false,
+          "trial_dir": "/tmp/janet-wave-evidence-35671ede/runner-matrix/release-lanes2/n1000/rep3",
+          "wall_s": 0.022978
+        }
+      ],
+      "trials": 3,
+      "variant": "release-lanes2",
+      "wall_s": {
+        "count": 3,
+        "max": 0.023682,
+        "mean": 0.02291766666666667,
+        "median": 0.022978,
+        "min": 0.022093,
+        "stdev": 0.0007962162604050066
+      }
+    },
+    {
+      "failed_count": 0,
+      "failures": [],
+      "metrics": {
+        "procs": {
+          "count": 3,
+          "max": 2000,
+          "mean": 2000.0,
+          "median": 2000,
+          "min": 2000,
+          "stdev": 0.0
+        },
+        "result": {
+          "count": 3,
+          "max": 2000,
+          "mean": 2000.0,
+          "median": 2000,
+          "min": 2000,
+          "stdev": 0.0
+        },
+        "spawn_ms": {
+          "count": 3,
+          "max": 28,
+          "mean": 20.0,
+          "median": 16,
+          "min": 16,
+          "stdev": 6.928203230275509
+        },
+        "total_ms": {
+          "count": 3,
+          "max": 42,
+          "mean": 33.333333333333336,
+          "median": 30,
+          "min": 28,
+          "stdev": 7.571877794400365
+        },
+        "wave_ms": {
+          "count": 3,
+          "max": 15,
+          "mean": 13.666666666666666,
+          "median": 14,
+          "min": 12,
+          "stdev": 1.5275252316519468
+        }
+      },
+      "n": 2000,
+      "ok": true,
+      "ok_count": 3,
+      "samples": [
+        {
+          "exit_status": 0,
+          "failures": [],
+          "metrics": {
+            "procs": 2000,
+            "result": 2000,
+            "spawn_ms": 16,
+            "total_ms": 28,
+            "wave_ms": 12
+          },
+          "ok": true,
+          "repeat": 1,
+          "term_signal": null,
+          "timed_out": false,
+          "trial_dir": "/tmp/janet-wave-evidence-35671ede/runner-matrix/release-lanes2/n2000/rep1",
+          "wall_s": 0.037229
+        },
+        {
+          "exit_status": 0,
+          "failures": [],
+          "metrics": {
+            "procs": 2000,
+            "result": 2000,
+            "spawn_ms": 28,
+            "total_ms": 42,
+            "wave_ms": 15
+          },
+          "ok": true,
+          "repeat": 2,
+          "term_signal": null,
+          "timed_out": false,
+          "trial_dir": "/tmp/janet-wave-evidence-35671ede/runner-matrix/release-lanes2/n2000/rep2",
+          "wall_s": 0.050416
+        },
+        {
+          "exit_status": 0,
+          "failures": [],
+          "metrics": {
+            "procs": 2000,
+            "result": 2000,
+            "spawn_ms": 16,
+            "total_ms": 30,
+            "wave_ms": 14
+          },
+          "ok": true,
+          "repeat": 3,
+          "term_signal": null,
+          "timed_out": false,
+          "trial_dir": "/tmp/janet-wave-evidence-35671ede/runner-matrix/release-lanes2/n2000/rep3",
+          "wall_s": 0.038811
+        }
+      ],
+      "trials": 3,
+      "variant": "release-lanes2",
+      "wall_s": {
+        "count": 3,
+        "max": 0.050416,
+        "mean": 0.042152,
+        "median": 0.038811,
+        "min": 0.037229,
+        "stdev": 0.007200413390910277
+      }
+    },
+    {
+      "failed_count": 0,
+      "failures": [],
+      "metrics": {
+        "procs": {
+          "count": 3,
+          "max": 1000,
+          "mean": 1000.0,
+          "median": 1000,
+          "min": 1000,
+          "stdev": 0.0
+        },
+        "result": {
+          "count": 3,
+          "max": 1000,
+          "mean": 1000.0,
+          "median": 1000,
+          "min": 1000,
+          "stdev": 0.0
+        },
+        "spawn_ms": {
+          "count": 3,
+          "max": 1,
+          "mean": 1.0,
+          "median": 1,
+          "min": 1,
+          "stdev": 0.0
+        },
+        "total_ms": {
+          "count": 3,
+          "max": 286,
+          "mean": 278.0,
+          "median": 277,
+          "min": 271,
+          "stdev": 7.54983443527075
+        },
+        "wave_ms": {
+          "count": 3,
+          "max": 285,
+          "mean": 277.0,
+          "median": 276,
+          "min": 270,
+          "stdev": 7.54983443527075
+        }
+      },
+      "n": 1000,
+      "ok": true,
+      "ok_count": 3,
+      "samples": [
+        {
+          "exit_status": 0,
+          "failures": [],
+          "metrics": {
+            "procs": 1000,
+            "result": 1000,
+            "spawn_ms": 1,
+            "total_ms": 286,
+            "wave_ms": 285
+          },
+          "ok": true,
+          "repeat": 1,
+          "term_signal": null,
+          "timed_out": false,
+          "trial_dir": "/tmp/janet-wave-evidence-35671ede/runner-matrix/release-local/n1000/rep1",
+          "wall_s": 0.294772
+        },
+        {
+          "exit_status": 0,
+          "failures": [],
+          "metrics": {
+            "procs": 1000,
+            "result": 1000,
+            "spawn_ms": 1,
+            "total_ms": 277,
+            "wave_ms": 276
+          },
+          "ok": true,
+          "repeat": 2,
+          "term_signal": null,
+          "timed_out": false,
+          "trial_dir": "/tmp/janet-wave-evidence-35671ede/runner-matrix/release-local/n1000/rep2",
+          "wall_s": 0.284028
+        },
+        {
+          "exit_status": 0,
+          "failures": [],
+          "metrics": {
+            "procs": 1000,
+            "result": 1000,
+            "spawn_ms": 1,
+            "total_ms": 271,
+            "wave_ms": 270
+          },
+          "ok": true,
+          "repeat": 3,
+          "term_signal": null,
+          "timed_out": false,
+          "trial_dir": "/tmp/janet-wave-evidence-35671ede/runner-matrix/release-local/n1000/rep3",
+          "wall_s": 0.280507
+        }
+      ],
+      "trials": 3,
+      "variant": "release-local",
+      "wall_s": {
+        "count": 3,
+        "max": 0.294772,
+        "mean": 0.2864356666666667,
+        "median": 0.284028,
+        "min": 0.280507,
+        "stdev": 0.007431029560789885
+      }
+    },
+    {
+      "failed_count": 0,
+      "failures": [],
+      "metrics": {
+        "procs": {
+          "count": 3,
+          "max": 2000,
+          "mean": 2000.0,
+          "median": 2000,
+          "min": 2000,
+          "stdev": 0.0
+        },
+        "result": {
+          "count": 3,
+          "max": 2000,
+          "mean": 2000.0,
+          "median": 2000,
+          "min": 2000,
+          "stdev": 0.0
+        },
+        "spawn_ms": {
+          "count": 3,
+          "max": 2,
+          "mean": 2.0,
+          "median": 2,
+          "min": 2,
+          "stdev": 0.0
+        },
+        "total_ms": {
+          "count": 3,
+          "max": 789,
+          "mean": 784.0,
+          "median": 785,
+          "min": 778,
+          "stdev": 5.5677643628300215
+        },
+        "wave_ms": {
+          "count": 3,
+          "max": 787,
+          "mean": 781.6666666666666,
+          "median": 782,
+          "min": 776,
+          "stdev": 5.507570547286102
+        }
+      },
+      "n": 2000,
+      "ok": true,
+      "ok_count": 3,
+      "samples": [
+        {
+          "exit_status": 0,
+          "failures": [],
+          "metrics": {
+            "procs": 2000,
+            "result": 2000,
+            "spawn_ms": 2,
+            "total_ms": 789,
+            "wave_ms": 787
+          },
+          "ok": true,
+          "repeat": 1,
+          "term_signal": null,
+          "timed_out": false,
+          "trial_dir": "/tmp/janet-wave-evidence-35671ede/runner-matrix/release-local/n2000/rep1",
+          "wall_s": 0.797977
+        },
+        {
+          "exit_status": 0,
+          "failures": [],
+          "metrics": {
+            "procs": 2000,
+            "result": 2000,
+            "spawn_ms": 2,
+            "total_ms": 778,
+            "wave_ms": 776
+          },
+          "ok": true,
+          "repeat": 2,
+          "term_signal": null,
+          "timed_out": false,
+          "trial_dir": "/tmp/janet-wave-evidence-35671ede/runner-matrix/release-local/n2000/rep2",
+          "wall_s": 0.791735
+        },
+        {
+          "exit_status": 0,
+          "failures": [],
+          "metrics": {
+            "procs": 2000,
+            "result": 2000,
+            "spawn_ms": 2,
+            "total_ms": 785,
+            "wave_ms": 782
+          },
+          "ok": true,
+          "repeat": 3,
+          "term_signal": null,
+          "timed_out": false,
+          "trial_dir": "/tmp/janet-wave-evidence-35671ede/runner-matrix/release-local/n2000/rep3",
+          "wall_s": 0.794065
+        }
+      ],
+      "trials": 3,
+      "variant": "release-local",
+      "wall_s": {
+        "count": 3,
+        "max": 0.797977,
+        "mean": 0.7945923333333335,
+        "median": 0.794065,
+        "min": 0.791735,
+        "stdev": 0.003154235459399564
+      }
+    },
+    {
+      "failed_count": 0,
+      "failures": [],
+      "metrics": {
+        "procs": {
+          "count": 3,
+          "max": 1000,
+          "mean": 1000.0,
+          "median": 1000,
+          "min": 1000,
+          "stdev": 0.0
+        },
+        "result": {
+          "count": 3,
+          "max": 1000,
+          "mean": 1000.0,
+          "median": 1000,
+          "min": 1000,
+          "stdev": 0.0
+        },
+        "spawn_ms": {
+          "count": 3,
+          "max": 9,
+          "mean": 8.333333333333334,
+          "median": 8,
+          "min": 8,
+          "stdev": 0.5773502691896257
+        },
+        "total_ms": {
+          "count": 3,
+          "max": 17,
+          "mean": 15.333333333333334,
+          "median": 15,
+          "min": 14,
+          "stdev": 1.5275252316519468
+        },
+        "wave_ms": {
+          "count": 3,
+          "max": 7,
+          "mean": 6.666666666666667,
+          "median": 7,
+          "min": 6,
+          "stdev": 0.5773502691896257
+        }
+      },
+      "n": 1000,
+      "ok": true,
+      "ok_count": 3,
+      "samples": [
+        {
+          "exit_status": 0,
+          "failures": [],
+          "metrics": {
+            "procs": 1000,
+            "result": 1000,
+            "spawn_ms": 9,
+            "total_ms": 17,
+            "wave_ms": 7
+          },
+          "ok": true,
+          "repeat": 1,
+          "term_signal": null,
+          "timed_out": false,
+          "trial_dir": "/tmp/janet-wave-evidence-35671ede/runner-matrix/script-lanes2/n1000/rep1",
+          "wall_s": 0.024243
+        },
+        {
+          "exit_status": 0,
+          "failures": [],
+          "metrics": {
+            "procs": 1000,
+            "result": 1000,
+            "spawn_ms": 8,
+            "total_ms": 14,
+            "wave_ms": 6
+          },
+          "ok": true,
+          "repeat": 2,
+          "term_signal": null,
+          "timed_out": false,
+          "trial_dir": "/tmp/janet-wave-evidence-35671ede/runner-matrix/script-lanes2/n1000/rep2",
+          "wall_s": 0.021912
+        },
+        {
+          "exit_status": 0,
+          "failures": [],
+          "metrics": {
+            "procs": 1000,
+            "result": 1000,
+            "spawn_ms": 8,
+            "total_ms": 15,
+            "wave_ms": 7
+          },
+          "ok": true,
+          "repeat": 3,
+          "term_signal": null,
+          "timed_out": false,
+          "trial_dir": "/tmp/janet-wave-evidence-35671ede/runner-matrix/script-lanes2/n1000/rep3",
+          "wall_s": 0.021902
+        }
+      ],
+      "trials": 3,
+      "variant": "script-lanes2",
+      "wall_s": {
+        "count": 3,
+        "max": 0.024243,
+        "mean": 0.02268566666666667,
+        "median": 0.021912,
+        "min": 0.021902,
+        "stdev": 0.0013486994970464447
+      }
+    },
+    {
+      "failed_count": 0,
+      "failures": [],
+      "metrics": {
+        "procs": {
+          "count": 3,
+          "max": 2000,
+          "mean": 2000.0,
+          "median": 2000,
+          "min": 2000,
+          "stdev": 0.0
+        },
+        "result": {
+          "count": 3,
+          "max": 2000,
+          "mean": 2000.0,
+          "median": 2000,
+          "min": 2000,
+          "stdev": 0.0
+        },
+        "spawn_ms": {
+          "count": 3,
+          "max": 16,
+          "mean": 15.666666666666666,
+          "median": 16,
+          "min": 15,
+          "stdev": 0.5773502691896257
+        },
+        "total_ms": {
+          "count": 3,
+          "max": 29,
+          "mean": 27.666666666666668,
+          "median": 28,
+          "min": 26,
+          "stdev": 1.5275252316519468
+        },
+        "wave_ms": {
+          "count": 3,
+          "max": 14,
+          "mean": 12.333333333333334,
+          "median": 13,
+          "min": 10,
+          "stdev": 2.0816659994661326
+        }
+      },
+      "n": 2000,
+      "ok": true,
+      "ok_count": 3,
+      "samples": [
+        {
+          "exit_status": 0,
+          "failures": [],
+          "metrics": {
+            "procs": 2000,
+            "result": 2000,
+            "spawn_ms": 16,
+            "total_ms": 28,
+            "wave_ms": 13
+          },
+          "ok": true,
+          "repeat": 1,
+          "term_signal": null,
+          "timed_out": false,
+          "trial_dir": "/tmp/janet-wave-evidence-35671ede/runner-matrix/script-lanes2/n2000/rep1",
+          "wall_s": 0.038386
+        },
+        {
+          "exit_status": 0,
+          "failures": [],
+          "metrics": {
+            "procs": 2000,
+            "result": 2000,
+            "spawn_ms": 15,
+            "total_ms": 29,
+            "wave_ms": 14
+          },
+          "ok": true,
+          "repeat": 2,
+          "term_signal": null,
+          "timed_out": false,
+          "trial_dir": "/tmp/janet-wave-evidence-35671ede/runner-matrix/script-lanes2/n2000/rep2",
+          "wall_s": 0.036882
+        },
+        {
+          "exit_status": 0,
+          "failures": [],
+          "metrics": {
+            "procs": 2000,
+            "result": 2000,
+            "spawn_ms": 16,
+            "total_ms": 26,
+            "wave_ms": 10
+          },
+          "ok": true,
+          "repeat": 3,
+          "term_signal": null,
+          "timed_out": false,
+          "trial_dir": "/tmp/janet-wave-evidence-35671ede/runner-matrix/script-lanes2/n2000/rep3",
+          "wall_s": 0.033918
+        }
+      ],
+      "trials": 3,
+      "variant": "script-lanes2",
+      "wall_s": {
+        "count": 3,
+        "max": 0.038386,
+        "mean": 0.036395333333333335,
+        "median": 0.036882,
+        "min": 0.033918,
+        "stdev": 0.0022734091873952977
+      }
+    },
+    {
+      "failed_count": 0,
+      "failures": [],
+      "metrics": {
+        "procs": {
+          "count": 3,
+          "max": 1000,
+          "mean": 1000.0,
+          "median": 1000,
+          "min": 1000,
+          "stdev": 0.0
+        },
+        "result": {
+          "count": 3,
+          "max": 1000,
+          "mean": 1000.0,
+          "median": 1000,
+          "min": 1000,
+          "stdev": 0.0
+        },
+        "spawn_ms": {
+          "count": 3,
+          "max": 1,
+          "mean": 1.0,
+          "median": 1,
+          "min": 1,
+          "stdev": 0.0
+        },
+        "total_ms": {
+          "count": 3,
+          "max": 100,
+          "mean": 99.33333333333333,
+          "median": 100,
+          "min": 98,
+          "stdev": 1.1547005383792515
+        },
+        "wave_ms": {
+          "count": 3,
+          "max": 99,
+          "mean": 98.33333333333333,
+          "median": 99,
+          "min": 97,
+          "stdev": 1.1547005383792515
+        }
+      },
+      "n": 1000,
+      "ok": true,
+      "ok_count": 3,
+      "samples": [
+        {
+          "exit_status": 0,
+          "failures": [],
+          "metrics": {
+            "procs": 1000,
+            "result": 1000,
+            "spawn_ms": 1,
+            "total_ms": 100,
+            "wave_ms": 99
+          },
+          "ok": true,
+          "repeat": 1,
+          "term_signal": null,
+          "timed_out": false,
+          "trial_dir": "/tmp/janet-wave-evidence-35671ede/runner-matrix/script-local/n1000/rep1",
+          "wall_s": 0.108381
+        },
+        {
+          "exit_status": 0,
+          "failures": [],
+          "metrics": {
+            "procs": 1000,
+            "result": 1000,
+            "spawn_ms": 1,
+            "total_ms": 100,
+            "wave_ms": 99
+          },
+          "ok": true,
+          "repeat": 2,
+          "term_signal": null,
+          "timed_out": false,
+          "trial_dir": "/tmp/janet-wave-evidence-35671ede/runner-matrix/script-local/n1000/rep2",
+          "wall_s": 0.107775
+        },
+        {
+          "exit_status": 0,
+          "failures": [],
+          "metrics": {
+            "procs": 1000,
+            "result": 1000,
+            "spawn_ms": 1,
+            "total_ms": 98,
+            "wave_ms": 97
+          },
+          "ok": true,
+          "repeat": 3,
+          "term_signal": null,
+          "timed_out": false,
+          "trial_dir": "/tmp/janet-wave-evidence-35671ede/runner-matrix/script-local/n1000/rep3",
+          "wall_s": 0.10563
+        }
+      ],
+      "trials": 3,
+      "variant": "script-local",
+      "wall_s": {
+        "count": 3,
+        "max": 0.108381,
+        "mean": 0.10726200000000001,
+        "median": 0.107775,
+        "min": 0.10563,
+        "stdev": 0.0014454677443651244
+      }
+    },
+    {
+      "failed_count": 0,
+      "failures": [],
+      "metrics": {
+        "procs": {
+          "count": 3,
+          "max": 2000,
+          "mean": 2000.0,
+          "median": 2000,
+          "min": 2000,
+          "stdev": 0.0
+        },
+        "result": {
+          "count": 3,
+          "max": 2000,
+          "mean": 2000.0,
+          "median": 2000,
+          "min": 2000,
+          "stdev": 0.0
+        },
+        "spawn_ms": {
+          "count": 3,
+          "max": 2,
+          "mean": 2.0,
+          "median": 2,
+          "min": 2,
+          "stdev": 0.0
+        },
+        "total_ms": {
+          "count": 3,
+          "max": 411,
+          "mean": 406.0,
+          "median": 404,
+          "min": 403,
+          "stdev": 4.358898943540674
+        },
+        "wave_ms": {
+          "count": 3,
+          "max": 409,
+          "mean": 404.0,
+          "median": 402,
+          "min": 401,
+          "stdev": 4.358898943540674
+        }
+      },
+      "n": 2000,
+      "ok": true,
+      "ok_count": 3,
+      "samples": [
+        {
+          "exit_status": 0,
+          "failures": [],
+          "metrics": {
+            "procs": 2000,
+            "result": 2000,
+            "spawn_ms": 2,
+            "total_ms": 411,
+            "wave_ms": 409
+          },
+          "ok": true,
+          "repeat": 1,
+          "term_signal": null,
+          "timed_out": false,
+          "trial_dir": "/tmp/janet-wave-evidence-35671ede/runner-matrix/script-local/n2000/rep1",
+          "wall_s": 0.421727
+        },
+        {
+          "exit_status": 0,
+          "failures": [],
+          "metrics": {
+            "procs": 2000,
+            "result": 2000,
+            "spawn_ms": 2,
+            "total_ms": 403,
+            "wave_ms": 401
+          },
+          "ok": true,
+          "repeat": 2,
+          "term_signal": null,
+          "timed_out": false,
+          "trial_dir": "/tmp/janet-wave-evidence-35671ede/runner-matrix/script-local/n2000/rep2",
+          "wall_s": 0.410883
+        },
+        {
+          "exit_status": 0,
+          "failures": [],
+          "metrics": {
+            "procs": 2000,
+            "result": 2000,
+            "spawn_ms": 2,
+            "total_ms": 404,
+            "wave_ms": 402
+          },
+          "ok": true,
+          "repeat": 3,
+          "term_signal": null,
+          "timed_out": false,
+          "trial_dir": "/tmp/janet-wave-evidence-35671ede/runner-matrix/script-local/n2000/rep3",
+          "wall_s": 0.412606
+        }
+      ],
+      "trials": 3,
+      "variant": "script-local",
+      "wall_s": {
+        "count": 3,
+        "max": 0.421727,
+        "mean": 0.41507200000000005,
+        "median": 0.412606,
+        "min": 0.410883,
+        "stdev": 0.005827430909071355
+      }
+    }
+  ],
+  "manifest_sha256": "33183f349a0eb82bb38a312bf20788fe80cb39e28be3743a54e9a47bdadda014",
+  "ok": true,
+  "output_dir": "/tmp/janet-wave-evidence-35671ede/runner-matrix",
+  "schema": "wave-controlled-run/1",
+  "started_at": "2026-10-28T17:00:46+00:00",
+  "trials": 48
+}

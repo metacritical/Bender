@@ -1,0 +1,1 @@
+{"step": "plain", "argv": ["/tmp/janet-wave-controlled-35671ede/build/bender", "--aot", "/tmp/janet-wave-controlled-35671ede/bench/cross-runtime/wave.janet", "-o", "/tmp/janet-wave-evidence-35671ede/plain"], "returncode": 1, "wall_s": 0.6011324170976877, "sha256": null}

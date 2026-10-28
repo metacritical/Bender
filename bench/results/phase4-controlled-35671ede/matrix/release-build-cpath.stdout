@@ -1,0 +1,46 @@
+def 0 thunk arity 0 slots 15 instrs 73
+def 1 <anon-1> arity 0 slots 2 instrs 6
+def 2 while arity 0 slots 5 instrs 17
+def 3 <anon-3> arity 0 slots 3 instrs 8
+contains 0 1
+contains 0 2
+extern 0 dyn
+extern 0 scan-number
+extern 0 ev/thread-chan
+extern 0 os/clock
+extern 0 proc/spawn
+calls 0 2
+extern 0 os/clock
+extern 0 proc/send
+extern 0 ev/take
+extern 0 os/clock
+extern 0 printf
+extern 0 eprintf
+extern 0 proc/lanes
+extern 0 proc/lanes-stop
+extern 1 proc/recv
+extern 1 ev/give
+contains 2 3
+extern 2 proc/spawn
+calls 2 2
+arity-unknown 2
+extern 3 proc/recv
+extern 3 proc/send
+stats 4 20 2 18 0
+reach 0 1 2 3
+callers 2 2 0 2
+recursive 2
+fix 4 1 0
+called-as 2 0
+arity 0 1
+hints 0 0
+hint-call
+profile 31 rows
+rets 0 0 0 rounds 2
+dce unsafe pattern 2 def 0 (thunk) pc 22: function value pending as call argument -- stripping nothing
+native-skip 0 thunk types not proven: params [] ret nil
+native-skip 1  types not proven: params [] ret ?
+native-skip 2 while types not proven: params [] ret nil
+native-skip 3  types not proven: params [] ret ?
+native-lib 0 kernels /tmp/janet-wave-evidence-35671ede/trained-native
+mkimage: 1205 bytes, 827 registry names -> /tmp/janet-wave-evidence-35671ede/trained.c

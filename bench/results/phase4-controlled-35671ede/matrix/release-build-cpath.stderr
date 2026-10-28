@@ -1,0 +1,4 @@
+profile-merge: 31 rows -> /tmp/janet-wave-evidence-35671ede/trained-native/profile.jdn (home=31)
+bender --aot: verifying 1 cached workloads
+procs=1000 result=1000 spawn_ms=1 wave_ms=265 total_ms=266
+bender --aot: pgo parity ok, installed /tmp/janet-wave-evidence-35671ede/trained

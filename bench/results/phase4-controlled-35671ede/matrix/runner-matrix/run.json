@@ -1,0 +1,180 @@
+{
+  "executables": {
+    "/tmp/janet-wave-controlled-35671ede/build/bender": "07e766fb28ab15eb78d563bbdc2e7c9a9b2adf86e187df0d6b705c7d6648151c",
+    "/tmp/janet-wave-evidence-35671ede/nopgo": "97ccaae09a4db39fa1756386faea4ef2b8b6d781526ff9efb402e4e8e1303988",
+    "/tmp/janet-wave-evidence-35671ede/plain": "e5494d5bae1c404fda5e7f3d9687e3dae20b604c98fc1409d4c614b781a5dfd0",
+    "/tmp/janet-wave-evidence-35671ede/trained": "9d921b21e2bbf9c4345a3ab0173d801985fc2829c38de27c5da6846803fcc4d2"
+  },
+  "expected_trials": 48,
+  "finished_at": "2026-10-28T17:00:59+00:00",
+  "git": {
+    "branch": "HEAD",
+    "dirty": false,
+    "error": null,
+    "repo": "/tmp/janet-wave-controlled-35671ede",
+    "rev": "35671edec04292e19a33b97cc3b18942e3e8c676"
+  },
+  "machine": {
+    "cpu_count": 12,
+    "hostname": "192.168.68.115",
+    "machine": "arm64",
+    "processor": "arm",
+    "python": {
+      "executable": "/opt/homebrew/opt/python@3.15/bin/python3.15",
+      "implementation": "CPython",
+      "version": "3.15.0"
+    },
+    "release": "25.6.0",
+    "system": "Darwin",
+    "version": "Darwin Kernel Version 25.6.0: Fri Jul 31 19:18:48 PDT 2026; root:xnu-12377.161.14~5/RELEASE_ARM64_T6020"
+  },
+  "manifest": {
+    "env": {
+      "JANET_LANE_FASTPOST": "0",
+      "JANET_NATIVE_EXECUTORS": "1",
+      "JANET_NO_PROFILE": "1",
+      "XDG_CACHE_HOME": "/tmp/janet-wave-evidence-35671ede/cache"
+    },
+    "output_dir": "/tmp/janet-wave-evidence-35671ede/runner-matrix",
+    "repeats": 3,
+    "repo": "/tmp/janet-wave-controlled-35671ede",
+    "sizes": [
+      1000,
+      2000
+    ],
+    "timeout_s": 15,
+    "variants": [
+      {
+        "argv": [
+          "/tmp/janet-wave-controlled-35671ede/build/bender",
+          "/tmp/janet-wave-controlled-35671ede/bench/cross-runtime/wave.janet",
+          "{n}"
+        ],
+        "env": {
+          "JANET_LANES": "0"
+        },
+        "env_unset": [
+          "JANET_PROFILE"
+        ],
+        "name": "script-local"
+      },
+      {
+        "argv": [
+          "/tmp/janet-wave-evidence-35671ede/plain",
+          "{n}"
+        ],
+        "env": {
+          "JANET_LANES": "0"
+        },
+        "env_unset": [
+          "JANET_PROFILE"
+        ],
+        "name": "plain-local"
+      },
+      {
+        "argv": [
+          "/tmp/janet-wave-evidence-35671ede/nopgo",
+          "{n}"
+        ],
+        "env": {
+          "JANET_LANES": "0"
+        },
+        "env_unset": [
+          "JANET_PROFILE"
+        ],
+        "name": "native-local"
+      },
+      {
+        "argv": [
+          "/tmp/janet-wave-evidence-35671ede/trained",
+          "{n}"
+        ],
+        "env": {
+          "JANET_LANES": "0"
+        },
+        "env_unset": [
+          "JANET_PROFILE"
+        ],
+        "name": "release-local"
+      },
+      {
+        "argv": [
+          "/tmp/janet-wave-controlled-35671ede/build/bender",
+          "/tmp/janet-wave-controlled-35671ede/bench/cross-runtime/wave.janet",
+          "{n}"
+        ],
+        "env": {
+          "JANET_LANES": "2"
+        },
+        "env_unset": [
+          "JANET_PROFILE"
+        ],
+        "name": "script-lanes2"
+      },
+      {
+        "argv": [
+          "/tmp/janet-wave-evidence-35671ede/plain",
+          "{n}"
+        ],
+        "env": {
+          "JANET_LANES": "2"
+        },
+        "env_unset": [
+          "JANET_PROFILE"
+        ],
+        "name": "plain-lanes2"
+      },
+      {
+        "argv": [
+          "/tmp/janet-wave-evidence-35671ede/nopgo",
+          "{n}"
+        ],
+        "env": {
+          "JANET_LANES": "2"
+        },
+        "env_unset": [
+          "JANET_PROFILE"
+        ],
+        "name": "native-lanes2"
+      },
+      {
+        "argv": [
+          "/tmp/janet-wave-evidence-35671ede/trained",
+          "{n}"
+        ],
+        "env": {
+          "JANET_LANES": "2"
+        },
+        "env_unset": [
+          "JANET_PROFILE"
+        ],
+        "name": "release-lanes2"
+      }
+    ]
+  },
+  "manifest_path": "/tmp/janet-wave-evidence-35671ede/runner-matrix.json",
+  "manifest_sha256": "33183f349a0eb82bb38a312bf20788fe80cb39e28be3743a54e9a47bdadda014",
+  "notes": [
+    "Sequential trials; argv executed literally without a shell.",
+    "Children run in their own session; only a timed-out child's process group is SIGKILLed.",
+    "A trial fails on timeout, signal, nonzero exit, missing result, result != N, procs != N, or conflicting result/procs records.",
+    "sample is macOS-only, opt-in, attached to the exact child pid, and diagnostic only.",
+    "Wall-clock profiling is intentionally not integrated into trials."
+  ],
+  "ok": true,
+  "output_dir": "/tmp/janet-wave-evidence-35671ede/runner-matrix",
+  "repo": "/tmp/janet-wave-controlled-35671ede",
+  "schema": "wave-controlled-run/1",
+  "selected_variants": [
+    "script-local",
+    "plain-local",
+    "native-local",
+    "release-local",
+    "script-lanes2",
+    "plain-lanes2",
+    "native-lanes2",
+    "release-lanes2"
+  ],
+  "started_at": "2026-10-28T17:00:46+00:00",
+  "trials": 48
+}
