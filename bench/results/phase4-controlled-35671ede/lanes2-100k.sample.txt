@@ -595,3 +595,917 @@ Call graph:
     + ! : | + !   : | + 3 unmarshal_one  (in bender) + 2548  [0x1046b64b0]  vector.c:35
     + ! : | + !   : | +   2 janet_srealloc  (in bender) + 96  [0x1046b088c]  gc.c:3513
     + ! : | + !   : | +   : 2 _realloc  (in libsystem_malloc.dylib) + 452  [0x18152ff14]
+    + ! : | + !   : | +   :   2 _malloc_zone_realloc  (in libsystem_malloc.dylib) + 148  [0x18152f6f8]
+    + ! : | + !   : | +   :     1 xzm_realloc  (in libsystem_malloc.dylib) + 880  [0x18151fef4]
+    + ! : | + !   : | +   :     | 1 _platform_memmove  (in libsystem_platform.dylib) + 428  [0x18170d50c]
+    + ! : | + !   : | +   :     1 xzm_realloc  (in libsystem_malloc.dylib) + 904  [0x18151ff0c]
+    + ! : | + !   : | +   :       1 _xzm_free  (in libsystem_malloc.dylib) + 352  [0x181520278]
+    + ! : | + !   : | +   :         1 _platform_memset  (in libsystem_platform.dylib) + 180  [0x18170d144]
+    + ! : | + !   : | +   1 janet_srealloc  (in bender) + 28  [0x1046b0848]  gc.c:3510
+    + ! : | + !   : | 2 unmarshal_one_def  (in bender) + 940  [0x1046ea150]  marsh.c:1029
+    + ! : | + !   : | + 1 unmarshal_one  (in bender) + 496  [0x1046b5cac]  marsh.c:1491
+    + ! : | + !   : | + ! 1 readint  (in bender) + 16  [0x1046b57c0]  marsh.c:764
+    + ! : | + !   : | + 1 unmarshal_one  (in bender) + 568  [0x1046b5cf4]  marsh.c:1497
+    + ! : | + !   : | +   1 janet_symbol  (in bender) + 152  [0x10468e3b8]  symcache.c:176
+    + ! : | + !   : | +     1 janet_symcache_findmem  (in bender) + 64  [0x1046d265c]  symcache.c:98
+    + ! : | + !   : | +       1 _tlv_get_addr  (in libdyld.dylib) + 0  [0x181300388]
+    + ! : | + !   : | 1 unmarshal_one_def  (in bender) + 136  [0x1046e9e2c]  marsh.c:963
+    + ! : | + !   : | + 1 janet_gcalloc  (in bender) + 1236  [0x104674c94]  gc.c:1371
+    + ! : | + !   : | 1 unmarshal_one_def  (in bender) + 560  [0x1046e9fd4]  marsh.c:989
+    + ! : | + !   : |   1 unmarshal_one  (in bender) + 1280  [0x1046b5fbc]  marsh.c:0
+    + ! : | + !   : |     1 janet_v_grow  (in bender) + 76  [0x10467fdf8]  vector.c:35
+    + ! : | + !   : |       1 janet_srealloc  (in bender) + 4  [0x1046b0830]  gc.c:3507
+    + ! : | + !   : 2 unmarshal_one  (in bender) + 1356  [0x1046b6008]  marsh.c:1532
+    + ! : | + !   : | 1 janet_gcalloc  (in bender) + 1268  [0x104674cb4]  gc.c:0
+    + ! : | + !   : | 1 janet_gcalloc  (in bender) + 804  [0x104674ae4]  gc.c:2379
+    + ! : | + !   : |   1 _posix_memalign  (in libsystem_malloc.dylib) + 52  [0x18152ffe0]
+    + ! : | + !   : |     1 _malloc_zone_memalign  (in libsystem_malloc.dylib) + 300  [0x18152f8f8]
+    + ! : | + !   : |       1 _xzm_xzone_malloc_freelist_outlined  (in libsystem_malloc.dylib) + 756  [0x181526994]
+    + ! : | + !   : 1 unmarshal_one  (in bender) + 1620  [0x1046b6110]  marsh.c:1500
+    + ! : | + !   : | 1 janet_symcache_findmem  (in bender) + 384  [0x1046d279c]  symcache.c:113
+    + ! : | + !   : 1 unmarshal_one  (in bender) + 1424  [0x1046b604c]  marsh.c:1539
+    + ! : | + !   : | 1 janet_v_grow  (in bender) + 76  [0x10467fdf8]  vector.c:35
+    + ! : | + !   : |   1 janet_srealloc  (in bender) + 36  [0x1046b0850]  gc.c:3510
+    + ! : | + !   : 1 unmarshal_one  (in bender) + 1512  [0x1046b60a4]  marsh.c:1543
+    + ! : | + !   :   1 unmarshal_one_env  (in bender) + 436  [0x1046ea5f0]  marsh.c:905
+    + ! : | + !   :     1 unmarshal_one  (in bender) + 1824  [0x1046b61dc]  marsh.c:1590
+    + ! : | + !   :       1 unmarshal_one  (in bender) + 1168  [0x1046b5f4c]  marsh.c:1725
+    + ! : | + !   :         1 janet_table_get  (in bender) + 0  [0x10468548c]  table.c:149
+    + ! : | + !   2 unmarshal_one  (in bender) + 1716  [0x1046b6170]  marsh.c:1584
+    + ! : | + !     1 janet_gcalloc  (in bender) + 24  [0x1046747d8]  gc.c:2370
+    + ! : | + !     1 janet_gcalloc  (in bender) + 804  [0x104674ae4]  gc.c:2379
+    + ! : | + !       1 _posix_memalign  (in libsystem_malloc.dylib) + 52  [0x18152ffe0]
+    + ! : | + !         1 _malloc_zone_memalign  (in libsystem_malloc.dylib) + 300  [0x18152f8f8]
+    + ! : | + !           1 _xzm_xzone_malloc_freelist_outlined  (in libsystem_malloc.dylib) + 756  [0x181526994]
+    + ! : | + 2 janet_channel_pop_with_lock  (in bender) + 320  [0x104698d90]  abstract.c:221
+    + ! : | + ! 2 _pthread_mutex_firstfit_unlock_slow  (in libsystem_pthread.dylib) + 220  [0x1816feb94]
+    + ! : | + !   2 _pthread_mutex_firstfit_wake  (in libsystem_pthread.dylib) + 28  [0x181700f0c]
+    + ! : | + !     2 __psynch_mutexdrop  (in libsystem_kernel.dylib) + 8  [0x1816c2ba8]
+    + ! : | + 1 janet_channel_pop_with_lock  (in bender) + 228  [0x104698d34]  ev.c:377
+    + ! : | 9 cfun_proc_spawn_impl  (in bender) + 1772  [0x1046c8264]  proc.c:1225
+    + ! : | + 3 janet_table_put  (in bender) + 384  [0x104675144]  table.c:0
+    + ! : | + ! 2 janet_gc_barrier  (in bender) + 700  [0x104675e40]  gc.c:0
+    + ! : | + ! 1 janet_gc_barrier  (in bender) + 668  [0x104675e20]  gc.c:2254
+    + ! : | + 3 janet_table_put  (in bender) + 308  [0x1046750f8]  table.c:380
+    + ! : | + ! 1 free  (in libsystem_malloc.dylib) + 0  [0x1814f66b8]
+    + ! : | + ! 1 janet_table_rehash  (in bender) + 52  [0x1046d3544]  util.c:1221
+    + ! : | + ! : 1 _xzm_xzone_thread_cache_fill_and_malloc  (in libsystem_malloc.dylib) + 120  [0x181526638]
+    + ! : | + ! 1 janet_table_rehash  (in bender) + 72  [0x1046d3558]  wrap.c:166
+    + ! : | + !   1 _tlv_get_addr  (in libdyld.dylib) + 0  [0x181300388]
+    + ! : | + 1 janet_gc_barrier  (in bender) + 1028  [0x104675f88]  gc.c:2309
+    + ! : | + 1 janet_gc_barrier  (in bender) + 1276  [0x104676080]  gc.c:2347
+    + ! : | + ! 1 janet_xfb_bucket_append  (in bender) + 84  [0x1046aebb0]  gc.c:2728
+    + ! : | + 1 janet_xfb_bucket_append  (in bender) + 84  [0x1046aebb0]  gc.c:2728
+    + ! : | 8 cfun_proc_spawn_impl  (in bender) + 76  [0x1046c7bc4]  proc.c:1075
+    + ! : | + 6 janet_fiber  (in bender) + 48  [0x10469ef10]  fiber.c:501
+    + ! : | + ! 4 janet_gcalloc  (in bender) + 1084  [0x104674bfc]  gc.c:2379
+    + ! : | + ! : 4 _platform_memmove  (in libsystem_platform.dylib) + 536  [0x18170d578]
+    + ! : | + ! 1 janet_gcalloc  (in bender) + 1312  [0x104674ce0]  gc.c:0
+    + ! : | + ! 1 janet_gcalloc  (in bender) + 804  [0x104674ae4]  gc.c:2379
+    + ! : | + !   1 _posix_memalign  (in libsystem_malloc.dylib) + 52  [0x18152ffe0]
+    + ! : | + !     1 _malloc_zone_memalign  (in libsystem_malloc.dylib) + 300  [0x18152f8f8]
+    + ! : | + !       1 _xzm_xzone_malloc_freelist_outlined  (in libsystem_malloc.dylib) + 756  [0x181526994]
+    + ! : | + 2 janet_fiber  (in bender) + 164  [0x10469ef84]  fiber.c:537
+    + ! : | +   2 _xzm_xzone_thread_cache_fill_and_malloc  (in libsystem_malloc.dylib) + 120  [0x181526638]
+    + ! : | 6 cfun_channel_pop  (in bender) + 140  [0x1046997c4]  abstract.c:217
+    + ! : | + 5 _pthread_mutex_firstfit_lock_slow  (in libsystem_pthread.dylib) + 216  [0x1816fe8e0]
+    + ! : | + ! 5 _pthread_mutex_firstfit_lock_wait  (in libsystem_pthread.dylib) + 84  [0x181700e9c]
+    + ! : | + !   5 __psynch_mutexwait  (in libsystem_kernel.dylib) + 8  [0x1816c29dc]
+    + ! : | + 1 _pthread_mutex_lock_init_slow  (in libsystem_pthread.dylib) + 76  [0x1816fe550]
+    + ! : | 5 cfun_proc_spawn_impl  (in bender) + 548  [0x1046c7d9c]  abstract.c:39
+    + ! : | + 2 janet_gcalloc  (in bender) + 1236  [0x104674c94]  gc.c:1371
+    + ! : | + 2 janet_gcalloc  (in bender) + 1084  [0x104674bfc]  gc.c:2379
+    + ! : | + ! 2 _platform_memmove  (in libsystem_platform.dylib) + 12,536  [0x18170d36c,0x18170d578]
+    + ! : | + 1 janet_gcalloc  (in bender) + 804  [0x104674ae4]  gc.c:2379
+    + ! : | +   1 _posix_memalign  (in libsystem_malloc.dylib) + 52  [0x18152ffe0]
+    + ! : | +     1 _malloc_zone_memalign  (in libsystem_malloc.dylib) + 300  [0x18152f8f8]
+    + ! : | +       1 _xzm_xzone_malloc_freelist_outlined  (in libsystem_malloc.dylib) + 756  [0x181526994]
+    + ! : | 5 cfun_proc_spawn_impl  (in bender) + 1684  [0x1046c820c]  proc.c:1214
+    + ! : | + 5 getenv  (in libsystem_c.dylib) + 64  [0x181591ef8]
+    + ! : | +   5 __findenv_locked  (in libsystem_c.dylib) + 88,64,...  [0x181591f7c,0x181591f64,...]
+    + ! : | 4 cfun_proc_lane_lookup  (in bender) + 304  [0x1046c85e0]  proc.c:492
+    + ! : | + 3 getenv  (in libsystem_c.dylib) + 64  [0x181591ef8]
+    + ! : | + ! 3 __findenv_locked  (in libsystem_c.dylib) + 20,88,...  [0x181591f38,0x181591f7c,...]
+    + ! : | + 1 getenv  (in libsystem_c.dylib) + 44  [0x181591ee4]
+    + ! : | +   1 _os_unfair_lock_lock_slow  (in libsystem_platform.dylib) + 172  [0x18170b3c0]
+    + ! : | +     1 __ulock_wait2  (in libsystem_kernel.dylib) + 8  [0x1816cdc98]
+    + ! : | 4 cfun_proc_recv  (in bender) + 480  [0x1046cb488]  ev.c:1922
+    + ! : | + 2 janet_channel_pop_with_lock  (in bender) + 852  [0x104698fa4]  ev.c:358
+    + ! : | + ! 1 janet_q_maybe_resize  (in bender) + 48  [0x1046e3410]  ev.c:333
+    + ! : | + ! 1 janet_q_maybe_resize  (in bender) + 128  [0x1046e3460]  ev.c:337
+    + ! : | + !   1 _malloc_zone_malloc  (in libsystem_malloc.dylib) + 100  [0x18152f120]
+    + ! : | + 1 janet_chan_remove_stale  (in bender) + 80  [0x1046e3614]  ev.c:1580
+    + ! : | + 1 janet_channel_pop_with_lock  (in bender) + 976  [0x104699020]  gc.c:0
+    + ! : | 4 cfun_proc_recv  (in bender) + 316  [0x1046cb3e4]  proc.c:1454
+    + ! : | + 3 janet_abstract_threaded  (in bender) + 128  [0x104675200]  abstract.c:128
+    + ! : | + ! 2 janet_table_put  (in bender) + 96  [0x104675024]  table.c:0
+    + ! : | + ! : 1 janet_dict_find  (in bender) + 16  [0x1046d2b58]  util.c:305
+    + ! : | + ! : 1 janet_dict_find  (in bender) + 184  [0x1046d2c00]  util.c:318
+    + ! : | + ! 1 janet_table_put  (in bender) + 308  [0x1046750f8]  table.c:380
+    + ! : | + !   1 janet_table_rehash  (in bender) + 204  [0x1046d35dc]  table.c:114
+    + ! : | + 1 janet_abstract_threaded  (in bender) + 36  [0x1046751a4]  abstract.c:109
+    + ! : | +   1 _xzm_xzone_thread_cache_fill_and_malloc  (in libsystem_malloc.dylib) + 120  [0x181526638]
+    + ! : | 3 cfun_proc_spawn_impl  (in bender) + 1856  [0x1046c82b8]  ev.c:748
+    + ! : | + 3 janet_schedule_general  (in bender) + 104  [0x104696e88]  ev.c:736
+    + ! : | +   2 janet_table_put  (in bender) + 96  [0x104675024]  table.c:0
+    + ! : | +   ! 2 janet_dict_find  (in bender) + 184  [0x1046d2c00]  util.c:318
+    + ! : | +   1 janet_table_put  (in bender) + 308  [0x1046750f8]  table.c:380
+    + ! : | +     1 janet_table_rehash  (in bender) + 216  [0x1046d35e8]  table.c:114
+    + ! : | +       1 janet_dict_find  (in bender) + 184  [0x1046d2c00]  util.c:318
+    + ! : | 3 cfun_proc_spawn_impl  (in bender) + 148  [0x1046c7c0c]  proc.c:1094
+    + ! : | + 1 janet_gcalloc  (in bender) + 1312  [0x104674ce0]  gc.c:0
+    + ! : | + 1 janet_gcalloc  (in bender) + 1276  [0x104674cbc]  gc.c:1376
+    + ! : | + 1 janet_gcalloc  (in bender) + 1084  [0x104674bfc]  gc.c:2379
+    + ! : | +   1 _platform_memmove  (in libsystem_platform.dylib) + 536  [0x18170d578]
+    + ! : | 2 janet_core_setdyn  (in bender) + 164  [0x10468d350]  corelib.c:286
+    + ! : | + 1 janet_table_put  (in bender) + 384  [0x104675144]  table.c:0
+    + ! : | + ! 1 janet_gc_barrier  (in bender) + 672  [0x104675e24]  gc.c:2254
+    + ! : | + 1 janet_xfb_bucket_append  (in bender) + 104  [0x1046aebc4]  gc.c:2730
+    + ! : | 1 cfun_channel_pop  (in bender) + 156  [0x1046997d4]  ev.c:1998
+    + ! : | 1 cfun_channel_pop  (in bender) + 184  [0x1046997f0]  ev.c:2001
+    + ! : | + 1 janet_await  (in bender) + 24  [0x1046965d0]  ev.c:930
+    + ! : | +   1 janet_signalv  (in bender) + 212  [0x104683494]  capi.c:89
+    + ! : | +     1 DYLD-STUB$$_longjmp  (in bender) + 4  [0x1047027fc]
+    + ! : | 1 cfun_proc_send  (in bender) + 256  [0x1046cae98]  ev.c:1828
+    + ! : | + 1 janet_channel_push_with_lock  (in bender) + 2332  [0x10469892c]  abstract.c:221
+    + ! : | +   1 _pthread_mutex_firstfit_unlock_slow  (in libsystem_pthread.dylib) + 188  [0x1816feb74]
+    + ! : | 1 cfun_proc_spawn  (in bender) + 180  [0x1046c9f50]  capi.c:285
+    + ! : | 1 cfun_proc_spawn  (in bender) + 236  [0x1046c9f88]  proc.c:0
+    + ! : | 1 cfun_proc_spawn_impl  (in bender) + 24  [0x1046c7b90]  proc.c:1066
+    + ! : | 1 cfun_proc_spawn_impl  (in bender) + 168  [0x1046c7c20]  proc.c:1091
+    + ! : | 1 cfun_proc_spawn_impl  (in bender) + 1500  [0x1046c8154]  symcache.c:191
+    + ! : | + 1 janet_symbol  (in bender) + 40  [0x10468e348]  symcache.c:173
+    + ! : | 1 cfun_proc_spawn_impl  (in bender) + 1084  [0x1046c7fb4]  table.c:92
+    + ! : | + 1 janet_gcalloc  (in bender) + 1268  [0x104674cb4]  gc.c:0
+    + ! : | 1 cfun_proc_spawn_impl  (in bender) + 1148  [0x1046c7ff4]  wrap.c:173
+    + ! : | + 1 _platform_memset_pattern16  (in libsystem_platform.dylib) + 320  [0x18170b260]
+    + ! : | 1 janet_core_setdyn  (in bender) + 56  [0x10468d2e4]  corelib.c:283
+    + ! : | 1 janet_core_type  (in bender) + 76  [0x1046902ec]  corelib.c:0
+    + ! : |   1 janet_symbol  (in bender) + 152  [0x10468e3b8]  symcache.c:176
+    + ! : |     1 janet_symcache_findmem  (in bender) + 92  [0x1046d2678]  symcache.c:98
+    + ! : 35 run_vm  (in bender) + 15276  [0x1046dda20]  tuple.c:36
+    + ! : | 24 janet_gcalloc  (in bender) + 804  [0x104674ae4]  gc.c:2379
+    + ! : | + 24 _posix_memalign  (in libsystem_malloc.dylib) + 52  [0x18152ffe0]
+    + ! : | +   24 _malloc_zone_memalign  (in libsystem_malloc.dylib) + 300  [0x18152f8f8]
+    + ! : | +     21 _xzm_xzone_malloc_freelist_outlined  (in libsystem_malloc.dylib) + 756  [0x181526994]
+    + ! : | +     3 _xzm_xzone_malloc_tiny  (in libsystem_malloc.dylib) + 336,764  [0x18152508c,0x181525238]
+    + ! : | 8 janet_gcalloc  (in bender) + 1084  [0x104674bfc]  gc.c:2379
+    + ! : | + 8 _platform_memmove  (in libsystem_platform.dylib) + 536,0,...  [0x18170d578,0x18170d360,...]
+    + ! : | 2 janet_gcalloc  (in bender) + 1236  [0x104674c94]  gc.c:1371
+    + ! : | 1 janet_gcalloc  (in bender) + 896  [0x104674b40]  gc.c:2379
+    + ! : 22 run_vm  (in bender) + 13460  [0x1046dd308]  vm.c:2745
+    + ! : | 19 cfun_proc_send  (in bender) + 408  [0x1046caf30]  proc.c:1348
+    + ! : | + 15 janet_channel_push_with_lock  (in bender) + 344  [0x104698168]  ev.c:1776
+    + ! : | + ! 15 janet_ev_post_event  (in bender) + 136  [0x104675738]  ev.c:3332
+    + ! : | + !   15 write  (in libsystem_kernel.dylib) + 8  [0x1816c3834]
+    + ! : | + 4 janet_channel_push_with_lock  (in bender) + 2576  [0x104698a20]  ev.c:1047
+    + ! : | +   4 janet_marshal  (in bender) + 252  [0x1046a035c]  marsh.c:728
+    + ! : | +     1 janet_table_put_raw  (in bender) + 168  [0x1046b558c]  table.c:407
+    + ! : | +     1 marshal_one  (in bender) + 312  [0x1046b4b04]  marsh.c:499
+    + ! : | +     : 1 janet_dict_find  (in bender) + 52  [0x1046d2b7c]  util.c:293
+    + ! : | +     :   1 janet_hash  (in bender) + 0  [0x104690378]  value.c:321
+    + ! : | +     1 marshal_one  (in bender) + 1592  [0x1046b5004]  marsh.c:607
+    + ! : | +     : 1 marshal_one  (in bender) + 832  [0x1046b4d0c]  marsh.c:560
+    + ! : | +     :   1 janet_buffer_extra  (in bender) + 100  [0x10467b9c0]  buffer.c:127
+    + ! : | +     :     1 _realloc  (in libsystem_malloc.dylib) + 452  [0x18152ff14]
+    + ! : | +     :       1 _malloc_zone_realloc  (in libsystem_malloc.dylib) + 148  [0x18152f6f8]
+    + ! : | +     :         1 xzm_realloc  (in libsystem_malloc.dylib) + 808  [0x18151feac]
+    + ! : | +     :           1 <deduplicated_symbol>  (in libsystem_malloc.dylib) + 112  [0x18151f1cc]
+    + ! : | +     1 pushint  (in bender) + 228  [0x1046b47ec]  marsh.c:154
+    + ! : | 2 cfun_proc_send  (in bender) + 388  [0x1046caf1c]  proc.c:1347
+    + ! : | + 2 janet_tuple_n  (in bender) + 44  [0x104689330]  tuple.c:51
+    + ! : | +   2 janet_gcalloc  (in bender) + 56  [0x1046747f8]  gc.c:2374
+    + ! : | 1 cfun_proc_send  (in bender) + 144  [0x1046cae28]  proc.c:1355
+    + ! : |   1 janet_symbol  (in bender) + 152  [0x10468e3b8]  symcache.c:176
+    + ! : |     1 janet_symcache_findmem  (in bender) + 24  [0x1046d2634]  symcache.c:71
+    + ! : 6 run_vm  (in bender) + 16052  [0x1046ddd28]  vm.c:2844
+    + ! : | 1 janet_gc_barrier  (in bender) + 700  [0x104675e40]  gc.c:0
+    + ! : | 1 janet_table_put  (in bender) + 96  [0x104675024]  table.c:0
+    + ! : | + 1 janet_dict_find  (in bender) + 184  [0x1046d2c00]  util.c:318
+    + ! : | 1 janet_table_put  (in bender) + 84  [0x104675018]  table.c:0
+    + ! : | 1 janet_table_put  (in bender) + 12  [0x104674fd0]  table.c:366
+    + ! : | 1 janet_table_put  (in bender) + 308  [0x1046750f8]  table.c:380
+    + ! : | + 1 janet_table_rehash  (in bender) + 180  [0x1046d35c4]  table.c:134
+    + ! : | 1 janet_table_put  (in bender) + 324  [0x104675108]  table.c:382
+    + ! : |   1 janet_dict_find  (in bender) + 156  [0x1046d2be4]  util.c:300
+    + ! : 4 run_vm  (in bender) + 540,7740  [0x1046da090,0x1046dbcb0]  vm.c:0
+    + ! : 4 run_vm  (in bender) + 9880,9884,...  [0x1046dc50c,0x1046dc510,...]  vm.c:2517
+    + ! : 3 run_vm  (in bender) + 10476  [0x1046dc760]  vm.c:2562
+    + ! : | 2 janet_gcalloc  (in bender) + 1268  [0x104674cb4]  gc.c:0
+    + ! : | 1 janet_gcalloc  (in bender) + 1236  [0x104674c94]  gc.c:1371
+    + ! : 3 run_vm  (in bender) + 14416  [0x1046dd6c4]  vm.c:2688
+    + ! : | 1 janet_fiber_cframe  (in bender) + 32  [0x1046ac474]  fiber.c:977
+    + ! : | 1 janet_fiber_cframe  (in bender) + 44  [0x1046ac480]  fiber.c:979
+    + ! : | 1 janet_fiber_cframe  (in bender) + 140  [0x1046ac4e0]  fiber.c:994
+    + ! : 2 janet_fiber_cframe  (in bender) + 160,164  [0x1046ac4f4,0x1046ac4f8]  fiber.c:998
+    + ! : 2 run_vm  (in bender) + 9348  [0x1046dc2f8]  vm.c:2452
+    + ! : | 1 janet_equals  (in bender) + 20  [0x1046950b4]  value.c:303
+    + ! : | 1 janet_equals  (in bender) + 64  [0x1046950e0]  value.c:305
+    + ! : 1 janet_getindex  (in bender) + 524  [0x1046d6790]  value.c:648
+    + ! : 1 run_vm  (in bender) + 10664  [0x1046dc81c]  fiber.c:711
+    + ! : 1 run_vm  (in bender) + 15356  [0x1046dda70]  util.c:255
+    + ! : | 1 janet_hash  (in bender) + 0  [0x104690378]  value.c:321
+    + ! : 1 run_vm  (in bender) + 15332  [0x1046dda58]  util.c:287
+    + ! : | 1 _platform_memmove  (in libsystem_platform.dylib) + 428  [0x18170d50c]
+    + ! : 1 run_vm  (in bender) + 396  [0x1046da000]  vm.c:0
+    + ! : | 1 _tlv_get_addr  (in libdyld.dylib) + 12  [0x181300394]
+    + ! : 1 run_vm  (in bender) + 7756  [0x1046dbcc0]  vm.c:2405
+    + ! : 1 run_vm  (in bender) + 10364  [0x1046dc6f0]  vm.c:2552
+    + ! : | 1 janet_gcalloc  (in bender) + 48  [0x1046747f0]  gc.c:2374
+    + ! : 1 run_vm  (in bender) + 10876  [0x1046dc8f0]  vm.c:2584
+    + ! : 1 run_vm  (in bender) + 11104  [0x1046dc9d4]  vm.c:2589
+    + ! : 1 run_vm  (in bender) + 11684  [0x1046dcc18]  vm.c:2614
+    + ! : 1 run_vm  (in bender) + 14416  [0x1046dd6c4]  vm.c:2689
+    + ! : 1 run_vm  (in bender) + 13204  [0x1046dd208]  vm.c:2705
+    + ! : 1 run_vm  (in bender) + 13876  [0x1046dd4a8]  vm.c:2729
+    + ! : 1 run_vm  (in bender) + 13440  [0x1046dd2f4]  vm.c:2744
+    + ! :   1 janet_fiber_cframe  (in bender) + 40  [0x1046ac47c]  fiber.c:977
+    + ! 1 janet_fiber_trampoline  (in bender) + 40  [0x1046ab0fc]  vm.c:3382
+    + ! 1 janet_fiber_trampoline  (in bender) + 224  [0x1046ab1b4]  vm.c:3387
+    + 7 janet_fiber_ctx_swap  (in bender) + 72,84  [0x104674770,0x10467477c]
+    1739 Thread_58149751
+      1413 thread_start  (in libsystem_pthread.dylib) + 8  [0x1816fec1c]
+      ! 1413 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x181703c58]
+      !   1413 janet_lane_thread_body  (in bender) + 88  [0x1046f4134]  proc.c:113
+      !     1412 janet_go_thread_subr  (in bender) + 1192  [0x10469f48c]  ev.c:2630
+      !     : 1391 janet_loop1  (in bender) + 2072  [0x10469d028]  ev.c:2550
+      !     : | 1320 janet_loop1_impl  (in bender) + 268  [0x10469d500]  ev.c:0
+      !     : | + 1320 kevent  (in libsystem_kernel.dylib) + 8  [0x1816c5fc4]
+      !     : | 39 janet_loop1_impl  (in bender) + 544  [0x10469d614]  ev.c:2683
+      !     : | + 19 janet_thread_chan_cb  (in bender) + 1540  [0x10469bb2c]  ev.c:1068
+      !     : | + ! 19 janet_unmarshal  (in bender) + 204  [0x1046916d4]  marsh.c:1773
+      !     : | + !   14 unmarshal_one  (in bender) + 1824  [0x1046b61dc]  marsh.c:1590
+      !     : | + !   : 6 unmarshal_one  (in bender) + 1468  [0x1046b6078]  marsh.c:1512
+      !     : | + !   : | 2 unmarshal_one_def  (in bender) + 1288  [0x1046ea2ac]  marsh.c:1077
+      !     : | + !   : | + 1 <deduplicated_symbol>  (in libsystem_malloc.dylib) + 212  [0x18151f230]
+      !     : | + !   : | + 1 _xzm_xzone_thread_cache_fill_and_malloc  (in libsystem_malloc.dylib) + 116  [0x181526634]
+      !     : | + !   : | +   1 _xzm_xzone_find_and_malloc_from_freelist_chunk  (in libsystem_malloc.dylib) + 768  [0x18152727c]
+      !     : | + !   : | 2 unmarshal_one_def  (in bender) + 560  [0x1046e9fd4]  marsh.c:989
+      !     : | + !   : | + 2 unmarshal_one  (in bender) + 1280  [0x1046b5fbc]  marsh.c:0
+      !     : | + !   : | +   2 janet_v_grow  (in bender) + 76  [0x10467fdf8]  vector.c:35
+      !     : | + !   : | +     2 janet_srealloc  (in bender) + 96  [0x1046b088c]  gc.c:3513
+      !     : | + !   : | +       2 _realloc  (in libsystem_malloc.dylib) + 452  [0x18152ff14]
+      !     : | + !   : | +         1 _malloc_zone_realloc  (in libsystem_malloc.dylib) + 148  [0x18152f6f8]
+      !     : | + !   : | +         ! 1 xzm_realloc  (in libsystem_malloc.dylib) + 808  [0x18151feac]
+      !     : | + !   : | +         !   1 _xzm_xzone_thread_cache_fill_and_malloc  (in libsystem_malloc.dylib) + 116  [0x181526634]
+      !     : | + !   : | +         !     1 _xzm_xzone_find_and_malloc_from_freelist_chunk  (in libsystem_malloc.dylib) + 1308  [0x181527498]
+      !     : | + !   : | +         !       1 xzm_segment_group_alloc_chunk  (in libsystem_malloc.dylib) + 628  [0x181508670]
+      !     : | + !   : | +         !         1 _xzm_segment_group_alloc_segment  (in libsystem_malloc.dylib) + 752  [0x18150add0]
+      !     : | + !   : | +         !           1 mach_vm_map  (in libsystem_kernel.dylib) + 128  [0x1816bf9d0]
+      !     : | + !   : | +         !             1 _kernelrpc_mach_vm_map_trap  (in libsystem_kernel.dylib) + 8  [0x1816bfacc]
+      !     : | + !   : | +         1 _malloc_zone_realloc  (in libsystem_malloc.dylib) + 48  [0x18152f694]
+      !     : | + !   : | 1 unmarshal_one_def  (in bender) + 516  [0x1046e9fa8]  marsh.c:1007
+      !     : | + !   : | + 1 _xzm_xzone_thread_cache_fill_and_malloc  (in libsystem_malloc.dylib) + 120  [0x181526638]
+      !     : | + !   : | 1 unmarshal_one_def  (in bender) + 820  [0x1046ea0d8]  marsh.c:1020
+      !     : | + !   : |   1 _malloc_zone_malloc  (in libsystem_malloc.dylib) + 56  [0x18152f0f4]
+      !     : | + !   : 5 unmarshal_one  (in bender) + 1512  [0x1046b60a4]  marsh.c:1543
+      !     : | + !   : | 3 unmarshal_one_env  (in bender) + 436  [0x1046ea5f0]  marsh.c:905
+      !     : | + !   : | + 2 unmarshal_one  (in bender) + 1716  [0x1046b6170]  marsh.c:1584
+      !     : | + !   : | + ! 1 janet_gcalloc  (in bender) + 1256  [0x104674ca8]  gc.c:1369
+      !     : | + !   : | + ! 1 janet_gcalloc  (in bender) + 1236  [0x104674c94]  gc.c:1371
+      !     : | + !   : | + 1 unmarshal_one  (in bender) + 1824  [0x1046b61dc]  marsh.c:1590
+      !     : | + !   : | +   1 unmarshal_one  (in bender) + 1092  [0x1046b5f00]  marsh.c:1705
+      !     : | + !   : | 1 unmarshal_one_env  (in bender) + 136  [0x1046ea4c4]  marsh.c:883
+      !     : | + !   : | + 1 janet_gcalloc  (in bender) + 1236  [0x104674c94]  gc.c:1371
+      !     : | + !   : | 1 unmarshal_one_env  (in bender) + 388  [0x1046ea5c0]  marsh.c:899
+      !     : | + !   : |   1 _malloc_zone_malloc  (in libsystem_malloc.dylib) + 100  [0x18152f120]
+      !     : | + !   : 2 unmarshal_one  (in bender) + 1424  [0x1046b604c]  marsh.c:1539
+      !     : | + !   : | 2 janet_v_grow  (in bender) + 76  [0x10467fdf8]  vector.c:35
+      !     : | + !   : |   1 janet_srealloc  (in bender) + 4  [0x1046b0830]  gc.c:3507
+      !     : | + !   : |   1 janet_srealloc  (in bender) + 96  [0x1046b088c]  gc.c:3513
+      !     : | + !   : |     1 _realloc  (in libsystem_malloc.dylib) + 452  [0x18152ff14]
+      !     : | + !   : |       1 _malloc_zone_realloc  (in libsystem_malloc.dylib) + 148  [0x18152f6f8]
+      !     : | + !   : |         1 xzm_realloc  (in libsystem_malloc.dylib) + 768  [0x18151fe84]
+      !     : | + !   : 1 unmarshal_one  (in bender) + 1356  [0x1046b6008]  marsh.c:1532
+      !     : | + !   :   1 janet_gcalloc  (in bender) + 1236  [0x104674c94]  gc.c:1371
+      !     : | + !   3 unmarshal_one  (in bender) + 1716  [0x1046b6170]  marsh.c:1584
+      !     : | + !   : 1 janet_gcalloc  (in bender) + 1268  [0x104674cb4]  gc.c:0
+      !     : | + !   : 1 janet_gcalloc  (in bender) + 1236  [0x104674c94]  gc.c:1371
+      !     : | + !   : 1 janet_gcalloc  (in bender) + 1288  [0x104674cc8]  gc.c:1377
+      !     : | + !   1 unmarshal_one  (in bender) + 76  [0x1046b5b08]  marsh.c:1437
+      !     : | + !   1 unmarshal_one  (in bender) + 2812  [0x1046b65b8]  vector.c:35
+      !     : | + !     1 janet_srealloc  (in bender) + 96  [0x1046b088c]  gc.c:3513
+      !     : | + !       1 _realloc  (in libsystem_malloc.dylib) + 452  [0x18152ff14]
+      !     : | + !         1 _malloc_zone_realloc  (in libsystem_malloc.dylib) + 148  [0x18152f6f8]
+      !     : | + !           1 xzm_realloc  (in libsystem_malloc.dylib) + 496  [0x18151fd74]
+      !     : | + 8 janet_thread_chan_cb  (in bender) + 68  [0x10469b56c]  ev.c:1463
+      !     : | + ! 7 _pthread_mutex_firstfit_lock_slow  (in libsystem_pthread.dylib) + 216  [0x1816fe8e0]
+      !     : | + ! : 7 _pthread_mutex_firstfit_lock_wait  (in libsystem_pthread.dylib) + 84  [0x181700e9c]
+      !     : | + ! :   7 __psynch_mutexwait  (in libsystem_kernel.dylib) + 8  [0x1816c29dc]
+      !     : | + ! 1 DYLD-STUB$$pthread_mutex_lock  (in bender) + 0  [0x104702e58]
+      !     : | + 7 janet_thread_chan_cb  (in bender) + 1196  [0x10469b9d4]  abstract.c:221
+      !     : | + ! 6 _pthread_mutex_firstfit_unlock_slow  (in libsystem_pthread.dylib) + 220  [0x1816feb94]
+      !     : | + ! : 6 _pthread_mutex_firstfit_wake  (in libsystem_pthread.dylib) + 28  [0x181700f0c]
+      !     : | + ! :   6 __psynch_mutexdrop  (in libsystem_kernel.dylib) + 8  [0x1816c2ba8]
+      !     : | + ! 1 _pthread_mutex_unlock_init_slow  (in libsystem_pthread.dylib) + 72  [0x1816fea5c]
+      !     : | + 1 _pthread_mutex_lock_init_slow  (in libsystem_pthread.dylib) + 116  [0x1816fe578]
+      !     : | + 1 janet_thread_chan_cb  (in bender) + 1560  [0x10469bb40]  buffer.c:76
+      !     : | + ! 1 _free  (in libsystem_malloc.dylib) + 96  [0x18152fd30]
+      !     : | + 1 janet_thread_chan_cb  (in bender) + 800  [0x10469b848]  ev.c:1062
+      !     : | + 1 janet_thread_chan_cb  (in bender) + 0  [0x10469b528]  ev.c:1457
+      !     : | + 1 janet_thread_chan_cb  (in bender) + 1180  [0x10469b9c4]  ev.c:748
+      !     : | +   1 janet_schedule_general  (in bender) + 0  [0x104696e20]  ev.c:731
+      !     : | 31 janet_loop1_impl  (in bender) + 500  [0x10469d5e8]  ev.c:2679
+      !     : | + 30 read  (in libsystem_kernel.dylib) + 8  [0x1816c091c]
+      !     : | + 1 DYLD-STUB$$read  (in bender) + 0  [0x104702ee8]
+      !     : | 1 janet_loop1_impl  (in bender) + 240  [0x10469d4e4]  ev.c:0
+      !     : 16 janet_loop1  (in bender) + 1296  [0x10469cd20]  ev.c:2514
+      !     : | 9 janet_collect_fiber_minor  (in bender) + 244  [0x104694764]  gc.c:2856
+      !     : | + 6 janet_mark_fiber  (in bender) + 180  [0x1046ada98]  gc.c:654
+      !     : | + ! 6 janet_mark  (in bender) + 420  [0x104696030]  gc.c:223
+      !     : | + !   3 janet_procat_mark  (in bender) + 228  [0x1046c9e4c]  proc.c:1007
+      !     : | + !   : 3 janet_mark  (in bender) + 420  [0x104696030]  gc.c:223
+      !     : | + !   :   2 janet_mark_abstract  (in bender) + 320  [0x1046adf48]  gc.c:313
+      !     : | + !   :   | 1 janet_table_put  (in bender) + 96  [0x104675024]  table.c:0
+      !     : | + !   :   | + 1 janet_dict_find  (in bender) + 184  [0x1046d2c00]  util.c:318
+      !     : | + !   :   | 1 janet_table_put  (in bender) + 384  [0x104675144]  table.c:0
+      !     : | + !   :   |   1 janet_gc_barrier  (in bender) + 688  [0x104675e34]  gc.c:1369
+      !     : | + !   :   1 janet_dict_find  (in bender) + 436  [0x1046d2cfc]  util.c:323
+      !     : | + !   1 janet_mark_abstract  (in bender) + 336  [0x1046adf58]  gc.c:0
+      !     : | + !   1 janet_procat_mark  (in bender) + 200  [0x1046c9e30]  proc.c:1004
+      !     : | + !   1 janet_procat_mark  (in bender) + 228  [0x1046c9e4c]  proc.c:1008
+      !     : | + 3 janet_mark_fiber  (in bender) + 904  [0x1046add6c]  gc.c:704
+      !     : | +   3 janet_mark_table  (in bender) + 396  [0x1046ad984]  gc.c:396
+      !     : | +     3 janet_mark  (in bender) + 1032  [0x104696294]  gc.c:339
+      !     : | +       3 janet_mark  (in bender) + 60  [0x104695ec8]  gc.c:0
+      !     : | 2 janet_collect_fiber_minor  (in bender) + 436  [0x104694824]  gc.c:0
+      !     : | + 2 janet_sweep_list  (in bender) + 236  [0x1046e69cc]  gc.c:964
+      !     : | 2 janet_collect_fiber_minor  (in bender) + 368  [0x1046947e0]  gc.c:2760
+      !     : | + 2 janet_mark  (in bender) + 712  [0x104696154]  gc.c:220
+      !     : | +   2 janet_mark_table  (in bender) + 396  [0x1046ad984]  gc.c:396
+      !     : | +     1 janet_mark  (in bender) + 420  [0x104696030]  gc.c:223
+      !     : | +     ! 1 janet_procat_mark  (in bender) + 104  [0x1046c9dd0]  proc.c:987
+      !     : | +     !   1 janet_mark  (in bender) + 1096  [0x1046962d4]  gc.c:223
+      !     : | +     !     1 janet_mark_fiber  (in bender) + 188  [0x1046adaa0]  gc.c:654
+      !     : | +     !       1 janet_mark  (in bender) + 1032  [0x104696294]  gc.c:339
+      !     : | +     !         1 janet_mark  (in bender) + 420  [0x104696030]  gc.c:223
+      !     : | +     !           1 janet_mark_abstract  (in bender) + 160  [0x1046adea8]  table.c:114
+      !     : | +     !             1 janet_dict_find  (in bender) + 8  [0x1046d2b50]  util.c:292
+      !     : | +     1 janet_mark  (in bender) + 1116  [0x1046962e8]  gc.c:223
+      !     : | 1 janet_collect_fiber_minor  (in bender) + 340  [0x1046947c4]  gc.c:2757
+      !     : | 1 janet_collect_fiber_minor  (in bender) + 76  [0x1046946bc]  gc.c:2776
+      !     : | 1 janet_collect_fiber_minor  (in bender) + 712  [0x104694938]  gc.c:2887
+      !     : |   1 getenv  (in libsystem_c.dylib) + 76  [0x181591f04]
+      !     : |     1 _os_unfair_lock_unlock_slow  (in libsystem_platform.dylib) + 56  [0x18170b4bc]
+      !     : |       1 __ulock_wake  (in libsystem_kernel.dylib) + 8  [0x1816c1bcc]
+      !     : 4 janet_loop1  (in bender) + 1108  [0x10469cc64]  vm.c:3590
+      !     : | 2 janet_fiber_ctx_swap  (in bender) + 72  [0x104674770]
+      !     : | 1 janet_continue_no_check  (in bender) + 92  [0x1046dea74]  vm.c:3429
+      !     : | + 1 janet_fiber_did_resume  (in bender) + 40  [0x1046965f8]  ev.c:0
+      !     : | 1 janet_continue_no_check  (in bender) + 976  [0x1046dede8]  vm.c:3561
+      !     : 1 janet_loop1  (in bender) + 64  [0x10469c850]  ev.c:2474
+      !     :   1 janet_expire_timeouts  (in bender) + 44  [0x10469d0c0]  util.c:1053
+      !     :     1 clock_gettime  (in libsystem_c.dylib) + 296  [0x18159fe4c]
+      !     :       1 _mach_boottime_usec  (in libsystem_c.dylib) + 64  [0x1815c54b0]
+      !     :         1 gettimeofday  (in libsystem_c.dylib) + 56  [0x181597dc0]
+      !     :           1 __commpage_gettimeofday_internal  (in libsystem_kernel.dylib) + 44  [0x1816c1c24]
+      !     :             1 mach_absolute_time  (in libsystem_kernel.dylib) + 108  [0x1816c010c]
+      !     1 janet_go_thread_subr  (in bender) + 1192  [0x10469f48c]  ev.c:2631
+      323 janet_fiber_shared_prime  (in bender) + 164  [0x1046ab0d4]  fiber.c:624
+      ! 323 janet_fiber_trampoline  (in bender) + 244  [0x1046ab1c8]  vm.c:3389
+      !   121 run_vm  (in bender) + 11320  [0x1046dcaac]  vm.c:2591
+      !   : 121 ???  (in bender)  load address 0x104674000 + 0x8e214  [0x104702214]
+      !   :   110 janet_collect_fiber_minor  (in bender) + 244  [0x104694764]  gc.c:2856
+      !   :   | 110 janet_mark_fiber  (in bender) + 880  [0x1046add54]  gc.c:682
+      !   :   |   110 janet_mark  (in bender) + 712  [0x104696154]  gc.c:220
+      !   :   |     109 janet_mark_table  (in bender) + 396  [0x1046ad984]  gc.c:396
+      !   :   |     + 102 janet_mark  (in bender) + 420  [0x104696030]  gc.c:223
+      !   :   |     + ! 96 janet_procat_mark  (in bender) + 104  [0x1046c9dd0]  proc.c:987
+      !   :   |     + ! : 96 janet_mark  (in bender) + 1096  [0x1046962d4]  gc.c:223
+      !   :   |     + ! :   28 janet_mark_fiber  (in bender) + 556  [0x1046adc10]  gc.c:522
+      !   :   |     + ! :   | 15 janet_drain_env_queue  (in bender) + 468  [0x1046e6438]  gc.c:465
+      !   :   |     + ! :   | + 12 janet_mark  (in bender) + 1032  [0x104696294]  gc.c:339
+      !   :   |     + ! :   | + ! 7 janet_mark  (in bender) + 420  [0x104696030]  gc.c:223
+      !   :   |     + ! :   | + ! : 3 janet_dict_find  (in bender) + 440,448,...  [0x1046d2d00,0x1046d2d08,...]  util.c:323
+      !   :   |     + ! :   | + ! : 2 janet_mark_abstract  (in bender) + 364  [0x1046adf74]  gc.c:331
+      !   :   |     + ! :   | + ! : 2 janet_mark_abstract  (in bender) + 184  [0x1046adec0]  table.c:153
+      !   :   |     + ! :   | + ! 3 janet_mark  (in bender) + 60  [0x104695ec8]  gc.c:0
+      !   :   |     + ! :   | + ! 2 janet_mark  (in bender) + 24  [0x104695ea4]  gc.c:208
+      !   :   |     + ! :   | + 1 janet_mark  (in bender) + 44  [0x104695eb8]  gc.c:209
+      !   :   |     + ! :   | + 1 janet_mark  (in bender) + 424  [0x104696034]  gc.c:223
+      !   :   |     + ! :   | + 1 janet_mark  (in bender) + 1148  [0x104696308]  gc.c:248
+      !   :   |     + ! :   | 10 janet_drain_env_queue  (in bender) + 44  [0x1046e6290]  gc.c:453
+      !   :   |     + ! :   | + 10 _tlv_get_addr  (in libdyld.dylib) + 0,4  [0x181300388,0x18130038c]
+      !   :   |     + ! :   | 1 janet_drain_env_queue  (in bender) + 36  [0x1046e6288]  gc.c:453
+      !   :   |     + ! :   | 1 janet_drain_env_queue  (in bender) + 544  [0x1046e6484]  gc.c:480
+      !   :   |     + ! :   | + 1 DYLD-STUB$$free  (in bender) + 4  [0x104702aa8]
+      !   :   |     + ! :   | 1 janet_mark  (in bender) + 1148  [0x104696308]  gc.c:248
+      !   :   |     + ! :   14 janet_mark_fiber  (in bender) + 552  [0x1046adc0c]  gc.c:521
+      !   :   |     + ! :   | 12 janet_mark_funcdef  (in bender) + 232,236  [0x1046e622c,0x1046e6230]  gc.c:0
+      !   :   |     + ! :   | 1 janet_mark_funcdef  (in bender) + 80  [0x1046e6194]  gc.c:493
+      !   :   |     + ! :   | 1 janet_mark_funcdef  (in bender) + 248  [0x1046e623c]  gc.c:503
+      !   :   |     + ! :   14 janet_mark_fiber  (in bender) + 904  [0x1046add6c]  gc.c:704
+      !   :   |     + ! :   | 11 janet_mark_table  (in bender) + 396  [0x1046ad984]  gc.c:396
+      !   :   |     + ! :   | + 6 janet_mark  (in bender) + 960  [0x10469624c]  gc.c:416
+      !   :   |     + ! :   | + 3 janet_mark  (in bender) + 1136,1148  [0x1046962fc,0x104696308]  gc.c:248
+      !   :   |     + ! :   | + 2 janet_mark  (in bender) + 1032  [0x104696294]  gc.c:339
+      !   :   |     + ! :   | +   1 janet_mark  (in bender) + 52  [0x104695ec0]  gc.c:209
+      !   :   |     + ! :   | +   : 1 _tlv_get_addr  (in libdyld.dylib) + 20  [0x18130039c]
+      !   :   |     + ! :   | +   1 janet_mark  (in bender) + 432  [0x10469603c]  gc.c:223
+      !   :   |     + ! :   | 1 janet_mark  (in bender) + 1148  [0x104696308]  gc.c:248
+      !   :   |     + ! :   | 1 janet_mark_table  (in bender) + 44  [0x1046ad824]  gc.c:387
+      !   :   |     + ! :   | + 1 _tlv_get_addr  (in libdyld.dylib) + 0  [0x181300388]
+      !   :   |     + ! :   | 1 janet_mark_table  (in bender) + 388  [0x1046ad97c]  gc.c:396
+      !   :   |     + ! :   |   1 janet_mark  (in bender) + 52  [0x104695ec0]  gc.c:209
+      !   :   |     + ! :   |     1 _tlv_get_addr  (in libdyld.dylib) + 0  [0x181300388]
+      !   :   |     + ! :   11 janet_mark_fiber  (in bender) + 524  [0x1046adbf0]  gc.c:96
+      !   :   |     + ! :   | 9 _realloc  (in libsystem_malloc.dylib) + 452  [0x18152ff14]
+      !   :   |     + ! :   | + 7 _malloc_zone_realloc  (in libsystem_malloc.dylib) + 148  [0x18152f6f8]
+      !   :   |     + ! :   | + ! 7 xzm_realloc  (in libsystem_malloc.dylib) + 24,292,...  [0x18151fb9c,0x18151fca8,...]
+      !   :   |     + ! :   | + 2 _malloc_zone_realloc  (in libsystem_malloc.dylib) + 48,124  [0x18152f694,0x18152f6e0]
+      !   :   |     + ! :   | 1 _realloc  (in libsystem_malloc.dylib) + 252  [0x18152fe4c]
+      !   :   |     + ! :   | + 1 xzm_malloc_zone_size  (in libsystem_malloc.dylib) + 20  [0x18152a520]
+      !   :   |     + ! :   | 1 _realloc  (in libsystem_malloc.dylib) + 208  [0x18152fe20]
+      !   :   |     + ! :   6 janet_mark_fiber  (in bender) + 1020  [0x1046adde0]  ev.c:236
+      !   :   |     + ! :   | 5 janet_mark  (in bender) + 420  [0x104696030]  gc.c:223
+      !   :   |     + ! :   | + 3 janet_mark_abstract  (in bender) + 160  [0x1046adea8]  table.c:114
+      !   :   |     + ! :   | + ! 3 janet_dict_find  (in bender) + 192  [0x1046d2c08]  util.h:85
+      !   :   |     + ! :   | + 1 janet_mark_abstract  (in bender) + 344  [0x1046adf60]  gc.c:0
+      !   :   |     + ! :   | + 1 janet_mark_abstract  (in bender) + 320  [0x1046adf48]  gc.c:313
+      !   :   |     + ! :   | +   1 janet_table_put  (in bender) + 384  [0x104675144]  table.c:0
+      !   :   |     + ! :   | +     1 janet_gc_barrier  (in bender) + 672  [0x104675e24]  gc.c:2254
+      !   :   |     + ! :   | 1 janet_mark  (in bender) + 388  [0x104696010]  gc.c:223
+      !   :   |     + ! :   5 janet_mark_fiber  (in bender) + 972  [0x1046addb0]  gc.c:719
+      !   :   |     + ! :   | 4 janet_mark  (in bender) + 412,392  [0x104696028,0x104696014]  gc.c:223
+      !   :   |     + ! :   | 1 janet_mark  (in bender) + 52  [0x104695ec0]  gc.c:209
+      !   :   |     + ! :   |   1 _tlv_get_addr  (in libdyld.dylib) + 20  [0x18130039c]
+      !   :   |     + ! :   4 janet_mark_fiber  (in bender) + 404,356,...  [0x1046adb78,0x1046adb48,...]  gc.c:677
+      !   :   |     + ! :   3 janet_mark_fiber  (in bender) + 132  [0x1046ada68]  gc.c:574
+      !   :   |     + ! :   3 janet_mark_fiber  (in bender) + 916  [0x1046add78]  gc.c:704
+      !   :   |     + ! :   | 2 janet_mark_abstract  (in bender) + 24  [0x1046ade20]  gc.c:305
+      !   :   |     + ! :   | 1 janet_mark_abstract  (in bender) + 328  [0x1046adf50]  gc.c:0
+      !   :   |     + ! :   2 janet_mark  (in bender) + 1148  [0x104696308]  gc.c:248
+      !   :   |     + ! :   2 janet_mark_fiber  (in bender) + 556  [0x1046adc10]  gc.c:679
+      !   :   |     + ! :   1 janet_mark_fiber  (in bender) + 476  [0x1046adbc0]  gc.c:519
+      !   :   |     + ! :   1 janet_mark_fiber  (in bender) + 112  [0x1046ada54]  gc.c:570
+      !   :   |     + ! :   | 1 _tlv_get_addr  (in libdyld.dylib) + 12  [0x181300394]
+      !   :   |     + ! :   1 janet_mark_fiber  (in bender) + 880  [0x1046add54]  gc.c:682
+      !   :   |     + ! :   | 1 janet_mark  (in bender) + 24  [0x104695ea4]  gc.c:208
+      !   :   |     + ! :   1 janet_mark_fiber  (in bender) + 528  [0x1046adbf4]  gc.c:96
+      !   :   |     + ! 3 janet_mark  (in bender) + 1148  [0x104696308]  gc.c:248
+      !   :   |     + ! 1 janet_mark_abstract  (in bender) + 24  [0x1046ade20]  gc.c:305
+      !   :   |     + ! 1 janet_procat_mark  (in bender) + 176  [0x1046c9e18]  proc.c:1000
+      !   :   |     + ! 1 janet_procat_mark  (in bender) + 228  [0x1046c9e4c]  proc.c:1007
+      !   :   |     + !   1 janet_mark  (in bender) + 52  [0x104695ec0]  gc.c:209
+      !   :   |     + !     1 _tlv_get_addr  (in libdyld.dylib) + 12  [0x181300394]
+      !   :   |     + 6 janet_mark_abstract  (in bender) + 352,356  [0x1046adf68,0x1046adf6c]  gc.c:0
+      !   :   |     + 1 janet_mark  (in bender) + 96  [0x104695eec]  gc.c:211
+      !   :   |     1 janet_mark  (in bender) + 1148  [0x104696308]  gc.c:248
+      !   :   9 janet_collect_fiber_minor  (in bender) + 436  [0x104694824]  gc.c:0
+      !   :   | 4 janet_sweep_list  (in bender) + 108,104  [0x1046e694c,0x1046e6948]  gc.c:0
+      !   :   | 2 janet_sweep_list  (in bender) + 200,268  [0x1046e69a8,0x1046e69ec]  gc.c:964
+      !   :   | 1 janet_sweep_list  (in bender) + 452  [0x1046e6aa4]  gc.c:1378
+      !   :   | 1 janet_sweep_list  (in bender) + 180  [0x1046e6994]  gc.c:956
+      !   :   | 1 janet_sweep_list  (in bender) + 388  [0x1046e6a64]  gc.c:965
+      !   :   2 janet_collect_fiber_minor  (in bender) + 456  [0x104694838]  gc.c:0
+      !   :     2 janet_sweep_list  (in bender) + 108  [0x1046e694c]  gc.c:0
+      !   98 run_vm  (in bender) + 14436  [0x1046dd6d8]  vm.c:2689
+      !   : 21 cfun_channel_pop  (in bender) + 156  [0x1046997d4]  ev.c:1922
+      !   : | 17 janet_channel_pop_with_lock  (in bender) + 1396  [0x1046991c4]  ev.c:1068
+      !   : | + 17 janet_unmarshal  (in bender) + 204  [0x1046916d4]  marsh.c:1773
+      !   : | +   17 unmarshal_one  (in bender) + 1824  [0x1046b61dc]  marsh.c:1590
+      !   : | +     8 unmarshal_one  (in bender) + 1512  [0x1046b60a4]  marsh.c:1543
+      !   : | +     ! 5 unmarshal_one_env  (in bender) + 436  [0x1046ea5f0]  marsh.c:905
+      !   : | +     ! : 4 unmarshal_one  (in bender) + 1824  [0x1046b61dc]  marsh.c:1590
+      !   : | +     ! : | 2 unmarshal_one  (in bender) + 2744  [0x1046b6574]  marsh.c:1735
+      !   : | +     ! : | + 2 janet_v_grow  (in bender) + 76  [0x10467fdf8]  vector.c:35
+      !   : | +     ! : | +   2 janet_srealloc  (in bender) + 96  [0x1046b088c]  gc.c:3513
+      !   : | +     ! : | +     2 _realloc  (in libsystem_malloc.dylib) + 452  [0x18152ff14]
+      !   : | +     ! : | +       1 _malloc_zone_realloc  (in libsystem_malloc.dylib) + 148  [0x18152f6f8]
+      !   : | +     ! : | +       ! 1 xzm_realloc  (in libsystem_malloc.dylib) + 904  [0x18151ff0c]
+      !   : | +     ! : | +       !   1 _xzm_free  (in libsystem_malloc.dylib) + 336  [0x181520268]
+      !   : | +     ! : | +       1 _malloc_zone_realloc  (in libsystem_malloc.dylib) + 184  [0x18152f71c]
+      !   : | +     ! : | 1 unmarshal_one  (in bender) + 1168  [0x1046b5f4c]  marsh.c:1725
+      !   : | +     ! : | + 1 janet_table_get  (in bender) + 88  [0x1046854e4]  table.c:151
+      !   : | +     ! : | +   1 janet_dict_find  (in bender) + 184  [0x1046d2c00]  util.c:318
+      !   : | +     ! : | 1 unmarshal_one  (in bender) + 1168  [0x1046b5f4c]  marsh.c:1726
+      !   : | +     ! : 1 unmarshal_one  (in bender) + 1716  [0x1046b6170]  marsh.c:1584
+      !   : | +     ! :   1 janet_gcalloc  (in bender) + 1236  [0x104674c94]  gc.c:1371
+      !   : | +     ! 2 unmarshal_one_env  (in bender) + 388  [0x1046ea5c0]  marsh.c:899
+      !   : | +     ! : 1 _xzm_xzone_thread_cache_fill_and_malloc  (in libsystem_malloc.dylib) + 116  [0x181526634]
+      !   : | +     ! : | 1 _xzm_xzone_find_and_malloc_from_freelist_chunk  (in libsystem_malloc.dylib) + 1396  [0x1815274f0]
+      !   : | +     ! : 1 _xzm_xzone_thread_cache_fill_and_malloc  (in libsystem_malloc.dylib) + 120  [0x181526638]
+      !   : | +     ! 1 unmarshal_one_env  (in bender) + 224  [0x1046ea51c]  vector.c:35
+      !   : | +     !   1 janet_smalloc  (in bender) + 24  [0x104680908]  gc.c:3479
+      !   : | +     !     1 _xzm_xzone_malloc  (in libsystem_malloc.dylib) + 228  [0x18151fa34]
+      !   : | +     6 unmarshal_one  (in bender) + 1468  [0x1046b6078]  marsh.c:1512
+      !   : | +     ! 3 unmarshal_one_def  (in bender) + 752  [0x1046ea094]  marsh.c:1000
+      !   : | +     ! : 3 unmarshal_one  (in bender) + 1596  [0x1046b60f8]  marsh.c:1494
+      !   : | +     ! :   3 janet_string  (in bender) + 40  [0x104683cd4]  string.c:52
+      !   : | +     ! :     2 janet_gcalloc  (in bender) + 1276  [0x104674cbc]  gc.c:1376
+      !   : | +     ! :     1 janet_gcalloc  (in bender) + 1084  [0x104674bfc]  gc.c:2379
+      !   : | +     ! :       1 _platform_memmove  (in libsystem_platform.dylib) + 536  [0x18170d578]
+      !   : | +     ! 1 unmarshal_one_def  (in bender) + 1124  [0x1046ea208]  marsh.c:1053
+      !   : | +     ! : 1 readint  (in bender) + 152  [0x1046b5848]  marsh.c:789
+      !   : | +     ! 1 unmarshal_one_def  (in bender) + 136  [0x1046e9e2c]  marsh.c:963
+      !   : | +     ! : 1 janet_gcalloc  (in bender) + 1084  [0x104674bfc]  gc.c:2379
+      !   : | +     ! :   1 _platform_memmove  (in libsystem_platform.dylib) + 536  [0x18170d578]
+      !   : | +     ! 1 unmarshal_one_def  (in bender) + 256  [0x1046e9ea4]  vector.c:35
+      !   : | +     !   1 janet_smalloc  (in bender) + 24  [0x104680908]  gc.c:3479
+      !   : | +     !     1 DYLD-STUB$$malloc  (in bender) + 4  [0x104702c4c]
+      !   : | +     2 unmarshal_one  (in bender) + 1424  [0x1046b604c]  marsh.c:1539
+      !   : | +     ! 2 janet_v_grow  (in bender) + 76  [0x10467fdf8]  vector.c:35
+      !   : | +     !   1 janet_srealloc  (in bender) + 36  [0x1046b0850]  gc.c:3510
+      !   : | +     !   : 1 _tlv_get_addr  (in libdyld.dylib) + 20  [0x18130039c]
+      !   : | +     !   1 janet_srealloc  (in bender) + 96  [0x1046b088c]  gc.c:3513
+      !   : | +     !     1 _realloc  (in libsystem_malloc.dylib) + 452  [0x18152ff14]
+      !   : | +     !       1 _malloc_zone_realloc  (in libsystem_malloc.dylib) + 148  [0x18152f6f8]
+      !   : | +     !         1 xzm_realloc  (in libsystem_malloc.dylib) + 1180  [0x181520020]
+      !   : | +     1 unmarshal_one  (in bender) + 1356  [0x1046b6008]  marsh.c:1532
+      !   : | +       1 janet_gcalloc  (in bender) + 1236  [0x104674c94]  gc.c:1371
+      !   : | 3 janet_channel_pop_with_lock  (in bender) + 320  [0x104698d90]  abstract.c:221
+      !   : | + 3 _pthread_mutex_firstfit_unlock_slow  (in libsystem_pthread.dylib) + 220  [0x1816feb94]
+      !   : | +   3 _pthread_mutex_firstfit_wake  (in libsystem_pthread.dylib) + 28  [0x181700f0c]
+      !   : | +     3 __psynch_mutexdrop  (in libsystem_kernel.dylib) + 8  [0x1816c2ba8]
+      !   : | 1 janet_channel_pop_with_lock  (in bender) + 920  [0x104698fe8]  abstract.c:221
+      !   : |   1 _pthread_mutex_firstfit_unlock_slow  (in libsystem_pthread.dylib) + 120  [0x1816feb30]
+      !   : 12 cfun_channel_pop  (in bender) + 140  [0x1046997c4]  abstract.c:217
+      !   : | 11 _pthread_mutex_firstfit_lock_slow  (in libsystem_pthread.dylib) + 216  [0x1816fe8e0]
+      !   : | + 11 _pthread_mutex_firstfit_lock_wait  (in libsystem_pthread.dylib) + 84  [0x181700e9c]
+      !   : | +   11 __psynch_mutexwait  (in libsystem_kernel.dylib) + 8  [0x1816c29dc]
+      !   : | 1 pthread_mutex_lock  (in libsystem_pthread.dylib) + 0  [0x1816fe3fc]
+      !   : 11 cfun_proc_spawn_impl  (in bender) + 1684  [0x1046c820c]  proc.c:1214
+      !   : | 11 getenv  (in libsystem_c.dylib) + 64  [0x181591ef8]
+      !   : |   11 __findenv_locked  (in libsystem_c.dylib) + 132,88,...  [0x181591fa8,0x181591f7c,...]
+      !   : 8 cfun_proc_spawn_impl  (in bender) + 1772  [0x1046c8264]  proc.c:1225
+      !   : | 4 janet_xfb_bucket_append  (in bender) + 96  [0x1046aebbc]  gc.c:0
+      !   : | 2 janet_gc_barrier  (in bender) + 988,1020  [0x104675f60,0x104675f80]  gc.c:2309
+      !   : | 1 janet_gc_barrier  (in bender) + 668  [0x104675e20]  gc.c:2254
+      !   : | 1 janet_table_put  (in bender) + 308  [0x1046750f8]  table.c:380
+      !   : |   1 janet_table_rehash  (in bender) + 144  [0x1046d35a0]  table.c:0
+      !   : |     1 _platform_memset_pattern16  (in libsystem_platform.dylib) + 0  [0x18170b120]
+      !   : 6 cfun_proc_recv  (in bender) + 316  [0x1046cb3e4]  proc.c:1454
+      !   : | 4 janet_abstract_threaded  (in bender) + 128  [0x104675200]  abstract.c:128
+      !   : | + 2 janet_table_put  (in bender) + 96  [0x104675024]  table.c:0
+      !   : | + ! 1 janet_dict_find  (in bender) + 156  [0x1046d2be4]  util.c:300
+      !   : | + ! 1 janet_dict_find  (in bender) + 124  [0x1046d2bc4]  util.c:305
+      !   : | + !   1 janet_equals  (in bender) + 908  [0x10469542c]  value.c:249
+      !   : | + 1 janet_table_put  (in bender) + 12  [0x104674fd0]  table.c:366
+      !   : | + 1 janet_table_put  (in bender) + 308  [0x1046750f8]  table.c:380
+      !   : | +   1 janet_table_rehash  (in bender) + 216  [0x1046d35e8]  table.c:114
+      !   : | +     1 janet_dict_find  (in bender) + 16  [0x1046d2b58]  util.c:305
+      !   : | 1 janet_abstract_threaded  (in bender) + 36  [0x1046751a4]  abstract.c:109
+      !   : | + 1 _xzm_xzone_thread_cache_fill_and_malloc  (in libsystem_malloc.dylib) + 120  [0x181526638]
+      !   : | 1 janet_abstract_threaded  (in bender) + 36  [0x1046751a4]  abstract.c:110
+      !   : 6 janet_core_setdyn  (in bender) + 164  [0x10468d350]  corelib.c:286
+      !   : | 2 janet_xfb_bucket_append  (in bender) + 104  [0x1046aebc4]  gc.c:2730
+      !   : | 1 janet_gc_barrier  (in bender) + 728  [0x104675e5c]  gc.c:1377
+      !   : | 1 janet_gc_barrier  (in bender) + 1276  [0x104676080]  gc.c:2347
+      !   : | + 1 janet_xfb_bucket_append  (in bender) + 156  [0x1046aebf8]  gc.c:2739
+      !   : | 1 janet_xfb_bucket_append  (in bender) + 96  [0x1046aebbc]  gc.c:0
+      !   : | 1 janet_xfb_bucket_append  (in bender) + 112  [0x1046aebcc]  gc.c:2730
+      !   : |   1 _xzm_xzone_malloc_tiny  (in libsystem_malloc.dylib) + 536  [0x181525154]
+      !   : 5 cfun_proc_spawn_impl  (in bender) + 548  [0x1046c7d9c]  abstract.c:39
+      !   : | 2 janet_gcalloc  (in bender) + 1268  [0x104674cb4]  gc.c:0
+      !   : | 2 janet_gcalloc  (in bender) + 804  [0x104674ae4]  gc.c:2379
+      !   : | + 2 _posix_memalign  (in libsystem_malloc.dylib) + 52  [0x18152ffe0]
+      !   : | +   2 _malloc_zone_memalign  (in libsystem_malloc.dylib) + 300  [0x18152f8f8]
+      !   : | +     1 _xzm_xzone_malloc_freelist_outlined  (in libsystem_malloc.dylib) + 324  [0x1815267e4]
+      !   : | +     ! 1 _xzm_xzone_find_and_malloc_from_freelist_chunk  (in libsystem_malloc.dylib) + 1308  [0x181527498]
+      !   : | +     !   1 xzm_segment_group_alloc_chunk  (in libsystem_malloc.dylib) + 504  [0x1815085f4]
+      !   : | +     !     1 _xzm_segment_group_find_and_allocate_chunk  (in libsystem_malloc.dylib) + 28  [0x181508a3c]
+      !   : | +     1 _xzm_xzone_malloc_freelist_outlined  (in libsystem_malloc.dylib) + 756  [0x181526994]
+      !   : | 1 janet_gcalloc  (in bender) + 1236  [0x104674c94]  gc.c:1371
+      !   : 4 cfun_proc_send  (in bender) + 256  [0x1046cae98]  ev.c:1828
+      !   : | 3 janet_channel_push_with_lock  (in bender) + 2316  [0x10469891c]  ev.c:748
+      !   : | + 2 janet_q_maybe_resize  (in bender) + 236  [0x1046e34cc]  ev.c:355
+      !   : | + 1 janet_schedule_general  (in bender) + 164  [0x104696ec4]  ev.c:0
+      !   : | +   1 janet_q_maybe_resize  (in bender) + 48  [0x1046e3410]  ev.c:333
+      !   : | 1 janet_channel_push_with_lock  (in bender) + 2332  [0x10469892c]  abstract.c:221
+      !   : |   1 _pthread_mutex_firstfit_unlock_slow  (in libsystem_pthread.dylib) + 176  [0x1816feb68]
+      !   : 4 cfun_proc_spawn_impl  (in bender) + 1856  [0x1046c82b8]  ev.c:748
+      !   : | 4 janet_schedule_general  (in bender) + 104  [0x104696e88]  ev.c:736
+      !   : |   3 janet_table_put  (in bender) + 96  [0x104675024]  table.c:0
+      !   : |   + 1 janet_dict_find  (in bender) + 140  [0x1046d2bd4]  util.c:299
+      !   : |   + 1 janet_dict_find  (in bender) + 156  [0x1046d2be4]  util.c:300
+      !   : |   + 1 janet_dict_find  (in bender) + 184  [0x1046d2c00]  util.c:318
+      !   : |   1 janet_table_put  (in bender) + 308  [0x1046750f8]  table.c:380
+      !   : |     1 janet_table_rehash  (in bender) + 180  [0x1046d35c4]  table.c:134
+      !   : 4 cfun_proc_spawn_impl  (in bender) + 76  [0x1046c7bc4]  proc.c:1075
+      !   : | 4 janet_fiber  (in bender) + 48  [0x10469ef10]  fiber.c:501
+      !   : |   3 janet_gcalloc  (in bender) + 804  [0x104674ae4]  gc.c:2379
+      !   : |   + 3 _posix_memalign  (in libsystem_malloc.dylib) + 52  [0x18152ffe0]
+      !   : |   +   3 _malloc_zone_memalign  (in libsystem_malloc.dylib) + 300  [0x18152f8f8]
+      !   : |   +     3 _xzm_xzone_malloc_tiny  (in libsystem_malloc.dylib) + 764  [0x181525238]
+      !   : |   1 janet_gcalloc  (in bender) + 116  [0x104674834]  gc.c:2377
+      !   : 4 cfun_proc_spawn_impl  (in bender) + 148  [0x1046c7c0c]  proc.c:1094
+      !   : | 1 janet_gcalloc  (in bender) + 1268  [0x104674cb4]  gc.c:0
+      !   : | 1 janet_gcalloc  (in bender) + 804  [0x104674ae4]  gc.c:2379
+      !   : | + 1 _posix_memalign  (in libsystem_malloc.dylib) + 52  [0x18152ffe0]
+      !   : | +   1 _malloc_zone_memalign  (in libsystem_malloc.dylib) + 300  [0x18152f8f8]
+      !   : | +     1 _xzm_xzone_malloc_freelist_outlined  (in libsystem_malloc.dylib) + 756  [0x181526994]
+      !   : | 1 janet_gcalloc  (in bender) + 1084  [0x104674bfc]  gc.c:2379
+      !   : | + 1 _platform_memmove  (in libsystem_platform.dylib) + 464  [0x18170d530]
+      !   : | 1 janet_gcalloc  (in bender) + 352  [0x104674920]  gc.c:2379
+      !   : 3 cfun_proc_recv  (in bender) + 480  [0x1046cb488]  ev.c:1922
+      !   : | 1 janet_channel_pop_with_lock  (in bender) + 816  [0x104698f80]  ev.c:136
+      !   : | + 1 <deduplicated_symbol>  (in libsystem_malloc.dylib) + 112  [0x18151f1cc]
+      !   : | 1 janet_channel_pop_with_lock  (in bender) + 20  [0x104698c64]  ev.c:1834
+      !   : | 1 janet_channel_pop_with_lock  (in bender) + 852  [0x104698fa4]  ev.c:358
+      !   : |   1 janet_q_maybe_resize  (in bender) + 128  [0x1046e3460]  ev.c:337
+      !   : |     1 <deduplicated_symbol>  (in libsystem_malloc.dylib) + 116  [0x18151f1d0]
+      !   : 2 cfun_proc_recv  (in bender) + 452  [0x1046cb46c]  ev.c:1921
+      !   : 1 _pthread_mutex_firstfit_lock_slow  (in libsystem_pthread.dylib) + 308  [0x1816fe93c]
+      !   : 1 _pthread_mutex_lock_init_slow  (in libsystem_pthread.dylib) + 116  [0x1816fe578]
+      !   : 1 cfun_proc_recv  (in bender) + 508  [0x1046cb4a4]  proc.c:1459
+      !   : | 1 janet_await  (in bender) + 24  [0x1046965d0]  ev.c:930
+      !   : |   1 janet_signalv  (in bender) + 212  [0x104683494]  capi.c:89
+      !   : |     1 DYLD-STUB$$_longjmp  (in bender) + 0  [0x1047027f8]
+      !   : 1 cfun_proc_spawn_impl  (in bender) + 24  [0x1046c7b90]  proc.c:1066
+      !   : 1 cfun_proc_spawn_impl  (in bender) + 1752  [0x1046c8250]  symcache.c:191
+      !   : | 1 janet_symbol  (in bender) + 68  [0x10468e364]  symcache.c:173
+      !   : 1 janet_proc_resolve_mbox  (in bender) + 332  [0x1046cb0b8]  proc.c:1594
+      !   : 1 janet_symbol  (in bender) + 248  [0x10468e418]  symcache.c:187
+      !   : 1 janet_xfb_bucket_append  (in bender) + 248  [0x1046aec54]  gc.c:2747
+      !   30 run_vm  (in bender) + 17452  [0x1046de2a0]  vm.c:2693
+      !   : 30 ???  (in bender)  load address 0x104674000 + 0x8e214  [0x104702214]
+      !   :   27 janet_collect_fiber_minor  (in bender) + 244  [0x104694764]  gc.c:2856
+      !   :   | 27 janet_mark_fiber  (in bender) + 880  [0x1046add54]  gc.c:682
+      !   :   |   27 janet_mark  (in bender) + 712  [0x104696154]  gc.c:220
+      !   :   |     26 janet_mark_table  (in bender) + 396  [0x1046ad984]  gc.c:396
+      !   :   |     + 24 janet_mark  (in bender) + 420  [0x104696030]  gc.c:223
+      !   :   |     + ! 24 janet_procat_mark  (in bender) + 104  [0x1046c9dd0]  proc.c:987
+      !   :   |     + !   24 janet_mark  (in bender) + 1096  [0x1046962d4]  gc.c:223
+      !   :   |     + !     7 janet_mark_fiber  (in bender) + 904  [0x1046add6c]  gc.c:704
+      !   :   |     + !     : 5 janet_mark_table  (in bender) + 396  [0x1046ad984]  gc.c:396
+      !   :   |     + !     : | 3 janet_mark  (in bender) + 960  [0x10469624c]  gc.c:416
+      !   :   |     + !     : | 1 janet_mark  (in bender) + 420  [0x104696030]  gc.c:223
+      !   :   |     + !     : | + 1 janet_mark_abstract  (in bender) + 200  [0x1046aded0]  gc.c:325
+      !   :   |     + !     : | 1 janet_mark  (in bender) + 1148  [0x104696308]  gc.c:248
+      !   :   |     + !     : 2 janet_mark_table  (in bender) + 92  [0x1046ad854]  gc.c:387
+      !   :   |     + !     6 janet_mark_fiber  (in bender) + 556  [0x1046adc10]  gc.c:522
+      !   :   |     + !     : 3 janet_drain_env_queue  (in bender) + 44  [0x1046e6290]  gc.c:453
+      !   :   |     + !     : | 3 _tlv_get_addr  (in libdyld.dylib) + 0,4  [0x181300388,0x18130038c]
+      !   :   |     + !     : 3 janet_drain_env_queue  (in bender) + 468  [0x1046e6438]  gc.c:465
+      !   :   |     + !     :   2 janet_mark  (in bender) + 424  [0x104696034]  gc.c:223
+      !   :   |     + !     :   1 janet_mark  (in bender) + 1032  [0x104696294]  gc.c:339
+      !   :   |     + !     :     1 janet_mark  (in bender) + 420  [0x104696030]  gc.c:223
+      !   :   |     + !     :       1 janet_mark_abstract  (in bender) + 184  [0x1046adec0]  table.c:153
+      !   :   |     + !     4 janet_mark_fiber  (in bender) + 524  [0x1046adbf0]  gc.c:96
+      !   :   |     + !     : 3 _realloc  (in libsystem_malloc.dylib) + 452  [0x18152ff14]
+      !   :   |     + !     : | 3 _malloc_zone_realloc  (in libsystem_malloc.dylib) + 148  [0x18152f6f8]
+      !   :   |     + !     : |   2 xzm_realloc  (in libsystem_malloc.dylib) + 80,212  [0x18151fbd4,0x18151fc58]
+      !   :   |     + !     : |   1 default_zone_realloc  (in libsystem_malloc.dylib) + 24  [0x1814f8c54]
+      !   :   |     + !     : 1 _realloc  (in libsystem_malloc.dylib) + 252  [0x18152fe4c]
+      !   :   |     + !     :   1 xzm_malloc_zone_size  (in libsystem_malloc.dylib) + 572  [0x18152a748]
+      !   :   |     + !     2 janet_mark_fiber  (in bender) + 1020  [0x1046adde0]  ev.c:236
+      !   :   |     + !     : 2 janet_mark  (in bender) + 420  [0x104696030]  gc.c:223
+      !   :   |     + !     :   1 janet_mark_abstract  (in bender) + 320  [0x1046adf48]  gc.c:313
+      !   :   |     + !     :   | 1 janet_table_put  (in bender) + 384  [0x104675144]  table.c:0
+      !   :   |     + !     :   |   1 janet_gc_barrier  (in bender) + 672  [0x104675e24]  gc.c:2254
+      !   :   |     + !     :   1 janet_mark_abstract  (in bender) + 160  [0x1046adea8]  table.c:114
+      !   :   |     + !     :     1 janet_dict_find  (in bender) + 192  [0x1046d2c08]  util.h:85
+      !   :   |     + !     2 janet_mark_fiber  (in bender) + 364,372  [0x1046adb50,0x1046adb58]  gc.c:677
+      !   :   |     + !     2 janet_mark_fiber  (in bender) + 916  [0x1046add78]  gc.c:704
+      !   :   |     + !     : 2 janet_mark_abstract  (in bender) + 24  [0x1046ade20]  gc.c:305
+      !   :   |     + !     1 janet_mark_fiber  (in bender) + 552  [0x1046adc0c]  gc.c:521
+      !   :   |     + !       1 janet_mark_funcdef  (in bender) + 232  [0x1046e622c]  gc.c:0
+      !   :   |     + 1 janet_mark  (in bender) + 60  [0x104695ec8]  gc.c:0
+      !   :   |     + 1 janet_mark_abstract  (in bender) + 356  [0x1046adf6c]  gc.c:0
+      !   :   |     1 janet_mark_table  (in bender) + 388  [0x1046ad97c]  gc.c:396
+      !   :   |       1 janet_mark  (in bender) + 44  [0x104695eb8]  gc.c:209
+      !   :   3 janet_collect_fiber_minor  (in bender) + 436  [0x104694824]  gc.c:0
+      !   :     2 janet_sweep_list  (in bender) + 240,268  [0x1046e69d0,0x1046e69ec]  gc.c:964
+      !   :     1 janet_sweep_list  (in bender) + 112  [0x1046e6950]  gc.c:0
+      !   28 run_vm  (in bender) + 15276  [0x1046dda20]  tuple.c:36
+      !   : 15 janet_gcalloc  (in bender) + 1084  [0x104674bfc]  gc.c:2379
+      !   : | 15 _platform_memmove  (in libsystem_platform.dylib) + 536  [0x18170d578]
+      !   : 9 janet_gcalloc  (in bender) + 804  [0x104674ae4]  gc.c:2379
+      !   : | 9 _posix_memalign  (in libsystem_malloc.dylib) + 52  [0x18152ffe0]
+      !   : |   9 _malloc_zone_memalign  (in libsystem_malloc.dylib) + 300  [0x18152f8f8]
+      !   : |     6 _xzm_xzone_malloc_freelist_outlined  (in libsystem_malloc.dylib) + 756  [0x181526994]
+      !   : |     1 <deduplicated_symbol>  (in libsystem_malloc.dylib) + 80  [0x18151f1ac]
+      !   : |     1 _xzm_xzone_malloc_freelist_outlined  (in libsystem_malloc.dylib) + 168  [0x181526748]
+      !   : |     + 1 __ulock_wait  (in libsystem_kernel.dylib) + 8  [0x1816c1af8]
+      !   : |     1 _xzm_xzone_malloc_tiny  (in libsystem_malloc.dylib) + 764  [0x181525238]
+      !   : 1 janet_gcalloc  (in bender) + 1240  [0x104674c98]  gc.c:1367
+      !   : 1 janet_gcalloc  (in bender) + 1256  [0x104674ca8]  gc.c:1369
+      !   : 1 janet_gcalloc  (in bender) + 1300  [0x104674cd4]  gc.c:1378
+      !   : 1 janet_gcalloc  (in bender) + 924  [0x104674b5c]  gc.c:2379
+      !   19 run_vm  (in bender) + 13460  [0x1046dd308]  vm.c:2745
+      !   : 14 cfun_proc_send  (in bender) + 408  [0x1046caf30]  proc.c:1348
+      !   : | 10 janet_channel_push_with_lock  (in bender) + 344  [0x104698168]  ev.c:1776
+      !   : | + 10 janet_ev_post_event  (in bender) + 136  [0x104675738]  ev.c:3332
+      !   : | +   10 write  (in libsystem_kernel.dylib) + 8  [0x1816c3834]
+      !   : | 4 janet_channel_push_with_lock  (in bender) + 2576  [0x104698a20]  ev.c:1047
+      !   : |   4 janet_marshal  (in bender) + 252  [0x1046a035c]  marsh.c:728
+      !   : |     2 marshal_one  (in bender) + 1592  [0x1046b5004]  marsh.c:607
+      !   : |     ! 1 marshal_one  (in bender) + 736  [0x1046b4cac]  marsh.c:554
+      !   : |     ! : 1 janet_table_put_raw  (in bender) + 380  [0x1046b5660]  table.c:412
+      !   : |     ! :   1 _xzm_free  (in libsystem_malloc.dylib) + 560  [0x181520348]
+      !   : |     ! 1 marshal_one  (in bender) + 832  [0x1046b4d0c]  marsh.c:560
+      !   : |     !   1 janet_buffer_extra  (in bender) + 100  [0x10467b9c0]  buffer.c:127
+      !   : |     !     1 _realloc  (in libsystem_malloc.dylib) + 452  [0x18152ff14]
+      !   : |     !       1 _malloc_zone_realloc  (in libsystem_malloc.dylib) + 148  [0x18152f6f8]
+      !   : |     !         1 default_zone_realloc  (in libsystem_malloc.dylib) + 24  [0x1814f8c54]
+      !   : |     1 janet_table_put_raw  (in bender) + 524  [0x1046b56f0]  table.c:420
+      !   : |     1 marshal_one  (in bender) + 1532  [0x1046b4fc8]  marsh.c:599
+      !   : |       1 pushint  (in bender) + 48  [0x1046b4738]  marsh.c:139
+      !   : |         1 janet_buffer_extra  (in bender) + 16  [0x10467b96c]  buffer.c:120
+      !   : 5 cfun_proc_send  (in bender) + 388  [0x1046caf1c]  proc.c:1347
+      !   :   5 janet_tuple_n  (in bender) + 44  [0x104689330]  tuple.c:51
+      !   :     3 janet_gcalloc  (in bender) + 288,752  [0x1046748e0,0x104674ab0]  gc.c:2379
+      !   :     1 janet_gcalloc  (in bender) + 56  [0x1046747f8]  gc.c:2374
+      !   :     + 1 _tlv_get_addr  (in libdyld.dylib) + 20  [0x18130039c]
+      !   :     1 janet_gcalloc  (in bender) + 56  [0x1046747f8]  gc.c:2374
+      !   4 run_vm  (in bender) + 16052  [0x1046ddd28]  vm.c:2844
+      !   : 1 janet_table_put  (in bender) + 96  [0x104675024]  table.c:0
+      !   : | 1 janet_dict_find  (in bender) + 156  [0x1046d2be4]  util.c:300
+      !   : 1 janet_table_put  (in bender) + 84  [0x104675018]  table.c:0
+      !   : 1 janet_table_put  (in bender) + 56  [0x104674ffc]  table.c:368
+      !   : 1 janet_table_put  (in bender) + 308  [0x1046750f8]  table.c:380
+      !   :   1 janet_table_rehash  (in bender) + 204  [0x1046d35dc]  table.c:114
+      !   2 run_vm  (in bender) + 376  [0x1046d9fec]  vm.c:0
+      !   : 2 _tlv_get_addr  (in libdyld.dylib) + 12,20  [0x181300394,0x18130039c]
+      !   2 run_vm  (in bender) + 7312,7316  [0x1046dbb04,0x1046dbb08]  vm.c:0
+      !   2 run_vm  (in bender) + 10364  [0x1046dc6f0]  vm.c:2552
+      !   : 1 janet_gcalloc  (in bender) + 1240  [0x104674c98]  gc.c:1367
+      !   : 1 janet_gcalloc  (in bender) + 804  [0x104674ae4]  gc.c:2379
+      !   :   1 _posix_memalign  (in libsystem_malloc.dylib) + 52  [0x18152ffe0]
+      !   :     1 _malloc_zone_memalign  (in libsystem_malloc.dylib) + 300  [0x18152f8f8]
+      !   :       1 _xzm_xzone_malloc_freelist_outlined  (in libsystem_malloc.dylib) + 756  [0x181526994]
+      !   2 run_vm  (in bender) + 10476  [0x1046dc760]  vm.c:2562
+      !   : 1 janet_gcalloc  (in bender) + 1268  [0x104674cb4]  gc.c:0
+      !   : 1 janet_gcalloc  (in bender) + 1236  [0x104674c94]  gc.c:1371
+      !   2 run_vm  (in bender) + 13868  [0x1046dd4a0]  vm.c:2719
+      !   : 1 janet_fiber_funcframe_tail  (in bender) + 252  [0x1046abfbc]  fiber.c:950
+      !   : 1 janet_fiber_funcframe_tail  (in bender) + 320  [0x1046ac000]  fiber.c:957
+      !   2 run_vm  (in bender) + 15520  [0x1046ddb14]  vm.c:2897
+      !   : 1 janet_getindex  (in bender) + 216  [0x1046d665c]  value.c:589
+      !   : 1 janet_getindex  (in bender) + 336  [0x1046d66d4]  value.c:617
+      !   1 janet_fiber_cframe  (in bender) + 160  [0x1046ac4f4]  fiber.c:998
+      !   1 run_vm  (in bender) + 692  [0x1046da128]  vm.c:2220
+      !   : 1 janet_env_detach  (in bender) + 360  [0x1046abea0]  fiber.c:849
+      !   1 run_vm  (in bender) + 660  [0x1046da108]  vm.c:2220
+      !   1 run_vm  (in bender) + 7288  [0x1046dbaec]  vm.c:2376
+      !   1 run_vm  (in bender) + 7752  [0x1046dbcbc]  vm.c:2401
+      !   1 run_vm  (in bender) + 7756  [0x1046dbcc0]  vm.c:2405
+      !   1 run_vm  (in bender) + 9884  [0x1046dc510]  vm.c:2517
+      !   1 run_vm  (in bender) + 10772  [0x1046dc888]  vm.c:2581
+      !   1 run_vm  (in bender) + 11716  [0x1046dcc38]  vm.c:2614
+      !   1 run_vm  (in bender) + 16088  [0x1046ddd4c]  vm.c:2847
+      !   1 run_vm  (in bender) + 16416  [0x1046dde94]  vm.c:2884
+      3 janet_fiber_ctx_swap  (in bender) + 72  [0x104674770]
+
+Total number in stack (recursive counted multiple, when >=5):
+        26       _tlv_get_addr  (in libdyld.dylib) + 0  [0x181300388]
+        20       janet_mark  (in bender) + 420  [0x104696030]  gc.c:223
+        17       _realloc  (in libsystem_malloc.dylib) + 452  [0x18152ff14]
+        16       _malloc_zone_realloc  (in libsystem_malloc.dylib) + 148  [0x18152f6f8]
+        16       janet_gcalloc  (in bender) + 0  [0x1046747c0]  gc.c:1371
+        14       janet_mark  (in bender) + 0  [0x104695e8c]  gc.c:223
+        14       janet_mark  (in bender) + 0  [0x104695e8c]  gc.c:248
+        13       _platform_memmove  (in libsystem_platform.dylib) + 0  [0x18170d360]
+        13       janet_gcalloc  (in bender) + 0  [0x1046747c0]  gc.c:0
+        12       _malloc_zone_memalign  (in libsystem_malloc.dylib) + 300  [0x18152f8f8]
+        12       _posix_memalign  (in libsystem_malloc.dylib) + 52  [0x18152ffe0]
+        12       _xzm_free  (in libsystem_malloc.dylib) + 0  [0x181520118]
+        12       _xzm_xzone_malloc_freelist_outlined  (in libsystem_malloc.dylib) + 0  [0x1815266a0]
+        12       janet_gcalloc  (in bender) + 804  [0x104674ae4]  gc.c:2379
+        12       janet_hash  (in bender) + 0  [0x104690378]  value.c:321
+        11       janet_dict_find  (in bender) + 0  [0x1046d2b48]  util.c:318
+        10       janet_dict_find  (in bender) + 52  [0x1046d2b7c]  util.c:293
+        9       _malloc_zone_realloc  (in libsystem_malloc.dylib) + 0  [0x18152f664]
+        9       janet_mark  (in bender) + 52  [0x104695ec0]  gc.c:209
+        9       xzm_realloc  (in libsystem_malloc.dylib) + 0  [0x18151fb84]
+        8       <deduplicated_symbol>  (in libsystem_malloc.dylib) + 0  [0x18151f15c]
+        8       janet_gcalloc  (in bender) + 1084  [0x104674bfc]  gc.c:2379
+        8       janet_mark  (in bender) + 1032  [0x104696294]  gc.c:339
+        8       janet_mark_abstract  (in bender) + 0  [0x1046ade08]  gc.c:0
+        8       janet_mark_table  (in bender) + 396  [0x1046ad984]  gc.c:396
+        8       janet_srealloc  (in bender) + 96  [0x1046b088c]  gc.c:3513
+        8       janet_table_put  (in bender) + 308  [0x1046750f8]  table.c:380
+        8       janet_table_put  (in bender) + 96  [0x104675024]  table.c:0
+        8       unmarshal_one  (in bender) + 1824  [0x1046b61dc]  marsh.c:1590
+        7       _xzm_xzone_thread_cache_fill_and_malloc  (in libsystem_malloc.dylib) + 0  [0x1815265c0]
+        7       janet_buffer_extra  (in bender) + 0  [0x10467b95c]  buffer.c:120
+        7       janet_smalloc  (in bender) + 24  [0x104680908]  gc.c:3479
+        7       janet_v_grow  (in bender) + 76  [0x10467fdf8]  vector.c:35
+        7       pushint  (in bender) + 48  [0x1046b4738]  marsh.c:139
+        6       _realloc  (in libsystem_malloc.dylib) + 252  [0x18152fe4c]
+        6       janet_buffer_extra  (in bender) + 100  [0x10467b9c0]  buffer.c:127
+        6       janet_collect_fiber_minor  (in bender) + 436  [0x104694824]  gc.c:0
+        6       janet_dict_find  (in bender) + 0  [0x1046d2b48]  util.c:323
+        6       janet_gc_barrier  (in bender) + 0  [0x104675b84]  gc.c:2254
+        6       janet_gcalloc  (in bender) + 0  [0x1046747c0]  gc.c:2379
+        6       janet_mark  (in bender) + 0  [0x104695e8c]  gc.c:209
+        6       janet_mark  (in bender) + 0  [0x104695e8c]  gc.c:211
+        6       janet_mark_abstract  (in bender) + 160  [0x1046adea8]  table.c:114
+        6       janet_sweep_list  (in bender) + 0  [0x1046e68e0]  gc.c:0
+        6       janet_sweep_list  (in bender) + 0  [0x1046e68e0]  gc.c:964
+        6       janet_table_put  (in bender) + 384  [0x104675144]  table.c:0
+        6       janet_table_put_raw  (in bender) + 0  [0x1046b54e4]  table.c:420
+        6       xzm_malloc_zone_size  (in libsystem_malloc.dylib) + 0  [0x18152a50c]
+        5       __psynch_mutexwait  (in libsystem_kernel.dylib) + 0  [0x1816c29d4]
+        5       _malloc_zone_malloc  (in libsystem_malloc.dylib) + 0  [0x18152f0bc]
+        5       _platform_memset  (in libsystem_platform.dylib) + 0  [0x18170d090]
+        5       _pthread_mutex_firstfit_lock_slow  (in libsystem_pthread.dylib) + 216  [0x1816fe8e0]
+        5       _pthread_mutex_firstfit_lock_wait  (in libsystem_pthread.dylib) + 84  [0x181700e9c]
+        5       _xzm_free  (in libsystem_malloc.dylib) + 352  [0x181520278]
+        5       _xzm_xzone_malloc  (in libsystem_malloc.dylib) + 0  [0x18151f950]
+        5       janet_collect_fiber_minor  (in bender) + 244  [0x104694764]  gc.c:2856
+        5       janet_dict_find  (in bender) + 0  [0x1046d2b48]  util.c:299
+        5       janet_dict_find  (in bender) + 0  [0x1046d2b48]  util.c:300
+        5       janet_fiber_ctx_swap  (in bender) + 0  [0x104674728]
+        5       janet_gcalloc  (in bender) + 0  [0x1046747c0]  gc.c:1376
+        5       janet_mark_fiber  (in bender) + 904  [0x1046add6c]  gc.c:704
+        5       janet_mark_table  (in bender) + 388  [0x1046ad97c]  gc.c:396
+        5       janet_table_put_raw  (in bender) + 380  [0x1046b5660]  table.c:412
+        5       marshal_one  (in bender) + 312  [0x1046b4b04]  marsh.c:499
+        5       unmarshal_one  (in bender) + 1716  [0x1046b6170]  marsh.c:1584
+        5       xzm_realloc  (in libsystem_malloc.dylib) + 904  [0x18151ff0c]
+
+Sort by top of stack, same collapsed (when >= 5):
+        kevent  (in libsystem_kernel.dylib)        4065
+        write  (in libsystem_kernel.dylib)        105
+        janet_mark  (in bender)        95
+        janet_gcalloc  (in bender)        72
+        __psynch_mutexwait  (in libsystem_kernel.dylib)        66
+        _tlv_get_addr  (in libdyld.dylib)        51
+        read  (in libsystem_kernel.dylib)        50
+        janet_dict_find  (in bender)        46
+        _platform_memmove  (in libsystem_platform.dylib)        39
+        _xzm_xzone_malloc_freelist_outlined  (in libsystem_malloc.dylib)        37
+        janet_sweep_list  (in bender)        37
+        janet_mark_abstract  (in bender)        34
+        janet_mark_fiber  (in bender)        31
+        run_vm  (in bender)        30
+        xzm_realloc  (in libsystem_malloc.dylib)        29
+        janet_mark_funcdef  (in bender)        23
+        __findenv_locked  (in libsystem_c.dylib)        19
+        pushint  (in bender)        18
+        janet_buffer_extra  (in bender)        17
+        janet_gc_barrier  (in bender)        17
+        _xzm_free  (in libsystem_malloc.dylib)        16
+        janet_hash  (in bender)        16
+        __psynch_mutexdrop  (in libsystem_kernel.dylib)        15
+        janet_fiber_ctx_swap  (in bender)        15
+        janet_xfb_bucket_append  (in bender)        13
+        _malloc_zone_realloc  (in libsystem_malloc.dylib)        11
+        janet_table_put_raw  (in bender)        11
+        janet_table_rehash  (in bender)        10
+        <deduplicated_symbol>  (in libsystem_malloc.dylib)        9
+        _xzm_xzone_malloc_tiny  (in libsystem_malloc.dylib)        8
+        _xzm_xzone_thread_cache_fill_and_malloc  (in libsystem_malloc.dylib)        8
+        janet_procat_mark  (in bender)        8
+        marshal_one  (in bender)        8
+        _xzm_xzone_malloc  (in libsystem_malloc.dylib)        7
+        janet_fiber_cframe  (in bender)        7
+        janet_table_put  (in bender)        6
+        xzm_malloc_zone_size  (in libsystem_malloc.dylib)        6
+        _free  (in libsystem_malloc.dylib)        5
+        _malloc_zone_malloc  (in libsystem_malloc.dylib)        5
+        _platform_memset  (in libsystem_platform.dylib)        5
+        _realloc  (in libsystem_malloc.dylib)        5
+        cfun_proc_spawn  (in bender)        5
+        janet_equals  (in bender)        5
+        janet_mark_table  (in bender)        5
+        janet_smalloc  (in bender)        5
+
+Binary Images:
+       0x104674000 -        0x10477884b +bender (0) <13226390-5EDF-3AC4-A3D8-165DFB5418E8> /tmp/*/bender
+       0x181290000 -        0x1812e2b4b  libobjc.A.dylib (951.7) <03BD9E32-CF0A-37B0-898A-3CE8DE06D842> /usr/lib/libobjc.A.dylib
+       0x1812e3000 -        0x181317d58  libdyld.dylib (1387) <957F93B3-8805-39C7-9C51-EDD1715F550E> /usr/lib/system/libdyld.dylib
+       0x181318000 -        0x1813cb4ff  dyld (1.0.0 - 1387) <74E52480-C2BD-3C8D-812D-95FE2B74A096> /usr/lib/dyld
+       0x1813cc000 -        0x1813cf228  libsystem_blocks.dylib (96) <E0AC1231-27AA-3A13-8FAC-41D5802B1F3C> /usr/lib/system/libsystem_blocks.dylib
+       0x1813d0000 -        0x18142455f  libxpc.dylib (3102.160.5) <33E44C2D-D65E-37A6-B85F-1A4CF524A050> /usr/lib/system/libxpc.dylib
+       0x181425000 -        0x1814459ff  libsystem_trace.dylib (1861.160.4) <93F1DD8C-6CD9-32B9-B222-D23DA5D161B4> /usr/lib/system/libsystem_trace.dylib
+       0x181446000 -        0x1814f45f7  libcorecrypto.dylib (1922.160.10) <0642DDAD-4771-3C82-805C-E7C6701C1461> /usr/lib/system/libcorecrypto.dylib
+       0x1814f5000 -        0x181545257  libsystem_malloc.dylib (812.160.5) <D969A907-3E43-3951-9365-8C2DB3812E9D> /usr/lib/system/libsystem_malloc.dylib
+       0x181546000 -        0x18158d23f  libdispatch.dylib (1542.160.2) <B2000CD5-F580-314A-A141-E036719D854E> /usr/lib/system/libdispatch.dylib
+       0x18158e000 -        0x181590ffb  libsystem_featureflags.dylib (103) <FEE12F9C-344B-33B3-8EDD-283580EF1C67> /usr/lib/system/libsystem_featureflags.dylib
+       0x181591000 -        0x1816121e7  libsystem_c.dylib (1752.160.4) <D77CEB62-AFF6-3CEC-BA9B-4F057FBE2EB5> /usr/lib/system/libsystem_c.dylib
+       0x181613000 -        0x1816a3ae7  libc++.1.dylib (2100.43) <F0FD393C-15BC-3C75-A19D-897F7B225C78> /usr/lib/libc++.1.dylib
+       0x1816a4000 -        0x1816be75f  libc++abi.dylib (2100.43) <F38A9C58-22AB-3798-BBAE-8DCD9CC0CE27> /usr/lib/libc++abi.dylib
+       0x1816bf000 -        0x1816fc2e7  libsystem_kernel.dylib (12377.161.14) <C6A4A4CB-92E6-3BAF-AAE0-E8306259209A> /usr/lib/system/libsystem_kernel.dylib
+       0x1816fd000 -        0x181709b3b  libsystem_pthread.dylib (539.100.4) <A373F0B0-9880-326A-88B4-DD8BE4E33072> /usr/lib/system/libsystem_pthread.dylib
+       0x18170a000 -        0x181712963  libsystem_platform.dylib (375.120.2) <EDB83A19-EC17-32DE-9350-6145970A85D6> /usr/lib/system/libsystem_platform.dylib
+       0x181713000 -        0x1817426eb  libsystem_info.dylib (600) <9B5FB84B-31AD-3EA7-8F89-8C700D369DC8> /usr/lib/system/libsystem_info.dylib
+       0x1856e0000 -        0x1856e9e5f  libsystem_darwin.dylib (1752.160.4) <8E07D22E-CE5A-38A0-B091-5B0338C326F5> /usr/lib/system/libsystem_darwin.dylib
+       0x185b4b000 -        0x185b5d1b6  libsystem_notify.dylib (348.160.3) <15799128-6CBD-30D6-A2BB-B9D02B4470C0> /usr/lib/system/libsystem_notify.dylib
+       0x187e1c000 -        0x187e36f7b  libsystem_networkextension.dylib (2226.161.1) <9C7B1EEB-47BE-3791-93A9-CFC693CB9417> /usr/lib/system/libsystem_networkextension.dylib
+       0x187eb9000 -        0x187ed0fdf  libsystem_asl.dylib (406) <54439739-33EE-3273-839F-CBA67D7F5CB1> /usr/lib/system/libsystem_asl.dylib
+       0x189a72000 -        0x189a7a387  libsystem_symptoms.dylib (2169.160.3) <229122B9-B8B1-3F2F-870E-8650AE3C4FB5> /usr/lib/system/libsystem_symptoms.dylib
+       0x18dd17000 -        0x18dd4f5b7  libsystem_containermanager.dylib (725.160.3) <14B2A47F-19C8-392F-8FDB-FE8AE375DD41> /usr/lib/system/libsystem_containermanager.dylib
+       0x18f129000 -        0x18f12d5d7  libsystem_configuration.dylib (1405.160.3) <D8D6280B-783D-3550-BDBA-2861AE40604F> /usr/lib/system/libsystem_configuration.dylib
+       0x18f12e000 -        0x18f13499f  libsystem_sandbox.dylib (2680.160.6) <54688162-B50D-3D31-A1E8-7B9766D3530D> /usr/lib/system/libsystem_sandbox.dylib
+       0x190789000 -        0x19078c1fb  libquarantine.dylib (196.160.2) <EEE5AADB-52E1-3C4C-881A-70405770B1F1> /usr/lib/system/libquarantine.dylib
+       0x190f28000 -        0x190f2ed03  libsystem_coreservices.dylib (191.5.1) <D4ACD2AC-5702-3C45-85A0-300B2C2D19E1> /usr/lib/system/libsystem_coreservices.dylib
+       0x1914b7000 -        0x1914f4a77  libsystem_m.dylib (3312.100.1) <B54FBE99-DB0B-32C7-ABDD-C2206DF606A4> /usr/lib/system/libsystem_m.dylib
+       0x1914f6000 -        0x1914f9527  libmacho.dylib (1387) <949131E5-BDA2-39BA-AA50-62651BB51802> /usr/lib/system/libmacho.dylib
+       0x191513000 -        0x1915203a7  libcommonCrypto.dylib (600035) <3B110564-5278-3CB0-85F1-2CE8431FF935> /usr/lib/system/libcommonCrypto.dylib
+       0x191521000 -        0x19152aca3  libunwind.dylib (2100.2) <05FD0014-55B1-3B8A-A6BA-6C7A389C4123> /usr/lib/system/libunwind.dylib
+       0x191533000 -        0x19153dbef  libcopyfile.dylib (240.160.2.0.1) <D0009B8A-8ECC-3D56-9206-7E1839707F93> /usr/lib/system/libcopyfile.dylib
+       0x19153e000 -        0x191541987  libcompiler_rt.dylib (103.3) <6FB345CA-7F5C-3263-A23F-143F7539FD8A> /usr/lib/system/libcompiler_rt.dylib
+       0x191542000 -        0x19154678b  libsystem_collections.dylib (1752.160.4) <C8160BD2-5941-3DC0-BB40-F8C2B8156EC4> /usr/lib/system/libsystem_collections.dylib
+       0x191547000 -        0x19154a4cf  libsystem_secinit.dylib (168.100.7) <ECABC024-8F02-374A-BB7E-29437CEA2ABD> /usr/lib/system/libsystem_secinit.dylib
+       0x19154b000 -        0x19154dbf7  libremovefile.dylib (85.100.6) <7460B5AE-469A-36A0-A7EC-6C7D69628E86> /usr/lib/system/libremovefile.dylib
+       0x19154e000 -        0x19154ef27  libkeymgr.dylib (31) <7E863FCA-F3FF-32C7-8A8C-F983E946AFC3> /usr/lib/system/libkeymgr.dylib
+       0x19154f000 -        0x191557e37  libsystem_dnssd.dylib (2881.160.4) <305F4398-E688-3384-B351-02D865EC8A04> /usr/lib/system/libsystem_dnssd.dylib
+       0x191558000 -        0x19155d09b  libcache.dylib (95) <9CD7B1E1-3E47-339C-A193-2392E3E0ED23> /usr/lib/system/libcache.dylib
+       0x19155e000 -        0x19155fce3  libSystem.B.dylib (1356) <4FED5EE2-5D3E-35B1-A170-9859C4B683BB> /usr/lib/libSystem.B.dylib
+       0x285521000 -        0x285528349  libRosetta.dylib (367.9) <0C7397C6-D747-31F2-8BC1-4096213BDE5C> /usr/lib/libRosetta.dylib
+       0x287134000 -        0x287137a4b  libsystem_darwindirectory.dylib (122) <971A4F65-493D-39F3-846D-0D33FA2769FD> /usr/lib/system/libsystem_darwindirectory.dylib
+       0x287138000 -        0x28714239b  libsystem_eligibility.dylib (319.160.17) <750CA446-92EA-3A56-9A7B-CC0841686C50> /usr/lib/system/libsystem_eligibility.dylib
+       0x287143000 -        0x28714a88b  libsystem_sanitizers.dylib (26.1) <D88EC709-9AA8-3083-B22B-D3CB39678D71> /usr/lib/system/libsystem_sanitizers.dylib
+       0x28714b000 -        0x28714bbb7  libsystem_trial.dylib (474.2.18.2) <7194FF5B-A6C5-3D67-B00A-90209F10D603> /usr/lib/system/libsystem_trial.dylib
