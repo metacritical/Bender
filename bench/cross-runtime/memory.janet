@@ -1,0 +1,31 @@
+# bench/cross-runtime/memory.janet
+#
+# How much memory does one LIVE process cost?
+#
+# This exists because an earlier comparison was invalid: both the Erlang and
+# Janet benchmarks spawned processes that EXITED immediately, so neither side
+# ever held N processes at once. A process that sends its answer and dies is a
+# queue entry, not a resident process.
+#
+# Here every process stays ALIVE, blocked on recv, until the whole set is up.
+# Only then is memory measured.
+#
+# Run: JANET_LANES=0 ./build/bender bench/cross-runtime/memory.janet <n>
+# The RSS figure is taken externally (see run.sh), so this prints the count and
+# then holds the set resident long enough to be sampled.
+
+(def n (scan-number (get (dyn :args) 1)))
+
+(def t0 (os/clock))
+(var i 0)
+(while (< i n)
+  # Blocked on proc/recv forever: alive, not exiting.
+  (proc/spawn-local (fn [] (proc/recv)) 8)
+  (set i (+ i 1)))
+(def built (- (os/clock) t0))
+
+(eprintf "live_procs=%d build_ms=%.0f" n (* 1000.0 built))
+
+# Hold the live set resident so the external RSS sampler sees all of it.
+(ev/sleep 3.0)
+(os/exit 0)

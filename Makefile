@@ -320,6 +320,18 @@ CALLGRIND_COMMAND=$(RUN) valgrind --tool=callgrind
 valgrind: $(JANET_TARGET)
 	$(VALGRIND_COMMAND) ./$(JANET_TARGET)
 
+# Benchmarks: micro-benchmarks plus the cross-runtime comparison.
+# BENCH_N sets the process count for the cross-runtime tables.
+BENCH_N ?= 1000000
+bench: $(JANET_TARGET)
+	$(RUN) ./$(JANET_TARGET) bench/concurrency.janet
+	@echo
+	@sh bench/cross-runtime/run.sh $(BENCH_N)
+
+# Only Janet's own micro-benchmarks: no Erlang/Go toolchain needed.
+bench-janet: $(JANET_TARGET)
+	$(RUN) ./$(JANET_TARGET) bench/concurrency.janet
+
 test: $(JANET_TARGET) $(TEST_SCRIPTS) $(EXAMPLE_SCRIPTS)
 	for f in test/suite*.janet; do $(RUN) ./$(JANET_TARGET) "$$f" || exit; done
 	for f in examples/*.janet; do $(RUN) ./$(JANET_TARGET) -k "$$f"; done
