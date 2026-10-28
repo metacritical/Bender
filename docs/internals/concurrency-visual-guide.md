@@ -121,6 +121,53 @@ thing to put inside it.
 
 ---
 
+## 3a. Arrow syntax: the pseudocode, made typeable
+
+The prose arrows above (`←`, `→`, `×`) are readable but awkward to type. Here is
+a compact ASCII form that maps 1:1 onto the same idea, using only characters a
+keyboard has:
+
+```
+   |>        put it INTO            x |> ch      = ev/give ch x
+   <|        take it OUT OF         v <| ch      = ev/take ch
+   **        spread across          f ** xs      = run f over xs
+   <>        across the boundary    <>ch         = a thread-chan (crosses lanes)
+   --        same VM only           --ch         = a plain ev/chan (never crosses)
+   @         await all              @n           = collect n results
+```
+
+So the guide's loop becomes:
+
+```
+PER PROC:
+    out <>              ; OUTBOX: crosses lanes
+    in  --              ; INBOX: local only, correct by construction
+    xs ** f |> in       ; spread f over the chunk INTO the inbox
+    @len(xs) <| in      ; await that many
+    sum |> out          ; send the total across
+
+@PROCS <| out           ; await one result per proc
+```
+
+Read the two arrow families as a promise you can check against the code:
+
+```
+    |>   in        safe   -- the value stays on this VM
+    |>   <>        safe   -- thread-chan marshals across
+    |>   --        ERROR  -- plain channel cannot cross (loud, by design)
+```
+
+That last line is the whole reason the distinction is worth learning: a plain
+`ev/chan` written from another lane raises instead of silently dropping. The
+arrow notation makes the mistake visible before you run it -- `--` is obviously
+"this side only" once you have seen it twice.
+
+Honest status: this is a READING aid, not shipped syntax. An attempt to build a
+`proc/fan-out` helper behind it measured 331ms where the equivalent hand-written
+code measured 44ms on the same work, and I did not find the cause, so it was
+reverted rather than shipped. The notation above describes code you write
+yourself today.
+
 ## 3b. Two levels, two VISIBILITY rules (the part that bites)
 
 The shape from §3 is correct, but where a proc RUNS decides what it can see.
