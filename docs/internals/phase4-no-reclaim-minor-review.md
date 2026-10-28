@@ -1,9 +1,11 @@
 # Phase 4: no-reclaim scoped minor — independent safety review
 
-Status: **reviewed and approved for porting, NOT shipped.**
-This document records a source-level safety argument for a candidate that is
-still pending a production port and a focused C regression fixture. Nothing
-here claims the change is already in `main`.
+Status: **landed as `f82d0642` after focused regression and matched checks.**
+This document records the source-level safety argument and original acceptance
+obligations. The production port is in `src/core/gc.c`; the real-abstract fixture
+is `test/c/test-gc-proc-minor-no-candidates.c`, run by
+`test/suite-gc-proc-minor-no-candidates.sh`. Remaining follow-up obligations below
+are not a claim of exhaustive GC coverage.
 
 ## Candidate
 
@@ -162,5 +164,17 @@ reachable only through a dedicated harness.
 
 ## Verdict
 
-Approved as a safe optimization of scoped minors whose possible free set is
-empty. Not approved as a fix for remaining marking cost, and not yet shipped.
+Approved and landed as a safe optimization of scoped minors whose possible free
+set is empty. Not a fix for remaining marking cost or a proof of Go parity.
+
+Post-review verification: the focused fixture passes against the production
+port, including nonempty malloc-large old objects, disabled blocks, eligible
+young blocks, global fallback, suspension, repeated skipped collections and a
+mark callback reachable solely through the rooted proc's exit reason followed
+by a real major. A negative-control fixture dropping that edge caused the probe
+to finalize, showing the positive test was load-bearing. Candidate suites passed:
+ev776, ev2 13, fiber-capture7, process-heaps28, gc-minor12, gc-stress25; lanes all
+assertions (including stop/join after640k parked), GC trace-cache, forced-quantum
+replay and foreign-VM threaded abstract claim C regression. `suite-proc` remains
+the identical baseline-qualified failure above. The 96-trial comparison and
+alternating local confirmation retained correct results and successful statuses.

@@ -1,6 +1,6 @@
 # Isolated collector candidate: no reclaimable young objects
 
-Status: experimental; **not shipped**, independent correctness approval pending. Base35671ede; isolated worktree `/tmp/janet-wave-candidate-35671ede`; exact patch `collector-candidate.patch`.
+Status: **landed as `f82d0642` after independent source review and focused regression checks**. Base35671ede; isolated worktree `/tmp/janet-wave-candidate-35671ede`; measured patch `collector-candidate.patch`. Production differs only in explanatory comments and includes the separately committed null-process correctness fix.
 
 ## Hypothesis and scope
 
@@ -46,6 +46,8 @@ The candidate substantially reduces local wave time but **does not eliminate qua
 
 These runs precede helper extraction but execute the same candidate eligibility/cleanup logic without the diagnostic env enabled. Clean helper-extracted candidate builds successfully and was used for the96trial matrix. Broader GC, pending/weak epoch and sanitizer coverage remain acceptance obligations.
 
-## Pending decision
+## Landing decision and remaining limits
 
-Keep isolated until independent reviews resolve exact sweep maintenance, epoch/visit semantics, C-root and callback effects; add a real-abstract C fixture covering empty, disabled, large-old, eligible-young and repeated skipped/real collections. Do not use a stack fake process as a GC root. Commit production changes only after narrow safety tests and repeated matched performance checks pass.
+Independent review and focused real-abstract fixture completed; production committed as `f82d0642`. See `docs/internals/phase4-no-reclaim-minor-review.md`. The fixture covers empty, disabled, malloc-large old, eligible-young and repeated skipped/real collections, plus a callback probe reachable solely from the process exit reason across a later major. Production fixture and companion null-process regression pass.
+
+Additional candidate checks: gc-minor12/12, gc-stress25/25, GC trace-cache C harness, forced-quantum replay and foreign-VM threaded-abstract ownership C harness all pass. Alternating baseline/candidate local confirmation gave N1000 median100→9ms, N2000 median416→33ms, all12 trials correct with exit0. This confirms the gain without resolving the remaining quadratic path, the residual script/AOT graph difference, or the baseline process-suite failure. No Go superiority claim follows.

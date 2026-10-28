@@ -1,0 +1,12 @@
+{"repeat": 0, "n": 1000, "arm": "baseline", "returncode": 0, "wave_ms": 103, "stdout": "procs=1000 result=1000\n", "stderr": "procs=1000 result=1000 spawn_ms=1 wave_ms=103 total_ms=105\n"}
+{"repeat": 0, "n": 1000, "arm": "candidate", "returncode": 0, "wave_ms": 9, "stdout": "procs=1000 result=1000\n", "stderr": "procs=1000 result=1000 spawn_ms=1 wave_ms=9 total_ms=10\n"}
+{"repeat": 0, "n": 2000, "arm": "baseline", "returncode": 0, "wave_ms": 429, "stdout": "procs=2000 result=2000\n", "stderr": "procs=2000 result=2000 spawn_ms=2 wave_ms=429 total_ms=431\n"}
+{"repeat": 0, "n": 2000, "arm": "candidate", "returncode": 0, "wave_ms": 33, "stdout": "procs=2000 result=2000\n", "stderr": "procs=2000 result=2000 spawn_ms=2 wave_ms=33 total_ms=35\n"}
+{"repeat": 1, "n": 1000, "arm": "candidate", "returncode": 0, "wave_ms": 8, "stdout": "procs=1000 result=1000\n", "stderr": "procs=1000 result=1000 spawn_ms=1 wave_ms=8 total_ms=9\n"}
+{"repeat": 1, "n": 1000, "arm": "baseline", "returncode": 0, "wave_ms": 100, "stdout": "procs=1000 result=1000\n", "stderr": "procs=1000 result=1000 spawn_ms=1 wave_ms=100 total_ms=101\n"}
+{"repeat": 1, "n": 2000, "arm": "candidate", "returncode": 0, "wave_ms": 34, "stdout": "procs=2000 result=2000\n", "stderr": "procs=2000 result=2000 spawn_ms=2 wave_ms=34 total_ms=36\n"}
+{"repeat": 1, "n": 2000, "arm": "baseline", "returncode": 0, "wave_ms": 416, "stdout": "procs=2000 result=2000\n", "stderr": "procs=2000 result=2000 spawn_ms=2 wave_ms=416 total_ms=418\n"}
+{"repeat": 2, "n": 1000, "arm": "baseline", "returncode": 0, "wave_ms": 97, "stdout": "procs=1000 result=1000\n", "stderr": "procs=1000 result=1000 spawn_ms=1 wave_ms=97 total_ms=98\n"}
+{"repeat": 2, "n": 1000, "arm": "candidate", "returncode": 0, "wave_ms": 9, "stdout": "procs=1000 result=1000\n", "stderr": "procs=1000 result=1000 spawn_ms=1 wave_ms=9 total_ms=10\n"}
+{"repeat": 2, "n": 2000, "arm": "baseline", "returncode": 0, "wave_ms": 415, "stdout": "procs=2000 result=2000\n", "stderr": "procs=2000 result=2000 spawn_ms=2 wave_ms=415 total_ms=417\n"}
+{"repeat": 2, "n": 2000, "arm": "candidate", "returncode": 0, "wave_ms": 33, "stdout": "procs=2000 result=2000\n", "stderr": "procs=2000 result=2000 spawn_ms=2 wave_ms=33 total_ms=35\n"}
