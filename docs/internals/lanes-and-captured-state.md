@@ -205,7 +205,41 @@ cut it 3.4× with no measurable cost to per-hop work (still ~6 µs/hop).
 `1M` in Janet is therefore feasible now, but only with roughly 9 GB free. Under
 memory pressure it swaps and every timing number becomes meaningless — see §6.
 
-## 5b. Why a proc costs ~10 KB and a fiber ~1 KB
+## 5a. Milestone: 1,000,000 processes in 1.31 GB
+
+After sharing young pages across ordinary proc construction (3401dc30):
+
+| scale | RSS | per proc |
+|---|---|---|
+| 20000 | 32 MB | 1.6 KB |
+| 100000 | 143 MB | 1.5 KB |
+| **1000000** | **1311 MB** | **1.31 KB** |
+
+All 1000000 bodies executed (verified by a shared counter reaching 1000000).
+For comparison: Erlang measured 2.7-3.2 KB/proc, so Janet is now BELOW BEAM's
+per-process footprint, and comfortably inside a 16 GB machine.
+
+The win came from a specific defect, not a general rewrite. Instrumenting the
+slab allocator showed 2.20 pages claimed per proc, with
+
+    c1 (64 B,  64 slots/page) = 0.92 pages/proc
+    c5 (256 B, 16 slots/page) = 0.92 pages/proc
+
+-- each proc filled about ONE SLOT of a fresh page. Cause: every fiber drew from
+its own nursery cursor so young pages stayed pure-owned. A proc being
+constructed is a short-lived context that allocates a couple of small objects,
+so ordinary construction now uses the SHARED cursor and many procs fill one
+page; an owner-mixed page reads as shared and floats to a global collection.
+Strict (spawn-isolated) construction is excluded, because its export rule needs
+pages only that child owns.
+
+That also removed the native-stack cost from the picture: the 64 KB reservation
+is untouched and no longer matters, because untouched reservation is not memory.
+Procs now measure 1.5 KB versus fibers' 1.15 KB, so the earlier advice to prefer
+fibers for volume is obsolete -- procs are nearly as cheap AND can use all cores.
+
+## 5b. Why a proc cost ~10 KB before (historical)
+
 
 Measured per-proc accounting (20000 procs, all bodies executed, 195MB RSS):
 
