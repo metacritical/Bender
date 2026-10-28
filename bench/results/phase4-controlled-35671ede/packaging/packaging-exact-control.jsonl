@@ -1,0 +1,12 @@
+{"branch": "baseline", "n": 1000, "repeat": 0, "returncode": 0, "stdout": "procs=1000 result=1000\n", "stderr": "procs=1000 result=1000 spawn_ms=1 wave_ms=279 total_ms=280\n"}
+{"branch": "baseline", "n": 1000, "repeat": 1, "returncode": 0, "stdout": "procs=1000 result=1000\n", "stderr": "procs=1000 result=1000 spawn_ms=2 wave_ms=282 total_ms=284\n"}
+{"branch": "baseline", "n": 1000, "repeat": 2, "returncode": 0, "stdout": "procs=1000 result=1000\n", "stderr": "procs=1000 result=1000 spawn_ms=1 wave_ms=275 total_ms=276\n"}
+{"branch": "baseline", "n": 2000, "repeat": 0, "returncode": 0, "stdout": "procs=2000 result=2000\n", "stderr": "procs=2000 result=2000 spawn_ms=2 wave_ms=767 total_ms=769\n"}
+{"branch": "baseline", "n": 2000, "repeat": 1, "returncode": 0, "stdout": "procs=2000 result=2000\n", "stderr": "procs=2000 result=2000 spawn_ms=2 wave_ms=774 total_ms=776\n"}
+{"branch": "baseline", "n": 2000, "repeat": 2, "returncode": 0, "stdout": "procs=2000 result=2000\n", "stderr": "procs=2000 result=2000 spawn_ms=2 wave_ms=772 total_ms=774\n"}
+{"branch": "postfix", "n": 1000, "repeat": 0, "returncode": 0, "stdout": "procs=1000 result=1000\n", "stderr": "procs=1000 result=1000 spawn_ms=1 wave_ms=25 total_ms=26\n"}
+{"branch": "postfix", "n": 1000, "repeat": 1, "returncode": 0, "stdout": "procs=1000 result=1000\n", "stderr": "procs=1000 result=1000 spawn_ms=1 wave_ms=22 total_ms=23\n"}
+{"branch": "postfix", "n": 1000, "repeat": 2, "returncode": 0, "stdout": "procs=1000 result=1000\n", "stderr": "procs=1000 result=1000 spawn_ms=1 wave_ms=22 total_ms=23\n"}
+{"branch": "postfix", "n": 2000, "repeat": 0, "returncode": 0, "stdout": "procs=2000 result=2000\n", "stderr": "procs=2000 result=2000 spawn_ms=2 wave_ms=61 total_ms=64\n"}
+{"branch": "postfix", "n": 2000, "repeat": 1, "returncode": 0, "stdout": "procs=2000 result=2000\n", "stderr": "procs=2000 result=2000 spawn_ms=2 wave_ms=68 total_ms=70\n"}
+{"branch": "postfix", "n": 2000, "repeat": 2, "returncode": 0, "stdout": "procs=2000 result=2000\n", "stderr": "procs=2000 result=2000 spawn_ms=2 wave_ms=64 total_ms=65\n"}

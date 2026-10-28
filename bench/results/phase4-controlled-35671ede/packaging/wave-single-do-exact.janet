@@ -1,0 +1,21 @@
+# Identical wave forms and integer-ms output, grouped in one top-level do.
+(do
+ (def n (scan-number (get (dyn :args) 1)))
+ (def done (ev/thread-chan 1))
+ (def t0 (os/clock))
+ (def sink (proc/spawn (fn [] (ev/give done (proc/recv))) 8))
+ (var head sink)
+ (var i 0)
+ (while (< i n)
+   (def downstream head)
+   (set head (proc/spawn (fn [] (proc/send downstream (+ 1 (proc/recv)))) 8))
+   (set i (+ i 1)))
+ (def t1 (os/clock))
+ (proc/send head 0)
+ (def result (ev/take done))
+ (def t2 (os/clock))
+ (assert (= result n) "wave result must equal process count")
+ (printf "procs=%d result=%d" n result)
+ (eprintf "procs=%d result=%d spawn_ms=%.0f wave_ms=%.0f total_ms=%.0f"
+          n result (* 1000.0 (- t1 t0)) (* 1000.0 (- t2 t1)) (* 1000.0 (- t2 t0)))
+ (when (> (proc/lanes) 0) (proc/lanes-stop)))
