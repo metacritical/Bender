@@ -1,8 +1,14 @@
 # Phase 4 routing audit: where a cross-lane hop's time actually goes
 
 Status: source-verified against `a69c0984`. Every line reference below was
-re-read at that commit. Claims are tagged **[measured]**, **[static]**, or
-**[open]** so a later reader can tell evidence from inference.
+re-read at that commit. Claims are tagged so a later reader can tell evidence
+from inference:
+
+- **[measured]** - an artifact exists in the tree or in an archived record.
+- **[reported]** - a figure from an earlier session with no retained artifact;
+  treat as a claim, not a reading.
+- **[static]** - read directly from the current source at the cited lines.
+- **[open]** - unresolved; the evidence present does not decide it.
 
 This document records the routing half of the phase-4 investigation. The GC
 half lives in `phase4-no-reclaim-minor-review.md`.
@@ -58,23 +64,43 @@ wakeup at all. Therefore "one wake per hop" is not a property of the design.
 
 ## 4. What the earlier "it is only kevent" claim did not establish
 
-**[measured]** The phase-4 comparison table
+**[reported]** The phase-4 comparison table
 (`docs/internals/phase4-comparison.md`) reported 6.9-7.4 us per cross-lane
-round trip against 0.17 us same-VM, and a `sample` run showing lane threads
-parked in `kevent`. Both observations are real.
+round trip against 0.17 us same-VM, and a `sample` run that showed lane threads
+parked in `kevent`. Those figures are **reported, not retained**: no script in
+`bench/` produces the reported marshal or same-VM rows, and no output file
+records them. `phase4-comparison.md` itself now heads that section
+"Cross-lane hop cost: provisional, not root-caused", and the earlier "ROOT
+CAUSE FOUND: cross-lane hops cost two poll cycles" heading was withdrawn.
 
-**[open]** Neither observation decomposes the hop. A parked thread observed at
-sample time says where the thread *waits*, not what its work costs when it
-runs. The attribution to "poll wakeup latency" was inference from a steady
-state, not a measurement of the components in section 1.
+**[open]** Neither the numbers nor the sample decompose the hop. A parked
+thread observed at sample time says where the thread *waits*, not what its work
+costs when it runs. The attribution to "poll wakeup latency" was inference from
+a steady state, not a measurement of the components listed in section 1, and it
+does not survive as an established cost model.
 
-**[measured]** The follow-up fast-post experiment
-(`docs/internals/fastpost-rejected.md`) removed the pipe from the path
-entirely and measured 6.80 us baseline versus 7.82-10.90 us with the ring, then
-lost wakeups under load. That result refutes the pipe as the dominant cost; it
-does not show the remaining cost is unavoidable, because the experiment
-changed only *where* an event is stored, not how many scheduler transitions a
-hop requires.
+**[reported / provisional]** The follow-up fast-post attempt is recorded in
+`docs/internals/fastpost-rejected.md` as an experiment whose source was
+**reverted before commit and is not in the repository**; that document marks its
+implementation detail and both measurement arms **transcript-only**. Two
+specifics bear on how little this evidence can support:
+
+- The pipe was **not** removed from the path. As described, the ring was drained
+  first and the pipe was still written **as a nudge when the target had
+  announced itself parked** — so a park-dependent self-pipe write remained in
+  the design.
+- The rejection is therefore not a measured refutation of the pipe's cost, and
+  it is not an exclusive-cost proof of anything. The described implementation
+  also had a reported reservation defect (two producers able to read the same
+  ring head) that is a plausible independent cause of the reported hang, and
+  the "ring never reported full" diagnostic was itself racy. A hang at larger n
+  is equally consistent with either cause, and the report does not discriminate
+  between them.
+
+What the fast-post episode legitimately supports: an as-described lock-free
+inbox did not show a latency win in that session, and its results are
+unverifiable. It does not show the remaining cross-lane cost is unavoidable,
+nor that any component of it has been attributed.
 
 ## 5. Retention that outlives completion
 
