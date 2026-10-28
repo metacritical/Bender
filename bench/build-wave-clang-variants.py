@@ -86,12 +86,19 @@ def main():
     raw = evidence / "raw"
     raw.mkdir()
     env = os.environ.copy()
+    # A directly invoked Xcode toolchain clang needs the selected SDK to find
+    # system headers; keep the same SDK for every build and training run.
+    sdkroot = env.get("SDKROOT") or capture(["xcrun", "--show-sdk-path"], cwd=root)
+    if not Path(sdkroot).is_dir():
+        parser.error(f"SDKROOT does not name a directory: {sdkroot}")
+    env["SDKROOT"] = str(Path(sdkroot).resolve())
     # Neither Janet's type profiler nor an inherited compiler/profile path may
     # contaminate LLVM training. Explicit Make arguments control build flags.
     for key in ("LLVM_PROFILE_FILE", "JANET_PROFILE", "JANET_PROFILE_OUT",
                 "NATIVE_COMMIT_PROBE", "CPATH", "CFLAGS", "LDFLAGS"):
         env.pop(key, None)
     manifest = {"source_commit": PIN, "wave_sha256": digest(wave),
+                "sdkroot": env["SDKROOT"],
                 "clang": clang, "clang_version": capture([clang, "--version"], cwd=root).splitlines()[0],
                 "profdata": profdata,
                 "profdata_version": capture([profdata, "--version"], cwd=root).splitlines()[0],
