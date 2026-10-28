@@ -349,6 +349,45 @@ lane-hosted procs cost 7.13 KB against 2.19 KB for the same proc spawned
 locally. That is a 3.3x tax on the lane path only, and it is what limits
 `proc/spawn` at scale -- not Janet's process representation.
 
+## 5c-ter. The lane dispatcher does not pump (root cause of the lane tax)
+
+The routed-proc tax is now explained, and it is an architectural gap rather than
+an allocator cost.
+
+A lane worker is a Janet function that loops:
+
+```janet
+(def [op serial x y] (ev/take ctl))     ; blocks waiting for commands
+```
+
+While it sits in that `ev/take`, **the lane's event loop is not running**. So a
+proc spawned LOCALLY on that lane (via `proc/spawn-local`) does not execute: its
+fiber is queued, but nothing pumps the scheduler until the next ctl message
+arrives. Measured: a lane that spawns 5 procs locally and then waits reports
+`bodies_ran=0`.
+
+That is also why routing every proc through the spawn PATH costs ~7 KB: each
+routed spawn goes over the control channel rather than being started by an
+already-running scheduler on the lane.
+
+### What the fix looks like (the pre-started-scheduler design)
+
+The lane worker should be a scheduler, not a blocking dispatcher:
+
+```janet
+(while running
+  (ev/take-with-pump ctl runnable)   ;; park on ctl, but keep pumping local procs
+  (handle op))
+```
+
+i.e. the lane must be able to run its own queued procs between commands, so that
+`proc/spawn-local` on a lane is (a) correct and (b) cheap -- the same ~1-2 KB a
+main-VM proc costs, instead of ~7 KB for a routed one.
+
+This is the difference between "lanes are message relays" and "lanes are
+schedulers with a mailbox", and it is the second thing needed for BEAM-shaped
+density across cores.
+
 ## 5d. The cross-lane memory tax (open issue)
 
 Measured with the same 50000-process program, differing only in lane count:
