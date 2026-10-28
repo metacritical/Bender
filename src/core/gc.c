@@ -1506,10 +1506,33 @@ static void *janet_slab_alloc(int class_index) {
         slot_obj->data.next = (JanetGCObject *) ss->old_free[class_index];
         ss->old_free[class_index] = slot_obj;
     }
-    /* Bump path: the requester's own cur page when in a fiber (young
-     * pages stay pure-owned), else the shared cur (host behavior
-     * unchanged from before Step 1.2). */
-    JanetSlabPage **curp = (NULL != req) ?
+    /* Bump path.
+     *
+     * Historically every fiber drew from its OWN cur page so young pages
+     * stayed pure-owned, which keeps a scoped sweep exact.
+
+     * That costs a full page per fiber even when the fiber allocates one
+     * small object: measured 2.20 pages/proc for a 5000-proc burst, with
+     * class c1 (64 B, 64 slots/page) and c5 (256 B, 16 slots/page) each
+     * claiming ~0.92 pages per proc -- i.e. pages ~1/64 full.
+     *
+     * A SHORT-LIVED allocation context (a proc being constructed, which is
+     * exactly gc_alloc_ctx) does not need purity: it allocates a couple of
+     * small objects and then either runs or dies. Route those through the
+     * SHARED cur so a page is filled by many constructing procs; a page that
+     * receives more than one owner is marked `mixed` on reuse, and mixed pages
+     * read as owner 0 everywhere, which is sound because owner 0 means
+     * "shared": they float until a global collection instead of a scoped one.
+     * Steady-state fibers (allocating during real execution) keep their own
+     * cur page exactly as before. */
+    /* STRICT (spawn-isolated) construction must keep its private cursor: the
+     * export/escape rule depends on the child's stores landing on pages only
+     * it owns, and sharing them makes an intra-heap store look like a
+     * cross-heap escape (measured: suite-proc's P3.3 export tests fail). So
+     * the shared cursor applies ONLY to ordinary construction. */
+    int constructing = (NULL != req && req == janet_vm.gc_alloc_ctx &&
+                        !req->heap_strict);
+    JanetSlabPage **curp = (NULL != req && !constructing) ?
         &req->nursery_cur[class_index] : &ss->cur[class_index];
     JanetSlabPage *page = *curp;
     if (NULL == page || page->age >= JANET_SLAB_OLD_AGE ||
