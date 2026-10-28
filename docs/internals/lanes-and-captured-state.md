@@ -268,6 +268,54 @@ the work must occupy another core.
 A smaller win WAS taken: the fiber stack was reserved at 64 slots for an
 arity-0 thunk; it is now 16 (376MB -> 367MB at 40000 procs).
 
+## 5c. The hybrid: fibers INSIDE procs
+
+The two tiers compose, and the composition is better than either alone. Put
+fibers inside procs: procs supply the cores, fibers supply the unit count.
+
+Same total work (110M iterations), three configurations:
+
+| configuration | wall | cores used |
+|---|---|---|
+| pure fibers, one VM | 1046 ms | 1 |
+| pure procs, 11 lanes | 120 ms | 11 |
+| **hybrid: 11 procs x 11 fibers each** | **121 ms** | **11** |
+
+The hybrid matches pure-proc speed exactly -- wrapping work in fibers costs
+nothing measurable -- while multiplying the number of concurrent units:
+
+| concurrent units | layout | RSS |
+|---|---|---|
+| 1,000,000 | 1000 procs x 1000 fibers | **1078 MB** |
+| 5,000,000 | 5000 procs x 1000 fibers | **2305 MB** |
+
+That is ~0.5 KB per live unit at 5M, because a fiber is ~1 KB but the fixed
+per-proc cost (page + structs) is amortised over the 1000 fibers beneath it.
+
+**Why this matters:** the unit ceiling is now set by millisecond-scale
+bookkeeping rather than by memory or core count. Neither Go (goroutines share
+one heap, so GC cost scales with live set) nor Erlang (2.7-3.2 KB per PROCESS
+with no cheaper inner tier) offers a comparable two-level structure: in BEAM the
+process IS the cheap unit, so 5M live processes would cost ~14 GB, whereas the
+Janet hybrid costs 2.3 GB and runs across all cores.
+
+Practical shape:
+
+```janet
+;; one proc per core-group of work, many fibers inside each
+(proc/spawn (fn []
+              (def ch (ev/chan 4096))
+              (var i 0)
+              (while (< i 1000)
+                (ev/go (fn [] (ev/give ch (unit-of-work))))
+                (set i (+ i 1)))
+              ;; collect
+              ...))
+```
+
+Caveats: a proc's fibers stay on that proc's VM (no migration), so balance work
+per proc evenly; and use `ev/thread-chan` to carry results back across lanes.
+
 ## 6. Measurement discipline (learn from our mistakes)
 
 Three separate wrong conclusions in one session came from ignored machine
