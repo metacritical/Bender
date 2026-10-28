@@ -168,3 +168,7 @@ CTestTestfile.cmake
 # plan_write default target: ephemeral agent scratch, never project direction.
 # Canonical plan lives in docs/internals/ORCHESTRATOR-PLAN.md
 implementation_plan.md
+
+# cross-runtime bench build artifacts
+bench/cross-runtime/wave-go
+bench/cross-runtime/wave.beam
