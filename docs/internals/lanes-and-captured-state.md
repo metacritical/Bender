@@ -149,6 +149,44 @@ its own self-pipe and the post rate spreads across them:
 That is why more lanes help even when throughput has plateaued: they buy
 headroom for large fan-outs, not more speed.
 
+## 4c. Fibers vs procs vs threads: what actually parallelises
+
+Three concurrency primitives, measured on the same workload (12 heavy tasks):
+
+| primitive | wall | parallel? |
+|---|---|---|
+| `ev/go` fibers, lanes off | 229 ms | no |
+| `ev/go` fibers, lanes on (11) | 226 ms | **no** |
+| `proc/spawn` across lanes (11) | 30 ms | **yes, 7.7x** |
+| `thread/new` x 12 | 28 ms | yes, 8.3x |
+
+**Fibers do NOT distribute across threads.** Turning lanes on makes no
+difference to `ev/go` (226 vs 229 ms): all fibers still run on the VM that
+created them, one thread. Fibers give concurrency (interleaved I/O, cheap
+suspension), never parallelism. If work must use many cores it has to be a
+`proc` (or `thread/new`), because those have their own VM and heap.
+
+Cost per unit, which drives the choice:
+
+| unit | memory | mechanism |
+|---|---|---|
+| fiber | **~1 KB** | cooperative, one VM, no migration |
+| proc | ~10 KB | own fiber + own heap + mailbox, lane-migratable |
+
+Measured fiber capacity on ONE thread: 250000 fibers spawned successfully
+(100000 in 15.8 s, 250000 in 39.9 s). The limit is scheduling time, not a hard
+count, and memory stays near 1 KB each (50000 fibers = 57 MB, 100000 = 109 MB).
+
+So the rule is: use fibers for I/O-shaped or very numerous cooperative tasks
+(cheap, single-core), and procs only for work that must occupy another core.
+
+## 4d. Scheduler count
+
+`proc/lanes-start` with no argument starts **cores - 1** lanes; on this 12-core
+box that is 11, i.e. 12 schedulers counting the main VM -- the same shape as
+BEAM's one-scheduler-per-core. `JANET_LANES=<n>` sets it explicitly, and the
+guidance in 4b applies: ~11 for throughput, more for burst headroom.
+
 ## 5. Process memory, and why 1M processes is a memory question
 
 Measured per-process footprint before and after the slab-page change:
