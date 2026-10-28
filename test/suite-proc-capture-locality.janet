@@ -84,6 +84,7 @@
 (let [box @[] ready (ev/chan 1) gate (ev/thread-chan 1) done (ev/chan 1)]
   (def p (proc/spawn (array-body box ready gate done) 8))
   (assert (local? p) "array capture must spawn locally")
+  (assert (proc/pid? p) "a local handle must satisfy proc/pid?")
   (assert (= true (ev/take ready)) "array actor must signal readiness")
   (gccollect) (gccollect)
   (ev/give gate true)
@@ -94,8 +95,10 @@
 (let [box @{:n 0} done (ev/chan 2) mk (cap-body box done)]
   (def p1 (proc/spawn (mk 1)))
   (assert (local? p1) "default capacity must keep local placement")
+  (assert (proc/pid? p1) "a local handle must satisfy proc/pid?")
   (def p2 (proc/spawn (mk 2) 32))
   (assert (local? p2) "explicit capacity must keep local placement")
+  (assert (proc/pid? p2) "a local handle must satisfy proc/pid?")
   # Completion ORDER is unspecified between two local actors: assert set
   # membership, never "first is 1, second is 2".
   (def a (ev/take done))
@@ -110,6 +113,7 @@
 (let [box @[] done (ev/chan 1)]
   (def p (spawn-tail (tail-body box done) 8))
   (assert (local? p) "tail-call wrapper must preserve local placement")
+  (assert (proc/pid? p) "a local handle must satisfy proc/pid?")
   (assert (= 1 (ev/take done)) "tail-spawned actor must run")
   (assert (= 1 (length box)) "tail actor must mutate the capture"))
 
