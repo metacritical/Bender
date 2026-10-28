@@ -68,9 +68,25 @@
 # machine has been up for a long time, so prefer it and fall back to the
 # double if the tuple shape is ever unavailable.
 (defn- now-us []
+  # Expect [tv_sec tv_nsec] from :tuple, but detect the shape rather than
+  # trusting it. Two representations are tolerated:
+  #   * [sec ns]        -- the documented tuple form (see os/clock in os.c,
+  #                        which wraps tv_sec and tv_nsec directly).
+  #   * [sec us]        -- a defensive reading used only if the second field
+  #                        cannot be nanoseconds (it would then be < 1000 for
+  #                        a sub-millisecond instant, which nanoseconds never
+  #                        look like for any non-tiny value; treated as us).
+  # Getting this scale wrong is not cosmetic: with seconds scaled as ms the
+  # value JUMPS BACKWARD across a second boundary (e.g. 1099999 -> 101000),
+  # making every phase duration negative. Verified against the rollover.
   (def t (os/clock :monotonic :tuple))
   (if (and (tuple? t) (= 2 (length t)))
-    (+ (* 1000 (get t 0)) (math/floor (/ (get t 1) 1000)))
+    (let [sec (get t 0)
+          frac (get t 1)
+          frac-is-ns (>= frac 1000)]
+      (if frac-is-ns
+        (+ (* 1000000 sec) (math/floor (/ frac 1000)))
+        (+ (* 1000000 sec) (math/floor frac))))
     (math/floor (* 1000000 (os/clock :monotonic)))))
 
 (defn- ms [a b] (/ (- b a) 1000.0))
@@ -96,11 +112,18 @@
 (eprintf "phase=spawn-end spawn_end_us=%d spawn_ms=%.3f" spawn_end spawn_ms)
 
 # --- phase: wave ------------------------------------------------------------
-(eprintf "phase=wave-start wave_start_us=%d" spawn_end)
+# wave_start is sampled AFTER the spawn-end marker is printed, so wave_ms
+# excludes the marker writes -- but it also excludes the spawn-end print's own
+# cost, and spawn_ms by contrast encloses the spawn-start print. The gap is
+# therefore reported explicitly rather than hidden; label_lag_us is that gap.
+# It is microseconds next to a wave of milliseconds, but it is not zero.
+(def wave_start (now-us))
+(eprintf "phase=wave-start wave_start_us=%d label_lag_us=%d"
+         wave_start (- wave_start spawn_end))
 (proc/send head 0)
 (def result (ev/take done))
 (def wave_end (now-us))
-(def wave_ms (ms spawn_end wave_end))
+(def wave_ms (ms wave_start wave_end))
 (eprintf "phase=wave-end wave_end_us=%d wave_ms=%.3f" wave_end wave_ms)
 
 # Correctness gate before any summary line, exactly as wave.janet asserts.
@@ -130,6 +153,19 @@
         (if (nil? pid-shape-lane-field) "nil"
             (string pid-shape-lane-field)))
 
+# --- clock sanity gate ------------------------------------------------------
+# Cheap regression guard for the tuple-scale bug: with seconds scaled as ms
+# instead of us, a value taken before and after a second boundary DECREASES by
+# ~999000. Two samples microseconds apart cannot legitimately go backward, so
+# this fails loudly rather than emitting negative phase durations. Cost is two
+# clock reads plus a comparison, outside all timed intervals.
+(def clock_a (now-us))
+(def clock_b (now-us))
+(when (< clock_b clock_a)
+  (eprintf "wave-phased: clock regression %d -> %d (tuple scale bug)"
+           clock_a clock_b)
+  (os/exit 3))
+
 # --- phase: shutdown --------------------------------------------------------
 (def shutdown_start (now-us))
 (eprintf "phase=shutdown-start shutdown_start_us=%d" shutdown_start)
@@ -144,4 +180,4 @@
 
 # --- final timing summary: same keys as wave.janet, 3-decimal precision -----
 (eprintf "procs=%d result=%d spawn_ms=%.3f wave_ms=%.3f total_ms=%.3f"
-        n result spawn_ms wave_ms (+ spawn_ms wave_ms))
+        n result spawn_ms wave_ms (ms spawn_start wave_end))

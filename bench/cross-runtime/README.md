@@ -37,7 +37,25 @@ Same chain, same actor body, same handoffs and the same deterministic
 shutdown matters; `wave.janet` remains the parity reference.
 
 N is a required integer `>= 1` with no upper cap beyond int32; invalid N exits 2
-with nothing on stdout.
+with nothing on stdout. Malformed input (`5x`, `10abc`, `1e`, `0x`, leading
+space) is rejected the same way, because `scan-number` returns nil for all of
+them; `1.5e2` is accepted as 150.
+
+**Clock note.** Timestamps come from `(os/clock :monotonic :tuple)`, which
+returns `[tv_sec tv_nsec]` (see the `:tuple` branch of `os_clock` in
+`src/core/os.c`, which wraps `tv_sec`/`tv_nsec` directly). Microseconds are
+`sec*1000000 + ns/1000`; scaling seconds as milliseconds instead makes the
+value jump **backward** by ~999000 us at every second boundary and every phase
+duration goes negative. That bug existed here and was fixed; `now-us` also
+detects the field scale rather than assuming it. A cheap guard (`clock
+regression`) exits 3 if two adjacent reads ever decrease.
+
+**Inter-phase gap, disclosed not hidden.** `wave-start` is sampled after the
+`spawn-end` marker is printed, so `wave_ms` excludes that marker's own write,
+while `spawn_ms` encloses the `spawn-start` write. The difference is reported
+as `label_lag_us` and is not folded into either interval; `total_ms` spans
+`spawn_start`..`wave_end`, so `spawn_ms + wave_ms + label_lag_us/1000`
+reconciles with it.
 
 **Lane placement is not observable from script.** The runtime exposes no
 per-actor lane identity. `proc/self-pid` returns `[:pid lane serial ctl]`, but
