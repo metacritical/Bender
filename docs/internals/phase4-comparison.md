@@ -49,7 +49,45 @@ That distinction is real and measured:
 So "we beat Go" is true for parallel throughput and false for per-message
 latency. Both statements are needed.
 
-## What is actually slow (candidates, not yet proven)
+## ROOT CAUSE FOUND: cross-lane hops cost two poll cycles
+
+The 15us/hop is not marshalling, not GC, and not chain length. Measured
+separately with `bench/lane-rt.janet` and `bench/hops.janet`:
+
+| operation | cost |
+|---|---|
+| marshal a value | 0.12 us |
+| marshal + unmarshal | 0.14 us |
+| same-VM channel round trip | 0.17 us |
+| **cross-lane round trip** | **6.9-7.4 us** |
+
+Data movement is ~0.14 us. The whole penalty is **6.9 us of poll-wakeup
+latency**: a cross-lane message must wake the target VM's event loop (self-pipe
+-> kevent) and the reply must wake the sender again. `sample` during the run
+shows the lane threads parked in `kevent`.
+
+Two hypotheses were tested and REJECTED:
+
+1. **"Live process count makes minors slow."** Hammering a 2-proc chain 20000
+   times with 0, 50000, 100000 and 200000 idle live procs gave 8.34, 7.79, 7.57
+   and 7.99 us/hop -- flat. Live set size is irrelevant.
+2. **"The chain length is the problem."** A 2-proc chain costs the same per hop
+   as an N-proc chain, so the earlier superlinear curve was the live-set growth
+   of the BUILD phase, not traversal.
+
+Also measured: lanes off is 0.46 us/hop vs 7.4 us with lanes on, i.e. the
+cross-lane penalty is ~16x and is FLAT across 2, 4 and 11 lanes -- it is a
+per-message cost, not contention.
+
+### What this means for remediation
+
+The lever is **poll-wakeup latency**, not marshalling. Beating Go on a
+message-passing chain would require waking the target without a full poll cycle
+(e.g. a per-lane lock-free inbox that the scheduler checks every turn, or a
+spin-then-park handoff). That is a real, bounded piece of work and is where the
+next change should go.
+
+## Remaining candidates (not yet proven)
 
 1. **~15 us per hop.** A channel round-trip measured 0.17 us, so the cost is not
    messaging itself. Each hop goes proc/recv -> proc/send, i.e. two mailbox

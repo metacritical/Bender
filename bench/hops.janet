@@ -1,0 +1,41 @@
+# Does the cost depend on CHAIN LENGTH or on LIVE PROCESS COUNT?
+#
+#   JANET_LANES=11 ./build/janet /tmp/p4/hops.janet <hops> <live>
+#
+# `live` idle procs are spawned first (they just park on recv forever), then a
+# 2-proc chain is hammered `hops` times. If time grows with `live`, the cost is
+# per-live-process (GC scanning a growing set). If it depends only on `hops`,
+# the chain length in the earlier benchmark was the real driver.
+
+(def H (or (scan-number (get (dyn :args) 1)) 100000))
+(def LIVE (or (scan-number (get (dyn :args) 2)) 0))
+(def done (ev/thread-chan 0))
+
+# Idle filler processes: each parks on recv and never wakes.
+(var i 0)
+(while (< i LIVE)
+  (proc/spawn (fn [] (proc/recv)) 8)
+  (set i (+ i 1)))
+
+# A 2-proc ping chain: echo increments and replies to the caller.
+(def echo (proc/spawn
+            (fn []
+              (var running true)
+              (while running
+                (def msg (proc/recv))
+                (if (nil? msg)
+                  (set running false)
+                  (ev/give done (+ 1 msg)))))
+            8))
+
+(def t0 (os/clock))
+(var k 0)
+(while (< k H)
+  (proc/send echo k)
+  (ev/take done)
+  (set k (+ k 1)))
+(def t1 (os/clock))
+
+(eprintf "hops=%d  live=%d  wall=%.0fms  (%.2f us/hop)"
+         H LIVE (* 1000.0 (- t1 t0)) (/ (* 1000000.0 (- t1 t0)) H))
+(when (> (proc/lanes) 0) (proc/lanes-stop))
