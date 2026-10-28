@@ -27,6 +27,29 @@ Janet emits deterministic `procs/result` on stdout and phase timings on stderr,
 so PGO parity compares results rather than nondeterministic clock readings.
 See `pgo-results.md` for the three-training-run release experiment and limits.
 
+### Phase-labelled variant (`wave-phased.janet`)
+
+Same chain, same actor body, same handoffs and the same deterministic
+`procs=N result=N` on stdout as `wave.janet`; it additionally writes six
+`phase=` markers to stderr (`spawn-start/end`, `wave-start/end`,
+`shutdown-start/end`) with monotonic microsecond timestamps and timings at
+`%.3f` ms instead of `%.0f`. Use it when the split between spawn, wave and
+shutdown matters; `wave.janet` remains the parity reference.
+
+N is a required integer `>= 1` with no upper cap beyond int32; invalid N exits 2
+with nothing on stdout.
+
+**Lane placement is not observable from script.** The runtime exposes no
+per-actor lane identity. `proc/self-pid` returns `[:pid lane serial ctl]`, but
+that lane field is hardcoded to the literal `1` in `src/core/proc.c`
+(`cfun_proc_self_pid`) -- it is a shape marker, not the executing worker --
+`proc/lanes` reports only how many worker VMs exist, and `proc/lanes-stats`
+reports overflow-queue push/pull counts. So `wave-phased.janet` prints
+`placement=unknown` and the configured worker count, and never infers a lane
+from chain index or lane count. Do not read a placement claim into its output.
+Adding real per-actor placement would need a new runtime metric; sampling per
+actor inside the chain would add work to the timed path.
+
 ## 2. Live-process memory (`memory.janet`, `memory.erl`)
 
 How much memory does one **resident** process cost?
