@@ -1157,15 +1157,24 @@ void janet_sweep(void) {
  * janet_collect_minor. */
 
 /* Page size is a power of two so janet_slab_page_for can mask a pointer down
- * to its page base. 4 KB (one OS page) is the smallest safe choice: the header
- * (sizeof(JanetSlabPage) ~ 48 bytes) plus at least one 512-byte slot still fit
- * in JANET_SLAB_USABLE, and aligned allocation at 4 KB is universally
- * supported. This is what makes a fresh process cost ~4 KB instead of ~16 KB.
- * Second pages are only claimed when a class actually needs more room, so a
- * short-lived process that allocates a few hundred bytes never pays the old
- * 16 KB-per-claim price. */
-#define JANET_SLAB_PAGE_SIZE 4096
-#define JANET_SLAB_PAGE_MASK (~(uintptr_t)0xFFF)
+ * to its page base.
+ *
+ * 16 KB, not one OS page. Shrinking to 4 KB cut per-process memory 34 KB ->
+ * 10 KB, but it quadrupled the page DIRECTORY for the same live bytes, and the
+ * directory is a sorted ARRAY: every pointer -> page lookup (janet_slab_obj_old,
+ * owner lookup, every write barrier) pays a binary search whose depth grows
+ * with the directory, and every page claim pays an O(n) insertion memmove.
+ * On a real game that cost is not a constant: it scales with heap size, so an
+ * interpreter run with the implicit profiler on (which adds per-function
+ * evidence tables and therefore pages) degraded progressively -- 24 FPS with
+ * 134 frames over 100 ms at 6000 frames, versus 120 FPS and 1 stall for the
+ * same run at 16 KB. Without the profiler both sizes were comparable, which is
+ * the tell: this is a heap-size-sensitive lookup cost, not a per-process
+ * memory trade. Per-process memory is recovered by keeping pages small only
+ * for the FIRST claim if the directory problem is ever fixed properly; until
+ * then 16 KB is the safe default. */
+#define JANET_SLAB_PAGE_SIZE 16384
+#define JANET_SLAB_PAGE_MASK (~(uintptr_t)0x3FFF)
 #define JANET_SLAB_MAGIC 0x4A534C41u
 #define JANET_SLAB_OLD_AGE 2
 
