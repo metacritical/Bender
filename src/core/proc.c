@@ -1068,7 +1068,12 @@ static Janet cfun_proc_spawn_impl(JanetFunction *func, int32_t cap, int isolated
      * via gc_alloc_ctx, so the process's memory is born owned (owner
      * id, strict bit, nursery, filing) and per-proc pressure/sweeps
      * cover it while globals stay quiet. */
-    JanetFiber *fiber = janet_fiber(func, 64, 0, NULL);
+    /* 16 slots instead of 64: a raw proc thunk is arity 0 with a tiny body in
+     * the common case, and the fiber stack grows on demand anyway
+     * (janet_fiber_pushn reallocates). 64 slots reserved 512 bytes per proc up
+     * front for every process whether used or not. */
+    JanetFiber *fiber = janet_fiber(func, 16, 0, NULL);
+
     janet_assert(NULL != fiber, "bad proc fiber");
     /* P3.3: strict fibers opt their page claims into the isolated bit
      * (barrier-checked exports) and arm the VM-wide gate. Never
