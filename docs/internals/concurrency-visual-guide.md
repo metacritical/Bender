@@ -1,0 +1,225 @@
+# The shape of concurrent Janet: a visual guide
+
+Code hides the structure. This page draws it first, then shows the code that
+produces that structure. The imagined syntax is deliberately not real Janet --
+it is a diagram you can read at a glance.
+
+Everything measured here is from `docs/internals/lanes-and-captured-state.md`
+(§4b, §5a, §5c). Numbers are from a 12-core Apple Silicon machine.
+
+---
+
+## 1. The three planes
+
+```
+                    ┌─────────────────────────────────────────────┐
+   OS THREADS       │  main VM        lane 1      lane 2   ...     │  12 threads
+   (schedulers)     │  (thread 0)     (thread 1)  (thread 2)       │  = 1 + 11 lanes
+                    └──────┬──────────────┬───────────┬────────────┘
+                           │              │           │
+   PROCS           ┌───────┴──────┐  ┌────┴─────┐  ┌──┴───────┐
+   (~1.3 KB each)  │  proc 0      │  │ proc 1   │  │ proc 2   │       own heap,
+                   │  own heap    │  │ own heap │  │ own heap │       own mailbox
+                   │  own mailbox │  │          │  │          │
+                   └───┬────┬─────┘  └────┬─────┘  └──┬───┬───┘
+                       │    │             │           │   │
+   FIBERS        ┌─────┴┐ ┌─┴────┐   ┌────┴─┐   ┌─────┴┐ ┌┴─────┐
+   (~1 KB each)  │ fib  │ │ fib  │   │ fib  │   │ fib  │ │ fib  │    cooperative,
+                 │      │ │      │   │      │   │      │ │      │    stay on their VM
+                 └──────┘ └──────┘   └──────┘   └──────┘ └──────┘
+```
+
+Read it bottom-up: **fibers** are the cheap units you want millions of, but
+they cannot leave their VM. **Procs** are how you reach other cores; each owns a
+heap and a mailbox. **Lanes** are the threads those procs are spread over.
+
+The rule that makes it click: *fibers give you count, procs give you cores.*
+
+---
+
+## 2. What the work looks like when it runs
+
+```
+   1 unit of work                     many units, one core              many units, all cores
+   ─────────────────                  ────────────────────              ─────────────────────
+   ┌──┐                               ┌──┐┌──┐┌──┐┌──┐                  ┌──┐┌──┐┌──┐   lane 1
+   │██│  done                         │██││██││██││██│  one           │██││██││██│
+   └──┘                               └──┘└──┘└──┘└──┘  after         └──┘└──┘└──┘
+                                                          another     ┌──┐┌──┐┌──┐   lane 2
+                                       (interleaved,     │██││██││██│
+                                        one thread)      └──┘└──┘└──┘
+                                                                      ┌──┐┌──┐┌──┐   lane 3
+                                                                      │██││██││██│
+                                                                      └──┘└──┘└──┘
+```
+
+| | cores used | 110M iterations took |
+|---|---|---|
+| fibers, one VM | 1 | **1046 ms** |
+| procs, 11 lanes | 11 | **120 ms** |
+| procs **containing** fibers | 11 | **121 ms** |
+
+The third row is the point: you get the full core count *and* the unit count.
+
+---
+
+## 3. Imagined syntax: a diagram you can read
+
+This is not valid Janet. It is what the code *means*, drawn.
+
+```
+╔════════════════════════════════════════════════════════════════════════╗
+║  SPAWN 11 PROCS                                                        ║
+║  ┌──────────────┐ ┌──────────────┐        ┌──────────────┐             ║
+║  │  PROC A      │ │  PROC B      │  ...   │  PROC K      │             ║
+║  │              │ │              │        │              │             ║
+║  │ 1000 FIBERS  │ │ 1000 FIBERS  │        │ 1000 FIBERS  │             ║
+║  │ ┌──┬──┬──┐   │ │ ┌──┬──┬──┐   │        │ ┌──┬──┬──┐   │             ║
+║  │ │  │  │  │…  │ │ │  │  │  │…  │        │ │  │  │  │…  │             ║
+║  │ └──┴──┴──┘   │ │ └──┴──┴──┘   │        │ └──┴──┴──┘   │             ║
+║  └──────┬───────┘ └──────┬───────┘        └──────┬───────┘             ║
+║         │                │                       │                     ║
+║         └────────────────┴───────────────────────┘                     ║
+║                          │                                             ║
+║                          ▼                                             ║
+║             ╔════════════════════════════╗                             ║
+║             ║  RESULTS CHANNEL           ║  ← units flow back here     ║
+║             ║  (thread channel: crosses  ║                             ║
+║             ║   every lane boundary)     ║                             ║
+║             ╚════════════╤═══════════════╝                             ║
+║                          ▼                                             ║
+║                    SUM / COLLECT                                       ║
+╚════════════════════════════════════════════════════════════════════════╝
+```
+
+Now the same shape with names that carry meaning:
+
+```
+SPAWN  = proc/spawn          "start a process on some core"
+HOST   = the body inside a proc
+DO     = ev/go               "start a fiber, right here, cheap"
+UNIT   = the actual work
+INBOX  = ev/chan             "collect locally, inside one proc"
+OUTBOX = ev/thread-chan      "collect across procs"
+```
+
+```
+for each PROC:
+    OUTBOX ← (later, this proc's contribution)
+    INBOX  ← INBOX.new
+    repeat UNIT_COUNT:
+        DO → INBOX          (a fiber, cheap, stays here)
+    await INBOX × UNIT_COUNT
+    OUTBOX ← sum
+await OUTBOX × PROC_COUNT
+```
+
+The nesting is the whole idea: **`DO` inside a `SPAWN`.** Two levels, one
+hierarchy. Neither Go nor BEAM offers this — in Go the inner unit shares one
+global heap; in BEAM the process *is* the cheap unit, so there is no cheaper
+thing to put inside it.
+
+---
+
+## 4. The real code, same shape
+
+```janet
+(def results (ev/thread-chan 65536))          # OUTBOX — crosses lanes
+
+(defn do-work [id]                            # UNIT
+  (var acc 0)
+  (var i 0)
+  (while (< i 1000) (set acc (+ acc (+ id i))) (set i (+ i 1)))
+  acc)
+
+(defn host [base count]                       # HOST — one core's worth
+  (def inbox (ev/chan 4096))                  # INBOX — local to this proc
+  (var i 0)
+  (while (< i count)
+    (def id (+ base i))
+    (ev/go (fn [] (ev/give inbox (do-work id))))   # DO → INBOX
+    (set i (+ i 1)))
+  (var got 0)
+  (while (< got count)                        # gather this proc's work
+    (ev/give results (ev/take inbox))
+    (set got (+ got 1))))
+
+# SPAWN: one proc per slice of the unit range
+(var started 0)
+(while (< started units)
+  (def take (min per-proc (- units started)))
+  (proc/spawn (fn [] (host started take)) 8)
+  (set started (+ started take)))
+
+# COLLECT: exactly `units` values come back
+(var sum 0)
+(var k 0)
+(while (< k units) (set sum (+ sum (ev/take results))) (set k (+ k 1)))
+```
+
+Verified behaviour of this exact script:
+
+```
+units=1210 procs=11 fibers_each<=110 lanes=11 wall=4ms checksum=1335840000
+```
+
+---
+
+## 5. Choosing the shape (a decision picture)
+
+```
+How many units?                          Do they need > 1 core?
+     │                                            │
+     ├─ a few, heavy ───────────────────────────► PROC per unit
+     │
+     ├─ very many, light ────► need cores? ──no──► FIBERS in one VM
+     │                            │
+     │                           yes
+     │                            ▼
+     └───────────────────────► PROCS containing FIBERS
+                                    (the hybrid)
+```
+
+| shape | memory per unit | cores | use when |
+|---|---|---|---|
+| 1 proc | ~1.3 KB | 1 | a few heavy jobs |
+| 1 fiber | ~1 KB | 1 | I/O-ish, massive count |
+| proc × fibers | **~0.5 KB** at 5M units | all | **default for heavy fan-out** |
+
+The hybrid wins on *both* axes at once: 5,000,000 concurrent units fit in
+2.3 GB and still use every core.
+
+---
+
+## 6. Where the data goes (and what cannot)
+
+```
+        ┌──────────── own heap ─────────────┐
+PROC A  │  array  table  buffer   ← mutable │
+        │  captured on spawn: COPIED, not   │
+        │  shared  (a lane marshals the     │
+        │  closure)                         │
+        └───────────────┬───────────────────┘
+                        │
+              ev/thread-chan  (values cross)
+              proc/send       (messages cross)
+                        │
+        ┌───────────────┴───────────────────┐
+PROC B  │  its own tenancy of the same data │
+        └───────────────────────────────────┘
+
+   ev/chan  ── does NOT cross.  Loud error if you try.
+```
+
+If a spawn captures mutable state, Janet places that proc **on the current
+VM** rather than silently giving it a detached copy — you keep sharing, you
+lose a core, and `JANET_PROC_SHARE_TRACE=1` tells you it happened.
+
+---
+
+## 7. One-line summary
+
+```
+fibers = the units you count        procs = the cores you use
+        └──── put the first inside the second ────┘
+```

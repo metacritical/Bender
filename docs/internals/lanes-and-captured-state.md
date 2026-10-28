@@ -270,6 +270,10 @@ arity-0 thunk; it is now 16 (376MB -> 367MB at 40000 procs).
 
 ## 5c. The hybrid: fibers INSIDE procs
 
+> Diagram-first version of this section, with imagined syntax and a decision
+> picture: `docs/internals/concurrency-visual-guide.md`. Runnable example:
+> `examples/concurrency-hybrid.janet`.
+
 The two tiers compose, and the composition is better than either alone. Put
 fibers inside procs: procs supply the cores, fibers supply the unit count.
 
