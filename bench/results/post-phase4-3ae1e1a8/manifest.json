@@ -1,0 +1,19 @@
+{
+  "baseline_commit": "3ae1e1a858da358a9687a6d604b5832b0fb7fff8",
+  "baseline_worktree": "/tmp/janet-next-baseline-3ae1e1a8",
+  "candidate_worktree": "/tmp/janet-next-candidate-3ae1e1a8",
+  "candidate_branch": "post-phase4-candidate-3ae1e1a8",
+  "raw_evidence_directory": "/tmp/janet-next-evidence-3ae1e1a8",
+  "native_executors": true,
+  "compiler": "Apple clang version 21.0.0 (clang-2100.3.34.2)",
+  "target": "arm64-apple-darwin25.6.0",
+  "runtime_sha256": "71d75d31b8581249ba6da93278c80e0db84e309e70575fcf910f28d352340ba7",
+  "library_sha256": "a49d3ce5b2363c008f24e94b8480aa6124223e57a5fa2a68dbda21b4e38d546c",
+  "phase0_archive": "phase0-baseline.tar.gz",
+  "phase0_archive_sha256": "e08f635c73bf17117db95bab34aea80ae1ac3fd27ef4d7c095c7d84badc19b8b",
+  "phase0_archive_members_verified": 7,
+  "baseline_spawn_return_exit": 0,
+  "census_coverage": "incomplete",
+  "numeric_opportunity_gate": "unavailable",
+  "decision": "pending"
+}
