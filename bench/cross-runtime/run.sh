@@ -37,12 +37,10 @@ printf '%-10s %10s %10s %10s   %s\n' ------- ----- -------- ------- ------
 
 run_wave_janet() {
     [ -x "$JANET_BIN" ] || { printf '%-10s %s\n' janet "skip: $JANET_BIN not built"; return; }
-    # LANES ARE REQUIRED for the wave. On a single VM it is quadratic in chain
-    # length (1000->95ms, 2000->377ms, 4000->1526ms) because every proc shares
-    # one GC arena; across lanes each VM owns its arena and it is linear
-    # (4000: 1506ms -> 27ms). Default 11 lanes, override with WAVE_LANES.
+    # Keep placement explicit. Timings are stderr so stdout remains suitable
+    # for deterministic AOT/PGO parity; parse only the timing record here.
     out=$(JANET_NO_PROFILE=1 JANET_LANES="${WAVE_LANES:-11}" "$JANET_BIN" \
-              "$HERE/wave.janet" "$N" 2>/dev/null | tr -d '\r')
+              "$HERE/wave.janet" "$N" 2>&1 | awk '/spawn_ms=/' | tr -d '\r')
     printf '%s\n' "$out" | awk -v rt=janet '{
         sp=""; wv=""; pr=""; rs=""
         for (i = 1; i <= NF; i++) {

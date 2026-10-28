@@ -18,12 +18,14 @@ This is a **dependency chain**, not parallel work: every hop waits for the
 previous one. It measures spawn cost plus per-hop message latency. **Cores
 cannot speed it up**, so a low wave time is not "more parallel".
 
-**Janet must run this with lanes on** (`JANET_LANES`, default 11 in `run.sh`).
-On a single VM the wave is **quadratic in chain length** -- measured
-1000->95 ms, 2000->377 ms, 4000->1526 ms, i.e. 2x length gives 4x time --
-because all procs share one GC arena and each completion minor walks it. Spread
-across lanes, each VM owns its arena and the cost is linear: the same 4000-proc
-wave drops from 1506 ms to 27 ms, **56x faster**.
+The runner defaults to 11 lanes; override with `WAVE_LANES`. Earlier small
+single-VM runs showed quadratic scaling, while routed runs were faster. These
+observations do not establish a GC cause or prove linear scaling to 1M.
+The token is serial, but placement can still change scheduling overhead.
+
+Janet emits deterministic `procs/result` on stdout and phase timings on stderr,
+so PGO parity compares results rather than nondeterministic clock readings.
+See `pgo-results.md` for the three-training-run release experiment and limits.
 
 ## 2. Live-process memory (`memory.janet`, `memory.erl`)
 

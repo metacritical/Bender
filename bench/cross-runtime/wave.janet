@@ -6,14 +6,11 @@
 #
 # This is deliberately a DEPENDENCY CHAIN, not parallel work: every hop waits
 # for the previous one. It measures spawn cost, per-hop message latency and
-# scheduling overhead -- never parallel speedup. Lanes cannot help it and are
-# not used.
-#
-# IMPORTANT: run this with lanes ON for realistic numbers. On a single VM the
-# wave is QUADRATIC in chain length (measured 1000->95ms, 2000->377ms,
-# 4000->1526ms: 2x length, 4x time), because every proc lives in one shared
-# arena and each completion minor walks it. Spread across lanes each VM has its
-# own arena and the cost becomes linear (4000: 1506ms -> 27ms, 56x faster).
+# scheduling overhead -- never parallel speedup. Lane placement can change
+# runtime overhead, but the token still traverses one dependent hop at a time.
+# Earlier small single-VM runs showed quadratic scaling; its cause has not
+# been established by profiling. Do not infer a GC diagnosis from timings.
+# Timings go to stderr; deterministic stdout permits AOT/PGO parity checks.
 #
 # Run: JANET_LANES=11 ./build/bender bench/cross-runtime/wave.janet <n>
 # Emits one machine-readable line, mirrored by wave.erl and wave.go.
@@ -37,7 +34,9 @@
 (def result (ev/take done))
 (def t2 (os/clock))
 
-(printf "procs=%d result=%d spawn_ms=%.0f wave_ms=%.0f total_ms=%.0f"
+(assert (= result n) "wave result must equal process count")
+(printf "procs=%d result=%d" n result)
+(eprintf "procs=%d result=%d spawn_ms=%.0f wave_ms=%.0f total_ms=%.0f"
         n result
         (* 1000.0 (- t1 t0))
         (* 1000.0 (- t2 t1))
