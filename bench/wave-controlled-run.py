@@ -25,6 +25,14 @@ Guarantees
   mark the trial failed, and any failed trial makes the process exit 1.
 * Repetitions are retained individually and summarized with min/median/mean/
   max/stdev. A minimum alone is never the result.
+* Output precision is preserved and reported, never silently coerced. The
+  legacy harnesses print **integer milliseconds**, so a sub-millisecond phase
+  collapses to ``0`` before this runner sees it. Each trial records
+  ``metric_text`` (exactly what was printed) and ``metric_resolution`` (the
+  step that text can express); the summary takes the coarsest step per metric
+  and emits ``precision_notes`` stating the value is quantised at the source.
+  A harness printing real decimals, or a JSON object record, keeps every
+  printed digit.
 * Provenance is recorded: git revision and dirty state, machine identity,
   Python version, the manifest hash, and the SHA-256 of every executable.
 
@@ -481,50 +489,131 @@ def _normalize_key(key):
 
 
 def _parse_value(text):
-    """Parse a metric value, tolerating the legacy ``12ms`` suffix."""
+    """Parse a metric value, tolerating the legacy ``12ms`` suffix.
+
+    Returns ``(value, resolution)`` where resolution is the smallest step the
+    emitted text can represent: 1 for an integer literal such as ``spawn=1ms``,
+    or 10**-decimals for ``spawn_ms=1.437``. The value itself keeps every digit
+    the harness printed; nothing is rounded or int-truncated here.
+    """
     text = text.strip()
     if not text:
-        return None
+        return None, None
     if text.endswith("ms") or text.endswith("MS"):
         text = text[:-2]
     try:
         number = float(text)
     except ValueError:
-        return None
-    if number.is_integer() and "." not in text and "e" not in text.lower():
-        return int(number)
-    return number
+        return None, None
+    lowered = text.lower()
+    if "." in text and "e" not in lowered:
+        decimals = len(text.split(".", 1)[1])
+        resolution = 10.0 ** -decimals
+        return number, resolution
+    if "e" in lowered:
+        # Scientific notation: the mantissa decides the step.
+        mantissa = lowered.split("e", 1)[0]
+        decimals = len(mantissa.split(".", 1)[1]) if "." in mantissa else 0
+        return number, 10.0 ** -decimals
+    return int(number), 1.0
 
 
-def parse_metrics(text):
-    """Parse ``key=value`` tokens from wave output.
+def _json_precision(value):
+    """The representable step of a JSON number: ints are unit-grid, floats decimal."""
+    if isinstance(value, int):
+        return 1.0
+    text = repr(value)  # shortest round-tripping decimal for a float
+    return 10.0 ** -(len(text.split(".", 1)[1])) if "." in text else 1.0
 
-    Handles every form emitted in this repo: Go's
-    ``procs=N result=N spawn=12ms wave=13ms total=25ms``, Erlang's identical
-    line via ``~p`` formatting, and Janet's split records, where deterministic
-    ``procs``/``result`` go to stdout and ``spawn_ms``/``wave_ms``/``total_ms``
-    go to stderr. Keys are canonicalised so ``spawn`` and ``spawn_ms`` land on
-    the same metric.
 
-    Returns ``(metrics, conflicts)`` where conflicts lists keys whose value
-    differed between two records (for example stdout versus stderr).
+def _json_metrics(line):
+    """Metrics from a JSON object record, or None when the line is not one.
+
+    A harness may emit ``{"procs": 1000, "spawn_ms": 1.437, "wave_ms": 109.2}``
+    instead of the key=value line. That form carries real decimals, so it is
+    accepted and its values keep full precision.
     """
-    metrics = {}
-    conflicts = []
-    for line in text.splitlines():
-        for token in line.replace("\t", " ").split():
-            if "=" not in token:
-                continue
-            key, _, raw_value = token.partition("=")
+    stripped = line.strip()
+    if not stripped.startswith("{") or not stripped.endswith("}"):
+        return None
+    try:
+        payload = json.loads(stripped)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    found = {}
+    for key, value in payload.items():
+        if isinstance(key, str) and isinstance(value, (int, float)) and not isinstance(value, bool):
+            found[key] = (value, _json_precision(value))
+    return found or None
+
+
+def _record(store, key, value, step, printed):
+    """Fold one parsed record into the metric store, tracking printed grid."""
+    # Widen the step first: a disagreeing record still proves the output cannot
+    # resolve finer than its own printed grid, and a conflict must not hide it.
+    if step is not None:
+        if key not in store["resolution"] or step > store["resolution"][key]:
+            # Keep the coarsest step seen: the weakest record bounds what an
+            # aggregate over these samples can honestly claim.
+            store["resolution"][key] = step
+    if key in store["metrics"] and store["metrics"][key] != value:
+        store["conflicts"].append(
+            {"key": key, "first": store["metrics"][key], "second": value}
+        )
+        return
+    store["metrics"][key] = value
+    store["text"][key] = printed
+
+
+def _parse_line(line, store):
+    """Parse one output line: either a JSON object record or key=value tokens."""
+    as_json = _json_metrics(line)
+    if as_json is not None:
+        for key, (value, step) in as_json.items():
             key, _unit = _normalize_key(key)
-            value = _parse_value(raw_value)
-            if value is None:
-                continue
-            if key in metrics and metrics[key] != value:
-                conflicts.append({"key": key, "first": metrics[key], "second": value})
-                continue
-            metrics[key] = value
-    return metrics, conflicts
+            _record(store, key, value, step, repr(value))
+        return
+    for token in line.replace("\t", " ").split():
+        if "=" not in token:
+            continue
+        key, _, raw_value = token.partition("=")
+        key, unit = _normalize_key(key)
+        value, step = _parse_value(raw_value)
+        if value is None:
+            continue
+        printed = raw_value.strip()
+        if printed.endswith("ms") or printed.endswith("MS"):
+            printed = printed[:-2]
+        # A count has no unit grid, so it claims no resolution.
+        _record(store, key, value, step if unit is not None else None, printed)
+
+
+def parse_output(text):
+    """Parse every metric a wave harness emitted, with its printed precision.
+
+    Handles all three shapes used in this repo:
+
+    * ``procs=N result=N spawn=12ms wave=13ms total=25ms`` -- Go
+      (``bench/cross-runtime/wave.go``, ``bench/wave-go.go``) and Erlang
+      (``wave.erl``), which print **integer milliseconds**.
+    * ``procs=N result=N`` plus ``spawn_ms=.. wave_ms=.. total_ms=..`` on
+      another stream -- Janet, whose ``eprintf`` line carries the timings.
+    * a JSON object line, for any harness that emits real decimals.
+
+    Keys are canonicalised so ``spawn`` and ``spawn_ms`` are one metric.
+
+    Returns a dict with ``metrics`` (numbers), ``conflicts`` (keys whose value
+    differed between records), ``text`` (the exact printed token per key) and
+    ``resolution`` (the representable step per key). A key whose resolution is
+    1 ms was quantised by the harness before the runner saw it -- that is a
+    floor, not a measurement, and downstream statistics must say so.
+    """
+    store = {"metrics": {}, "conflicts": [], "text": {}, "resolution": {}}
+    for line in text.splitlines():
+        _parse_line(line, store)
+    return store
 
 
 def trial_failures(metrics, conflicts, n, outcome):
@@ -760,7 +849,8 @@ def run_trial(variant, n, repeat, output_dir, executables):
     stdout, stderr = outcome["stdout"], outcome["stderr"]
     stdout_path, stderr_path = _write_logs(trial_dir, stdout, stderr)
 
-    metrics, conflicts = parse_metrics(stdout + "\n" + stderr)
+    parsed = parse_output(stdout + "\n" + stderr)
+    metrics, conflicts = parsed["metrics"], parsed["conflicts"]
     failures = _classify(outcome, metrics, conflicts, n)
     fields = _outcome_fields(outcome)
 
@@ -787,6 +877,10 @@ def run_trial(variant, n, repeat, output_dir, executables):
         "stdout_sha256": sha256_bytes(stdout.encode("utf-8")),
         "stderr_sha256": sha256_bytes(stderr.encode("utf-8")),
         "metrics": metrics,
+        # Exactly what the harness printed, and the step its text can express.
+        # resolution_ms == 1 means the harness quantised before reporting.
+        "metric_text": parsed["text"],
+        "metric_resolution": parsed["resolution"],
         "metric_conflicts": conflicts,
         "failures": failures,
         "ok": not failures,
@@ -830,8 +924,7 @@ def summarize(trials):
             name: _stats([row["metrics"][name] for row in rows if name in row["metrics"]])
             for name in metric_names
         }
-        wall = _stats([row["wall_s"] for row in rows])
-        failures = sorted({kind for row in rows for kind in row["failures"]})
+        resolution = _group_resolution(rows, metric_names)
         summary["groups"].append(
             {
                 "variant": variant,
@@ -840,9 +933,11 @@ def summarize(trials):
                 "ok_count": sum(1 for row in rows if row["ok"]),
                 "failed_count": sum(1 for row in rows if not row["ok"]),
                 "ok": all(row["ok"] for row in rows),
-                "failures": failures,
-                "wall_s": wall,
+                "failures": sorted({k for row in rows for k in row["failures"]}),
+                "wall_s": _stats([row["wall_s"] for row in rows]),
                 "metrics": metrics,
+                "metric_resolution": resolution,
+                "precision_notes": _precision_notes(resolution),
                 "samples": [
                     {
                         "repeat": row["repeat"],
@@ -852,6 +947,7 @@ def summarize(trials):
                         "term_signal": row["term_signal"],
                         "timed_out": row["timed_out"],
                         "metrics": row["metrics"],
+                        "metric_text": row.get("metric_text", {}),
                         "failures": row["failures"],
                         "trial_dir": row["trial_dir"],
                     }
@@ -860,6 +956,34 @@ def summarize(trials):
             }
         )
     return summary
+
+
+def _group_resolution(rows, metric_names):
+    """Coarsest printed step per metric: the weakest record bounds the group."""
+    out = {}
+    for name in metric_names:
+        steps = [
+            row["metric_resolution"][name]
+            for row in rows
+            if name in row.get("metric_resolution", {})
+            and row["metric_resolution"][name] is not None
+        ]
+        if steps:
+            out[name] = max(steps)
+    return out
+
+
+def _precision_notes(resolution):
+    """Spell out which metrics the harness quantised before reporting."""
+    notes = []
+    for name, step in sorted(resolution.items()):
+        if step >= 1.0:
+            notes.append(
+                f"{name} is printed as whole {int(step)} ms by the harness; "
+                "values are quantised at the source and stdev/median are "
+                "resolved to that grid, not to a finer measurement."
+            )
+    return notes
 
 
 def total_trials(manifest, only=None):

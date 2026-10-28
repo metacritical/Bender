@@ -46,7 +46,21 @@ def good_child():
     return child(GOOD)
 
 
-class RunnerTestCase(unittest.TestCase):
+def wave(extra="", fmt_extra=""):
+    """Synthetic child printing the canonical wave line at the requested n.
+
+    ``extra`` is appended inside the f-string, so callers add metrics without
+    respelling procs/result every time.
+    """
+    suffix = " " + extra if extra else ""
+    return child(
+        "import sys;n=int(sys.argv[1]);"
+        f"print(f'procs={{n}} result={{n}}{suffix}')"
+    )
+
+
+class RunnerHarness(unittest.TestCase):
+    """Shared fixture: temp dir, manifest writer, and trial readers."""
     def setUp(self):
         self.tmp = tempfile.mkdtemp(prefix="wave-runner-test-")
         self.addCleanup(shutil.rmtree, self.tmp, True)
@@ -74,11 +88,26 @@ class RunnerTestCase(unittest.TestCase):
         return code, stdout.getvalue(), stderr.getvalue()
 
     def run_single(self, source, name="probe", **variant_kw):
-        """Run one synthetic-child variant and return (exit code, first trial)."""
-        manifest = {"name": name, "argv": child(source)}
+        """Run one synthetic-child variant and return (exit code, first trial).
+
+        ``source`` may be a Python snippet (wrapped by ``child``) or an argv
+        list from a builder such as ``wave``.
+        """
+        manifest = {"name": name, "argv": source if isinstance(source, list)
+                    else child(source)}
         manifest.update(variant_kw)
         code, _, _ = self.run_manifest(self.write_manifest([manifest]))
         return code, self.read_out("trials.jsonl")[0]
+
+    def run_ok(self, source, name="probe", **variant_kw):
+        """Run a variant expected to pass; assert it did and return its trial."""
+        code, trial = self.run_single(source, name=name, **variant_kw)
+        self.assertEqual(code, 0, f"{name} exited {code}: {trial['failures']}")
+        return trial
+
+    def metrics_of(self, source, name="probe", **variant_kw):
+        """Parsed metrics for one passing synthetic child."""
+        return self.run_ok(source, name=name, **variant_kw)["metrics"]
 
     def read_out(self, name):
         with open(os.path.join(self.tmp, "out", name), encoding="utf-8") as handle:
@@ -98,7 +127,10 @@ class RunnerTestCase(unittest.TestCase):
                     found.append(os.path.join(variant_dir, n_dir, rep))
         return found
 
-    # -- success and evidence -------------------------------------------
+class EvidenceTests(RunnerHarness):
+    """Success path: layout, provenance, and repetitions retained."""
+
+
     def test_success_retains_every_repeat_and_logs(self):
         path = self.write_manifest(
             [
@@ -171,7 +203,10 @@ class RunnerTestCase(unittest.TestCase):
         trial = self.read_out("trials.jsonl")[0]
         self.assertEqual(trial["executable"]["sha256"], digest)
 
-    # -- correctness failures -------------------------------------------
+class CorrectnessTests(RunnerHarness):
+    """Every way a trial can fail must be recorded, never hidden."""
+
+
     def test_wrong_result_is_a_failure(self):
         code, trial = self.run_single(
             "import sys;n=int(sys.argv[1]);"
@@ -297,7 +332,10 @@ class RunnerTestCase(unittest.TestCase):
         self.assertTrue(os.path.isfile(trial["stdout_path"]))
         self.assertTrue(os.path.isfile(trial["stderr_path"]))
 
-    # -- argv and parsing ------------------------------------------------
+class ArgvAndParsingTests(RunnerHarness):
+    """argv is literal, placeholders are checked, legacy forms parse."""
+
+
     def test_argv_is_literal_never_a_shell(self):
         path = self.write_manifest(
             [
@@ -411,7 +449,77 @@ class RunnerTestCase(unittest.TestCase):
         self.assertEqual(metrics["base_mb"], 2.5)
         self.assertIn("missing_result", trial["failures"])
 
-    # -- statistics ------------------------------------------------------
+class PrecisionTests(RunnerHarness):
+    """Printed precision is preserved and quantisation is disclosed."""
+
+
+    def test_decimal_metrics_keep_full_precision(self):
+        trial = self.run_ok(
+            wave("spawn_ms=1.437 wave_ms=109.284 total_ms=110.721"),
+            name="precise",
+        )
+        self.assertEqual(trial["metrics"]["wave_ms"], 109.284)
+        self.assertEqual(trial["metrics"]["spawn_ms"], 1.437)
+        # The printed text and the representable step are both kept.
+        self.assertEqual(trial["metric_text"]["wave_ms"], "109.284")
+        self.assertAlmostEqual(trial["metric_resolution"]["wave_ms"], 0.001)
+
+    def test_legacy_lines_are_marked_quantised(self):
+        # The exact legacy shape: integers, so 1 ms is the whole resolution.
+        trial = self.run_ok(
+            wave("spawn=1ms wave=109ms total=110ms"), name="legacy"
+        )
+        self.assertEqual(trial["metrics"]["spawn_ms"], 1)
+        self.assertEqual(trial["metric_resolution"]["spawn_ms"], 1.0)
+        group = self.read_out("summary.json")["groups"][0]
+        self.assertEqual(group["metric_resolution"]["wave_ms"], 1.0)
+        self.assertTrue(
+            any("wave_ms" in note and "whole 1 ms" in note
+                for note in group["precision_notes"]),
+            "quantised metrics must be called out",
+        )
+        # Counts are not times and get no quantisation note.
+        self.assertNotIn("procs", group["metric_resolution"])
+
+    def test_json_record_metrics_are_parsed(self):
+        metrics = self.metrics_of(
+            "import json, sys;n=int(sys.argv[1]);"
+            "print(json.dumps({'procs': n, 'result': n, "
+            "'spawn_ms': 0.812, 'wave_ms': 42.5, 'total_ms': 43.312}))",
+            name="jsonrec",
+        )
+        self.assertEqual(metrics["wave_ms"], 42.5)
+        self.assertEqual(metrics["spawn_ms"], 0.812)
+
+    def test_json_and_text_records_agree_without_conflict(self):
+        trial = self.run_ok(
+            "import json, sys;n=int(sys.argv[1]);"
+            "print(json.dumps({'procs': n, 'result': n, 'wave_ms': 7.5}));"
+            "print(f'procs={n} result={n} wave_ms=7.500')",
+            name="both",
+        )
+        self.assertEqual(trial["metrics"]["wave_ms"], 7.5)
+        self.assertEqual(trial["metric_conflicts"], [])
+        # 7.5 carries one decimal, so the coarser record bounds the claim.
+        self.assertAlmostEqual(trial["metric_resolution"]["wave_ms"], 0.1)
+
+    def test_parse_output_reports_resolution_per_key(self):
+        parsed = runner.parse_output(
+            "procs=10 result=10 spawn=1ms wave=109ms total=110ms"
+        )
+        self.assertEqual(parsed["metrics"]["total_ms"], 110)
+        self.assertEqual(parsed["resolution"]["total_ms"], 1.0)
+        # A count has no unit grid, so no resolution is claimed for it.
+        self.assertNotIn("result", parsed["resolution"])
+
+    def test_parse_output_keeps_coarsest_step_on_mixed_records(self):
+        parsed = runner.parse_output("wave_ms=109.284\nwave_ms=109ms")
+        self.assertEqual(parsed["resolution"]["wave_ms"], 1.0)
+
+class StatisticsTests(RunnerHarness):
+    """The summary reports a distribution, never a bare minimum."""
+
+
     def test_summary_is_not_min_only(self):
         path = self.write_manifest(
             [
@@ -449,7 +557,10 @@ class RunnerTestCase(unittest.TestCase):
         self.assertIsNotNone(stats["stdev"])
         self.assertIsNone(runner._stats([]))
 
-    # -- manifest and CLI -------------------------------------------------
+class ManifestAndCliTests(RunnerHarness):
+    """Manifest validation and command-line behaviour."""
+
+
     def test_example_manifest_is_valid_and_runs_dry(self):
         normalized = runner.normalize_manifest(runner.EXAMPLE_MANIFEST, self.tmp)
         self.assertEqual(len(normalized["variants"]), 4)
