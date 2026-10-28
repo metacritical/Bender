@@ -50,18 +50,6 @@
   (eprintf "wave-phased: %s" msg)
   (os/exit 2))
 
-# --- N: required, integer, >= 1, no arbitrary cap ---------------------------
-(def raw-n (get (dyn :args) 1))
-(when (nil? raw-n) (die "missing N argument"))
-
-(def n (scan-number raw-n))
-(unless (and (number? n) (= n (math/floor n)))
-  (die (string "N must be an integer, got " raw-n)))
-(when (< n 1) (die (string "N must be >= 1, got " raw-n)))
-# Janet numbers are doubles; N above 2^31 is not representable as an int32
-# chain index, so reject rather than silently truncate.
-(when (> n 2147483647) (die (string "N exceeds int32 range: " raw-n)))
-
 # --- monotonic clock, microsecond resolution --------------------------------
 # os/clock :monotonic returns a double of seconds; :tuple returns
 # [seconds nanoseconds]. The tuple form avoids losing microseconds when the
@@ -89,6 +77,65 @@
     (math/floor (* 1000000 (os/clock :monotonic)))))
 
 (defn- ms [a b] (/ (- b a) 1000.0))
+
+# --- clock self-test (opt-in): real 1.1 s rollover regression ---------------
+# Run as:  ./build/bender bench/cross-runtime/wave-phased.janet selftest
+#
+# Every synthetic control feeds hand-made [sec ns] tuples, so it checks the
+# arithmetic but not the live clock. This mode is the only check that measures
+# a REAL elapsed interval longer than one second and therefore crosses a real
+# monotonic second boundary, which is exactly the condition the old
+# sec*1000 bug needed to show up.
+#
+# It is not a performance measurement: it sleeps ~1.1 s once and asserts the
+# interval landed in a sane window. The window is deliberately wide so a loaded
+# or suspended machine does not produce a false failure; what it actually
+# rejects is a wrong SCALE (an interval off by ~1000x) or a non-monotonic clock
+# (negative or collapsed delta). Cost: ~1.1 s, only when explicitly requested.
+(defn- selftest []
+  (def target-us 1100000)
+  (def started (now-us))
+  (ev/sleep 1.1)
+  (def ended (now-us))
+  (def delta (- ended started))
+  (def cross-sec-a (math/floor (/ started 1000000)))
+  (def cross-sec-b (math/floor (/ ended 1000000)))
+  (printf "selftest elapsed_us=%d elapsed_ms=%.3f crossed_second=%v"
+          delta (ms started ended) (> cross-sec-b cross-sec-a))
+  (def problems @[])
+  (when (< delta 0)
+    (array/push problems (string "non-monotonic: delta=" delta)))
+  # Wide sanity band: a clock scaled by 1000 gives ~1100 us, not ~1.1e6 us.
+  (when (< delta 900000)
+    (array/push problems (string "elapsed too small (wrong scale?): " delta)))
+  (when (> delta 5000000)
+    (array/push problems (string "elapsed implausibly large: " delta)))
+  (unless (> cross-sec-b cross-sec-a)
+    (array/push problems "did not cross a second boundary; rollover untested"))
+  (if (empty? problems)
+    (do
+      (print "selftest PASSED")
+      0)
+    (do
+      (each problem problems (eprintf "selftest FAILED: %s" problem))
+      1)))
+
+(def raw-n (get (dyn :args) 1))
+
+(when (= "selftest" raw-n)
+  (os/exit (selftest)))
+
+# --- N: required, integer, >= 1, no arbitrary cap ---------------------------
+# Validated after the clock self-test dispatch so `selftest` is not read as N.
+(when (nil? raw-n) (die "missing N argument"))
+
+(def n (scan-number raw-n))
+(unless (and (number? n) (= n (math/floor n)))
+  (die (string "N must be an integer, got " raw-n)))
+(when (< n 1) (die (string "N must be >= 1, got " raw-n)))
+# Janet numbers are doubles; N above 2^31 is not representable as an int32
+# chain index, so reject rather than silently truncate.
+(when (> n 2147483647) (die (string "N exceeds int32 range: " raw-n)))
 
 # --- phase: spawn -----------------------------------------------------------
 (def done (ev/thread-chan 1))
