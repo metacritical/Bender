@@ -3035,7 +3035,8 @@ static void janet_proc_verify(JanetProcess *proc, JanetGCObject **cands, size_t 
  * like fiber minors (instruction-boundary stacks are consistent).
  */
 void janet_collect_process(JanetProcess *proc) {
-    JanetFiber *f;
+    /* The NULL-proc fallback short-circuits before assigning f. */
+    JanetFiber *f = NULL;
     if (janet_vm.gc_suspend) return;
     /* Stuck remember set: cross-fiber stores past JANET_XFB_MAX go
      * unrecorded, so the narrow per-proc mark+sweep would free young
