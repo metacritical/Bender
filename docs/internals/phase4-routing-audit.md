@@ -124,48 +124,78 @@ graph work:
 ### The shape is now measured, not hypothesized
 
 **[measured]** A packaging control reproduced the gap by changing *only* the
-top-level compilation shape: identical actor graph, identical messages, the
-whole wave wrapped in a single `(do ...)` so it compiles as one thunk instead of
-one thunk per form. Artifact:
-`/tmp/janet-wave-evidence-35671ede/packaging-control.jsonl` (24 trials, 3
-repeats per cell, every run rc 0 with `result == n`), source
-`wave-single-do.janet`.
+top-level compilation shape: the same forwarding actors, sink, receive /
+increment / send operations, completion assertion, and result output, with the
+whole wave grouped inside one top-level `(do ...)` so it compiles as one thunk
+instead of one thunk per form.
 
-Median wave time, forms vs single-`do`:
+Committed artifacts (commit `dba6e617`) live under
+`bench/results/phase4-controlled-35671ede/packaging/`:
 
-| build | N | forms | single-do | ratio |
+- `packaging-control.jsonl` - 24 rotated normal/grouped trials, 3 repeats per
+  cell, N=1000/2000, baseline and post-fix interpreters.
+- `packaging-exact-control.jsonl` - 12 confirming grouped trials written with
+  the **original integer-millisecond format**, so output-format differences
+  cannot explain the numbers.
+- `wave-single-do.janet`, `wave-single-do-exact.janet`, `README.md`.
+
+Provenance for the two interpreters is archived alongside:
+`../candidate/collector-candidate.patch` (the measured collector change) and
+`../matrix/` (the corpus-wide build matrix). All 36 subprocesses exited 0 with
+`result == N`.
+
+Wave-only medians, ms:
+
+| build | N | normal script | single-`do` script | plain-AOT reference |
 |---|---|---|---|---|
-| before fix | 1000 | 99 ms | 279.6 ms | 2.82x |
-| before fix | 2000 | 406 ms | 765.0 ms | 1.88x |
-| after fix | 1000 | 8 ms | 23.0 ms | 2.88x |
-| after fix | 2000 | 33 ms | 63.2 ms | 1.92x |
+| baseline | 1000 | 99 | 279 | 281 |
+| baseline | 2000 | 406 | 772 | 777 |
+| post-fix | 1000 | 8 | 22 | 23 |
+| post-fix | 2000 | 33 | 64 | 61 |
 
-The single-`do` arm lands on the AOT/plain packaging numbers (281 / 777 before,
-23 / 61 after) within run-to-run noise, and the ratio is preserved on both
-builds. So the top-level compilation shape is **sufficient** to reproduce the
-gap: no static-link difference is required to explain it.
+Grouped figures are the 12-trial integer-format confirmation; the 24-trial
+decimal batch agrees within a few ms (765.0 vs 772, 23.0 vs 22, 63.2 vs 64,
+279.6 vs 279), so the format change only quantises, it does not explain the
+gap. Normal-script figures are medians of the 24-trial batch.
 
-**[measured, bounded]** What this shows is exactly one thing: packaging alone
-moves the number. It does **not** prove which object edge pays for it. The
-control cannot separate "more owners, so more scoped collections" from "one
-large thunk keeps a bigger live set charged to a single nursery and trips the
-threshold differently" - both are consequences of the same shape change.
-Calling it a proven GC graph-edge diagnosis would overstate this evidence.
+The single-`do` arm lands on the plain-AOT reference numbers, and the grouped
+cost is preserved on **both** builds - including after the collector fix, where
+the absolute cost drops by roughly an order of magnitude. A packaging effect
+that survives removing the dominant cost is not a link or build artifact.
 
-Two confounds a reviewer should record alongside the result:
+**Supported conclusion:** grouping the source into one top-level thunk is
+sufficient to reproduce the script/AOT local discrepancy *without* changing the
+interpreter binary or linking a static AOT executable. Static-link or PGO
+differences are therefore not required to explain this gap.
 
-- **Timing precision differs between arms.** The forms arm reports `wave_ms`
-  via `%.0f` (integer milliseconds) while the control prints `%.3f`. At N=1000
-  the fixed 99 vs 279 ms gap is far outside that quantisation, so the
-  conclusion survives, but a marginal result at small N would not.
-- **Lexical scope is changed intentionally, and only in the driver.** The
-  control hoists `n`, `done`, `sink`, `head`, `i`, `t0`-`t2` inside the `do`
-  block; the spawned process bodies and the `done` channel are unchanged, and
-  the top-level `def`s are still module-level bindings reachable from child
-  closures. That is the point of the experiment - it changes driver packaging,
-  not actor wiring - but it means the arms are not byte-identical sources.
-- The trial records carry no environment field, so the lane setting for each
-  cell is not recoverable from the artifact itself.
+**[measured, bounded]** That is the whole claim. It does **not** identify the
+exclusive object-level root path. The control cannot separate "more owners, so
+more scoped collections" from "one large thunk keeps a larger reachable frame
+set charged to a single nursery and trips the threshold differently" - both are
+consequences of the same shape change, and apportioning the extra traversal
+among specific references would need mark-edge instrumentation. Packaging is
+also not claimed to be the only influence on every workload.
+
+Residual limits of this evidence:
+
+- **Lexical scope changes intentionally, and only in the driver.** The grouped
+  source hoists `n`, `done`, `sink`, `head`, `i`, `t0`-`t2` inside the `do`
+  block; the spawned process bodies and the `done` channel are unchanged. That
+  is the point of the experiment - it changes driver compilation shape, not
+  actor wiring - but the arms are not byte-identical sources, so this is a
+  test of thunk shape, not an identical-object-graph control.
+- **The AOT reference values are not simultaneous paired timings.** They come
+  from earlier matched matrix/candidate batches, so "within noise" is an
+  ordering-of-magnitude agreement, not a paired comparison.
+- **The records carry no environment field**, so the lane setting per cell is
+  not recoverable from the JSONL alone; the run used `JANET_LANES=0`.
+- The baseline grouped decimal-format first trial (379 ms) is an outlier and is
+  retained in the raw records rather than discarded.
+
+**Operational warning:** these results do not license removing roots or
+changing compilation semantics to improve a benchmark. The cost is a property
+of reachable-frame shape, and the fix belongs in collection policy, not in
+narrowing what user code may reference.
 
 ## 8. Discriminating packaging experiment (ran; results in section 7)
 
@@ -190,7 +220,8 @@ JANET_LANES=0 JANET_NO_PROFILE=1 ./build/bender /tmp/pk/wave-do.janet 1000
 ```
 
 **Observed:** the wrapped form reproduces the image-arm cost (table above), so
-per-form compilation shape is causal for the gap.
+top-level compilation shape is sufficient for the gap. It is not evidence of an
+exclusive root path (see the bounded conclusion in section 7).
 
 **E2 - image with a single entry (not yet run).** Take the same wrapped body,
 put it inside `(defn main [& args] (do ...))`, build with `-c`, and run the
