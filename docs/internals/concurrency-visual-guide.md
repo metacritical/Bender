@@ -121,6 +121,48 @@ thing to put inside it.
 
 ---
 
+## 3b. Two levels, two VISIBILITY rules (the part that bites)
+
+The shape from §3 is correct, but where a proc RUNS decides what it can see.
+Both cases below were verified:
+
+```
+    closure captures MUTABLE state?  ──── yes ───►  placed on THIS VM
+              │                                     (shares the capture)
+             no                                     loses a core,
+              │                                     sees your variables
+              ▼
+        crosses to a lane                     globals are PER-VM:
+        (its own heap)                        the lane has its own
+```
+
+Measured, `JANET_LANES=4`:
+
+| spawn | placement | what the main VM sees |
+|---|---|---|
+| closes over a local array | **this VM** (object, not tuple) | `shared=100` — mutation visible |
+| captures nothing (reads a global) | **a lane** (pid tuple) | `counter=0` — global is per-VM |
+
+That second row is the trap. A proc on another lane gets its **own copy of the
+global table**, so `(++ counter)` inside it updates a counter nobody reads. This
+looks like "the work never ran" when it actually ran fine 990 times.
+
+So, for a fan-out that must reach a lane, results have to come back explicitly:
+
+```janet
+(def out (ev/thread-chan 4))      ;; crosses lanes
+(defn body []
+  (def ch (ev/chan 4096))         ;; local to that VM: correct, never crosses
+  ...
+  (ev/give out acc))              ;; explicit return
+(proc/spawn body 8)               ;; takes a lane (no mutable capture)
+(def got (ev/take out))           ;; => 100
+```
+
+If you would rather keep direct access to your variables, capture one and the
+proc stays home: same code, `shared=100`, one core instead of twelve. The choice
+is per-spawn and visible in the returned handle (tuple = lane, object = this VM).
+
 ## 4. The real code, same shape
 
 ```janet
