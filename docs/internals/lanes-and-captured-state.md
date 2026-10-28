@@ -320,6 +320,41 @@ Practical shape:
 Caveats: a proc's fibers stay on that proc's VM (no migration), so balance work
 per proc evenly; and use `ev/thread-chan` to carry results back across lanes.
 
+## 5d. The cross-lane memory tax (open issue)
+
+Measured with the same 50000-process program, differing only in lane count:
+
+| lanes | RSS | per proc |
+|---|---|---|
+| 0 (single VM) | 91 MB | **1.87 KB** |
+| 4 | 341 MB | **6.98 KB** |
+
+So running a process on a LANE costs ~3.7x more than running it on the main VM.
+That is the current blocker for "5M processes", not the per-proc struct: idle
+procs measure 1.31 KB and single-VM procs 1.87 KB, but a lane-hosted proc costs
+~7 KB.
+
+Consequence, measured:
+
+| procs | result |
+|---|---|
+| 200000 | completes, 1045 MB |
+| 400000 - 1000000 | **fails** on a machine with swap already in use |
+| 2000000 | completed once at 3016 MB on an idle box, 161 s |
+
+For comparison, Erlang does 5000000 processes in 823-1043 MB total
+(0.17-0.21 KB per process official memory accounting). Erlang is not doing
+anything cleverer per process; it simply does not pay a cross-boundary tax for
+a process that stays on its scheduler.
+
+Not yet diagnosed: which part of the lane path allocates. Candidates worth
+measuring next: the marshal transit buffer created per routed spawn (the
+closure is marshalled on every spawn), a per-lane native stack plus heap that
+a large live set keeps resident, and the result channel's per-item transit.
+
+``proc/send`` is NOT implicated: 1,000,000 consecutive sends across 11 lanes
+completed with zero errors when tested in isolation.
+
 ## 6. Measurement discipline (learn from our mistakes)
 
 Three separate wrong conclusions in one session came from ignored machine
