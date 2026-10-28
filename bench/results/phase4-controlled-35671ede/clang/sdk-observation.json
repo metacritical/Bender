@@ -1,0 +1,11 @@
+{
+  "observed_at": "2026-10-28T17:43:10.398012+00:00",
+  "sdkroot": "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk",
+  "sdkroot_resolved": "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk",
+  "settings_sha256": {
+    "SDKSettings.json": "7b93ad7e534cc4b31c6a4e39d19b5e0288acf2168c2649479a796d1cb51939fb",
+    "SDKSettings.plist": "90a738dbf3fd88e7f6d35646e19d3a8a716923b9773ce1b67260466d9ceed370"
+  },
+  "build_environment_source": "Parent command explicitly set SDKROOT=\"$(xcrun --show-sdk-path)\" for successful bash-24; original manifest did not record it.",
+  "limitation": "SDK path/settings observed after build, not embedded artifact proof; original manifest retained unchanged. Driver now records SDK for future builds."
+}
