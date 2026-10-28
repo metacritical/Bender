@@ -366,11 +366,17 @@ Ruled out so far, each by measurement:
   the full tax (1.52 KB at lanes=0 against 6.83 KB at lanes=4)
 - proc/send: 1000000 consecutive cross-lane sends completed with zero errors
 
-Best remaining hypothesis: a lane-hosted proc claims its own slab page on the
-LANE's heap (a 4 KB page per proc, since each proc owns a heap) plus a native
-stack commitment -- roughly the 5.1 KB delta. Testing that means making lane
-heaps share pages the way ordinary construction already does (see 5c), which is
-a GC change that needs the full suite as its gate.
+Also ruled out: post-construction allocation. A proc that allocates NOTHING
+(`(fn [] nil)`, shared closure) still measures 1.66 KB at lanes=0 and 7.08 KB at
+lanes=4, so the tax is not caused by anything the proc body allocates. And lane
+construction already shares young pages (5c), so it is not the construction
+allocator either.
+
+That leaves the structural cost of a proc LIVING on a lane: per-lane heap
+residency plus a native stack commitment, paid whether or not the proc does
+work. Pinning down which of the two dominates needs a heap/stack-level
+instrument (RSS alone cannot separate them), which is the next step and not
+something to guess at.
 
 Not yet diagnosed: which part of the lane path allocates. Candidates worth
 measuring next: the marshal transit buffer created per routed spawn (the
