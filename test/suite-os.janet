@@ -199,4 +199,9 @@
 (assert (os/which (os/which)) "os/which 1 arg")
 (assert (not (os/which :gobbledegook)) "os/which 2")
 
+(def cpu (os/cpu-count))
+(assert (number? cpu) (string "os/cpu-count must return a number, got: " cpu))
+(assert (> cpu 0) "os/cpu-count is positive")
+(assert (= cpu (os/cpu-count 99)) "os/cpu-count ignores dflt when the count is available")
+
 (end-suite)

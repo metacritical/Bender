@@ -75,6 +75,7 @@
 #include <crt_externs.h>
 #define environ (*_NSGetEnviron())
 #include <AvailabilityMacros.h>
+#include <sys/sysctl.h>
 int chroot(const char *dirname);
 #elif !defined(JANET_PLAN9)
 extern char **environ;
@@ -325,6 +326,21 @@ JANET_CORE_FN(os_cpu_count,
     sched_getaffinity(0, sizeof(cs), &cs);
     int count = CPU_COUNT(&cs);
     return janet_wrap_integer(count);
+#elif defined(JANET_APPLE)
+    /* macOS/iOS define JANET_APPLE, NOT JANET_BSD, so the two sysctl branches
+     * below never compiled here and os/cpu-count silently returned nil -- which
+     * is how a caller doing (- (os/cpu-count) 1) got a nil-arithmetic error
+     * instead of a processor count. HW_NCPU is present on Darwin and reports
+     * the online processor count. */
+    {
+        int name[2] = {CTL_HW, HW_NCPU};
+        int result = 0;
+        size_t len = sizeof(result);
+        if (-1 == sysctl(name, 2, &result, &len, NULL, 0)) {
+            return argc > 0 ? argv[0] : janet_wrap_nil();
+        }
+        return janet_wrap_integer(result);
+    }
 #elif defined(JANET_BSD) && defined(HW_NCPUONLINE)
     const int name[2] = {CTL_HW, HW_NCPUONLINE};
     int result = 0;
