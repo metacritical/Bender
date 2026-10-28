@@ -42,13 +42,39 @@ space) is rejected the same way, because `scan-number` returns nil for all of
 them; `1.5e2` is accepted as 150.
 
 **Clock note.** Timestamps come from `(os/clock :monotonic :tuple)`, which
-returns `[tv_sec tv_nsec]` (see the `:tuple` branch of `os_clock` in
-`src/core/os.c`, which wraps `tv_sec`/`tv_nsec` directly). Microseconds are
-`sec*1000000 + ns/1000`; scaling seconds as milliseconds instead makes the
-value jump **backward** by ~999000 us at every second boundary and every phase
-duration goes negative. That bug existed here and was fixed; `now-us` also
-detects the field scale rather than assuming it. A cheap guard (`clock
-regression`) exits 3 if two adjacent reads ever decrease.
+returns `[tv_sec tv_nsec]` (the `:tuple` branch of `os_clock` in
+`src/core/os.c` wraps `tv_sec`/`tv_nsec` directly). Confirmed against the parent
+runtime: `(1394009 105833000)` and the `:double` form `1394009.105833` both give
+`1394009105833` us. So the conversion is `sec*1000000 + ns/1000`.
+
+Scaling the seconds term by `1000` (milliseconds) instead mixes units. Inside a
+single second the two terms happen to agree, so short runs look correct; once a
+phase crosses a second boundary the result is wrong, and *both* symptoms matter:
+
+| phase length across a boundary | true | buggy | symptom |
+|---|---:|---:|---|
+| sub-millisecond | 1 us | −998999 us | **negative** |
+| ~100 ms | 100000 us | −899000 us | **negative** |
+| ~1.2 s | 2220000 us | 222000 us | 1.8 s undercount |
+| ~3 s | 3000000 us | 3000 us | 3 s undercount |
+
+A real 12000-process run crossing a boundary reported 236544 us for a true
+1235544 us wave — a 1 s undercount with a positive sign, which a sign-only
+check would have missed. This bug existed here and is fixed; `now-us` converts
+unconditionally (no "ns vs us" scale heuristic, which would itself misread a
+sub-microsecond fraction near a boundary), and a cheap guard exits 3 if two
+adjacent reads decrease.
+
+Covered two ways rather than by tiny-N spot checks:
+
+* deterministic rollover control — feeds boundary-crossing `[sec ns]` pairs
+  directly and asserts the fixed formula stays positive *while confirming the
+  old formula fails those same cases*;
+* live control — crosses three real second boundaries, asserts zero backward
+  steps, and cross-checks the tuple value against the `:double` form.
+
+Forced-boundary runs (12000 processes, four consecutive trials) all straddled a
+real second boundary with positive, sane durations.
 
 **Inter-phase gap, disclosed not hidden.** `wave-start` is sampled after the
 `spawn-end` marker is printed, so `wave_ms` excludes that marker's own write,

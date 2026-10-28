@@ -67,26 +67,25 @@
 # [seconds nanoseconds]. The tuple form avoids losing microseconds when the
 # machine has been up for a long time, so prefer it and fall back to the
 # double if the tuple shape is ever unavailable.
+(defn- clock->us [t]
+  # Convert (os/clock :monotonic :tuple) to integer microseconds.
+  #
+  # The tuple is [tv_sec tv_nsec] -- verified against the parent runtime, where
+  # (1394009 105833000) and the :double form 1394009.105833 agree:
+  #   sec*1000000 + ns/1000 = 1394009105833  (== round(double*1000000))
+  # So the whole-second term is scaled by 1000000, NOT by 1000. Scaling it by
+  # 1000 mixes milliseconds with microseconds: inside one second the two terms
+  # agree, but across a second boundary the result DROPS by ~999000 us and
+  # every phase duration goes negative. Do not reintroduce a scale heuristic
+  # here either -- inferring "ns vs us" from a small fraction misreads a
+  # genuine sub-microsecond ns value near a boundary.
+  (+ (* 1000000 (get t 0)) (math/floor (/ (get t 1) 1000))))
+
 (defn- now-us []
-  # Expect [tv_sec tv_nsec] from :tuple, but detect the shape rather than
-  # trusting it. Two representations are tolerated:
-  #   * [sec ns]        -- the documented tuple form (see os/clock in os.c,
-  #                        which wraps tv_sec and tv_nsec directly).
-  #   * [sec us]        -- a defensive reading used only if the second field
-  #                        cannot be nanoseconds (it would then be < 1000 for
-  #                        a sub-millisecond instant, which nanoseconds never
-  #                        look like for any non-tiny value; treated as us).
-  # Getting this scale wrong is not cosmetic: with seconds scaled as ms the
-  # value JUMPS BACKWARD across a second boundary (e.g. 1099999 -> 101000),
-  # making every phase duration negative. Verified against the rollover.
   (def t (os/clock :monotonic :tuple))
   (if (and (tuple? t) (= 2 (length t)))
-    (let [sec (get t 0)
-          frac (get t 1)
-          frac-is-ns (>= frac 1000)]
-      (if frac-is-ns
-        (+ (* 1000000 sec) (math/floor (/ frac 1000)))
-        (+ (* 1000000 sec) (math/floor frac))))
+    (clock->us t)
+    # Fallback: the :double form is seconds + fraction, so the same 1e6 scale.
     (math/floor (* 1000000 (os/clock :monotonic)))))
 
 (defn- ms [a b] (/ (- b a) 1000.0))
