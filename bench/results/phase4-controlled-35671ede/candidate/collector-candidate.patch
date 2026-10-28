@@ -1,0 +1,52 @@
+diff --git a/src/core/gc.c b/src/core/gc.c
+index 2bc992fd..aa596257 100644
+--- a/src/core/gc.c
++++ b/src/core/gc.c
+@@ -2761,6 +2761,32 @@ static void janet_xfb_mark_owned(JanetSlabState *ss, uint32_t owner) {
+     }
+ }
+ 
++/* The proc minor sweeps only these lists. Old, disabled, foreign-owner
++ * and fiber blocks cannot be reclaimed by that sweep regardless of marks. */
++static int janet_proc_minor_has_candidates(JanetFiber *f) {
++    for (int kind = 0; kind < 3; kind++) {
++        for (JanetGCObject *cur = f->heap_lists[kind]; cur; cur = cur->data.next) {
++            if (!(cur->flags & JANET_MEM_DISABLED) &&
++                    !janet_slab_obj_old(cur) &&
++                    janet_slab_obj_owner(cur) == f->gc_owner &&
++                    JANET_MEMORY_FIBER != janet_gc_type(cur)) return 1;
++        }
++    }
++    return 0;
++}
++
++/* Preserve the non-reclamation effects of an empty-candidate sweep. */
++static void janet_proc_minor_clear_stamps(JanetFiber *f) {
++    for (int kind = 0; kind < 3; kind++) {
++        for (JanetGCObject *cur = f->heap_lists[kind]; cur; cur = cur->data.next) {
++            if (!(cur->flags & JANET_MEM_DISABLED))
++                cur->flags &= ~JANET_MEM_EPOCH_MASK;
++        }
++    }
++    janet_sweep_drain_pending();
++    janet_heap_verify("proc-owned-no-young");
++}
++
+ void janet_collect_fiber_minor(JanetFiber *f) {
+     JanetSlabState *ss;
+     if (janet_vm.gc_suspend) return;
+@@ -2778,6 +2804,14 @@ void janet_collect_fiber_minor(JanetFiber *f) {
+         f->gc_nursery_bytes = 0;
+         return;
+     }
++    /* Isolated candidate: if no object can satisfy this scoped minor's
++     * sweep predicate, marking cannot change its free set. Preserve the
++     * non-reclamation sweep effects without walking the transitive roots. */
++    if (NULL != f->proc && !janet_proc_minor_has_candidates(f)) {
++        janet_proc_minor_clear_stamps(f);
++        f->gc_nursery_bytes = 0;
++        return;
++    }
+     JANET_GC_WORK_TICK(work_gc_fiber_minor);
+     janet_gc_epoch_next();
+     depth = JANET_RECURSION_GUARD;
