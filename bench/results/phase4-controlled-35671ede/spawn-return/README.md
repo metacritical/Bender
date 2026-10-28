@@ -1,6 +1,6 @@
 # Routed spawn backpressure corrupts its public return value
 
-Status: demonstrated defect; **fix in progress**, not landed in this evidence commit.
+Status: **fixed in `0c935aeb`**, independently reviewed, deterministic regression verified and bounded larger-wave reruns complete. Original failure evidence remains unchanged.
 
 ## Runtime observation
 
@@ -27,9 +27,26 @@ At pinned source `src/core/proc.c:326-334`, `janet_proc_spawn_routed` pushes its
 
 Channel write completion normally schedules the blocked writer with the channel (`src/core/ev.c:1473-1474`, same-VM path1892-1898). Therefore a parked routed spawn returns `core/channel`, exactly matching the diagnostic. If an intermediate head is wrong, later chain work is routed to an invalid target or channel while the sink remains waiting; if the final head is wrong the initial main send can raise. This establishes a concrete defect without claiming it is the sole possible stall cause.
 
-## Planned correction
+## Landed correction
 
-Keep backpressure, routing and actor semantics. A private C prepare stage returns either a direct local/already-accepted-steal handle or a rooted plan containing ctl, spawn message and intended PID. A public Janet wrapper performs the existing blocking write and returns the saved PID from its Janet frame. This avoids a fiber-wide wake-value override, new channel cross-thread protocol, busy waiting, or dropping spawn requests. Implementation, deterministic full-control-channel tests, independent rooting/API review and bounded larger-wave reruns remain required.
+Keep backpressure, routing and actor semantics. An explicitly internal C prepare stage returns a direct local/accepted routed/accepted-steal handle, or a plan containing ctl, spawn message and intended PID only when try-mode3 refuses the full control channel. The public Janet wrapper performs the existing blocking write and returns the saved PID from its rooted Janet frame. No fiber-wide wake-value override, new channel cross-thread protocol, busy waiting or dropped spawn request. See `docs/internals/proc-spawn-backpressure.md` for independent rooting/API review and deterministic test details.
+
+The deterministic test fails on the old runtime and passes on production: full gated worker ctl, ordinary and tail calls, full GC while parked, cancellation, distinct valid PID/control/serial fields, actual actor replies and immediate acceptance. Main suites ev776/capture7/heaps28/gc-minor12/gc-stress25 and lanes640k parked stop/join pass. The process suite still fails at the identical baseline test605; not green.
+
+## Bounded reruns after the fix
+
+All12 phase-labelled trials returned result=N and exit0 within10s/1GiB sampledRSS bounds:
+
+| Lanes | N | Correct | Wave median ms | Maximum sampledRSS KiB |
+|---:|---:|---:|---:|---:|
+|1|80000|3/3|263.218|605120|
+|2|65536|3/3|572.416|509904|
+|2|80000|3/3|698.252|608736|
+|2|100000|3/3|873.575|738304|
+
+These are correctness/resource-bounded completion checks, **not matched before/after speedup claims**: the old80k arm stalled and has no accepted latency. Independent per-spawn checks also validated every returned PID in80k waves on lanes1 and2. Plain AOT, native-enabled/noPGO and trained-release AOT artifacts each rebuilt successfully and returned correct N1000 on local/two-lane arms. No claim of million-live scalability, per-actor placement, solved residual quadratic GC, or Go superiority.
+
+`fixed-verification.tar.gz` retains52files with build logs, all12bounded trials stdout/stderr/hash/status, independent per-spawn checks, regression logs and AOT verification. Every archive member verified byte-for-byte. SHA256 `c211954e4a0e1f38e1045e0bd05dd4d14daa0867fecc1a05a7eab7f187926ac5`.
 
 ## Evidence
 
