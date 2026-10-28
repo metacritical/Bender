@@ -56,25 +56,17 @@
 # machine has been up for a long time, so prefer it and fall back to the
 # double if the tuple shape is ever unavailable.
 (defn- clock->us [t]
-  # Convert (os/clock :monotonic :tuple) to integer microseconds.
+  # (os/clock :monotonic :tuple) is [tv_sec tv_nsec] -- the runtime contract,
+  # confirmed against the parent: (1394009 105833000) and the :double form
+  # 1394009.105833 both reduce to 1394009105833 us.
   #
-  # The tuple is [tv_sec tv_nsec] -- verified against the parent runtime, where
-  # (1394009 105833000) and the :double form 1394009.105833 agree:
-  #   sec*1000000 + ns/1000 = 1394009105833  (== round(double*1000000))
-  # So the whole-second term is scaled by 1000000, NOT by 1000. Scaling it by
-  # 1000 mixes milliseconds with microseconds: inside one second the two terms
-  # agree, but across a second boundary the result DROPS by ~999000 us and
-  # every phase duration goes negative. Do not reintroduce a scale heuristic
-  # here either -- inferring "ns vs us" from a small fraction misreads a
-  # genuine sub-microsecond ns value near a boundary.
+  # One format, no unit guessing. tv_nsec is legitimately 0..999999999, so a
+  # small fraction (e.g. 0..999 near a second start) is real nanoseconds and
+  # must NOT be reinterpreted as microseconds.
   (+ (* 1000000 (get t 0)) (math/floor (/ (get t 1) 1000))))
 
 (defn- now-us []
-  (def t (os/clock :monotonic :tuple))
-  (if (and (tuple? t) (= 2 (length t)))
-    (clock->us t)
-    # Fallback: the :double form is seconds + fraction, so the same 1e6 scale.
-    (math/floor (* 1000000 (os/clock :monotonic)))))
+  (clock->us (os/clock :monotonic :tuple)))
 
 (defn- ms [a b] (/ (- b a) 1000.0))
 
@@ -137,6 +129,19 @@
 # chain index, so reject rather than silently truncate.
 (when (> n 2147483647) (die (string "N exceeds int32 range: " raw-n)))
 
+# Guard the contract's sharp edge cheaply: tv_nsec legitimately spans
+# 0..999999999, and a value under 1000 (seconds + a few hundred ns, i.e. right
+# after a second start) must convert as nanoseconds, not be reinterpreted as
+# microseconds. Two arithmetic checks, no clock read, no cost on any path.
+# Expected: 1 ms in ns -> 1000 us; a whole second -> 1000000 us;
+# +1 us with ns still under 1000 -> 1000001 us; 999999000 ns -> 1999999 us.
+(unless (and (= 1000 (clock->us [0 1000000]))
+             (= 1000000 (clock->us [1 0]))
+             (= 1000001 (clock->us [1 1000]))
+             (= 1999999 (clock->us [1 999999000])))
+  (eprintf "wave-phased: clock->us contract check failed")
+  (os/exit 3))
+
 # --- phase: spawn -----------------------------------------------------------
 (def done (ev/thread-chan 1))
 
@@ -158,11 +163,16 @@
 (eprintf "phase=spawn-end spawn_end_us=%d spawn_ms=%.3f" spawn_end spawn_ms)
 
 # --- phase: wave ------------------------------------------------------------
-# wave_start is sampled AFTER the spawn-end marker is printed, so wave_ms
-# excludes the marker writes -- but it also excludes the spawn-end print's own
-# cost, and spawn_ms by contrast encloses the spawn-start print. The gap is
-# therefore reported explicitly rather than hidden; label_lag_us is that gap.
-# It is microseconds next to a wave of milliseconds, but it is not zero.
+# Marker accounting, stated exactly:
+#   * wave_start is sampled AFTER the spawn-end marker is printed, so wave_ms
+#     EXCLUDES the spawn-end print.
+#   * wave_ms STILL INCLUDES the wave-start print (this marker's own write),
+#     which is unavoidable: the interval start cannot be labelled without
+#     emitting the label. It is ~tens of microseconds against a wave of
+#     milliseconds, but it is inside the interval, not outside it.
+#   * spawn_ms by contrast ENCLOSES the spawn-start print.
+# The span between spawn_end and wave_start is reported separately as
+# label_lag_us rather than folded into either interval.
 (def wave_start (now-us))
 (eprintf "phase=wave-start wave_start_us=%d label_lag_us=%d"
          wave_start (- wave_start spawn_end))
