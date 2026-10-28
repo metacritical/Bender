@@ -1,0 +1,43 @@
+{
+  "repo": "../..",
+  "output_dir": "build/wave-evidence",
+  "sizes": [10000, 100000],
+  "repeats": 3,
+  "timeout_s": 600,
+  "env": {
+    "JANET_NO_PROFILE": "1"
+  },
+  "variants": [
+    {
+      "name": "janet-script-lanes0",
+      "argv": ["./build/bender", "bench/cross-runtime/wave.janet", "{n}"],
+      "env": {
+        "JANET_LANES": "0"
+      }
+    },
+    {
+      "name": "janet-script-lanes11",
+      "argv": ["./build/bender", "bench/cross-runtime/wave.janet", "{n}"],
+      "env": {
+        "JANET_LANES": "11"
+      }
+    },
+    {
+      "name": "go",
+      "argv": ["./bench/cross-runtime/wave-go", "{n}"]
+    },
+    {
+      "name": "erlang",
+      "argv": [
+        "erl",
+        "-noshell",
+        "+P",
+        "8000000",
+        "-pa",
+        "build/beam",
+        "-eval",
+        "wave:main([\"{n}\"]),halt()."
+      ]
+    }
+  ]
+}
