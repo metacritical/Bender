@@ -320,6 +320,35 @@ Practical shape:
 Caveats: a proc's fibers stay on that proc's VM (no migration), so balance work
 per proc evenly; and use `ev/thread-chan` to carry results back across lanes.
 
+## 5c-bis. CORRECTION: live-process memory, measured properly
+
+Every earlier comparison in this file was measured with processes that EXITED
+immediately, so neither side was holding N processes at once. Re-measured with
+processes that stay ALIVE (blocked on receive) until the count is reached:
+
+| runtime | 1M live | per proc | 5M live | per proc |
+|---|---|---|---|---|
+| Erlang | 3032 MB | 3.10 KB | 13601 MB | **2.79 KB** |
+| **Janet, single VM** | **1810 MB** | **1.85 KB** | **4123 MB** | **0.84 KB** |
+| Janet, 4 lanes routed | 139 MB @ 20k | 7.13 KB | — | — |
+
+**Janet hosts more live processes per byte than Erlang**: 1.7x cheaper at 1M and
+3.3x cheaper at 5M. The five-million-process claim HOLDS on a single VM, at
+4.1 GB rather than the ~14 GB Erlang needs.
+
+Two things this corrects:
+
+1. The earlier "Janet cannot do 5M" conclusion was wrong. It failed because the
+   test routed every proc across lanes (7.13 KB each) AND because Erlang's own
+   number had been taken from an exiting-process benchmark.
+2. The "Erlang 0.17-0.21 KB per process" figure derived from its documentation is
+   NOT what a live process costs here; measured, Erlang spends 2.79-3.10 KB.
+
+The remaining real defect is unchanged and narrower than believed: **routed**
+lane-hosted procs cost 7.13 KB against 2.19 KB for the same proc spawned
+locally. That is a 3.3x tax on the lane path only, and it is what limits
+`proc/spawn` at scale -- not Janet's process representation.
+
 ## 5d. The cross-lane memory tax (open issue)
 
 Measured with the same 50000-process program, differing only in lane count:
