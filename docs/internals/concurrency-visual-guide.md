@@ -168,6 +168,110 @@ code measured 44ms on the same work, and I did not find the cause, so it was
 reverted rather than shipped. The notation above describes code you write
 yourself today.
 
+## 3a-bis. The same arrows, in real Lisp form
+
+The ASCII arrows in 3a are a reading aid. Here is what that notation becomes
+when you actually write it in Janet, and what Lisp FORCES it to become.
+
+### The one structural constraint
+
+`x |> ch` is **not expressible as a macro** in a Lisp. A form's head is
+evaluated (or macro-expanded) before its arguments, so `(x =>> ch)` expands to
+`(1 ch ...)` when `x` holds `1` -- "1 expects 1 argument, got 2". Janet's `|>`
+is worse still: it collides with the `|(...)|` short-function syntax and cannot
+be bound at all. Measured, this is a hard wall, not a naming problem.
+
+So the value goes on the **right** and the verbs stay in head position:
+
+```janet
+(into  ch x)    ; value INTO channel      -- ev/give
+(out-of ch)     ; value OUT OF channel    -- ev/take
+(spread f xs)   ; SPREAD f over xs        -- map
+(await-n n ch)  ; AWAIT n results        -- collect
+```
+
+Which reads as a pipeline rather than an arrow. Janet already has the threading
+macros for that:
+
+```janet
+(->> items (spread work) (into outbox))
+```
+
+### Verified reference implementation
+
+```janet
+(defn into    [ch x]  (ev/give ch x))
+(defn out-of  [ch]    (ev/take ch))
+(defn spread  [f xs]  (map f xs))
+(defn await-n [n ch]
+  (var i 0)
+  (def acc @[])
+  (while (< i n) (array/push acc (ev/take ch)) (set i (+ i 1)))
+  acc)
+```
+
+Tested output:
+
+```
+out-of:  1
+spread:  @[10 20 30]
+await 2: @[2 7]
+```
+
+### The whole two-level pattern, in Lisp
+
+This is the guide's pseudocode written honestly, and it is verified:
+
+```janet
+(proc/lanes-start 4)
+
+(defn work [x] (* x x))
+(def items (seq [i :range [0 8]] i))
+(def outbox (ev/thread-chan 64))          ; crosses lanes
+
+(defn chunk-host [job]
+  (def base (job 0))
+  (def xs   (job 1))
+  (def inbox (ev/chan 64))                ; SAME VM ONLY -- correct here
+  (var i 0)
+  (while (< i (length xs))
+    (def idx (+ base i))
+    (def x   (xs i))
+    (ev/go (fn [] (ev/give inbox [idx (work x)])))   ; DO -> INBOX
+    (set i (+ i 1)))
+  (var k 0)
+  (while (< k (length xs))
+    (ev/give outbox (ev/take inbox))
+    (set k (+ k 1))))
+
+;; PER PROC: hand it a chunk over the mailbox, never by capture
+(var i 0)
+(while (< i (length items))
+  (def p (proc/spawn (fn [] (chunk-host (proc/recv))) 8))
+  (proc/send p [i (slice items i (+ i 1))])
+  (set i (+ i 1)))
+
+;; @PROCS <| outbox : rebuild the answer in input order
+(def buf (array/new-filled (length items)))
+(var got 0)
+(while (< got (length items))
+  (def pair (ev/take outbox))
+  (put buf (pair 0) (pair 1))
+  (set got (+ got 1)))
+
+buf    ; => @[0 1 4 9 16 25 36 49]   (verified)
+```
+
+Three things this makes visible that the arrows hid:
+
+1. **`inbox` is created inside the proc**, so it is that VM's own channel. The
+   `--` (same-VM-only) rule is satisfied by construction -- no error, no copy.
+2. **The chunk arrives via `proc/send`**, not by closing over `items`. Capturing
+   the array would pin the proc to the current VM and silently serialise
+   everything (see 3b).
+3. **Results carry their index**, so collection order does not matter -- the
+   output array is rebuilt in input order regardless of completion order.
+
 ## 3b. Two levels, two VISIBILITY rules (the part that bites)
 
 The shape from §3 is correct, but where a proc RUNS decides what it can see.
