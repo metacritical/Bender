@@ -106,6 +106,49 @@ workload in Go and Erlang, all spend essentially one core's worth of time.
 This is worth internalising: **lanes multiply throughput of independent work;
 they do nothing for latency of sequential work.**
 
+## 4b. Choosing a lane count (measured on 12 cores)
+
+Lane count is the direct lever for BOTH throughput and the burst ceiling, and
+they peak at different points.
+
+CPU-bound work (identical total work, same checksums in every arm):
+
+| configuration | wall | speedup |
+|---|---|---|
+| one VM (sequential) | 231 ms | 1x |
+| 12 lanes | 30 ms | 7.7x |
+| 12 x `thread/new` | 28 ms | 8.3x |
+
+Past ~16 workers both mechanisms plateau and then degrade (24 workers ~60 ms,
+48 workers ~103 ms for the same work) -- that is the physical core count, not a
+runtime difference. **Lanes and `thread/new` are the same lever**; a lane IS an
+OS thread (24 lanes measured 25 OS threads). Choose lanes when you want the
+mailbox/actor model, `thread/new` when you want fire-and-join with a value.
+
+Burst throughput for a result-returning fan-out (50000 procs):
+
+| lanes | wall |
+|---|---|
+| 8 | 360 ms |
+| 11 | 332 ms |
+| 16 | 331 ms |
+| 24 | 330 ms |
+
+So ~11 lanes saturates throughput on this box.
+
+The burst CEILING, however, keeps rising with lane count, because each lane has
+its own self-pipe and the post rate spreads across them:
+
+| lanes | largest burst that completes |
+|---|---|
+| 4 | 80000 fails, 50000 OK |
+| 8 | 100000 OK, 200000 fails |
+| 11 | 200000 OK, 400000 fails |
+| 24 | 400000 OK, 1000000 too slow to finish here |
+
+That is why more lanes help even when throughput has plateaued: they buy
+headroom for large fan-outs, not more speed.
+
 ## 5. Process memory, and why 1M processes is a memory question
 
 Measured per-process footprint before and after the slab-page change:
