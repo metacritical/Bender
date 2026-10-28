@@ -303,6 +303,69 @@ If you would rather keep direct access to your variables, capture one and the
 proc stays home: same code, `shared=100`, one core instead of twelve. The choice
 is per-spawn and visible in the returned handle (tuple = lane, object = this VM).
 
+## 3c. The one rule that decides parallel vs serial (root cause, measured)
+
+This is the difference between 6.6x and 1.0x, and it is easy to get wrong
+because the code looks identical.
+
+```
+CHANNEL CREATED AT TOP LEVEL  -> global lookup -> proc takes a LANE   -> PARALLEL
+CHANNEL CREATED INSIDE A DEFN -> lexical capture -> proc pinned HERE -> SERIAL
+```
+
+Measured, 11 x 2M iterations, `proc/lanes-start 11`:
+
+| channel created | wall | speed |
+|---|---|---|
+| top level (`def gchan ...`) | **30 ms** | 6x |
+| inside the defn (`(def lchan ...)`) | **221 ms** | 1x |
+
+Both return a lane-shaped handle and both give correct results. Only the timing
+tells you which happened. The mechanism is the placement rule from 3b: a proc
+whose closure captures *mutable* state is placed on the current VM to preserve
+sharing, and a channel is mutable state.
+
+### The fix: send, do not capture
+
+```janet
+;; WORKS inside a function: nothing is captured.
+(defn pmap [f xs]
+  (def n (length xs))
+  (def out (ev/thread-chan 0))
+  (var i 0)
+  (while (< i n)
+    (def p (proc/spawn (fn []
+                         (def job (proc/recv))
+                         (def g  (job 0))
+                         (def ch (job 1))
+                         (ev/give ch (g (job 2))))
+                       8))
+    (proc/send p [f out (xs i)])     ; f, the channel and the item all travel
+    (set i (+ i 1)))
+  (var acc @[])
+  (var k 0)
+  (while (< k n) (array/push acc (ev/take out)) (set k (+ k 1)))
+  acc)
+```
+
+Verified: **34 ms parallel vs 223 ms sequential -- 6.6x on 11 lanes.**
+
+Note what is sent: `[f out x]`. The function, the result channel AND the work
+item arrive as one message, so the spawned closure is completely capture-free
+and the proc is free to take a lane.
+
+### The three-line form, and when it is fast
+
+```janet
+(def out (ev/thread-chan 0))                             ; line 1
+(each x items (proc/spawn (fn [] (ev/give out (heavy x))) 8))   ; line 2
+(repeat (length items) (ev/take out))                    ; line 3
+```
+
+This is genuinely 3 lines and genuinely parallel (26-36 ms measured, 6.9x) --
+**as long as `out` is defined at top level**. Move those same three lines inside
+a `defn` and it silently becomes serial. That single fact is the whole trap.
+
 ## 4. The real code, same shape
 
 ```janet
