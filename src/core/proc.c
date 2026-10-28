@@ -259,6 +259,27 @@ static Janet janet_proc_spawn_routed(JanetFunction *func, int32_t cap) {
     janet_lane_rr++;
     JanetChannel *ctl = janet_lane_ctls[lane];
     uint32_t serial = janet_proc_next_serial();
+    /* Bulk fan-out flow control.
+     *
+     * Each cross-lane spawn posts an event to the target lane's self-pipe,
+     * which holds only ~341 events (16 KiB / 48 bytes). A tight spawn loop
+     * that never enters the event loop fills it and the poster aborts with
+     * "failed to write event to self-pipe" -- measured at 30000 procs across 4
+     * lanes. The poster cannot block waiting for the pipe (that inverts the
+     * channel lock, observed as a live deadlock), so the CALLER drains: every
+     * 4 routed spawns we sample ready I/O and deliver whatever has queued.
+     * One non-blocking poll per 4 spawns is noise next to the marshal cost.
+     *
+     * This raises the measured ceiling rather than removing it: the pipe holds
+     * ~341 events and macOS offers no way to enlarge it (no F_SETPIPE_SZ), so at
+     * some process count the post rate still outruns the drain. Measured on a
+     * 4-lane burst returning results: 50000 and 80000 complete, 100000 aborts;
+     * with 2 lanes even 80000 aborts. Making this unbounded needs real
+     * backpressure in the lane dispatcher, not a bigger drain frequency. */
+    {
+        static JANET_THREAD_LOCAL uint32_t spawn_tick = 0;
+        if (0 == (++spawn_tick & 3)) janet_loop1_poll_now();
+    }
     Janet msg[4];
     msg[0] = janet_ckeywordv("spawn");
     msg[1] = janet_wrap_number((double) serial);

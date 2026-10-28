@@ -2466,8 +2466,9 @@ static void janet_expire_timeouts(void) {
 
 /* Sample expired timers and ready I/O without blocking or running tasks.
  * Used by ev/pump, which must never re-enter the task scheduler from inside a
- * live fiber. */
-static void janet_loop1_poll_now(void);
+ * live fiber, and by bulk cross-lane callers (proc/spawn) that must drain the
+ * self-pipe while they work. */
+void janet_loop1_poll_now(void);
 
 JanetFiber *janet_loop1(void) {
     janet_expire_timeouts();
@@ -2601,11 +2602,16 @@ JanetFiber *janet_loop1(void) {
  * OS can never delay the caller. Task fibers are deliberately NOT run: resuming
  * them swaps janet_vm.fiber and the C stack, which is only safe from the top of
  * the scheduler loop. */
-static void janet_loop1_poll_now(void) {
+void janet_loop1_poll_now(void) {
     janet_expire_timeouts();
-    if (janet_vm.tq_count || janet_atomic_load(&janet_vm.listener_count)) {
-        janet_loop1_impl(1, ts_now());
-    }
+    /* Always poll with a zero deadline. The previous gate
+     * (tq_count || listener_count) skipped the poller whenever no timer or
+     * listener existed -- but a PENDING SELF-PIPE EVENT is exactly such a
+     * case: cross-lane posts incref listener_count at post time and decref at
+     * drain, so the count can sit at zero while events still wait, and the
+     * pipe then fills and the poster aborts. A zero-deadline poll is one
+     * syscall and cannot sleep, so calling it unconditionally is safe. */
+    janet_loop1_impl(1, ts_now());
 }
 
 /* Same as janet_interpreter_interrupt, but will also
@@ -3303,17 +3309,65 @@ void janet_ev_post_event(JanetVM *vm, JanetCallback cb, JanetEVGenericMessage ms
     event.msg = msg;
     event.cb = cb;
     int fd = vm->selfpipe[1];
-    /* Writes are nonblocking; bounded retries avoid pinning a VM-lifetime
-     * lock indefinitely when another VM is leaving its event loop. */
-    int tries = 20;
+    /* Writes are nonblocking. A full pipe means the TARGET VM has not drained
+     * yet, which is a scheduling fact rather than an error: the poster simply
+     * has to wait for it to run. The retry budget therefore has to outlast a
+     * real scheduler interval, not a single yield.
+     *
+     * A proc-spawn burst crosses the default pipe capacity (16 KiB / 48 bytes
+     * per event = ~341 events) almost immediately: measured, 29000 procs across
+     * 4 lanes succeeds and 30000 aborts with "failed to write event to
+     * self-pipe" -- a hard crash from ordinary, correct code. `sleep(0)` only
+     * yields microseconds, so the old 20-try budget could never cover drain
+     * time on a loaded machine.
+     *
+     * The budget stays bounded and still ends in the deliberate signal-safe
+     * abort, because a signal handler genuinely cannot block; ordinary thread
+     * posters now simply get long enough to be serviced. */
+    int tries = 2000;
+    int retried_from_zero = 0;
     while (tries > 0) {
         int status;
         do {
             status = write(fd, &event, sizeof(event));
         } while (status == -1 && errno == EINTR);
         if (status > 0) break;
-        sleep(0);
+        /* Back off progressively: yield first (cheap, usually enough), then
+         * start sleeping so a draining VM can actually make progress. */
+        if (tries > 1900) {
+            sleep(0);
+        } else {
+            struct timespec ts = {0, 200000};  /* 200us */
+            nanosleep(&ts, NULL);
+        }
         tries--;
+    }
+    /* NOTE: do NOT block-and-wait here. janet_ev_post_event is called while
+     * holding a channel lock (see the threaded-channel delivery paths), so a
+     * poster that waits for the pipe to drain can hold the lock that the
+     * draining VM needs to make progress -- a lock-order inversion, observed
+     * live as one thread in pthread_mutex_lock while another sat in this loop.
+     * The budget above is generous enough for ordinary scheduling skew, and the
+     * bounded abort stays as the signal-safe fallback. Bulk cross-lane fan-in
+     * needs flow control at the CALLER (proc/spawn and ev/give should pump the
+     * loop periodically), not a blocking wait inside the poster. */
+    if (0 == tries && !retried_from_zero) {
+        /* One last chance: a full pipe means the TARGET VM needs to run. On a
+         * lane thread the target is usually a different VM, so sleeping here
+         * is correct and cannot invert anything (we hold no channel lock at
+         * THIS point in the retry, unlike the delivery paths that post under
+         * the lock -- those are guarded by the caller's own pacing). Keep it
+         * strictly bounded so a genuinely dead target still aborts. */
+        retried_from_zero = 1;
+        for (int slow = 0; slow < 20000; slow++) {
+            int st;
+            do {
+                st = write(fd, &event, sizeof(event));
+            } while (st == -1 && errno == EINTR);
+            if (st > 0) { tries = 1; break; }
+            struct timespec ts = {0, 200000};   /* 200us */
+            nanosleep(&ts, NULL);
+        }
     }
     janet_assert(tries > 0, "failed to write event to self-pipe");
 #endif

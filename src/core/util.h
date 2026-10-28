@@ -295,6 +295,8 @@ void janet_ev_mark(void);
  * no stack walk) instead of fully marking them. See gc.h's
  * janet_gc_mark_fiber_shallow and docs/internals/proc-lanes.md. */
 void janet_ev_mark_shallow(void);
+/* Drain ready I/O and expired timers once, without blocking or running tasks. */
+void janet_loop1_poll_now(void);
 void janet_async_start_fiber(JanetFiber *fiber, JanetStream *stream, JanetAsyncMode mode, JanetEVCallback callback, void *state);
 int janet_make_pipe(JanetHandle handles[2], int mode);
 #ifdef JANET_FILEWATCH
