@@ -168,6 +168,71 @@ code measured 44ms on the same work, and I did not find the cause, so it was
 reverted rather than shipped. The notation above describes code you write
 yourself today.
 
+## 3a-ter. Which symbols actually work (tested exhaustively)
+
+Every candidate was compiled as `(defmacro SYM [a b] (+ a b))` and called. This
+is the authoritative list -- "define" and "call" are separate questions because
+Janet resolves some character sequences as reader syntax before symbol lookup.
+
+### USABLE -- safe to define and call
+
+| symbol | reads as | suggested role |
+|---|---|---|
+| `!` | send (Erlang) | `(! pid msg)` |
+| `<!` | receive (Erlang) | `(<! pid)` |
+| `=>>` | into | `(=>> val chan)` |
+| `<--` | take out of | `(<-- chan)` |
+| `*>>` | spread | `(*>> f xs)` |
+| `>>=` | await n | `(>>= n chan)` |
+| `=>`, `><`, `<:`, `??`, `!>` | various | free if you want alternatives |
+| `->>`, `-->`, `<->`, `<<<`, `*>>>`, `!>>`, `=!>`, `<<-` | various | free |
+
+### REJECTED -- do not use
+
+| symbol | reason |
+|---|---|
+| `|>` | collides with the `|(...)|` short-function reader macro |
+| `<|` | same collision |
+| `<|>` | same collision |
+| `|>>` | same collision |
+| `~>` | already bound (`~` is unquote) |
+| `~~` | already bound |
+| `::` | reader syntax (keyword) |
+| `->`, `->>` | already bound as threading macros -- usable, but do not redefine |
+
+`->` and `->>` are the one special case: they already exist and do the
+threading job, so use them as-is rather than shadowing them.
+
+### The verified set
+
+```janet
+(defmacro !   [pid msg]  ~(proc/send ,pid ,msg))
+(defmacro <!  [p]        ~(proc/recv ,p))
+(defmacro =>> [v ch]     ~(ev/give ,ch ,v))
+(defmacro <-- [ch]       ~(ev/take ,ch))
+(defmacro *>> [f xs]     ~(map ,f ,xs))
+(defmacro >>= [n ch]
+  ~(do
+     (var _i 0)
+     (def _a @[])
+     (while (< _i ,n)
+       (array/push _a (ev/take ,ch))
+       (set _i (+ _i 1)))
+     _a))
+```
+
+Tested output:
+
+```
+=>> / <--  : 1
+*>>        : @[10 20 30]
+>>=        : @[7]
+! / <!     : worked (proc got 99 and replied)
+```
+
+`!` and `<!` are the Erlang pair, which is why they are worth having: they make
+send and receive look like what they are.
+
 ## 3a-bis. The same arrows, in real Lisp form
 
 The ASCII arrows in 3a are a reading aid. This is the notation as actual Janet
