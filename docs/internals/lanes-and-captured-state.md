@@ -205,6 +205,35 @@ cut it 3.4× with no measurable cost to per-hop work (still ~6 µs/hop).
 `1M` in Janet is therefore feasible now, but only with roughly 9 GB free. Under
 memory pressure it swaps and every timing number becomes meaningless — see §6.
 
+## 5b. Why a proc costs ~10 KB and a fiber ~1 KB
+
+Measured per-proc accounting (20000 procs, all bodies executed, 195MB RSS):
+
+    4 KB   slab page claim -- gc_alloc_ctx points at the new fiber during
+           construction, so every proc's allocations land on its OWN heap and
+           its first allocation claims a fresh 4 KB page
+    ~5 KB  native C stack actually touched when the proc runs
+    ~1 KB  fiber struct (384 B) + proc abstract (80 B) + child env table
+           (48 B) + fiber data stack
+
+The two big items are structural, not oversights:
+
+- **A per-proc page is what per-process GC isolation IS.** Sharing pages
+  across processes would make one process's minor collection able to free
+  another's objects, which is the property the whole model relies on.
+- **A running proc needs a real C stack.** Reducing the RESERVED commit
+  (JANET_FIBER_STACK_INIT_BYTES 64 KiB -> 16 KiB) measured *no change at all*
+  because reservation is not the cost; touching is.
+
+So ~10 KB is close to the floor for a process that owns a heap and can run C
+code, and getting to fiber-like ~1 KB would require processes to share heaps --
+which is precisely the BEAM-model trade we have not made. Use fibers (~1 KB,
+single core) when you need very many cheap cooperative tasks; use procs when
+the work must occupy another core.
+
+A smaller win WAS taken: the fiber stack was reserved at 64 slots for an
+arity-0 thunk; it is now 16 (376MB -> 367MB at 40000 procs).
+
 ## 6. Measurement discipline (learn from our mistakes)
 
 Three separate wrong conclusions in one session came from ignored machine
