@@ -33,7 +33,7 @@ Workload is `bench/cross-runtime/wave.janet`, NOT legacy `bench/wave.janet`. It 
 Two sequential batches were run, never overlapping:
 
 1. `matrix-trials.jsonl`: 48 trials, rotating variant order across rounds, sizes 1000/2000, lanes0/2, three repetitions per arm.
-2. `runner-matrix/trials.jsonl`: a separate confirming 48-trial batch using committed `bench/wave-controlled-run.py`, manifest `runner-matrix.json`. Full run provenance and distributions are retained. The runner passed 27 synthetic tests independently before this batch. The manifest's per-arm order is fixed, so batch one supplies the rotated-order control.
+2. `runner-matrix/trials.jsonl`: a separate confirming 48-trial batch using committed `bench/wave-controlled-run.py`, manifest `runner-matrix.json`. Full run provenance and distributions are retained. `runner-logs.tar.gz` contains all 147 run-level and per-trial files, including stdout/stderr and trial metadata; archive members were verified byte-for-byte against the original run directory (archive SHA256 `1e7ec55ecfab065a1cfe4bda5c9f49378878f228881acc9be9925ca135ecc085`). The runner passed 27 synthetic tests independently before this batch. The manifest's per-arm order is fixed, so batch one supplies the rotated-order control.
 
 All 96 trials returned correct result=N with successful status; no failures are dropped. Runtime overrides: JANET_NO_PROFILE=1, JANET_NATIVE_EXECUTORS=1, JANET_LANE_FASTPOST=0, explicit lanes0 or2; JANET_PROFILE removed. Other environment inherited, not hermetic. Machine state is not asserted idle. These small samples identify a reproducible difference; they are not a Go comparison or a million-actor capacity claim.
 
