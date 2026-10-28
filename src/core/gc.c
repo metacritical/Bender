@@ -2761,6 +2761,32 @@ static void janet_xfb_mark_owned(JanetSlabState *ss, uint32_t owner) {
     }
 }
 
+/* A proc minor can reclaim only young blocks belonging to its owner.
+ * Mixed pages, old blocks and disabled objects survive regardless of marks. */
+static int janet_proc_minor_has_candidates(JanetFiber *f) {
+    for (int kind = 0; kind < 3; kind++) {
+        for (JanetGCObject *cur = f->heap_lists[kind]; cur; cur = cur->data.next) {
+            if (!(cur->flags & JANET_MEM_DISABLED) &&
+                    !janet_slab_obj_old(cur) &&
+                    janet_slab_obj_owner(cur) == f->gc_owner &&
+                    JANET_MEMORY_FIBER != janet_gc_type(cur)) return 1;
+        }
+    }
+    return 0;
+}
+
+/* With no reclaimable blocks, reproduce the sweep's maintenance only. */
+static void janet_proc_minor_clear_stamps(JanetFiber *f) {
+    for (int kind = 0; kind < 3; kind++) {
+        for (JanetGCObject *cur = f->heap_lists[kind]; cur; cur = cur->data.next) {
+            if (!(cur->flags & JANET_MEM_DISABLED))
+                cur->flags &= ~JANET_MEM_EPOCH_MASK;
+        }
+    }
+    janet_sweep_drain_pending();
+    janet_heap_verify("proc-owned-no-young");
+}
+
 void janet_collect_fiber_minor(JanetFiber *f) {
     JanetSlabState *ss;
     if (janet_vm.gc_suspend) return;
@@ -2775,6 +2801,14 @@ void janet_collect_fiber_minor(JanetFiber *f) {
     ss = (JanetSlabState *) janet_vm.slab_state;
     if (NULL != ss && ss->xfb_stuck) {
         janet_collect_minor();
+        f->gc_nursery_bytes = 0;
+        return;
+    }
+    /* No free decision can depend on tracing when the scoped sweep has no
+     * eligible objects. Leave epochs, visit cycles and incoming edges alone;
+     * any later collection that can reclaim objects performs its full mark. */
+    if (NULL != f->proc && !janet_proc_minor_has_candidates(f)) {
+        janet_proc_minor_clear_stamps(f);
         f->gc_nursery_bytes = 0;
         return;
     }
