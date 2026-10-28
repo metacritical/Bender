@@ -636,5 +636,139 @@ class ManifestAndCliTests(RunnerHarness):
         self.assertEqual(caught.exception.code, 2)
 
 
+class EscapedDescendantTests(RunnerHarness):
+    """A descendant that leaves the child's group is not ours to kill or await."""
+
+    def test_post_timeout_drain_is_bounded_and_never_kills_escapee(self):
+        # The grandchild calls setsid(), so it leaves the child's process group:
+        # the runner's SIGKILL cannot reach it and it keeps the pipes open.
+        marker = os.path.join(self.tmp, "escaped.pid")
+        source = (
+            "import subprocess, sys, time\n"
+            "p = subprocess.Popen([sys.executable, '-c',"
+            "'import time; time.sleep(60)'], start_new_session=True)\n"
+            f"open({marker!r}, 'w').write(str(p.pid))\n"
+            "print('partial=1', flush=True)\n"
+            "time.sleep(60)\n"
+        )
+        started = time.monotonic()
+        code, trial = self.run_single(source, name="escape", timeout_s=0.4)
+        elapsed = time.monotonic() - started
+        self.assertEqual(code, 1)
+        self.assertTrue(trial["timed_out"])
+        self.assertTrue(trial["drain_timed_out"])
+        self.assertEqual(trial["failures"], ["timeout"])
+        # Bounded: the drain must not wait out the escapee's lifetime.
+        self.assertLess(elapsed, runner.POST_KILL_DRAIN_S + 20)
+        # Workload time stops at the timeout, not after the drain.
+        self.assertLess(trial["workload_s"], runner.POST_KILL_DRAIN_S)
+        # Giving up on EOF must not discard what the child already printed.
+        with open(trial["stdout_path"], encoding="utf-8") as handle:
+            self.assertIn("partial=1", handle.read())
+        with open(marker, encoding="utf-8") as handle:
+            escaped = int(handle.read().strip())
+        try:
+            os.kill(escaped, 15)
+        except ProcessLookupError:
+            pass
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            try:
+                os.kill(escaped, 0)
+            except ProcessLookupError:
+                return
+            time.sleep(0.05)
+        self.fail("escaped descendant was killed by the runner")
+
+    def test_owned_group_still_drained_on_timeout(self):
+        code, trial = self.run_single("import time; time.sleep(30)", name="hang",
+                                     timeout_s=0.4)
+        self.assertEqual(code, 1)
+        self.assertFalse(trial["drain_timed_out"])
+
+
+class ExecutableHashTests(RunnerHarness):
+    """The recorded hash is the executable the CHILD would run."""
+
+    def test_hash_uses_variant_effective_path(self):
+        tool_dir = os.path.join(self.tmp, "tools")
+        os.makedirs(tool_dir)
+        target = os.path.join(tool_dir, "decoy")
+        with open(target, "w", encoding="utf-8") as handle:
+            handle.write("#!/bin/sh\necho procs=5 result=5\n")
+        os.chmod(target, 0o755)
+        trial = self.run_ok(
+            ["decoy", "{n}"],
+            name="pathhere",
+            env={"PATH": tool_dir + os.pathsep + os.environ.get("PATH", "")},
+        )
+        self.assertEqual(trial["executable"]["path"], target)
+        self.assertEqual(trial["executable"]["sha256"], runner.sha256_file(target))
+
+    def test_hash_matches_cwd_relative_executable(self):
+        target = os.path.join(self.tmp, "local-exec")
+        with open(target, "w", encoding="utf-8") as handle:
+            handle.write("#!/bin/sh\necho procs=5 result=5\n")
+        os.chmod(target, 0o755)
+        trial = self.run_ok(["./local-exec", "{n}"], name="relpath")
+        self.assertEqual(trial["executable"]["path"], target)
+
+
+class CountPrecisionTests(RunnerHarness):
+    """Counts stay exact and malformed counts never disappear."""
+
+    def test_large_count_is_not_rounded_to_float(self):
+        big = 2 ** 53 + 1
+        parsed = runner.parse_output("result=%d" % big)
+        self.assertEqual(parsed["metrics"]["result"], big)
+        self.assertEqual(
+            runner.trial_failures(
+                parsed["metrics"], parsed["conflicts"], big,
+                {"timed_out": False, "term_signal": None, "exit_status": 0},
+            ),
+            [],
+        )
+
+    def test_large_count_does_not_pass_a_neighbouring_expected_value(self):
+        big = 2 ** 53 + 1
+        parsed = runner.parse_output("result=%d" % big)
+        failures = runner.trial_failures(
+            parsed["metrics"], parsed["conflicts"], big - 1,
+            {"timed_out": False, "term_signal": None, "exit_status": 0},
+        )
+        self.assertEqual(failures, ["result_mismatch"])
+
+    def test_malformed_result_is_a_conflict_not_ignored(self):
+        parsed = runner.parse_output("result=7 result=oops")
+        self.assertEqual(parsed["metrics"]["result"], 7)
+        self.assertEqual(len(parsed["conflicts"]), 1)
+        self.assertEqual(parsed["conflicts"][0]["key"], "result")
+        failures = runner.trial_failures(
+            parsed["metrics"], parsed["conflicts"], 7,
+            {"timed_out": False, "term_signal": None, "exit_status": 0},
+        )
+        self.assertEqual(failures, ["metric_conflict"])
+
+    def test_malformed_procs_is_a_conflict(self):
+        parsed = runner.parse_output("procs=5 procs=NaN result=5")
+        self.assertIn("procs", [c["key"] for c in parsed["conflicts"]])
+
+    def test_malformed_extra_metric_is_still_tolerated(self):
+        parsed = runner.parse_output("result=5 note=n/a")
+        self.assertEqual(parsed["conflicts"], [])
+
+
+class WorkloadWallTests(RunnerHarness):
+    """Sampler teardown is not workload time."""
+
+    def test_workload_s_is_recorded_and_separate(self):
+        trial = self.run_ok(wave("spawn=1ms wave=2ms total=3ms"), name="walls")
+        self.assertIn("workload_s", trial)
+        self.assertLessEqual(trial["workload_s"], trial["wall_s"])
+        group = self.read_out("summary.json")["groups"][0]
+        self.assertIn("workload_s", group)
+        self.assertIn("workload_s", group["samples"][0])
+
+
 if __name__ == "__main__":
     unittest.main()

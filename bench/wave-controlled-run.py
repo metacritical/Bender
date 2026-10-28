@@ -13,10 +13,16 @@ Guarantees
 * Sequential trials only. One child at a time, so trials never contend.
 * ``argv`` is executed literally -- no shell -- and the manifest may only
   interpolate ``{n}``, ``{repeat}`` and ``{variant}``.
-* Exact outcome per trial: exit status, terminating signal, timeout flag and
-  wall seconds. Only on timeout does the runner kill the child, and it kills
-  the child's own process group (the child is started with
-  ``start_new_session=True``), never an unrelated process.
+* Exact outcome per trial: exit status, terminating signal, timeout flag,
+  ``workload_s`` (the child's own duration) and ``wall_s`` (total, including
+  sampler teardown). Only on timeout does the runner kill the child, and it
+  kills the child's own process group (the child is started with
+  ``start_new_session=True``), never an unrelated process. A descendant that
+  left that group is neither killed nor awaited: the post-kill pipe drain is
+  bounded and reports ``drain_timed_out`` when it gives up.
+* Counts are compared exactly. ``result`` and ``procs`` are parsed as integers,
+  never through float, and a malformed count (e.g. ``result=oops``) is recorded
+  as a metric conflict instead of being dropped.
 * Every trial keeps its stdout and stderr, plus a JSON record, and the run
   keeps an append-only ``trials.jsonl``.
 * Waves are checked for correctness, not just timing: ``result`` must equal the
@@ -101,6 +107,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 import platform
 import re
@@ -121,6 +128,14 @@ ALLOWED_PLACEHOLDERS = ("n", "repeat", "variant")
 # Bare keys emitted by bench/wave.go and bench/wave.erl mean the same thing as
 # the explicit *_ms keys emitted by bench/cross-runtime/wave.go.
 BARE_MS_KEYS = ("spawn", "wave", "total")
+# Counts a wave harness must report correctly. A malformed value for one of these
+# is a conflict, not an ignorable non-numeric token: dropping it would let
+# `result=7 result=oops` pass as a correct trial.
+COUNT_KEYS = ("result", "procs")
+# Bounded wait for the killed child's pipes. A descendant that escaped into its
+# own session can hold them open indefinitely; the drain must not wait on it, and
+# must never kill an unowned process to make progress.
+POST_KILL_DRAIN_S = 5.0
 
 # Failure kinds, in the order they are reported.
 FAILURE_TIMEOUT = "timeout"
@@ -501,21 +516,31 @@ def _parse_value(text):
         return None, None
     if text.endswith("ms") or text.endswith("MS"):
         text = text[:-2]
+    if not text:
+        return None, None
+    lowered = text.lower()
+    if "." not in text and "e" not in lowered:
+        # An integer literal is parsed as an integer so counts keep every digit.
+        # Going through float first would silently round anything above 2**53,
+        # turning a wrong result into a passing one.
+        try:
+            return int(text, 10), 1.0
+        except ValueError:
+            return None, None
     try:
         number = float(text)
     except ValueError:
         return None, None
-    lowered = text.lower()
+    if not math.isfinite(number):
+        return None, None
     if "." in text and "e" not in lowered:
         decimals = len(text.split(".", 1)[1])
         resolution = 10.0 ** -decimals
         return number, resolution
-    if "e" in lowered:
-        # Scientific notation: the mantissa decides the step.
-        mantissa = lowered.split("e", 1)[0]
-        decimals = len(mantissa.split(".", 1)[1]) if "." in mantissa else 0
-        return number, 10.0 ** -decimals
-    return int(number), 1.0
+    # Scientific notation: the mantissa decides the step.
+    mantissa = lowered.split("e", 1)[0]
+    decimals = len(mantissa.split(".", 1)[1]) if "." in mantissa else 0
+    return number, 10.0 ** -decimals
 
 
 def _json_precision(value):
@@ -582,6 +607,17 @@ def _parse_line(line, store):
         key, unit = _normalize_key(key)
         value, step = _parse_value(raw_value)
         if value is None:
+            # A malformed count must never vanish: `result=7 result=oops`
+            # would otherwise look like a correct trial. Record the disagreement
+            # so it is classified as a metric conflict.
+            if key in COUNT_KEYS:
+                store["conflicts"].append(
+                    {
+                        "key": key,
+                        "first": store["metrics"].get(key),
+                        "second": None,
+                    }
+                )
             continue
         printed = raw_value.strip()
         if printed.endswith("ms") or printed.endswith("MS"):
@@ -702,14 +738,25 @@ def _finish_sampler(sampler, timeout_s):
     return {"returncode": sampler.returncode, "error": (stderr or "").strip() or None}
 
 
-def executable_digest(argv, cwd):
+def executable_digest(argv, cwd, env=None):
+    """Hash the executable the CHILD will actually run.
+
+    Resolution uses the variant's effective environment and working directory,
+    not this process's PATH, so a variant that overrides PATH is hashed against
+    the same candidate the kernel would exec.
+    """
     if not argv:
         return {"path": None, "sha256": None, "error": "empty argv"}
     candidate = argv[0]
     if os.sep not in candidate and not os.path.isabs(candidate):
-        resolved = shutil.which(candidate) or candidate
+        path_var = None if env is None else env.get("PATH")
+        resolved = shutil.which(candidate, path=path_var) or candidate
     else:
         resolved = candidate if os.path.isabs(candidate) else os.path.join(cwd, candidate)
+    if not os.path.isabs(resolved):
+        # A bare-name lookup that failed still resolves relative to the cwd the
+        # child would run in.
+        resolved = os.path.join(cwd, resolved)
     resolved = os.path.abspath(resolved)
     if not os.path.isfile(resolved):
         return {"path": resolved, "sha256": None, "error": "not a regular file"}
@@ -719,6 +766,44 @@ def executable_digest(argv, cwd):
         "sha256": digest,
         "error": None if digest else "unreadable",
     }
+
+
+def _drain_after_kill(proc, drain_s):
+    """Collect whatever the killed group left, never waiting on an escapee.
+
+    The child's own group is killed by ``_kill_group``; a descendant that called
+    setsid() left that group and is NOT ours to kill. If such a process still
+    holds the pipes open, an unbounded ``communicate()`` blocks the runner
+    indefinitely. So the drain is bounded and reports whether it timed out
+    instead of hanging. Returns ``(stdout, stderr, drain_timed_out)``.
+    """
+    try:
+        stdout, stderr = proc.communicate(timeout=drain_s)
+        return stdout or "", stderr or "", False
+    except subprocess.TimeoutExpired as exc:
+        # Give up on pipe EOF but keep what already arrived, so a timed-out trial
+        # still explains itself. communicate() hands the buffered bytes back on
+        # the exception; anything still in the pipe is read non-blocking. The
+        # pipes go non-blocking so the process object can be reclaimed without
+        # the interpreter blocking on a pipe an unowned descendant still holds.
+        captured = []
+        buffered = (exc.output, exc.stderr)
+        for stream, have in zip((proc.stdout, proc.stderr), buffered):
+            # TimeoutExpired may carry bytes even for a text-mode child.
+            if isinstance(have, bytes):
+                text = have.decode("utf-8", "replace")
+            else:
+                text = have or ""
+            if stream is not None:
+                try:
+                    fd = stream.fileno()
+                    os.set_blocking(fd, False)
+                    chunk = os.read(fd, 1 << 20)
+                except (OSError, ValueError):
+                    chunk = b""
+                text += chunk.decode("utf-8", "replace")
+            captured.append(text)
+        return captured[0], captured[1], True
 
 
 def _execute_with_sample(argv, cwd, env, variant, trial_dir):
@@ -742,7 +827,9 @@ def _execute_with_sample(argv, cwd, env, variant, trial_dir):
             "stdout": "",
             "stderr": "",
             "wall_s": time.monotonic() - started,
+            "workload_s": time.monotonic() - started,
             "timed_out": False,
+            "drain_timed_out": False,
             "kill_error": None,
             "spawn_error": f"{type(exc).__name__}: {exc}",
             "sample_note": None,
@@ -758,12 +845,18 @@ def _execute_with_sample(argv, cwd, env, variant, trial_dir):
 
     timed_out = False
     kill_error = None
+    drain_timed_out = False
     try:
         stdout, stderr = proc.communicate(timeout=variant["timeout_s"])
     except subprocess.TimeoutExpired:
         timed_out = True
+        # The workload's own duration stops when its timeout fires; neither the
+        # kill nor the drain is workload time.
+        workload_s = time.monotonic() - started
         kill_error = _kill_group(proc.pid)
-        stdout, stderr = proc.communicate()
+        stdout, stderr, drain_timed_out = _drain_after_kill(proc, POST_KILL_DRAIN_S)
+    else:
+        workload_s = time.monotonic() - started
 
     sample_info = None
     if sampler is not None:
@@ -774,7 +867,9 @@ def _execute_with_sample(argv, cwd, env, variant, trial_dir):
         "stdout": stdout or "",
         "stderr": stderr or "",
         "wall_s": time.monotonic() - started,
+        "workload_s": workload_s,
         "timed_out": timed_out,
+        "drain_timed_out": drain_timed_out,
         "kill_error": kill_error,
         "spawn_error": None,
         "sample_note": sample_note,
@@ -839,13 +934,12 @@ def run_trial(variant, n, repeat, output_dir, executables):
     trial_dir = os.path.join(output_dir, variant["name"], f"n{n}", f"rep{repeat}")
     os.makedirs(trial_dir, exist_ok=True)
 
-    digest = executable_digest(argv, cwd)
+    env = build_env(variant["env"], variant["env_unset"])
+    digest = executable_digest(argv, cwd, env)
     executables.setdefault(digest["path"], digest["sha256"])
 
     started_at = utc_now()
-    outcome = _execute_with_sample(
-        argv, cwd, build_env(variant["env"], variant["env_unset"]), variant, trial_dir
-    )
+    outcome = _execute_with_sample(argv, cwd, env, variant, trial_dir)
     stdout, stderr = outcome["stdout"], outcome["stderr"]
     stdout_path, stderr_path = _write_logs(trial_dir, stdout, stderr)
 
@@ -864,13 +958,18 @@ def run_trial(variant, n, repeat, output_dir, executables):
         "env_overrides": variant["env"],
         "env_unset": variant["env_unset"],
         "started_at": started_at,
+        # workload_s: the child's own duration, excluding sampler teardown.
+        # wall_s: total including sampler teardown, kept for continuity with
+        # records written before this field existed.
         "wall_s": round(outcome["wall_s"], 6),
+        "workload_s": round(outcome["workload_s"], 6),
         "exit_status": fields["exit_status"],
         "term_signal": fields["term_signal"],
         "term_signal_name": (
             signal_name(fields["term_signal"]) if fields["term_signal"] else None
         ),
         "timed_out": outcome["timed_out"],
+        "drain_timed_out": outcome["drain_timed_out"],
         "timeout_s": variant["timeout_s"],
         "stdout_path": stdout_path,
         "stderr_path": stderr_path,
@@ -935,6 +1034,12 @@ def summarize(trials):
                 "ok": all(row["ok"] for row in rows),
                 "failures": sorted({k for row in rows for k in row["failures"]}),
                 "wall_s": _stats([row["wall_s"] for row in rows]),
+                "workload_s": _stats(
+                    [
+                        row.get("workload_s", row["wall_s"])
+                        for row in rows
+                    ]
+                ),
                 "metrics": metrics,
                 "metric_resolution": resolution,
                 "precision_notes": _precision_notes(resolution),
@@ -943,9 +1048,11 @@ def summarize(trials):
                         "repeat": row["repeat"],
                         "ok": row["ok"],
                         "wall_s": row["wall_s"],
+                        "workload_s": row.get("workload_s", row["wall_s"]),
                         "exit_status": row["exit_status"],
                         "term_signal": row["term_signal"],
                         "timed_out": row["timed_out"],
+                        "drain_timed_out": row.get("drain_timed_out", False),
                         "metrics": row["metrics"],
                         "metric_text": row.get("metric_text", {}),
                         "failures": row["failures"],
