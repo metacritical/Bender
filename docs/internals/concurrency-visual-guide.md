@@ -170,107 +170,96 @@ yourself today.
 
 ## 3a-bis. The same arrows, in real Lisp form
 
-The ASCII arrows in 3a are a reading aid. Here is what that notation becomes
-when you actually write it in Janet, and what Lisp FORCES it to become.
+The ASCII arrows in 3a are a reading aid. This is the notation as actual Janet
+macros -- all four verified working.
 
-### The one structural constraint
-
-`x |> ch` is **not expressible as a macro** in a Lisp. A form's head is
-evaluated (or macro-expanded) before its arguments, so `(x =>> ch)` expands to
-`(1 ch ...)` when `x` holds `1` -- "1 expects 1 argument, got 2". Janet's `|>`
-is worse still: it collides with the `|(...)|` short-function syntax and cannot
-be bound at all. Measured, this is a hard wall, not a naming problem.
-
-So the value goes on the **right** and the verbs stay in head position:
+### The macros
 
 ```janet
-(into  ch x)    ; value INTO channel      -- ev/give
-(out-of ch)     ; value OUT OF channel    -- ev/take
-(spread f xs)   ; SPREAD f over xs        -- map
-(await-n n ch)  ; AWAIT n results        -- collect
+(defmacro =>> [val chan] ~(ev/give ,chan ,val))   ; (1) INTO
+(defmacro <-- [chan]    ~(ev/take ,chan))         ; (2) OUT OF
+(defmacro *>> [f xs]    ~(map ,f ,xs))            ; (3) SPREAD
+(defmacro >>= [n chan]                            ; (4) AWAIT n
+  ~(do
+     (var _i 0)
+     (def _acc @[])
+     (while (< _i ,n)
+       (array/push _acc (ev/take ,chan))
+       (set _i (+ _i 1)))
+     _acc))
 ```
 
-Which reads as a pipeline rather than an arrow. Janet already has the threading
-macros for that:
-
-```janet
-(->> items (spread work) (into outbox))
-```
-
-### Verified reference implementation
-
-```janet
-(defn into    [ch x]  (ev/give ch x))
-(defn out-of  [ch]    (ev/take ch))
-(defn spread  [f xs]  (map f xs))
-(defn await-n [n ch]
-  (var i 0)
-  (def acc @[])
-  (while (< i n) (array/push acc (ev/take ch)) (set i (+ i 1)))
-  acc)
-```
-
-Tested output:
+Verified:
 
 ```
-out-of:  1
-spread:  @[10 20 30]
-await 2: @[2 7]
+(=> 1 ch) (=> 2 ch)   (<-- ch)  =>  1
+(*>> (fn [x] (* x 10)) [1 2 3]) =>  @[10 20 30]
+(>>= 2 out) after two gives     =>  @[7 8]
 ```
 
-### The whole two-level pattern, in Lisp
+### Why prefix, not infix
 
-This is the guide's pseudocode written honestly, and it is verified:
+`(=>> 7 out)` works; `(7 =>> out)` cannot. A Lisp evaluates a form's head first,
+so `(x =>> ch)` becomes `(1 ch ...)` once `x` holds `1`: "1 expects 1 argument,
+got 2". The macro must be in head position -- that is the whole constraint, and
+it costs nothing to obey.
+
+One caveat found the hard way: a `;` comment at the END of a line inside a
+`defmacro` form breaks the parser ("splice can only be used in function
+parameters"). Put macro comments on their own line or use `#` above it.
+
+### The whole two-level pattern, with the arrows
+
+Verified end to end; output `@[0 1 4 9 16 25 36 49]`.
 
 ```janet
 (proc/lanes-start 4)
 
 (defn work [x] (* x x))
 (def items (seq [i :range [0 8]] i))
-(def outbox (ev/thread-chan 64))          ; crosses lanes
+(def outbox (ev/thread-chan 64))          ; <> crosses lanes
 
-(defn chunk-host [job]
+(defn chunk-host []
+  (def job (proc/recv))                   ; the chunk arrives by MAIL
   (def base (job 0))
   (def xs   (job 1))
-  (def inbox (ev/chan 64))                ; SAME VM ONLY -- correct here
+  (def inbox (ev/chan 64))                ; -- this VM only
   (var i 0)
   (while (< i (length xs))
     (def idx (+ base i))
     (def x   (xs i))
-    (ev/go (fn [] (ev/give inbox [idx (work x)])))   ; DO -> INBOX
+    (ev/go (fn [] (=>> [idx (work x)] inbox)))    ; DO =>> INBOX
     (set i (+ i 1)))
   (var k 0)
   (while (< k (length xs))
-    (ev/give outbox (ev/take inbox))
+    (=>> (<-- inbox) outbox)                      ; INBOX =>> OUTBOX
     (set k (+ k 1))))
 
-;; PER PROC: hand it a chunk over the mailbox, never by capture
+;; PER PROC
 (var i 0)
 (while (< i (length items))
-  (def p (proc/spawn (fn [] (chunk-host (proc/recv))) 8))
+  (def p (proc/spawn chunk-host 8))
   (proc/send p [i (slice items i (+ i 1))])
   (set i (+ i 1)))
 
-;; @PROCS <| outbox : rebuild the answer in input order
+;; @PROCS <| outbox: rebuild in input order
 (def buf (array/new-filled (length items)))
 (var got 0)
 (while (< got (length items))
-  (def pair (ev/take outbox))
+  (def pair (<-- outbox))
   (put buf (pair 0) (pair 1))
   (set got (+ got 1)))
 
-buf    ; => @[0 1 4 9 16 25 36 49]   (verified)
+buf    ; => @[0 1 4 9 16 25 36 49]
 ```
 
-Three things this makes visible that the arrows hid:
+Three things the arrows make easier to see, and that are easy to get wrong:
 
-1. **`inbox` is created inside the proc**, so it is that VM's own channel. The
-   `--` (same-VM-only) rule is satisfied by construction -- no error, no copy.
-2. **The chunk arrives via `proc/send`**, not by closing over `items`. Capturing
-   the array would pin the proc to the current VM and silently serialise
-   everything (see 3b).
-3. **Results carry their index**, so collection order does not matter -- the
-   output array is rebuilt in input order regardless of completion order.
+1. **`inbox` is created inside the proc**, so the `--` (same-VM-only) rule holds
+   by construction -- no copy, no error.
+2. **The chunk arrives via `proc/recv`**, not by capturing `items`. A captured
+   array pins the proc to the current VM and silently serialises everything.
+3. **Results carry their index**, so completion order is irrelevant.
 
 ## 3b. Two levels, two VISIBILITY rules (the part that bites)
 
