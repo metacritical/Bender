@@ -104,9 +104,9 @@ read as a wave-phase profile.
 
 ## 7. Consequence for the packaging discrepancy
 
-**[measured]** Local N=1000 wave: 101 ms when the workload is a script, versus
-281 ms for the same source packaged as an image, and only 6-16 ms with lanes
-enabled. All arms produced correct results.
+**[measured]** Local N=1000 wave: 99-101 ms when the workload is a script,
+versus 279-282 ms for the same actor graph compiled as one top-level form, and
+only 6-16 ms with lanes enabled. All arms produced correct results.
 
 **[static]** Those two packagings differ in top-level structure, not in actor
 graph work:
@@ -119,38 +119,82 @@ graph work:
   nursery accounting plus the scoped-collection trigger are per owner
   (`src/core/vm.c:305-318`, `src/core/gc.c:2790`).
 - An image is one marshalled environment loaded and run as a single entry
-  (`src/boot/boot.janet:7055-7058`).
+  (`src/boot/boot.janet:7055-7058`), i.e. the same shape as one `do` form.
 
-So the two packagings differ in how many owners the same allocation stream is
-charged to, and therefore where scoped collections fall. Note the wave's own
-actor work happens inside spawned processes either way (they are attributed to
-the child, `src/core/proc.c:1110`), so this difference is a *plausible* cause
-of a several-fold gap, not an established one. Section 8 exists to decide it.
+### The shape is now measured, not hypothesized
 
-## 8. Discriminating packaging experiment (proposed, not yet run)
+**[measured]** A packaging control reproduced the gap by changing *only* the
+top-level compilation shape: identical actor graph, identical messages, the
+whole wave wrapped in a single `(do ...)` so it compiles as one thunk instead of
+one thunk per form. Artifact:
+`/tmp/janet-wave-evidence-35671ede/packaging-control.jsonl` (24 trials, 3
+repeats per cell, every run rc 0 with `result == n`), source
+`wave-single-do.janet`.
+
+Median wave time, forms vs single-`do`:
+
+| build | N | forms | single-do | ratio |
+|---|---|---|---|---|
+| before fix | 1000 | 99 ms | 279.6 ms | 2.82x |
+| before fix | 2000 | 406 ms | 765.0 ms | 1.88x |
+| after fix | 1000 | 8 ms | 23.0 ms | 2.88x |
+| after fix | 2000 | 33 ms | 63.2 ms | 1.92x |
+
+The single-`do` arm lands on the AOT/plain packaging numbers (281 / 777 before,
+23 / 61 after) within run-to-run noise, and the ratio is preserved on both
+builds. So the top-level compilation shape is **sufficient** to reproduce the
+gap: no static-link difference is required to explain it.
+
+**[measured, bounded]** What this shows is exactly one thing: packaging alone
+moves the number. It does **not** prove which object edge pays for it. The
+control cannot separate "more owners, so more scoped collections" from "one
+large thunk keeps a bigger live set charged to a single nursery and trips the
+threshold differently" - both are consequences of the same shape change.
+Calling it a proven GC graph-edge diagnosis would overstate this evidence.
+
+Two confounds a reviewer should record alongside the result:
+
+- **Timing precision differs between arms.** The forms arm reports `wave_ms`
+  via `%.0f` (integer milliseconds) while the control prints `%.3f`. At N=1000
+  the fixed 99 vs 279 ms gap is far outside that quantisation, so the
+  conclusion survives, but a marginal result at small N would not.
+- **Lexical scope is changed intentionally, and only in the driver.** The
+  control hoists `n`, `done`, `sink`, `head`, `i`, `t0`-`t2` inside the `do`
+  block; the spawned process bodies and the `done` channel are unchanged, and
+  the top-level `def`s are still module-level bindings reachable from child
+  closures. That is the point of the experiment - it changes driver packaging,
+  not actor wiring - but it means the arms are not byte-identical sources.
+- The trial records carry no environment field, so the lane setting for each
+  cell is not recoverable from the artifact itself.
+
+## 8. Discriminating packaging experiment (ran; results in section 7)
+
+The design below was executed as the packaging control above. Kept because the
+single-entry image arm (**E2**) has not been run: that one would separate
+"many top-level thunks" from "image packaging" as a whole.
 
 Change only packaging; keep every actor, mailbox, and message identical.
 
-**E1 - single-form script.** Copy `bench/wave.janet` unchanged and wrap the
-whole body in one `(do ...)`, producing exactly one top-level form:
+**E1 - single-form script.** Wrap the whole body in one `(do ...)`, producing
+exactly one top-level form:
 
 ```
-mkdir -p /tmp/pk && { printf '(do\n'; cat bench/wave.janet; printf '\n)\n'; } > /tmp/pk/wave-do.janet
+mkdir -p /tmp/pk && { printf '(do\n'; cat bench/cross-runtime/wave.janet; printf '\n)\n'; } > /tmp/pk/wave-do.janet
 ```
 
-Run both at N=1000, min of 3, same environment:
+Run both at N=1000, same environment, several repeats:
 
 ```
-JANET_LANES=0 JANET_NO_PROFILE=1 ./build/bender bench/wave.janet 1000
+JANET_LANES=0 JANET_NO_PROFILE=1 ./build/bender bench/cross-runtime/wave.janet 1000
 JANET_LANES=0 JANET_NO_PROFILE=1 ./build/bender /tmp/pk/wave-do.janet 1000
 ```
 
-Prediction if per-form packaging is causal: the wrapped form moves materially
-toward the image number. If both stay near 101 ms, per-form thunk count is not
-the discriminator and section 7's explanation is wrong.
+**Observed:** the wrapped form reproduces the image-arm cost (table above), so
+per-form compilation shape is causal for the gap.
 
-**E2 - image with a single entry.** Take the same wrapped body, put it inside
-`(defn main [& args] (do ...))`, build with `-c`, and run the image:
+**E2 - image with a single entry (not yet run).** Take the same wrapped body,
+put it inside `(defn main [& args] (do ...))`, build with `-c`, and run the
+image:
 
 ```
 ./build/bender -c /tmp/pk/wave-main.janet /tmp/pk/wave-main.jimage
