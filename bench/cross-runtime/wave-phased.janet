@@ -174,8 +174,7 @@
 # The span between spawn_end and wave_start is reported separately as
 # label_lag_us rather than folded into either interval.
 (def wave_start (now-us))
-(eprintf "phase=wave-start wave_start_us=%d label_lag_us=%d"
-         wave_start (- wave_start spawn_end))
+(eprintf "phase=wave-start wave_start_us=%d" wave_start)
 (proc/send head 0)
 (def result (ev/take done))
 (def wave_end (now-us))
@@ -190,24 +189,8 @@
 # worker VMs actually up. Neither says where an individual actor ran.
 (def requested-lanes (or (scan-number (os/getenv "JANET_LANES")) 0))
 (def active-lanes (proc/lanes))
-(def self-proc (proc/self))
-(def self-pid (if (nil? self-proc) nil (proc/self-pid)))
-# The lane slot of the pid tuple is structural (hardcoded 1 in proc.c), so it
-# is reported under a name that cannot be mistaken for runtime placement.
-(def pid-shape-lane-field
-  (if (and (tuple? self-pid) (>= (length self-pid) 3))
-    (get self-pid 1)
-    nil))
-
 (eprintf "lanes=%d requested_lanes=%d placement=unknown"
         active-lanes requested-lanes)
-(eprintf "placement_note=%s"
-        (string "runtime exposes no per-actor lane identity; "
-                "proc/self-pid lane field is structural, not the executing lane"))
-(eprintf "self_in_proc=%s pid_shape_lane_field=%s"
-        (if (nil? self-proc) "false" "true")
-        (if (nil? pid-shape-lane-field) "nil"
-            (string pid-shape-lane-field)))
 
 # --- clock sanity gate ------------------------------------------------------
 # Cheap regression guard for the tuple-scale bug: with seconds scaled as ms
