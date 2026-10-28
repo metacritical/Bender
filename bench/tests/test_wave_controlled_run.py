@@ -22,9 +22,19 @@ SCRIPT = os.path.join(os.path.dirname(HERE), "wave-controlled-run.py")
 
 
 def load_runner():
+    """Import the runner from its hyphenated filename, without writing bytecode.
+
+    Importing a file in ``bench/`` would otherwise leave ``bench/__pycache__``
+    in the tree; the runner is loaded for every test module, so suppress it.
+    """
     spec = importlib.util.spec_from_file_location("wave_controlled_run", SCRIPT)
     module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+    previous = sys.dont_write_bytecode
+    sys.dont_write_bytecode = True
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        sys.dont_write_bytecode = previous
     return module
 
 
