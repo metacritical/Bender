@@ -1159,22 +1159,18 @@ void janet_sweep(void) {
 /* Page size is a power of two so janet_slab_page_for can mask a pointer down
  * to its page base.
  *
- * 16 KB, not one OS page. Shrinking to 4 KB cut per-process memory 34 KB ->
- * 10 KB, but it quadrupled the page DIRECTORY for the same live bytes, and the
- * directory is a sorted ARRAY: every pointer -> page lookup (janet_slab_obj_old,
- * owner lookup, every write barrier) pays a binary search whose depth grows
- * with the directory, and every page claim pays an O(n) insertion memmove.
- * On a real game that cost is not a constant: it scales with heap size, so an
- * interpreter run with the implicit profiler on (which adds per-function
- * evidence tables and therefore pages) degraded progressively -- 24 FPS with
- * 134 frames over 100 ms at 6000 frames, versus 120 FPS and 1 stall for the
- * same run at 16 KB. Without the profiler both sizes were comparable, which is
- * the tell: this is a heap-size-sensitive lookup cost, not a per-process
- * memory trade. Per-process memory is recovered by keeping pages small only
- * for the FIRST claim if the directory problem is ever fixed properly; until
- * then 16 KB is the safe default. */
-#define JANET_SLAB_PAGE_SIZE 16384
-#define JANET_SLAB_PAGE_MASK (~(uintptr_t)0x3FFF)
+ * 4 KB (one OS page): a fresh process costs ~4 KB of slab instead of ~16 KB,
+ * which is what makes the per-process memory target (~10 KB) reachable.
+ *
+ * This is safe again because the page table is now a hash set rather than a
+ * sorted array. Shrinking the page multiplies the number of pages for the
+ * same live bytes; against a sorted array that deepened every lookup and
+ * every claim, and a real game degraded to 24 FPS with 134 stalled frames.
+ * With O(1) lookup the page size is purely a memory trade, so the small page
+ * is the right default. Do not reintroduce an ordered structure here without
+ * re-measuring that game. */
+#define JANET_SLAB_PAGE_SIZE 4096
+#define JANET_SLAB_PAGE_MASK (~(uintptr_t)0xFFF)
 #define JANET_SLAB_MAGIC 0x4A534C41u
 #define JANET_SLAB_OLD_AGE 2
 
@@ -1365,63 +1361,113 @@ static void janet_slab_page_free(void *page) {
 
 /* Page owning ptr, or NULL (malloc-backed large object, a stack object,
  * or foreign memory -- all treated as old). Membership is established by
- * binary search over the live-page directory first, so the header probe
- * below only ever reads our own mapped pages; the magic + bounds checks
- * then keep the mapping exact. */
-static JanetSlabPage *janet_slab_page_for(void *ptr) {
-    JanetSlabState *ss = (JanetSlabState *) janet_vm.slab_state;
-    if (NULL == ss || 0 == ss->dir_count) return NULL;
-    uintptr_t base = (uintptr_t) ptr & JANET_SLAB_PAGE_MASK;
-    size_t lo = 0, hi = ss->dir_count;
-    while (lo < hi) {
-        size_t mid = lo + (hi - lo) / 2;
-        uintptr_t midbase = (uintptr_t) ss->dir[mid];
-        if (midbase < base) {
-            lo = mid + 1;
-        } else if (midbase > base) {
-            hi = mid;
-        } else {
-            JanetSlabPage *page = (JanetSlabPage *) base;
-            if (page->magic != JANET_SLAB_MAGIC) return NULL;
-            if (page->class_index < 0 || page->class_index >= JANET_SLAB_NCLASSES) return NULL;
-            if (page->bump < 0 || (size_t) page->bump > (size_t) JANET_SLAB_USABLE) return NULL;
-            if ((char *) ptr < (char *) JANET_SLAB_SLOTS(page)) return NULL;
-            if ((char *) ptr >= (char *) base + JANET_SLAB_PAGE_SIZE) return NULL;
-            return page;
-        }
-    }
-    return NULL;
+ * an open-addressed hash probe over the live-page table first, so the
+ * header probe below only ever reads our own mapped pages; the magic +
+ * bounds checks then keep the mapping exact.
+ *
+ * This table was a SORTED ARRAY with binary search until the 4 KB page
+ * experiment exposed why that is the wrong shape. Page count scales with
+ * heap size / page size, so a smaller page silently multiplied the cost
+ * of EVERY object-leaf query -- owner, age, and the write barrier -- by
+ * deepening the search, and every claim paid an O(n) insertion memmove.
+ * A game holding a few hundred MB therefore ran progressively slower the
+ * longer it played, which read as the GC "getting stuck".
+ *
+ * The table is now a grow-only open-addressed pointer set: O(1) expected
+ * lookup and insert regardless of heap size, so page size is once again
+ * purely a memory trade and not a speed one. Growth is amortized (capacity
+ * doubles, and a rehash is a linear pass with no free/realloc per entry).
+ * Pages are never removed individually -- they are released en-masse at
+ * clear -- so no tombstones or deletion path are needed; an empty slot is
+ * simply NULL. */
+#define JANET_SLAB_DIR_EMPTY ((JanetSlabPage *) NULL)
+#define JANET_SLAB_DIR_MINCAP 64u
+
+/* Multiplicative mix: page bases are page-aligned, so the low bits are
+ * constant and must be discarded before they dominate the bucket index. */
+static size_t janet_slab_dir_hash(uintptr_t base) {
+    uint64_t h = (uint64_t) (base >> 12);
+    h ^= h >> 33;
+    h *= 0xff51afd7ed558ccdULL;
+    h ^= h >> 33;
+    h *= 0xc4ceb9fe1a85ec53ULL;
+    h ^= h >> 33;
+    return (size_t) h;
 }
 
-/* Insert a page into the sorted directory. Returns 0 on OOM (caller
- * must drop the page). Raw allocation only. */
-static int janet_slab_dir_insert(JanetSlabPage *page) {
-    JanetSlabState *ss = (JanetSlabState *) janet_vm.slab_state;
-    size_t lo = 0, hi = ss->dir_count;
-    uintptr_t base = (uintptr_t) page;
-    while (lo < hi) {
-        size_t mid = lo + (hi - lo) / 2;
-        if ((uintptr_t) ss->dir[mid] < base) {
-            lo = mid + 1;
-        } else {
-            hi = mid;
+static JanetSlabPage *janet_slab_dir_lookup(JanetSlabState *ss, uintptr_t base) {
+    size_t mask = (size_t) ss->dir_cap - 1;
+    size_t i = janet_slab_dir_hash(base) & mask;
+    for (;;) {
+        JanetSlabPage *slot = ss->dir[i];
+        if (NULL == slot) return NULL;                 /* empty: absent */
+        if ((uintptr_t) slot == base) return slot;
+        i = (i + 1) & mask;                            /* linear probe */
+    }
+}
+
+/* Rehash into ncap (a power of two >= dir_count). Returns 0 on OOM, in
+ * which case the old table is untouched. Raw allocation only. */
+static int janet_slab_dir_grow(JanetSlabState *ss, size_t ncap) {
+    JanetSlabPage **ntab = janet_calloc(ncap, sizeof(JanetSlabPage *));
+    size_t i;
+    if (NULL == ntab) return 0;
+    for (i = 0; i < ss->dir_cap; i++) {
+        JanetSlabPage *page = ss->dir[i];
+        if (NULL == page) continue;
+        {
+            size_t mask = ncap - 1;
+            size_t j = janet_slab_dir_hash((uintptr_t) page) & mask;
+            while (NULL != ntab[j]) j = (j + 1) & mask;
+            ntab[j] = page;
         }
     }
-    if (ss->dir_count == ss->dir_cap) {
-        size_t ncap = ss->dir_cap ? ss->dir_cap * 2 : 16;
-        JanetSlabPage **ndir = janet_malloc(ncap * sizeof(JanetSlabPage *));
-        if (NULL == ndir) return 0;
-        memcpy(ndir, ss->dir, lo * sizeof(JanetSlabPage *));
-        memcpy(ndir + lo + 1, ss->dir + lo, (ss->dir_count - lo) * sizeof(JanetSlabPage *));
-        janet_free(ss->dir);
-        ss->dir = ndir;
-        ss->dir_cap = ncap;
-    } else {
-        memmove(ss->dir + lo + 1, ss->dir + lo, (ss->dir_count - lo) * sizeof(JanetSlabPage *));
+    janet_free(ss->dir);
+    ss->dir = ntab;
+    ss->dir_cap = ncap;
+    return 1;
+}
+
+/* Insert a page into the table. Returns 0 on OOM (caller must drop the
+ * page). Raw allocation only. */
+static int janet_slab_dir_insert(JanetSlabPage *page) {
+    JanetSlabState *ss = (JanetSlabState *) janet_vm.slab_state;
+    uintptr_t base = (uintptr_t) page;
+    /* Keep load factor <= 1/2 so probe chains stay short. */
+    if (0 == ss->dir_cap) {
+        if (!janet_slab_dir_grow(ss, JANET_SLAB_DIR_MINCAP)) return 0;
+    } else if ((ss->dir_count + 1) * 2 > ss->dir_cap) {
+        if (!janet_slab_dir_grow(ss, ss->dir_cap * 2)) return 0;
     }
-    ss->dir[lo] = page;
+    {
+        size_t mask = (size_t) ss->dir_cap - 1;
+        size_t i = janet_slab_dir_hash(base) & mask;
+        while (NULL != ss->dir[i]) {
+            /* Identical insert would only happen on a double-claim bug;
+             * treat it as success so the caller keeps one entry. */
+            if ((uintptr_t) ss->dir[i] == base) return 1;
+            i = (i + 1) & mask;
+        }
+        ss->dir[i] = page;
+    }
     ss->dir_count++;
     return 1;
+}
+
+static JanetSlabPage *janet_slab_page_for(void *ptr) {
+    JanetSlabState *ss = (JanetSlabState *) janet_vm.slab_state;
+    JanetSlabPage *page;
+    uintptr_t base;
+    if (NULL == ss || 0 == ss->dir_count) return NULL;
+    base = (uintptr_t) ptr & JANET_SLAB_PAGE_MASK;
+    page = janet_slab_dir_lookup(ss, base);
+    if (NULL == page) return NULL;
+    if (page->magic != JANET_SLAB_MAGIC) return NULL;
+    if (page->class_index < 0 || page->class_index >= JANET_SLAB_NCLASSES) return NULL;
+    if (page->bump < 0 || (size_t) page->bump > (size_t) JANET_SLAB_USABLE) return NULL;
+    if ((char *) ptr < (char *) JANET_SLAB_SLOTS(page)) return NULL;
+    if ((char *) ptr >= (char *) base + JANET_SLAB_PAGE_SIZE) return NULL;
+    return page;
 }
 
 /* Object age for GC purposes: young pages hold only young objects (see
@@ -1847,6 +1893,47 @@ static void janet_sweep_kind(int kind, int is_minor, uint32_t only_owner,
  * lists, total == block_count; no cycles (bounded walk); fiber
  * objects only in globals (filing invariant). O(world); runs after
  * sweeps when enabled. */
+/* Debug aid for the page table. A table bug is FAIL-SAFE, not corrupting:
+ * an absent entry makes the page's objects look old, so they are retained
+ * rather than freed-while-live. Correctness tests therefore cannot catch a
+ * lost entry -- but the leak is real (live slots are never recycled) and
+ * shows up as RSS ratcheting across churn. This audit is the direct check:
+ * every page on every class list must be findable through the table, and
+ * every occupied slot must resolve back to its own page. Only runs under
+ * JANET_HEAP_VERIFY, so it costs nothing in normal builds. */
+static void janet_slab_dir_verify(const char *where) {
+    JanetSlabState *ss = (JanetSlabState *) janet_vm.slab_state;
+    size_t listed = 0, c;
+    int cls;
+    if (NULL == ss) return;
+    for (cls = 0; cls < JANET_SLAB_NCLASSES; cls++) {
+        JanetSlabPage *page;
+        for (page = ss->pages[cls]; NULL != page; page = page->next) {
+            listed++;
+            if (janet_slab_dir_lookup(ss, (uintptr_t) page) != page) {
+                fprintf(stderr,
+                        "slab-dir(%s): page %p class %d NOT findable\n",
+                        where, (void *) page, cls);
+                abort();
+            }
+        }
+    }
+    if (listed != ss->dir_count) {
+        fprintf(stderr, "slab-dir(%s): %zu pages listed, %zu table entries\n",
+                where, listed, ss->dir_count);
+        abort();
+    }
+    for (c = 0; c < ss->dir_cap; c++) {
+        JanetSlabPage *page = ss->dir[c];
+        if (NULL == page) continue;
+        if (janet_slab_dir_lookup(ss, (uintptr_t) page) != page) {
+            fprintf(stderr, "slab-dir(%s): unreachable entry %p\n",
+                    where, (void *) page);
+            abort();
+        }
+    }
+}
+
 static void janet_heap_verify(const char *where) {
     static int verify = -1;
     size_t total = 0;
@@ -1854,6 +1941,7 @@ static void janet_heap_verify(const char *where) {
     int kind;
     if (-1 == verify) verify = (NULL != getenv("JANET_HEAP_VERIFY")) ? 1 : 0;
     if (!verify) return;
+    janet_slab_dir_verify(where);
     for (kind = 0; kind < 3; kind++) {
         JanetGCObject *ghead;
         JanetSlabState *ss = (JanetSlabState *) janet_vm.slab_state;
