@@ -3649,6 +3649,21 @@
 ### P-lanes: VM-per-core proc parallelism
 ###
 
+(defn proc/spawn
+  "Spawn a zero-argument process with mailbox capacity (default 16).
+  Returns a local proc or a routed [:pid lane serial ctl] handle. Mutable
+  captures keep their existing local placement. Routed backpressure waits
+  for the control-channel write before returning the saved PID."
+  [entry &opt capacity]
+  (def prepared (if (nil? capacity)
+                  (proc/spawn-prepare entry)
+                  (proc/spawn-prepare entry capacity)))
+  (if (and (tuple? prepared) (= :proc-spawn-write (get prepared 0)))
+    (do (def pid (get prepared 1))
+        (ev/give (get prepared 2) (get prepared 3))
+        pid)
+    prepared))
+
 (defn proc/lane-worker
   "Resident dispatcher for one proc lane. Takes one launch tuple
   [ctl lane-id aff]: `ctl` is the lane's threaded control channel;

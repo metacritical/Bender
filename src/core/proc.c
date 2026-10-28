@@ -323,15 +323,23 @@ static Janet janet_proc_spawn_routed(JanetFunction *func, int32_t cap) {
         }
         /* try-push refused (full): fall through to the ctl path */
     }
-    if (janet_channel_push(ctl, spawn_msg, 0)) {
-        janet_await(); /* ctl full: resumed when the push lands */
-    }
+    /* Try-mode never parks: preserve the immediate path when accepted. */
+    int needs_write = janet_channel_push(ctl, spawn_msg, 3);
     Janet tup[4];
     tup[0] = janet_ckeywordv("pid");
     tup[1] = janet_wrap_number((double) (lane + 1));
     tup[2] = janet_wrap_number((double) serial);
     tup[3] = janet_wrap_abstract(ctl);
-    return janet_wrap_tuple(janet_tuple_n(tup, 4));
+    Janet pid = janet_wrap_tuple(janet_tuple_n(tup, 4));
+    if (!needs_write) return pid;
+    /* A parked C write resumes with its channel, not at this C frame.
+     * The boot wrapper retains the intended pid across its blocking give. */
+    Janet plan[4];
+    plan[0] = janet_ckeywordv("proc-spawn-write");
+    plan[1] = pid;
+    plan[2] = janet_wrap_abstract(ctl);
+    plan[3] = spawn_msg;
+    return janet_wrap_tuple(janet_tuple_n(plan, 4));
 }
 
 /* Worker-local: spawn-serial -> local proc abstract. */
@@ -1242,20 +1250,11 @@ static Janet cfun_proc_spawn_impl(JanetFunction *func, int32_t cap, int isolated
 }
 
 JANET_CORE_FN(cfun_proc_spawn,
-              "(proc/spawn thunk &opt capacity)",
-              "Spawn a raw process: schedule 0-argument `thunk` as a "
-              "fiber on this lane's event loop with an owned isolated "
-              "mailbox (capacity `capacity`, default 16). The process "
-              "reads its own mailbox with proc/recv and learns itself "
-              "via proc/self. Returns the proc (a core/proc distinct "
-              "type; refuses marshal — same-VM only). The historic O(n^2) "
-              "hazard for keeping every handle in one flat array is GONE: the "
-              "child env no longer proto-chains to the spawner (see "
-              "docs/internals/proc-lanes.md) and a flat-array spawn burst now "
-              "measures linear (2k/5k/10k procs in 212/234/274 ms). Keeping "
-              "handles in an array to join on them is safe. With lanes active "
-              "the handle is a [:pid lane serial ctl] tuple instead of an "
-              "object -- see docs/internals/lanes-and-captured-state.md.") {
+              "(proc/spawn-prepare thunk &opt capacity)",
+              "Internal primitive for proc/spawn; not a stable public API. "
+              "Returns a local or accepted routed handle, or an internal "
+              "[:proc-spawn-write pid ctl message] plan. The boot wrapper "
+              "must complete that blocking write before returning pid.") {
     janet_arity(argc, 1, 2);
     JanetFunction *func = janet_getfunction(argv, 0);
     if (func->def->min_arity > 0) {
@@ -1833,7 +1832,7 @@ JANET_CORE_FN(cfun_proc_killed,
 }
 
 static const JanetRegExt proc_cfuns_ext[] = {
-    JANET_CORE_REG("proc/spawn", cfun_proc_spawn),
+    JANET_CORE_REG("proc/spawn-prepare", cfun_proc_spawn),
     JANET_CORE_REG("proc/spawn-isolated", cfun_proc_spawn_isolated),
         JANET_CORE_REG("proc/self-pid", cfun_proc_self_pid),
         JANET_CORE_REG("proc/spawn-local", cfun_proc_spawn_local),
