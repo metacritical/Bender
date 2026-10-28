@@ -372,11 +372,23 @@ lanes=4, so the tax is not caused by anything the proc body allocates. And lane
 construction already shares young pages (5c), so it is not the construction
 allocator either.
 
-That leaves the structural cost of a proc LIVING on a lane: per-lane heap
-residency plus a native stack commitment, paid whether or not the proc does
-work. Pinning down which of the two dominates needs a heap/stack-level
-instrument (RSS alone cannot separate them), which is the next step and not
-something to guess at.
+Also ruled out since: lane re-routing inside the worker's spawn handler
+(switching it to proc/spawn-local changed nothing), queue backpressure (pacing
+spawns with ev/pump changed nothing), and lane VM fixed overhead (an idle
+4-lane VM is 5 MB, while the tax at n=20000 is 126 MB, so it is per-process).
+
+**The slab design is NOT the problem, and this is worth stating because it is
+the natural suspicion.** Slabs are per-VM with owner attribution, not per-proc;
+shared_stack is ON by default for proc fibers; and lane-side construction
+already routes through the shared page cursor. The same proc costs 1.64 KB when
+spawned with `proc/spawn-local` even while lanes are running, and 6.63 KB when
+routed with `proc/spawn` -- same process, same VM, same allocator. So the cost
+enters somewhere in the routed path, not in the process representation.
+
+Remaining instrument needed: count live slab pages and native-stack bytes on a
+lane VM before/after N routed spawns. That separates heap from stack directly,
+which RSS cannot. Until that runs, the honest statement is: single-VM procs are
+1.6 KB, lane-routed procs are ~6.6 KB, and the delta is in the routing path.
 
 Not yet diagnosed: which part of the lane path allocates. Candidates worth
 measuring next: the marshal transit buffer created per routed spawn (the
