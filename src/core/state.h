@@ -256,6 +256,9 @@ struct JanetVM {
     size_t gc_interval;
     size_t next_collection;
     size_t block_count;
+    /* Post-major survivors; current uncollected garbage cannot raise the
+     * next major's pressure budget. */
+    size_t gc_major_live_blocks;
     int gc_suspend;
     int gc_mark_phase;
     /* Generational collection (Phase 2b-iii policy): minor collections run

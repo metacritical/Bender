@@ -3354,6 +3354,7 @@ void janet_collect(void) {
     janet_mark_roots();
     janet_vm.gc_mark_phase = 0;
     janet_sweep();
+    janet_vm.gc_major_live_blocks = janet_vm.block_count;
     janet_vm.next_collection = 0;
     /* NOTE (Phase 2a root discipline): scratch memory is deliberately NOT
      * reclaimed here. Scratch lifetimes belong to their C scopes (compile
@@ -3591,6 +3592,7 @@ void janet_clear_memory(void) {
     /* With no live objects left, drop the slab pages themselves (frees
      * directory + freelists with them; fresh pages on next use). */
     janet_slab_free_pages();
+    janet_vm.gc_major_live_blocks = 0;
     janet_free_all_scratch();
     janet_free(janet_vm.scratch_mem);
 }

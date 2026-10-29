@@ -304,7 +304,10 @@ static void janet_site_dump(void) {
 #define JANET_FULL_SCALE 1024
 #define maybe_collect() do {\
     JanetFiber *mcf_ = janet_vm.fiber; \
-    if (JANET_UNLIKELY(NULL != mcf_ && mcf_->gc_nursery_bytes >= janet_vm.gc_minor_threshold)) { \
+    /* Check global major pressure before the scaled nursery branches. */ \
+    if (JANET_UNLIKELY(janet_vm.next_collection >= janet_vm.gc_interval \
+            + janet_vm.gc_major_live_blocks * JANET_FULL_SCALE)) janet_collect(); \
+    else if (JANET_UNLIKELY(NULL != mcf_ && mcf_->gc_nursery_bytes >= janet_vm.gc_minor_threshold)) { \
         size_t fth_ = janet_vm.gc_minor_threshold; \
         if (!(mcf_->heap_strict && NULL != mcf_->proc)) { \
             fth_ += (size_t) janet_vm.block_count * JANET_FIBER_MINOR_SCALE; \
@@ -313,9 +316,7 @@ static void janet_site_dump(void) {
             if (mcf_->heap_strict && NULL != mcf_->proc) janet_collect_process(mcf_->proc); \
             else janet_collect_fiber_minor(mcf_); } } \
     else if (JANET_UNLIKELY(janet_vm.gc_young_bytes >= janet_vm.gc_minor_threshold \
-            + (size_t) janet_vm.block_count * JANET_FIBER_MINOR_SCALE)) janet_collect_minor(); \
-    else if (JANET_UNLIKELY(janet_vm.next_collection >= janet_vm.gc_interval \
-            + (size_t) janet_vm.block_count * JANET_FULL_SCALE)) janet_collect(); } while (0)
+            + (size_t) janet_vm.block_count * JANET_FIBER_MINOR_SCALE)) janet_collect_minor(); } while (0)
 #define vm_checkgc_next() maybe_collect(); vm_next()
 #define vm_pcnext() pc++; vm_next()
 #define vm_checkgc_pcnext() maybe_collect(); vm_pcnext()
@@ -3671,6 +3672,7 @@ int janet_init(void) {
     janet_vm.next_collection = 0;
     janet_vm.gc_interval = 0x400000;
     janet_vm.block_count = 0;
+    janet_vm.gc_major_live_blocks = 0;
     janet_vm.gc_mark_phase = 0;
     /* Generational policy (Phase 2b-iii): minors run on nursery pressure. */
     janet_vm.gc_minor_phase = 0;
