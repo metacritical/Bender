@@ -231,6 +231,40 @@ static int32_t bender_proc_find_mutable_capture(BenderFunction *func) {
     return -1;
 }
 
+/* Dependency-aware placement: a closure that captures a pid tuple is
+ * usually spawning a child that will communicate with that pid. Keep the
+ * child on the captured pid's lane, like OTP placing a spawned process on
+ * the current scheduler. Round-robin remains for independent spawns. */
+static int32_t bender_proc_find_pid_lane(BenderFunction *func) {
+    if (NULL == func || NULL == func->def) return 0;
+    int32_t numenvs = func->def->environments_length;
+    for (int32_t e = 0; e < numenvs; e++) {
+        BenderFuncEnv *env = func->envs[e];
+        if (NULL == env) continue;
+        int32_t len = env->length;
+        for (int32_t i = 0; i < len; i++) {
+            Bender v;
+            if (env->offset > 0 && NULL != env->as.fiber) {
+                v = env->as.fiber->data[env->offset + i];
+            } else if (NULL != env->as.values) {
+                v = env->as.values[i];
+            } else {
+                continue;
+            }
+            if (!bender_checktype(v, BENDER_TUPLE)) continue;
+            const Bender *tup = bender_unwrap_tuple(v);
+            if (4 != bender_tuple_length(tup)) continue;
+            if (!bender_checktype(tup[0], BENDER_KEYWORD) ||
+                    bender_unwrap_keyword(tup[0]) !=
+                    bender_unwrap_keyword(bender_ckeywordv("pid"))) continue;
+            if (!bender_checktype(tup[1], BENDER_NUMBER)) continue;
+            int32_t lane = (int32_t) bender_unwrap_number(tup[1]);
+            if (lane > 0 && lane <= 64) return lane;
+        }
+    }
+    return 0;
+}
+
 static Bender bender_proc_spawn_routed(BenderFunction *func, int32_t cap) {
     bender_lanes_maybe_autostart();
     if (0 == bender_lane_count) return cfun_proc_spawn_impl(func, cap, 0);
@@ -255,8 +289,11 @@ static Bender bender_proc_spawn_routed(BenderFunction *func, int32_t cap) {
         }
         return cfun_proc_spawn_impl(func, cap, 0);
     }
-    int32_t lane = (bender_lane_rr % bender_lane_count);
-    bender_lane_rr++;
+    int32_t preferred = bender_proc_find_pid_lane(func);
+    int32_t lane = (preferred > 0 && preferred <= bender_lane_count)
+        ? (preferred - 1)
+        : (bender_lane_rr % bender_lane_count);
+    if (preferred <= 0) bender_lane_rr++;
     BenderChannel *ctl = bender_lane_ctls[lane];
     uint32_t serial = bender_proc_next_serial();
     /* Bulk fan-out flow control.
