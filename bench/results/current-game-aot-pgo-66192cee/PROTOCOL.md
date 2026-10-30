@@ -26,4 +26,6 @@ Initial host inspection found substantial unrelated activity (including a live T
 
 ## Status
 
-Preparation only. No new performance result or verified native compilation is claimed by this protocol.
+Preparation only. The isolated native-enabled runtime support build succeeded; this is not an AOT game artifact and does not establish any emitted game kernel. Game AOT compilation, PGO training/release and sequential benchmarking remain unstarted. No new performance result is claimed by this prospective protocol.
+
+The saved-world manifest entries are relative to the slot directory `worlds-v1/15f2268da8ec2a4105ef2deaf6ae0b19`, not the world root. Its three subdirectories are snapshots of that same slot, not other slots. Workload verification must use this exact root mapping.
