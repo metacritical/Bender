@@ -1,0 +1,77 @@
+{
+  "schema": "janet/benchmark-capture/1",
+  "label": "runtime-build-pinned-v2",
+  "complete": true,
+  "evidence_dir": "/Users/pankajdoharey/Development/Projects/janet/bench/results/current-game-aot-pgo-66192cee/runtime-build-pinned-v2",
+  "command": {
+    "argv": [
+      "make",
+      "-B",
+      "NATIVE_EXECUTORS=1",
+      "JANET_BUILD=\"66192cee\"",
+      "-j4"
+    ],
+    "cwd": "/Users/pankajdoharey/Development/Projects/janet/build/current-game-aot-pgo-66192cee/runtime",
+    "stdin": "devnull",
+    "env_overrides": {
+      "JANET_NO_PROFILE": "1",
+      "JANET_LANES": "0",
+      "XDG_CACHE_HOME": "/Users/pankajdoharey/Development/Projects/janet/build/current-game-aot-pgo-66192cee/cache-runtime-pinned"
+    },
+    "executable": {
+      "path": "/usr/bin/make",
+      "sha256": "b8763cf250e607a778bb4603cecb5b90338814d0a3dfcba0d57b1de242f610e9",
+      "bytes": 118640,
+      "error": null
+    }
+  },
+  "timing": {
+    "started_at": "2026-10-30T09:03:23.275908+00:00",
+    "finished_at": "2026-10-30T09:03:24.624722+00:00",
+    "wall_s": 1.348332,
+    "wall_includes_wrapper": false
+  },
+  "result": {
+    "kind": "exited",
+    "exit_status": 2,
+    "signal": null,
+    "signal_name": null,
+    "spawn_error": null
+  },
+  "timeout": {
+    "seconds": null,
+    "expired": false,
+    "kill_signal": null,
+    "kill_error": null
+  },
+  "streams": {
+    "stdout": {
+      "file": "stdout.log",
+      "sha256": "80c0bd3ab7b36ed7c3312718206abbbbb1bced6f44a9622696e642a4c520811f",
+      "bytes": 2096
+    },
+    "stderr": {
+      "file": "stderr.log",
+      "sha256": "4741054cad075136178adf5c213d63a680f56756d4fe8141b18fe5a5a9fe1940",
+      "bytes": 1359
+    }
+  },
+  "resource": {
+    "source": "wait4 rusage",
+    "maxrss_raw": 58540032,
+    "maxrss_unit": "bytes",
+    "maxrss_bytes": 58540032,
+    "utime_s": 0.874902,
+    "stime_s": 0.790624,
+    "page_reclaims": 54550,
+    "page_faults": 4198,
+    "swaps": 0,
+    "block_input_ops": 0,
+    "block_output_ops": 0,
+    "messages_sent": 0,
+    "messages_received": 0,
+    "signals_received": 18,
+    "voluntary_context_switches": 896,
+    "involuntary_context_switches": 29325
+  }
+}

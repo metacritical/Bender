@@ -1,0 +1,12 @@
+cc -DJANET_BOOTSTRAP -DJANET_BUILD=66192cee -O0 -std=c99 -Wall -Wextra -Isrc/include -Isrc/conf -fvisibility=hidden -fPIC -g -o build/core/abstract.boot.o -c src/core/abstract.c
+cc -DJANET_BOOTSTRAP -DJANET_BUILD=66192cee -O0 -std=c99 -Wall -Wextra -Isrc/include -Isrc/conf -fvisibility=hidden -fPIC -g -o build/core/array.boot.o -c src/core/array.c
+cc -DJANET_BOOTSTRAP -DJANET_BUILD=66192cee -O0 -std=c99 -Wall -Wextra -Isrc/include -Isrc/conf -fvisibility=hidden -fPIC -g -o build/core/asm.boot.o -c src/core/asm.c
+cc -DJANET_BOOTSTRAP -DJANET_BUILD=66192cee -O0 -std=c99 -Wall -Wextra -Isrc/include -Isrc/conf -fvisibility=hidden -fPIC -g -o build/core/buffer.boot.o -c src/core/buffer.c
+cc -DJANET_BOOTSTRAP -DJANET_BUILD=66192cee -O0 -std=c99 -Wall -Wextra -Isrc/include -Isrc/conf -fvisibility=hidden -fPIC -g -o build/core/bytecode.boot.o -c src/core/bytecode.c
+cc -DJANET_BOOTSTRAP -DJANET_BUILD=66192cee -O0 -std=c99 -Wall -Wextra -Isrc/include -Isrc/conf -fvisibility=hidden -fPIC -g -o build/core/capi.boot.o -c src/core/capi.c
+cc -DJANET_BOOTSTRAP -DJANET_BUILD=66192cee -O0 -std=c99 -Wall -Wextra -Isrc/include -Isrc/conf -fvisibility=hidden -fPIC -g -o build/core/cfuns.boot.o -c src/core/cfuns.c
+cc -DJANET_BOOTSTRAP -DJANET_BUILD=66192cee -O0 -std=c99 -Wall -Wextra -Isrc/include -Isrc/conf -fvisibility=hidden -fPIC -g -o build/core/compile.boot.o -c src/core/compile.c
+cc -DJANET_BOOTSTRAP -DJANET_BUILD=66192cee -O0 -std=c99 -Wall -Wextra -Isrc/include -Isrc/conf -fvisibility=hidden -fPIC -g -o build/core/corelib.boot.o -c src/core/corelib.c
+cc -DJANET_BOOTSTRAP -DJANET_BUILD=66192cee -O0 -std=c99 -Wall -Wextra -Isrc/include -Isrc/conf -fvisibility=hidden -fPIC -g -o build/core/debug.boot.o -c src/core/debug.c
+cc -DJANET_BOOTSTRAP -DJANET_BUILD=66192cee -O0 -std=c99 -Wall -Wextra -Isrc/include -Isrc/conf -fvisibility=hidden -fPIC -g -o build/core/emit.boot.o -c src/core/emit.c
+cc -DJANET_BOOTSTRAP -DJANET_BUILD=66192cee -O0 -std=c99 -Wall -Wextra -Isrc/include -Isrc/conf -fvisibility=hidden -fPIC -g -o build/core/ev.boot.o -c src/core/ev.c

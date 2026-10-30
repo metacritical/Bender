@@ -1,0 +1,26 @@
+src/core/abstract.c:265:13: warning: unused function 'janet_abstract_release_cb' [-Wunused-function]
+  265 | static void janet_abstract_release_cb(JanetEVGenericMessage msg) {
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~
+1 warning generated.
+src/core/corelib.c:1384:50: error: invalid digit 'c' in decimal constant
+ 1384 |     janet_def(env, "janet/build", janet_cstringv(JANET_BUILD),
+      |                                                  ^
+<command line>:2:26: note: expanded from macro 'JANET_BUILD'
+    2 | #define JANET_BUILD 66192cee
+      |                          ^
+1 error generated.
+make: *** [build/core/corelib.boot.o] Error 1
+make: *** Waiting for unfinished jobs....
+src/core/ev.c:107:3: warning: redefinition of typedef 'JanetChanPendReg' is a C11 feature [-Wtypedef-redefinition]
+  107 | } JanetChanPendReg;
+      |   ^
+src/core/ev.c:66:33: note: previous definition is here
+   66 | typedef struct JanetChanPendReg JanetChanPendReg;
+      |                                 ^
+src/core/ev.c:5895:17: warning: unused variable 'root' [-Wunused-variable]
+ 5895 |     JanetFiber *root = call_waiter;
+      |                 ^~~~
+src/core/ev.c:1138:13: warning: unused function 'flag_chanpend_node' [-Wunused-function]
+ 1138 | static void flag_chanpend_node(JanetChannelPending *p) {
+      |             ^~~~~~~~~~~~~~~~~~
+3 warnings generated.
