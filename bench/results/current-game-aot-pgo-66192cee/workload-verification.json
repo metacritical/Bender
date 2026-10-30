@@ -1,0 +1,143 @@
+{
+  "schema": "janet-bench-workload-verification/1",
+  "generated_at": "2026-10-30T09:03:54Z",
+  "purpose": "Durable, hash-pinned frozen game + saved-world bytes for the current-game AOT/PGO benchmark. Evidence must not depend on /tmp.",
+  "reference_commit": "66192ceed5f2545e14546e12505eda4d31e6cca5",
+  "reference_evidence_dir": "bench/results/current-game-6a4f008b-c07042a7",
+  "provenance": {
+    "origin_worktree": "/Users/pankajdoharey/Development/Projects/ML/trinecraft",
+    "origin_head_at_freeze": "2c6843849077c1032e9b5ce8e0c8e9c21d4b25d2",
+    "origin_git_describe": "2c68438-dirty",
+    "origin_commit_count": 552,
+    "origin_remotes": "none configured (freeze is the sole reproducibility mechanism)",
+    "freeze_timestamp_utc": "2026-10-30T13:42:00Z",
+    "freeze_note": "bench/results/current-game-6a4f008b-c07042a7/FREEZE-NOTE.md",
+    "provenance_kind": "byte-identical frozen copy of a dirty worktree, verified against committed file manifests, not reconstructed from a git archive of the live tree"
+  },
+  "live_source_disclaimer": {
+    "statement": "The live worktree is NOT the workload and was not copied, in whole or in part, into these bytes.",
+    "drifted_recorded_files_count": 8,
+    "drifted_paths": [
+      "main.janet",
+      "run.sh",
+      "src/player.janet",
+      "src/world-provider.janet",
+      "test/player-test.janet",
+      "test/world-provider-test.janet",
+      "test/test_progressive_worker.py",
+      "tools/progressive_worker.py"
+    ],
+    "note": "The live worktree advanced past the freeze. Frozen bytes were validated against the committed manifests before copying; no live file was substituted."
+  },
+  "runtime": {
+    "kind": "frozen Janet game source (interpreted workload)",
+    "manifest_reference": {
+      "path": "bench/results/current-game-6a4f008b-c07042a7/runtime-source-manifest.json",
+      "sha256": "8d3fc0c3fee811ad5b14f8e4141e5cd4522687dc9ce885b43b754acd37b7ef48",
+      "entries": 228
+    },
+    "source_manifest": {
+      "path": "/tmp/janet-current-game-ab-evidence/SOURCE-MANIFEST.txt",
+      "sha256": "dfc64b0eafe36b414a39b075cf578238c1b9bc408d73e751283c6716fd472709",
+      "entries": 228
+    },
+    "durable_copy": {
+      "path": "build/current-game-aot-pgo-66192cee/game-source",
+      "absolute_path": "/Users/pankajdoharey/Development/Projects/janet/build/current-game-aot-pgo-66192cee/game-source",
+      "files_total": 442,
+      "bytes_total": 61328480,
+      "gitignored": true
+    },
+    "verification": {
+      "against_runtime_source_manifest": {
+        "ok": 228,
+        "mismatched": 0,
+        "missing": 0,
+        "bad_paths": []
+      },
+      "against_saved_world_manifest": {
+        "ok": 214,
+        "mismatched": 0,
+        "missing": 0,
+        "bad_paths": []
+      },
+      "tree_identical_to_origin_copy": true,
+      "result": "PASS"
+    }
+  },
+  "saved_world": {
+    "manifest_reference": {
+      "path": "bench/results/current-game-6a4f008b-c07042a7/saved-world-manifest.json",
+      "sha256": "2bb4e82a48b9cadb801ba3a747492d92f3db5eef0d3a07912513b859cacf806f",
+      "entries": 214
+    },
+    "world_root_relative": "worlds-v1",
+    "slot": "15f2268da8ec2a4105ef2deaf6ae0b19",
+    "slot_name": "Terrain Diffusion 12345",
+    "provider": "terrain-diffusion-python",
+    "active_snapshot": "38457c768f8b3cf96ce3cff979b5b30f",
+    "identity": "6e97877c869b250e5ce1f7bbce60697d2bea239568e7dd53c1e57c5d12742372",
+    "seed": 12345,
+    "slot_subtree_sha256": "253d4f6f925a354e58090c7c785d461d11259980c82b974117f5999630e721c3",
+    "region_file": {
+      "relative": "worlds-v1/15f2268da8ec2a4105ef2deaf6ae0b19/38457c768f8b3cf96ce3cff979b5b30f/world.trcr",
+      "bytes": 2098836,
+      "sha256": "49b6371c01656440b0b355aaff1f911478e9c2df177eb3955d1413c981d0a9b2",
+      "crc32": 391204424,
+      "declared_region_crc_match": true
+    },
+    "scenic_artifact": {
+      "relative": "worlds-v1/15f2268da8ec2a4105ef2deaf6ae0b19/38457c768f8b3cf96ce3cff979b5b30f/scenic",
+      "entries": 6,
+      "tiles": 64,
+      "climate_f32_present": false,
+      "ready_true": true,
+      "temporary_true": true
+    }
+  },
+  "archive": {
+    "path": "bench/results/current-game-aot-pgo-66192cee/frozen-game-source-66192cee.tar.gz",
+    "sha256": "8a8a1027f006e5cbbaad44589a86461e041251ce1faf357245cd99e18424db0a",
+    "bytes": 52089454,
+    "mebibytes": 49.68,
+    "uncompressed_bytes": 61328480,
+    "compression_ratio": 0.8494,
+    "files": 442,
+    "empty_directories_preserved": 2,
+    "deterministic": true,
+    "reproducible_sha256": "8a8a1027f006e5cbbaad44589a86461e041251ce1faf357245cd99e18424db0a",
+    "builder": {
+      "tool": "python3 tarfile (GNU_FORMAT) + gzip, mtime=0, sorted paths, uid/gid 0, fixed mtime 1793350920",
+      "why_not_gnu_tar": "bsdtar 3.5.3 on this host has no --sort/--mtime/--owner, so determinism is produced in python",
+      "rebuild_recipe": "python3: tarfile.open(...,'w', GNU_FORMAT) over sorted files+empty dirs with uid=gid=0, uname=gname='root', mtime=1793350920, mode 0755/0644, wrapped in gzip.GzipFile(filename='', mtime=0, compresslevel=9); writes the identical sha256 above"
+    },
+    "roundtrip_verification": {
+      "extracted_to": "a fresh mktemp scratch directory (not retained in the repo)",
+      "files_extracted": 442,
+      "empty_directories_restored": 2,
+      "runtime_source_manifest_ok": 228,
+      "saved_world_manifest_ok": 214,
+      "byte_identical_tree_diff": true,
+      "all_hashes_match": true,
+      "result": "PASS"
+    }
+  },
+  "environment_contract": {
+    "launch_cwd": "the game-source directory (data/appearance.janet and data/materials.janet resolve relative to cwd)",
+    "window_required": true,
+    "env_scrub": "all JANET_* and BENDER_* removed, then JANET_NO_PROFILE=1, JANET_LANES=0, XDG_CACHE_HOME=<per-arm cache>",
+    "game_arguments": "--frames N --uncapped --world-slot 15f2268da8ec2a4105ef2deaf6ae0b19 --world-root <frozen world root>",
+    "writes_nothing": "a bounded --frames run skips save-on-exit; the frozen tree is read-only input"
+  },
+  "verification_commands": {
+    "reextract_and_verify": "tar -xzf bench/results/current-game-aot-pgo-66192cee/frozen-game-source-66192cee.tar.gz -C <scratch> && cd <scratch>/game-source && shasum -a 256 -c <checkfile-from-runtime-source-manifest>",
+    "verify_durable_copy": "cd build/current-game-aot-pgo-66192cee/game-source && shasum -a 256 -c <checkfile>",
+    "note": "Build a checkfile from either committed JSON manifest with: python3 -c 'import json,sys;d=json.load(sys.stdin);sys.stdout.write(\"\".join(e[\"sha256\"]+\"  \"+e[\"path\"]+\"\\n\" for e in d))'"
+  },
+  "not_claimed": [
+    "No game run, build, or benchmark was executed to produce this document.",
+    "No performance number is asserted; timing evidence is the parent's separate arm output.",
+    "An AOT binary built from these bytes is not evidence that native game kernels emitted.",
+    "The saved-world copy is byte-identical to the live original only as of the freeze."
+  ]
+}
