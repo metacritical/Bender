@@ -6,6 +6,7 @@ exact status, exclusive evidence directories, environment layering and the two
 independent resource reports.
 """
 
+import hashlib
 import json
 import os
 import shutil
@@ -433,6 +434,89 @@ class TimeoutTests(CaptureHarness):
         self.assertEqual(code, capture_tool.TIMEOUT_STATUS)
         self.assertEqual(code, 124)
         self.assertTrue(self.read_record()["timeout"]["expired"])
+
+
+class WrapperSupervisionTests(CaptureHarness):
+    """Under --resource-tool time the reaped pid is the WRAPPER's.
+
+    BSD time appends its own diagnostics to the child's stderr on abnormal
+    death and rewrites a signal death into exit 1, so the record must say which
+    process the status describes instead of passing the wrapper's off as the
+    child's own outcome.
+    """
+
+    def setUp(self):
+        super().setUp()
+        if sys.platform not in capture_tool.TIME_FLAGS or shutil.which("time") is None:
+            self.skipTest("no platform time tool available")
+
+    def test_clean_run_is_not_flagged_as_abnormal(self):
+        record = self.run_capture(py("import sys; sys.stderr.write('e\\n')"), resource_tool="time")
+        self.assertFalse(record["wrapper_supervision"]["child_signal_unrecoverable"])
+        self.assertFalse(record["wrapper_supervision"]["stderr_noise"]["present"])
+        self.assertEqual(self.read_bytes("stderr.log"), b"e\n")
+
+    def test_wrapper_noise_is_identified_not_mistaken_for_child_output(self):
+        record = self.run_capture(
+            py(
+                "import os, signal, sys\n"
+                "sys.stderr.write('child-own\\n'); sys.stderr.flush()\n"
+                "os.kill(os.getpid(), signal.SIGTERM)\n"
+            ),
+            resource_tool="time",
+        )
+        noise = record["wrapper_supervision"]["stderr_noise"]
+        self.assertTrue(noise["present"])
+        # The raw stream still keeps every byte, wrapper text included.
+        self.assertIn(b"child-own\n", self.read_bytes("stderr.log"))
+        self.assertIn(b"time: ", self.read_bytes("stderr.log"))
+        # ...and the child's own contribution is separately quantified.
+        self.assertEqual(noise["clean_bytes"], len(b"child-own\n"))
+        self.assertEqual(noise["clean_sha256"], hashlib.sha256(b"child-own\n").hexdigest())
+
+    def test_sigterm_under_the_wrapper_is_still_reported_as_a_signal(self):
+        record = self.run_capture(
+            py("import os, signal; os.kill(os.getpid(), signal.SIGTERM)"), resource_tool="time"
+        )
+        self.assertEqual(record["result"]["kind"], "signaled")
+        self.assertEqual(record["result"]["signal_name"], "SIGTERM")
+        self.assertFalse(record["wrapper_supervision"]["child_signal_unrecoverable"])
+
+    def test_a_signal_the_wrapper_cannot_report_is_flagged_not_invented(self):
+        # BSD time rewrites a SIGKILL death into "exit 1", so the child's real
+        # fate is unrecoverable from the wrapper status. The record must say so
+        # rather than presenting the wrapper's exit code as the child's.
+        record = self.run_capture(
+            py(
+                "import os, signal, sys\n"
+                "sys.stderr.write('before\\n'); sys.stderr.flush()\n"
+                "os.kill(os.getpid(), signal.SIGKILL)\n"
+            ),
+            resource_tool="time",
+        )
+        self.assertTrue(record["wrapper_supervision"]["child_signal_unrecoverable"])
+        self.assertEqual(record["result"].get("reaped_process"), "time-wrapper")
+        self.assertEqual(record["result"].get("child_status_reported_by"), "wrapper")
+        # The wrapper's exit code is NOT claimed as the child's exit status.
+        self.assertIn(record["result"]["kind"], ("exited", "signaled"))
+        self.assertIn(b"before\n", self.read_bytes("stderr.log"))
+
+    def test_a_clean_exit_keeps_its_own_status_under_the_wrapper(self):
+        record = self.run_capture(py("import sys; sys.exit(7)"), resource_tool="time")
+        self.assertEqual(record["result"]["kind"], "exited")
+        self.assertEqual(record["result"]["exit_status"], 7)
+        self.assertEqual(capture_tool.cli_status(record), 7)
+        self.assertFalse(record["wrapper_supervision"]["child_signal_unrecoverable"])
+
+    def test_unwrapped_runs_carry_no_wrapper_block(self):
+        record = self.run_capture(py("print('plain')"))
+        self.assertNotIn("wrapper_supervision", record)
+
+    def test_the_recorded_kind_stays_inside_the_schema(self):
+        record = self.run_capture(
+            py("import sys; sys.stderr.write('x\\n'); sys.exit(1)"), resource_tool="time"
+        )
+        self.assertIn(record["result"]["kind"], ("exited", "signaled"))
 
 
 if __name__ == "__main__":

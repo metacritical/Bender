@@ -29,9 +29,17 @@ Guarantees
 * Resource usage comes from ``wait4``'s rusage for the exact child. On request
   the same run can also be wrapped in the platform time tool (``/usr/bin/time
   -l`` on macOS, ``-v`` on GNU/Linux); that report is written to its own file,
-  so it never mixes into ``stderr.log``. Wrapper mode is opt-in because the BSD
-  tool appends one of its own diagnostics to the child's stderr when a child
-  dies by signal -- the default mode cannot contaminate either stream.
+  so it never mixes into ``stderr.log``.
+* Wrapper mode is opt-in and says what it is. The pid reaped in that mode is the
+  WRAPPER's, so ``result`` is labelled ``reaped_process: time-wrapper`` and the
+  child's own fate is not invented from the wrapper's status. BSD time rewrites
+  a signal death into exit 1 and appends lines such as
+  ``time: command terminated abnormally`` to the CHILD's stderr; the raw bytes
+  are still preserved exactly, and ``wrapper_supervision.stderr_noise``
+  quantifies the wrapper's share (with the child's own bytes re-hashed) instead
+  of passing the tool's text off as the child's output. When the child's signal
+  is genuinely lost, ``child_signal_unrecoverable`` says so. The default mode
+  has none of these caveats, which is why it is the default.
 * A capture that fails part way does not pretend to be complete. ``complete``
   is ``true`` only after the streams are digested and the record landed; a
   capture-level failure writes a record with ``complete: false`` and the error.
@@ -69,8 +77,16 @@ Record
         "stderr": {"file": "stderr.log", "sha256": "...", "bytes": 0}
       },
       "resource": {"source": "wait4 rusage", "maxrss_bytes": 12345678, ...},
-      "resource_detail": {"file": "resource.time.txt", "metrics": {...}}
+      "resource_detail": {"file": "resource.time.txt", "metrics": {...}},
+      "wrapper_supervision": {
+        "wrapped": true, "reaped_process": "time-wrapper",
+        "child_status_reported_by": "wrapper",
+        "child_signal_unrecoverable": false,
+        "stderr_noise": {"present": false}
+      }
     }
+
+``wrapper_supervision`` appears only for a wrapped run.
 
 Usage
 -----
@@ -172,6 +188,12 @@ class CaptureRequest:
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="microseconds")
+
+
+def read_bytes(path: str) -> bytes:
+    """The file's bytes. Used only for the bounded wrapper-noise scan."""
+    with open(path, "rb") as handle:
+        return handle.read()
 
 
 def hash_and_count(path: str) -> dict:
@@ -504,6 +526,41 @@ def _spawn_argv(evidence, request):
     raise CaptureError(f"unknown resource tool {request.resource_tool!r}")
 
 
+# The BSD time tool appends its own diagnostic to the CHILD's stderr when the
+# child dies abnormally, e.g. ``time: command terminated abnormally``. Those
+# lines are the wrapper's, not the child's, and the tool also rewrites a signal
+# death into exit 1 -- so wrapper mode records the stream honestly AND states
+# what the wrapper injected rather than passing its text off as child output.
+TIME_NOISE_PREFIX = "time: "
+
+
+def split_time_noise(payload: bytes, spawn_argv) -> dict:
+    """Separate the time tool's own stderr lines from the child's bytes.
+
+    Only called when the run was wrapped AND the child died abnormally, which is
+    the only case BSD time writes to the child's descriptor. ``clean`` is the
+    child's bytes as far as they can be recovered; ``noise`` is what the wrapper
+    added. Both are returned so the record never hides the distinction.
+    """
+    lines = payload.splitlines(keepends=True)
+    noise = [line for line in lines if line.startswith(TIME_NOISE_PREFIX.encode())]
+    if not noise:
+        return {"present": False}
+    clean = b"".join(line for line in lines if not line.startswith(TIME_NOISE_PREFIX.encode()))
+    return {
+        "present": True,
+        "wrapper_argv0": spawn_argv[0],
+        "noise_bytes": sum(len(line) for line in noise),
+        "noise_sha256": hashlib.sha256(b"".join(noise)).hexdigest(),
+        "clean_bytes": len(clean),
+        "clean_sha256": hashlib.sha256(clean).hexdigest(),
+        "note": (
+            "the time tool appended these lines to the child's stderr; "
+            "stderr.log is the raw stream, these are the wrapper's contribution"
+        ),
+    }
+
+
 def _assemble(request, evidence, outcome) -> dict:
     """The complete record for one finished child."""
     run = outcome["run"]
@@ -514,6 +571,14 @@ def _assemble(request, evidence, outcome) -> dict:
         "signal_name": None,
     }
     result["spawn_error"] = run["spawn_error"]
+    # Under the time wrapper, the pid we reap is the WRAPPER's, so its status is
+    # the wrapper's and not the child's. The kind stays inside the schema (a
+    # wrapper does exit normally); what changes is that the status is labelled
+    # as the wrapper's and the child's own fate is not invented from it.
+    wrapped = outcome["report_path"] is not None
+    if wrapped:
+        result["reaped_process"] = "time-wrapper"
+        result["child_status_reported_by"] = "wrapper"
     record = {
         "schema": SCHEMA,
         "label": request.label,
@@ -545,6 +610,20 @@ def _assemble(request, evidence, outcome) -> dict:
         },
         "resource": resource_block(run["usage"]) if run["usage"] is not None else None,
     }
+    if wrapped:
+        noise = split_time_noise(
+            read_bytes(os.path.join(evidence, STDERR_NAME)), outcome["spawn_argv"]
+        )
+        record["wrapper_supervision"] = {
+            "wrapped": True,
+            "reaped_process": "time-wrapper",
+            "child_status_reported_by": "wrapper",
+            "stderr_noise": noise,
+            # Only an abnormal death loses the signal: a clean exit has none to
+            # lose, and the wrapper's own noise is the signal that it happened.
+            "child_signal_unrecoverable": result["kind"] == "exited"
+            and bool(noise.get("present")),
+        }
     if outcome["report_path"] is not None:
         record["resource_detail"] = parse_time_report(outcome["report_path"])
     return record
@@ -575,7 +654,11 @@ def capture(request) -> dict:
     try:
         executable = resolve_executable(request.argv, request.cwd, env)
         spawn_argv, report_path = _spawn_argv(evidence, request)
-        outcome = {"executable": executable, "report_path": report_path}
+        outcome = {
+            "executable": executable,
+            "report_path": report_path,
+            "spawn_argv": spawn_argv,
+        }
         outcome["started_at"] = utc_now()
         outcome["run"] = _run_child(
             spawn_argv, request.cwd, env, evidence, request.timeout
