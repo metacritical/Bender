@@ -1,0 +1,18 @@
+# Error handling with try and defer.
+
+(defn parse-port
+  [s]
+  (def n (scan-number s))
+  (unless (and n (<= 1 n 65535))
+    (error (string "invalid port: " s)))
+  n)
+
+(defn main
+  [& args]
+  (try
+    (printf "port = %d" (parse-port "8080"))
+    ([err] (print "failed: " err)))
+  (defer (print "cleanup")
+    (try
+      (parse-port "nope")
+      ([err] (print "expected: " err)))))

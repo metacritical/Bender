@@ -1,0 +1,36 @@
+{
+  "name": "bender-language",
+  "displayName": "Bender",
+  "description": "Bender language support: syntax highlighting and editor configuration for .ben files.",
+  "version": "0.1.0",
+  "publisher": "bender-lang",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.70.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "bender",
+        "aliases": [
+          "Bender",
+          "bender"
+        ],
+        "extensions": [
+          ".ben"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "bender",
+        "scopeName": "source.bender",
+        "path": "./syntaxes/bender.tmLanguage.json"
+      }
+    ]
+  }
+}

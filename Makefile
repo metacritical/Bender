@@ -505,6 +505,10 @@ grammar: build/janet.tmLanguage
 build/janet.tmLanguage: tools/tm_lang_gen.janet $(JANET_TARGET)
 	$(RUN) $(JANET_TARGET) $< > $@
 
+grammar-linguist: grammar/syntaxes/bender.tmLanguage.json
+grammar/syntaxes/bender.tmLanguage.json: tools/linguist_grammar.janet $(JANET_TARGET)
+	$(RUN) $(JANET_TARGET) $< > $@
+
 compile-commands:
 	# Requires pip install compiledb
 	compiledb make
@@ -542,4 +546,4 @@ help:
 	@echo
 
 .PHONY: clean install install-jpm-git install-spork-git repl debug valgrind test \
-	test-build-mode test-executors valtest callgrind callgrind-test dist uninstall docs grammar format help compile-commands
+	test-build-mode test-executors valtest callgrind callgrind-test dist uninstall docs grammar grammar-linguist format help compile-commands

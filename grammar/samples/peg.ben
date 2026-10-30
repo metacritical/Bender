@@ -1,0 +1,13 @@
+# A PEG for dotted-quad IPv4 addresses.
+
+(def ipv4
+  (peg/compile
+    ~(* (between 1 3 (range "09")) "."
+        (between 1 3 (range "09")) "."
+        (between 1 3 (range "09")) "."
+        (between 1 3 (range "09")))))
+
+(defn main
+  [& args]
+  (each addr ["192.168.0.1" "10.0.0.255" "999.1.1.1"]
+    (printf "%-15s %s" addr (if (peg/match ipv4 addr) "ok" "bad"))))

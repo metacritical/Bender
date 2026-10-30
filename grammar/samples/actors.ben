@@ -1,0 +1,22 @@
+# Producer/consumer over Bender's event channels.
+#
+#   bender grammar/samples/actors.ben
+
+(defn producer
+  [ch n]
+  (ev/spawn
+    (for i 0 n
+      (ev/give ch (* i i)))
+    # nil is the end-of-stream sentinel.
+    (ev/give ch nil)))
+
+(defn main
+  [& args]
+  (def ch (ev/chan 4))
+  (producer ch 16)
+  (var total 0)
+  (forever
+    (def x (ev/take ch))
+    (if (nil? x) (break))
+    (+= total x))
+  (printf "sum of squares: %d" total))

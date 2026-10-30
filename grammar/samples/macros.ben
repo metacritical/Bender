@@ -1,0 +1,18 @@
+# Macros, quasiquote and compile-time expansion.
+
+(defmacro with-timing
+  [tag & body]
+  ~(let [start (os/clock)
+         result (do ,;body)]
+     (printf "%s: %.3f ms" ,tag (* 1000 (- (os/clock) start)))
+     result))
+
+(defn fib
+  [n]
+  (if (< n 2)
+    n
+    (+ (fib (- n 1)) (fib (- n 2)))))
+
+(defn main
+  [& args]
+  (with-timing "fib(20)" (fib 20)))

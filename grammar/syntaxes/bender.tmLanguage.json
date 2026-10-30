@@ -1,0 +1,120 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Bender",
+  "scopeName": "source.bender",
+  "fileTypes": ["ben"],
+  "uuid": "d2f4a1c8-7e3b-4a6f-9c2d-1b8e5f7a9c3d",
+  "foldingStartMarker": "(\\(|\\[|\\{)",
+  "foldingStopMarker": "(\\)|\\]|\\})",
+  "patterns": [{"include": "#all"}],
+  "repository": {
+    "all": {
+      "patterns": [
+        {"include": "#comment"},
+        {"include": "#longstring"},
+        {"include": "#string"},
+        {"include": "#readermac"},
+        {"include": "#parens"},
+        {"include": "#brackets"},
+        {"include": "#braces"},
+        {"include": "#hint"},
+        {"include": "#literal"},
+        {"include": "#keyword"},
+        {"include": "#hex-number"},
+        {"include": "#radix-number"},
+        {"include": "#decimal-number"},
+        {"include": "#control"},
+        {"include": "#builtin"},
+        {"include": "#symbol"}
+      ]
+    },
+    "comment": {
+      "match": "(#).*$",
+      "name": "comment.line.number-sign.bender",
+      "captures": {"1": {"name": "punctuation.definition.comment.bender"}}
+    },
+    "string": {
+      "begin": "(@?\")",
+      "beginCaptures": {"1": {"name": "punctuation.definition.string.begin.bender"}},
+      "end": "\"",
+      "endCaptures": {"0": {"name": "punctuation.definition.string.end.bender"}},
+      "name": "string.quoted.double.bender",
+      "patterns": [
+        {"match": "(\\\\[nevr0zft\"\\\\']|\\\\x[0-9a-fA-F]{2}|\\\\u[0-9a-fA-F]{4}|\\\\U[0-9a-fA-F]{6})",
+         "name": "constant.character.escape.bender"}
+      ]
+    },
+    "longstring": {
+      "begin": "(@?)(`+)",
+      "beginCaptures": {
+        "1": {"name": "punctuation.definition.string.begin.bender"},
+        "2": {"name": "punctuation.definition.string.begin.bender"}
+      },
+      "end": "\\2",
+      "endCaptures": {"0": {"name": "punctuation.definition.string.end.bender"}},
+      "name": "string.quoted.triple.bender"
+    },
+    "readermac": {
+      "match": "['~;,]",
+      "name": "punctuation.other.readermacro.bender"
+    },
+    "parens": {
+      "begin": "(@?\\()",
+      "beginCaptures": {"1": {"name": "punctuation.definition.parens.begin.bender"}},
+      "end": "(\\))",
+      "endCaptures": {"1": {"name": "punctuation.definition.parens.end.bender"}},
+      "patterns": [{"include": "#all"}]
+    },
+    "brackets": {
+      "begin": "(@?\\[)",
+      "beginCaptures": {"1": {"name": "punctuation.definition.brackets.begin.bender"}},
+      "end": "(\\])",
+      "endCaptures": {"1": {"name": "punctuation.definition.brackets.end.bender"}},
+      "patterns": [{"include": "#all"}]
+    },
+    "braces": {
+      "begin": "(@?\\{)",
+      "beginCaptures": {"1": {"name": "punctuation.definition.braces.begin.bender"}},
+      "end": "(\\})",
+      "endCaptures": {"1": {"name": "punctuation.definition.braces.end.bender"}},
+      "patterns": [{"include": "#all"}]
+    },
+    "hint": {
+      "match": "(?<![.\\w_\\-=!@\\$%^&?/<>*]):hint(?![.\\w_\\-=!@\\$%^&?/<>*])",
+      "name": "keyword.other.hint.bender"
+    },
+    "literal": {
+      "match": "(?<![.\\w_\\-=!@\\$%^&?/<>*])(true|false|nil)(?![.\\w_\\-=!@\\$%^&?/<>*])",
+      "name": "constant.language.bender"
+    },
+    "keyword": {
+      "match": "(?<![.\\w_\\-=!@\\$%^&?/<>*]):[.:\\w_\\-=!@\\$%^&?/<>*]*",
+      "name": "constant.keyword.bender"
+    },
+    "hex-number": {
+      "match": "(?<![.\\w_\\-=!@\\$%^&?/<>*])[-+]?0x([_\\da-fA-F]+|[_\\da-fA-F]+\\.[_\\da-fA-F]*|\\.[_\\da-fA-F]+)(&[+-]?[\\da-fA-F]+)?(?![.\\w_\\-=!@\\$%^&?/<>*])",
+      "name": "constant.numeric.hex.bender"
+    },
+    "radix-number": {
+      "match": "(?<![.\\w_\\-=!@\\$%^&?/<>*])[-+]?\\d\\d?r([_\\w]+|[_\\w]+\\.[_\\w]*|\\.[_\\w]+)(&[+-]?[\\w]+)?(?![.\\w_\\-=!@\\$%^&?/<>*])",
+      "name": "constant.numeric.radix.bender"
+    },
+    "decimal-number": {
+      "match": "(?<![.\\w_\\-=!@\\$%^&?/<>*])[-+]?([_\\d]+|[_\\d]+\\.[_\\d]*|\\.[_\\d]+)([eE&][+-]?[\\d]+)?(?![.\\w_\\-=!@\\$%^&?/<>*])",
+      "name": "constant.numeric.decimal.bender"
+    },
+    "control": {
+      "match": "(?<![.\\w_\\-=!@\\$%^&?/<>*])(ffi/defbind-alias|ev/with-deadline|ev/spawn-thread|ev/with-wlock|ev/with-rlock|ffi/defstruct|ev/do-thread|ev/with-lock|ffi/defbind|quasiquote|with-dyns|with-syms|defmethod|with-vars|when-with|defmacro-|ev/gather|short-fn|compwhen|comptime|as-macro|generate|ev/spawn|defmulti|with-env|fiber-fn|defmacro|when-let|comment|default|forever|protect|assertf|if-with|upscope|unquote|unless|tracev|toggle|repeat|edefer|prompt|splice|if-not|assert|catseq|compif|defdyn|import|if-let|tabseq|eachp|match|label|as\\?->|quote|varfn|while|delay|defn-|break|defer|eachk|forv|juxt|loop|as->|case|-\\?>>|when|var-|with|defn|def-|cond|coro|each|try|use|seq|-\\?>|and|var|->>|set|let|def|for|chr|doc|if|%=|fn|\\*=|->|-=|or|/=|\\+\\+|do|--|\\+=)(?![.\\w_\\-=!@\\$%^&?/<>*])",
+      "name": "keyword.control.bender"
+    },
+    "builtin": {
+      "match": "(?<![.\\w_\\-=!@\\$%^&?/<>*])(module/add-file-extension|unsafe/pointer-cfunction|ffi/calling-conventions|unsafe/pointer-buffer|bundle/add-directory|pool/profile-harvest|struct/proto-flatten|buffer/push-float32|buffer/push-float64|debug/fiber-nursery|debug/profile-reset|debug/collect-fiber|debug/profile-start|table/proto-flatten|default-peg-grammar|proc/spawn-isolated|unsafe/exec-protect|bender/config-bits|ev/give-supervisor|debug/collect-proc|string/ascii-lower|proc/spawn-prepare|string/has-suffix\\?|shared/materialize|string/has-prefix\\?|debug/profile-stop|buffer/push-uint64|buffer/push-uint32|bundle/add-manpage|module/expand-path|module/add-syspath|debug/profile-dump|string/replace-all|buffer/push-string|net/address-unpack|buffer/push-uint16|string/ascii-upper|filewatch/unlisten|debugger-on-status|buffer/from-bytes|buffer/new-filled|\\*module-make-env\\*|unsafe/trampoline|string/from-bytes|buffer/bit-toggle|table/weak-values|struct/with-proto|fiber/can-resume\\?|fiber/setmaxstack|bundle/installed\\?|proc/lanes-policy|bundle/update-all|debug/fiber-owner|shared/shareable\\?|unsafe/exec-alloc|ev/acquire-rlock|ev/release-rlock|ev/release-wlock|buffer/format-at|math/rng-uniform|compare-and-set!|proc/lane-worker|ev/acquire-wlock|module/add-paths|proc/record-exit|buffer/bit-clear|proc/spawn-local|buffer/push-word|debug/stacktrace|bundle/reinstall|proc/monitors-of|proc/lanes-start|debug/slab-stats|buffer/push-byte|proc/lane-lookup|filewatch/remove|bundle/uninstall|array/new-filled|proc/exit-reason|filewatch/listen|proc/lanes-stats|fiber/last-value|\\*module-loading\\*|\\*module-loaders\\*|string/check-set|\\*defdyn-prefix\\*|\\*pretty-format\\*|math/seedrandom|string/find-all|struct/getproto|proc/lanes-stop|bundle/manifest|ffi/struct-info|bundle/topolist|make-image-dict|lazy-take-while|lazy-drop-while|parser/has-more|proc/unregister|bundle/add-file|table/to-struct|net/accept-loop|load-image-dict|ev/acquire-lock|tuple/sourcemap|ev/release-lock|table/weak-keys|peg/replace-all|struct/to-table|debug/arg-stack|math/rng-buffer|os/posix-chroot|lazy-from-array|\\*current-file\\*|table/getproto|module/loading|table/setproto|unsafe/ptr-add|unsafe/ptr-sub|thaw-keep-keys|parser/consume|proc/lane-pull|debug/unfbreak|\\*module-paths\\*|proc/isolated\\?|net/setsockopt|parser/produce|thread/profile|string/replace|fiber/maxstack|bender/version|unsafe/realloc|\\*multimethods\\*|tuple/brackets|math/log-gamma|proc/trap-exit|bundle/install|math/int32-min|ev/thread-chan|bundle/replace|bundle/add-bin|module/loaders|string/reverse|math/int32-max|\\*module-cache\\*|buffer/push-at|os/perm-string|buffer/bit-set|pool/dispatch|os/posix-fork|ev/unregister|os/proc-close|string/format|filewatch/new|fiber/current|os/posix-exec|ffi/signature|shared/length|gcsetinterval|longest-first|struct/rawget|string/repeat|os/cryptorand|ev/chan-close|unsafe/calloc|parser/status|net/recv-from|unsafe/malloc|lazy-to-array|remove-method|buffer/format|proc/register|int/to-number|parser/insert|unsafe/ptr-eq|\\*flychecking\\*|\\*lint-levels\\*|\\*ffi-context\\*|proc/try-send|net/localname|\\*profilepath\\*|\\*repl-prompt\\*|\\*peg-grammar\\*|keyword/slice|\\*macro-lints\\*|lazy-to-fiber|proc/self-pid|proc/lane-pin|debug/unbreak|debug/lineage|thread/alive\\?|filewatch/add|fiber/getenv|fiber/setenv|peg/find-all|net/peername|parser/error|proc/whereis|flatten-into|parser/flush|os/proc-kill|keep-syntax!|symbol/slice|os/proc-wait|unsafe/jitfn|ev/timeslice|math/int-min|\\*exit-value\\*|\\*executable\\*|\\*lint-error\\*|proc/monitor|warn-compile|pool/acquire|proc/killed\\?|debugger-env|table/rawget|string/bytes|partition-by|parser/clone|special-list|debug/fbreak|fiber/status|\\*macro-form\\*|module/value|parser/state|ev/all-tasks|bundle/whois|module/cache|net/shutdown|tuple/setmap|math/rng-int|int/to-bytes|string/triml|lazy-iterate|os/setlocale|string/trimr|bundle/prune|buffer/clear|string/split|string/slice|array/ensure|array/concat|array/insert|math/int-max|all-dynamics|all-bindings|os/sigaction|module/paths|ev/interrupt|parser/where|bender/build|os/cpu-count|ev/demonitor|ev/go-gather|merge-module|array/remove|pool/collect|buffer/slice|lazy-filter|lazy-empty\\?|run-context|keep-syntax|net/connect|idempotent\\?|net/send-to|lazy-reduce|os/compiler|lazy-repeat|net/address|lazy-mapcat|frequencies|scan-number|debug/break|unsafe/poke|parser/byte|module/find|bundle/list|debug/stack|table/clear|dictionary\\?|\\*lint-warn\\*|peg/compile|accumulate2|os/strftime|alternation|bad-compile|buffer/blit|array/clear|array/slice|unsafe/free|buffer/trim|buffer/push|table/clone|buffer/fill|tuple/slice|thread/join|buffer/popn|pool/submit|ffi/context|string/find|eval-string|\\*doc-color\\*|\\*doc-width\\*|lengthable\\?|proc/alive\\?|proc/serial|proc/sup-of|math/random|ev/deadline|string/join|os/realpath|ev/capacity|\\*err-color\\*|string/trim|ev/try-take|os/perm-int|ev/try-give|ev/register|os/readlink|peg/replace|math/hypot|merge-into|math/ldexp|lazy-range|proc/stash|math/asinh|math/acosh|load-image|proc/trap\\?|make-image|net/accept|math/frexp|math/floor|math/log10|math/gamma|math/atanh|math/atan2|lazy-first|debug/step|complement|os/symlink|math/round|take-until|cfunction\\?|table/weak|parser/eof|ev/monitor|env-lookup|ev/to-file|ev/rselect|doc-format|pool/spawn|drop-while|drop-until|array/push|array/peek|array/weak|array/trim|accumulate|\\*optimize\\*|array/join|array/fill|buffer/new|buffer/bit|take-while|bundle/add|tuple/join|tuple/type|thread/new|get-method|shared/get|proc/lanes|has-value\\?|shared/new|find-index|gcinterval|net/listen|net/server|math/expm1|math/log1p|regex-meta|from-pairs|interleave|net/socket|ffi/struct|math/trunc|file/close|fiber/root|ev/whereis|parser/new|ffi/native|ffi/lookup|os/execute|proc/spawn|proc/done\\?|os/environ|file/lines|file/flush|file/write|math/sqrt|math/tanh|proc/send|proc/self|os/rename|pool/stop|os/isatty|os/mktime|os/getpid|peg/match|pool/call|parse-all|partition|net/close|net/flush|proc/pid\\?|net/chunk|proc/recv|os/getenv|os/setenv|normalise|proc/kill|net/write|file/open|fiber/new|file/seek|file/read|ffi/align|ev/thread|ffi/write|ffi/close|file/tell|re-escape|interpose|lazy-cell|propagate|sorted-by|file/temp|gccollect|function\\?|array/new|abstract\\?|unmarshal|array/pop|update-in|varglobal|\\*task-id\\*|\\*syspath\\*|bad-parse|ev/cancel|defglobal|ev/select|ev/rwlock|compare>=|compare<=|table/new|deep-not=|lazy-cons|math/asin|math/acos|math/cbrt|lazy-take|lazy-rest|math/atan|math/-inf|math/log2|math/exp2|math/sinh|math/cosh|math/ceil|math/next|math/erfc|lazy-drop|lazy-each|lazy-peek|os/spawn|os/sleep|os/touch|describe|math/exp|math/nan|distinct|ev/close|ev/chunk|ev/ichan|ev/count|math/pow|os/shell|os/rmdir|proc/pid|cli-main|brushift|math/lcm|compare<|bindings|math/log|lazy-cat|boolean\\?|compare=|pool/map|keyword\\?|os/umask|os/which|math/inf|compare>|math/gcd|debugger|math/rng|flycheck|math/tan|index-of|indexed\\?|math/abs|math/sin|maclintf|make-env|root-env|has-key\\?|reverse!|identity|os/chmod|os/clock|group-by|ffi/call|math/cos|ffi/read|lazy-map|ev/sleep|math/erf|ev/write|net/read|lazy-nil|peg/find|getproto|json-str|ffi/size|postwalk|os/mkdir|os/lstat|zipcoll|xprintf|untrace|reduce2|realize|sort-by|reverse|sandbox|require|symbol\\?|truthy\\?|struct\\?|product|string\\?|prewalk|flatten|extreme|getline|ev/read|ev/pump|geomean|ev/take|marshal|keyword|methods|int/s64|import\\*|math/pi|buffer\\?|brshift|compile|\\*redef\\*|\\*debug\\*|compare|blshift|ev/give|ev/full|int/u64|ev/call|eprintf|ev/lock|ev/chan|os/date|os/time|number\\?|os/arch|partial|os/open|os/pipe|os/exit|os/link|os/stat|stdout|string|xprinf|stderr|os/dir|every\\?|fiber\\?|false\\?|filter|gensym|freeze|setdyn|os/cwd|sorted|buffer|min-of|signal|get-in|dofile|doc-of|eflush|table\\?|delay1|curenv|symbol|disasm|empty\\?|native|errorf|printf|bytes\\?|eprinf|struct|cancel|eprint|xprint|update|invert|reduce|math/e|tuple\\?|values|put-in|length|array\\?|\\*exit\\*|macex1|mapcat|memcmp|resume|reset!|return|max-of|\\*args\\*|debug|parse|yield|error|macex|\\*out\\*|eprin|count|table|swap!|zero\\?|os/rm|merge|deep=|\\*err\\*|deref|trace|slurp|xprin|atom\\?|first|stdin|tuple|os/cd|true\\?|pairs|flush|slice|juxt\\*|array|even\\?|apply|prinf|print|ev/go|range|take|any\\?|thaw|bnot|bxor|band|comp|atom|type|walk|repl|hash|odd\\?|nil\\?|some|one\\?|mean|keep|puts|last|int\\?|not=|keys|quit|drop|nat\\?|pos\\?|neg\\?|next|nan\\?|doc\\*|find|spit|prin|sort|eval|kvs|map|mod|min|max|not|asm|inc|all|get|cmp|put|bor|dec|div|dyn|sum|<=|pp|>=|in|\\*|%|=|>|<|-|/|\\+)(?![.\\w_\\-=!@\\$%^&?/<>*])",
+      "name": "support.function.bender"
+    },
+    "symbol": {
+      "match": "(?<![.\\w_\\-=!@\\$%^&?/<>*])[.a-zA-Z_\\-=!@\\$%^&?/<>*][.:\\w_\\-=!@\\$%^&?/<>*]*",
+      "name": "variable.other.bender"
+    }
+  }
+}
+
