@@ -62,6 +62,8 @@ Record
       "timing": {"started_at": "...Z", "finished_at": "...Z", "wall_s": 0.123},
       "result": {"kind": "exited", "exit_status": 0, "signal": null,
                  "signal_name": null, "spawn_error": null},
+      "timeout": {"seconds": null, "expired": false,
+                  "kill_signal": null, "kill_error": null},
       "streams": {
         "stdout": {"file": "stdout.log", "sha256": "...", "bytes": 456},
         "stderr": {"file": "stderr.log", "sha256": "...", "bytes": 0}
@@ -75,11 +77,27 @@ Usage
 ::
 
     tools/benchmark_capture.py --evidence-dir out/run1 --cwd . \\
-        --env JANET_PROFILE=1 --label tip-aot -- ./build/janet run.janet
+        --env JANET_PROFILE=1 --label tip-aot --timeout 180 \\
+        -- ./build/janet run.janet
+
+``--timeout`` is a safety deadline, not a measurement. When it fires the child's
+whole process group is killed with SIGKILL and the run is recorded as expired.
+``result`` still says what the wait status actually said (signaled, SIGKILL),
+and ``timeout.expired`` carries the separate fact that *we* stopped it -- a
+timed-out run is a successful capture of a failed run, so a driver reads
+``timeout.expired`` and must not treat ``complete: true`` as a passing run. The
+child gets its own session only when a timeout is requested, so runs without one
+keep the previous process-group behaviour.
 
 The process exits with the child's status (128+signal when it was terminated by
-a signal) so a wrapper script cannot mistake a failed run for a finished one; it
+a signal) so a wrapper script cannot mistake a failed run for a finished one. A
+timed-out child exits 124, the conventional timeout(1) code, deliberately
+distinct from 128+9 so a driver can tell "we stopped it" from "it died". It
 exits 2 only when the capture itself could not be performed.
+
+Do not wrap this tool in ``subprocess.run(..., timeout=...)``: that kills only
+this process and leaves the child tree running into the next sequential
+measurement. Use ``--timeout`` here instead.
 """
 
 from __future__ import annotations
@@ -92,12 +110,19 @@ import shutil
 import signal
 import subprocess
 import sys
+import threading
 import time
 from datetime import datetime, timezone
 from dataclasses import dataclass, field, replace
 
 SCHEMA = "janet/benchmark-capture/1"
 CHUNK_BYTES = 1024 * 1024
+# A killed child is reaped almost immediately; this only bounds a pathological
+# wait so an unreapable child cannot hang the tool forever.
+REAP_GRACE_S = 30.0
+# The conventional timeout(1) status, distinct from 128+SIGKILL (137), so a
+# driver can tell "we stopped it" from "it died".
+TIMEOUT_STATUS = 124
 STDOUT_NAME = "stdout.log"
 STDERR_NAME = "stderr.log"
 RECORD_NAME = "capture.json"
@@ -131,9 +156,12 @@ class CaptureRequest:
     env_overrides: dict = field(default_factory=dict)
     label: str = None
     resource_tool: str = "none"
+    timeout: float = None
 
     def resolved(self) -> "CaptureRequest":
         """A copy with an absolute cwd and the overrides pinned as a plain dict."""
+        if self.timeout is not None and self.timeout <= 0:
+            raise CaptureError(f"timeout must be positive, got {self.timeout!r}")
         return replace(
             self,
             argv=tuple(self.argv),
@@ -322,12 +350,69 @@ def parse_time_report(path) -> dict:
     }
 
 
-def _run_child(argv, cwd, env, evidence) -> dict:
+def _terminate_group(pgid) -> str:
+    """SIGKILL the child's whole process group; report an unaddressable group.
+
+    A group kill, not a pid kill: the benchmark is a native binary that may have
+    spawned workers, and killing only the leader would leave them burning CPU
+    into the next sequential arm. If the group cannot be addressed at all the
+    leader is still killed, so a failed group kill can never leave the capture
+    hanging on a live child; the shortfall is returned for the record rather
+    than hidden. Returns None on success, else a reason string.
+    """
+    try:
+        os.killpg(pgid, signal.SIGKILL)
+        return None
+    except ProcessLookupError:
+        # The group is already gone, which is exactly the outcome we wanted.
+        return None
+    except OSError as exc:
+        group_error = f"killpg({pgid}) failed: {type(exc).__name__}: {exc}"
+    try:
+        os.kill(pgid, signal.SIGKILL)
+    except OSError as exc:
+        return f"{group_error}; kill({pgid}) failed: {type(exc).__name__}: {exc}"
+    return f"{group_error}; killed the leader only (workers may have escaped)"
+
+
+def _reap_with_timeout(proc, timeout):
+    """Reap the child, killing its group when the deadline passes.
+
+    ``wait4`` runs on a thread so wall timing and rusage stay exact and the
+    main thread never polls. The reaper owns the single ``wait`` for this child,
+    which is why the main thread only observes the event instead of waiting too.
+    """
+    outcome = {}
+
+    def reap():
+        try:
+            _, status, usage = os.wait4(proc.pid, 0)
+            outcome["status"], outcome["usage"] = status, usage
+        except ChildProcessError as exc:  # someone else reaped it
+            outcome["error"] = f"{type(exc).__name__}: {exc}"
+        finally:
+            outcome["done"].set()
+
+    outcome["done"] = threading.Event()
+    reaper = threading.Thread(target=reap, name="capture-reaper", daemon=True)
+    reaper.start()
+    expired = not outcome["done"].wait(timeout)
+    if expired:
+        kill_error = _terminate_group(proc.pid)
+        # SIGKILL is not ignorable, so the reap completes promptly; the wait is
+        # bounded only so a pathological kernel state cannot hang the tool.
+        outcome["done"].wait(REAP_GRACE_S)
+        outcome["kill_error"] = kill_error
+    return expired, outcome
+
+
+def _run_child(argv, cwd, env, evidence, timeout=None) -> dict:
     """Give the child real descriptors, then reap it with wait4.
 
     The files are opened before the spawn so a failure to create them is a
     capture error, and both use exclusive mode so no path can overwrite
-    existing evidence.
+    existing evidence. A requested timeout puts the child in its own session so
+    its whole tree is addressable for a group kill.
     """
     started = time.monotonic()
     with open(os.path.join(evidence, STDOUT_NAME), "xb") as out, open(
@@ -342,25 +427,51 @@ def _run_child(argv, cwd, env, evidence) -> dict:
                 stdout=out,
                 stderr=err,
                 close_fds=True,
+                start_new_session=timeout is not None,
             )
         except OSError as exc:
-            return {
-                "spawn_error": f"{type(exc).__name__}: {exc}",
-                "status": None,
-                "usage": None,
-                "wall_s": time.monotonic() - started,
-            }
-        _, status, usage = os.wait4(proc.pid, 0)
+            return _run_outcome(started, spawn_error=f"{type(exc).__name__}: {exc}")
+        reap = _await_child(proc, timeout)
+        status = reap[0]
         # Bookkeeping only: the child is already reaped, and without this Popen
         # would still report it as running.
-        proc.returncode = (
-            -os.WTERMSIG(status) if os.WIFSIGNALED(status) else os.WEXITSTATUS(status)
-        )
+        if status is not None:
+            proc.returncode = (
+                -os.WTERMSIG(status) if os.WIFSIGNALED(status) else os.WEXITSTATUS(status)
+            )
+    return _run_outcome(started, reap)
+
+
+def _await_child(proc, timeout):
+    """Reap the child, honouring the deadline when one was requested.
+
+    Returns ``(status, usage, expired, kill_error)``. A status of None with a
+    kill_error of None means the reap itself failed.
+    """
+    if timeout is None:
+        _, status, usage = os.wait4(proc.pid, 0)
+        return status, usage, False, None
+    expired, outcome = _reap_with_timeout(proc, timeout)
+    kill_error = outcome.get("kill_error")
+    if "error" in outcome:
+        return None, None, expired, f"{outcome['error']}: {kill_error or ''}".strip()
+    return outcome.get("status"), outcome.get("usage"), expired, kill_error
+
+
+def _run_outcome(started, reap=None, spawn_error=None) -> dict:
+    """One normalized child-run result, in the shape the record builder reads.
+
+    ``reap`` is a ``(status, usage, expired, kill_error)`` tuple from
+    ``_await_child``; ``spawn_error`` covers the cases where no child ever ran.
+    """
+    status, usage, expired, kill_error = reap if reap is not None else (None, None, False, None)
     return {
-        "spawn_error": None,
-        "status": status_block(status),
+        "spawn_error": spawn_error,
+        "status": status_block(status) if status is not None else None,
         "usage": usage,
         "wall_s": time.monotonic() - started,
+        "expired": expired,
+        "kill_error": kill_error,
     }
 
 
@@ -422,6 +533,12 @@ def _assemble(request, evidence, outcome) -> dict:
             "wall_includes_wrapper": outcome["report_path"] is not None,
         },
         "result": result,
+        "timeout": {
+            "seconds": request.timeout,
+            "expired": bool(run["expired"]),
+            "kill_signal": "SIGKILL" if run["expired"] else None,
+            "kill_error": run["kill_error"],
+        },
         "streams": {
             name: {"file": filename, **hash_and_count(os.path.join(evidence, filename))}
             for name, filename in (("stdout", STDOUT_NAME), ("stderr", STDERR_NAME))
@@ -460,7 +577,9 @@ def capture(request) -> dict:
         spawn_argv, report_path = _spawn_argv(evidence, request)
         outcome = {"executable": executable, "report_path": report_path}
         outcome["started_at"] = utc_now()
-        outcome["run"] = _run_child(spawn_argv, request.cwd, env, evidence)
+        outcome["run"] = _run_child(
+            spawn_argv, request.cwd, env, evidence, request.timeout
+        )
         outcome["finished_at"] = utc_now()
         record = _assemble(request, evidence, outcome)
         write_record(evidence, record)
@@ -477,6 +596,8 @@ def cli_status(record) -> int:
     result = record.get("result") or {}
     if result.get("spawn_error"):
         return 2
+    if (record.get("timeout") or {}).get("expired"):
+        return TIMEOUT_STATUS
     if result.get("kind") == "signaled":
         return 128 + int(result["signal"])
     exit_status = result.get("exit_status")
@@ -494,11 +615,12 @@ def split_at_separator(argv):
 def describe(record) -> str:
     """One human line summarizing a finished capture."""
     result = record["result"]
-    outcome = (
-        f"exited {result['exit_status']}"
-        if result["kind"] == "exited"
-        else f"{result['kind']} {result.get('signal_name') or ''}".strip()
-    )
+    if (record.get("timeout") or {}).get("expired"):
+        outcome = f"TIMED OUT after {record['timeout']['seconds']}s"
+    elif result["kind"] == "exited":
+        outcome = f"exited {result['exit_status']}"
+    else:
+        outcome = f"{result['kind']} {result.get('signal_name') or ''}".strip()
     return (
         f"captured {record['evidence_dir']} ({outcome}, "
         f"{record['timing']['wall_s']:.3f}s wall, "
@@ -531,6 +653,16 @@ def main(argv=None) -> int:
         help="'time' also wraps the run in the platform time tool",
     )
     parser.add_argument("--json", action="store_true", help="print the whole record")
+    parser.add_argument(
+        "--timeout",
+        type=float,
+        default=None,
+        metavar="SECONDS",
+        help=(
+            "kill the child's whole process group after SECONDS and exit 124; "
+            "the child is run in its own session so no descendant survives"
+        ),
+    )
     args = parser.parse_args(head)
 
     if not child_argv:
@@ -545,6 +677,7 @@ def main(argv=None) -> int:
                 env_overrides=parse_env_overrides(args.env),
                 label=args.label,
                 resource_tool=args.resource_tool,
+                timeout=args.timeout,
             )
         )
     except CaptureError as exc:

@@ -11,6 +11,7 @@ import os
 import shutil
 import sys
 import tempfile
+import time
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
@@ -52,6 +53,13 @@ class CaptureHarness(unittest.TestCase):
     def read_record(self):
         with open(os.path.join(self.evidence(), "capture.json"), encoding="utf-8") as handle:
             return json.load(handle)
+
+    def assert_clean_exit(self, record, status):
+        """The child exited on its own with exactly this status."""
+        self.assertEqual(record["result"]["kind"], "exited")
+        self.assertEqual(record["result"]["exit_status"], status)
+        self.assertIsNone(record["result"]["signal"])
+        self.assertEqual(capture_tool.cli_status(record), status)
 
     def assert_stream_matches_file(self, record, stream):
         """The recorded digest and size describe the bytes actually on disk."""
@@ -104,9 +112,7 @@ class FailureTests(CaptureHarness):
     def test_failing_command_keeps_its_exact_exit_status(self):
         record = self.run_capture(py("import sys; sys.exit(7)"))
         self.assertTrue(record["complete"])
-        self.assertEqual(record["result"]["exit_status"], 7)
-        self.assertEqual(record["result"]["kind"], "exited")
-        self.assertEqual(capture_tool.cli_status(record), 7)
+        self.assert_clean_exit(record, 7)
 
     def test_signal_death_is_recorded_as_a_signal_not_an_exit(self):
         argv = py("import os, signal; os.kill(os.getpid(), signal.SIGTERM)")
@@ -336,6 +342,97 @@ class ResourceTests(CaptureHarness):
         self.assertIsNone(record["resource_detail"]["error"])
         self.assertTrue(record["resource_detail"]["metrics"])
         self.assertTrue(record["timing"]["wall_includes_wrapper"])
+
+
+class TimeoutTests(CaptureHarness):
+    """A requested deadline must stop the whole child tree, not just a wrapper."""
+
+    def test_timeout_records_expiry_and_kills_the_child(self):
+        record = self.run_capture(py("import time; time.sleep(10)"), timeout=0.5)
+        self.assertTrue(record["complete"], "the capture itself succeeded")
+        self.assertTrue(record["timeout"]["expired"])
+        self.assertEqual(record["timeout"]["seconds"], 0.5)
+        self.assertEqual(record["timeout"]["kill_signal"], "SIGKILL")
+        self.assertIsNone(record["timeout"]["kill_error"])
+        # The status is what the wait actually said: killed, not "exited".
+        self.assertEqual(record["result"]["kind"], "signaled")
+        self.assertEqual(record["result"]["signal_name"], "SIGKILL")
+        self.assertEqual(capture_tool.cli_status(record), capture_tool.TIMEOUT_STATUS)
+
+    def test_timeout_is_bounded_by_the_requested_deadline(self):
+        record = self.run_capture(py("import time; time.sleep(10)"), timeout=0.5)
+        self.assertLess(record["timing"]["wall_s"], 10.0)
+
+    def test_the_whole_process_group_is_killed(self):
+        # The child spawns a grandchild in the same group and prints its pid;
+        # a pid-only kill would leave the grandchild alive.
+        source = (
+            "import subprocess, sys, time\n"
+            "kid = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(10)'])\n"
+            "print(kid.pid, flush=True)\n"
+            "time.sleep(10)\n"
+        )
+        record = self.run_capture(py(source), timeout=1.0)
+        self.assertTrue(record["timeout"]["expired"])
+        grandchild = int(self.read_bytes("stdout.log").split()[0])
+        self.assertTrue(
+            self._reaped(grandchild), f"grandchild {grandchild} survived the group kill"
+        )
+
+    def _reaped(self, pid, attempts=50):
+        """Wait (briefly) for a pid to disappear from the process table."""
+        for _ in range(attempts):
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                return True
+            except PermissionError:
+                return False  # exists, just not ours
+            time.sleep(0.1)
+        return False
+
+    def test_a_fast_child_under_a_generous_timeout_is_untouched(self):
+        record = self.run_capture(py("print('done')"), timeout=60)
+        self.assertFalse(record["timeout"]["expired"])
+        self.assertIsNone(record["timeout"]["kill_signal"])
+        self.assert_clean_exit(record, 0)
+        self.assertEqual(self.read_bytes("stdout.log"), b"done\n")
+
+    def test_a_failing_child_under_a_timeout_keeps_its_own_status(self):
+        record = self.run_capture(py("import sys; sys.exit(5)"), timeout=60)
+        self.assertFalse(record["timeout"]["expired"])
+        self.assert_clean_exit(record, 5)
+
+    def test_without_a_timeout_no_deadline_is_recorded(self):
+        record = self.run_capture(py("print('plain')"))
+        self.assertIsNone(record["timeout"]["seconds"])
+        self.assertFalse(record["timeout"]["expired"])
+        self.assert_clean_exit(record, 0)
+
+    def test_a_non_positive_timeout_is_refused(self):
+        for bad in (0, -1):
+            with self.assertRaises(capture_tool.CaptureError):
+                capture_tool.CaptureRequest(
+                    argv=tuple(py("pass")), cwd=self.tmp, evidence_dir=self.evidence(), timeout=bad
+                ).resolved()
+
+    def test_cli_timeout_exits_with_the_timeout_status(self):
+        with redirect_stdout(StringIO()), redirect_stderr(StringIO()):
+            code = capture_tool.main(
+                [
+                    "--evidence-dir",
+                    self.evidence(),
+                    "--cwd",
+                    self.tmp,
+                    "--timeout",
+                    "0.5",
+                    "--",
+                    *py("import time; time.sleep(10)"),
+                ]
+            )
+        self.assertEqual(code, capture_tool.TIMEOUT_STATUS)
+        self.assertEqual(code, 124)
+        self.assertTrue(self.read_record()["timeout"]["expired"])
 
 
 if __name__ == "__main__":
