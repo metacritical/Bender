@@ -1,0 +1,16 @@
+{
+  "kind": "plain marshalled bytecode VM image, not native game kernels",
+  "tier_a_kernels": 0,
+  "tier_b_executors": 0,
+  "pgo_used": false,
+  "outputs": {
+    "plain-aot": {
+      "sha256": "10f151040e521383446c3a146fedd6cd10db78cc3e830e022160f4f15eed0660",
+      "bytes": 2164664
+    },
+    "plain-aot.c": {
+      "sha256": "a2aed8d79e2d3c4558dd5ae03b1fdf4f421c1b1579d1b0ddeba5a7caccacc578",
+      "bytes": 3800029
+    }
+  }
+}

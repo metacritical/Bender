@@ -1,0 +1,78 @@
+{
+  "schema": "janet/benchmark-capture/1",
+  "label": "plain-aot-build",
+  "complete": true,
+  "evidence_dir": "/Users/pankajdoharey/Development/Projects/janet/bench/results/current-game-aot-pgo-66192cee/plain-aot-build",
+  "command": {
+    "argv": [
+      "/Users/pankajdoharey/Development/Projects/janet/build/current-game-aot-pgo-66192cee/runtime/build/bender",
+      "--aot",
+      "/Users/pankajdoharey/Development/Projects/janet/build/current-game-aot-pgo-66192cee/game-source/main.janet",
+      "-o",
+      "/Users/pankajdoharey/Development/Projects/janet/build/current-game-aot-pgo-66192cee/artifacts/plain-aot"
+    ],
+    "cwd": "/Users/pankajdoharey/Development/Projects/janet/build/current-game-aot-pgo-66192cee/game-source",
+    "stdin": "devnull",
+    "env_overrides": {
+      "JANET_NO_PROFILE": "1",
+      "JANET_LANES": "0",
+      "JANET_TOOLS": "/Users/pankajdoharey/Development/Projects/janet/build/current-game-aot-pgo-66192cee/runtime/tools",
+      "XDG_CACHE_HOME": "/Users/pankajdoharey/Development/Projects/janet/build/current-game-aot-pgo-66192cee/cache-plain-aot-build"
+    },
+    "executable": {
+      "path": "/Users/pankajdoharey/Development/Projects/janet/build/current-game-aot-pgo-66192cee/runtime/build/bender",
+      "sha256": "6e5639fdaf08e49dafeb61a08170e2c9db3a48447465fcb5a49c8b5afe50c436",
+      "bytes": 1392776,
+      "error": null
+    }
+  },
+  "timing": {
+    "started_at": "2026-10-30T09:05:47.884953+00:00",
+    "finished_at": "2026-10-30T09:05:49.936383+00:00",
+    "wall_s": 2.051072,
+    "wall_includes_wrapper": false
+  },
+  "result": {
+    "kind": "exited",
+    "exit_status": 0,
+    "signal": null,
+    "signal_name": null,
+    "spawn_error": null
+  },
+  "timeout": {
+    "seconds": null,
+    "expired": false,
+    "kill_signal": null,
+    "kill_error": null
+  },
+  "streams": {
+    "stdout": {
+      "file": "stdout.log",
+      "sha256": "2f120b60c417607cce0223324bbde983f5ebad49c2fa616124b243f3e805e1a6",
+      "bytes": 261
+    },
+    "stderr": {
+      "file": "stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    }
+  },
+  "resource": {
+    "source": "wait4 rusage",
+    "maxrss_raw": 172949504,
+    "maxrss_unit": "bytes",
+    "maxrss_bytes": 172949504,
+    "utime_s": 0.70806,
+    "stime_s": 0.390223,
+    "page_reclaims": 34418,
+    "page_faults": 3075,
+    "swaps": 0,
+    "block_input_ops": 0,
+    "block_output_ops": 0,
+    "messages_sent": 0,
+    "messages_received": 0,
+    "signals_received": 0,
+    "voluntary_context_switches": 1001,
+    "involuntary_context_switches": 7382
+  }
+}
