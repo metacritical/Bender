@@ -62,7 +62,7 @@ non-release candidate as the GUI result.
 
 Create a sustained single-process AOT/PGO probe in the approved scratch
 root, reusing the unmodified scene modules and input. Attribute sampled
-time and allocations to VM dispatch, `janet_dict_find`/container access,
+time and allocations to VM dispatch, `bender_dict_find`/container access,
 core calls, string-buffer construction, GC, and native code. Report
 dynamic executor entries/backedges/**effectful exits**, not just emitted
 function counts. Measure startup/construction independently from playback.
@@ -72,15 +72,15 @@ Do not choose a data-layout rewrite until its expected share is measured.
 both repos imports the unchanged effect modules, runs 100 full animations
 in one process, and is itself PGO-collected twice and verified `--release`.
 Its 4-second main-thread sample had 3,380 stack tops: `run_vm` 1,383
-(~41%), `janet_gc_barrier` 283 (~8%), `janet_dict_find` 185 (~5%),
-`janet_in` 169 (~5%), and libc environment lookup 96 (~3%). Samples
+(~41%), `bender_gc_barrier` 283 (~8%), `bender_dict_find` 185 (~5%),
+`bender_in` 169 (~5%), and libc environment lookup 96 (~3%). Samples
 are an attribution guide, not independent addends or a VM-only timing.
-The lookup came from repeated diagnostic `getenv("JANET_TRACE_STRICT")`
+The lookup came from repeated diagnostic `getenv("BENDER_TRACE_STRICT")`
 checks on slab reuse and strict write barriers, not enforcement of
 strict-heap isolation.
 
 The first generic VM fix (`5e3f2740`) caches that diagnostic flag at
-`janet_init` and refreshes it on `os/setenv`; C reinitialization tests
+`bender_init` and refreshes it on `os/setenv`; C reinitialization tests
 pin both modes. GC/proc/event and the enabled executor/ASan matrix pass.
 Re-sampling removes environment lookup from the hot-stack list. In six
 same-sitting paired sustained-scattered release runs it is **1.033×**
@@ -138,9 +138,9 @@ dispatch 28/28, source-qualified callgraph and GC trace pass. Representative
 CLI value/math/array/table/I/O/interrupt suites pass 273/273. The native
 executor suite still stops at its AOT image's `native executor registration
 refused` and zero entry count, before the budget-1/2 and sanitizer lanes; the
-image links the ordinary macro-free `build/libjanet.a` unless an executor-enabled
+image links the ordinary macro-free `build/libbender.a` unless an executor-enabled
 library is built, so this is **not** a passing executor safety gate or a
-verified regression attribution. A standalone `bench/run.janet` native image
+verified regression attribution. A standalone `bench/run.ben` native image
 runs and preserves numeric results, but its single noisy microbench timings
 are not a paired release speed measurement. The CLI frame-stream, held-out
 seed and paired same-compiler GUI/CLI release gates remain pending for this
@@ -188,7 +188,7 @@ The seven-round, five-effect **complete bounded ANSI frame stream** sitting
 (seed 42, `ruby-port/logo.txt`, output discarded, whole process included)
 passed byte-for-byte parity across current verified-release Bender, Rust,
 Lua 5.5, LuaJIT and precompiled Chez. Raw records:
-`/tmp/janet-receiver-cli-language-fps.json` (ephemeral local artifact).
+`/tmp/bender-receiver-cli-language-fps.json` (ephemeral local artifact).
 Median effective frames/s were:
 
 | Effect | Frames | Bender | Rust | Lua 5.5 | LuaJIT | Chez compiled |
@@ -226,20 +226,20 @@ startup/effect construction and VM work both matter. One-frame repeats in
 that sitting were **17.73/13.80/18.50 ms**, but the separate quick ablation
 sitting was noisy (one wipe sample at 45 ms); these estimates are not a
 subtractive causal profile. A sustained unrelated `nbody` VM sample showed
-container access (`janet_in`), `janet_put` and GC barriers on its hot stack;
+container access (`bender_in`), `bender_put` and GC barriers on its hot stack;
 it does not quantify ttfx scene costs. A direct ttfx `sample` request found
 no stacks because the ~100 ms process ended before sampling began. Avoid
 inventing a main-thread ttfx percentage from those incomplete samples.
 
 A subsequent diagnostic-only replay (`3684d0b` in ttfx, `388511ee` here)
 now supplies those missing **ttfx-specific** observations. The driver
-`janet-port/bench/hot-stack.janet` reconstructs canvas, RNG, context and
+`bender-port/bench/hot-stack.ben` reconstructs canvas, RNG, context and
 effect from seed 42 and `ruby-port/logo.txt` on every replay; a single
 `--dump` replay is byte-identical to the existing CLI for `wipe` (138 frames)
 and `scattered` (181 frames). Five discarded-output scattered replays produce
 905 frames. It does not reuse completed mutable effects. Build the interpreter
-from the current amalgamation with `-DJANET_TTFX_SITE_PROFILE` and pass
-`JANET_TTFX_SITE_PROFILE=1` at runtime to collect counts; use a separate
+from the current amalgamation with `-DBENDER_TTFX_SITE_PROFILE` and pass
+`BENDER_TTFX_SITE_PROFILE=1` at runtime to collect counts; use a separate
 compile-disabled interpreter for sampling. The diagnostic counter is
 **separate from PGO**, indexed by original PC with source/name and a bytecode
 word fingerprint; it reports drops, and counts VM `call`/`tailcall` opcode
@@ -263,12 +263,12 @@ current 256-PC receiver/edge feedback limit too.
 A separate *uninstrumented* sustained 60-replay process permitted two
 independent macOS 4-second/1-ms `sample` runs for scattered (10,860 frames
 per run) and one wipe run (8,280 frames). Main-thread stacks repeatedly
-showed `run_vm` and `janet_in` -> `janet_dict_find` -> `janet_hash`; the
-scattered samples also show `janet_table_put`/`janet_gc_barrier` and method
+showed `run_vm` and `bender_in` -> `bender_dict_find` -> `bender_hash`; the
+scattered samples also show `bender_table_put`/`bender_gc_barrier` and method
 invocation. Raw artifacts are under `/tmp/ttfx-site-profile-2K7oHk85/`:
 `replay3.sites`, `wipe-replay3.sites`, `scattered-stack.txt`,
 `scattered-stack-2.txt`, `wipe-stack-2.txt`. The sample tree does not identify
-Janet caller functions; **do not attribute sampled C time directly to a
+Bender caller functions; **do not attribute sampled C time directly to a
 specific `ctx-frame-string` PC** or infer AOT speedup from instrumented
 counts. Diagnostic runs perturb timing (~0.77 s vs ~0.27 s for a one-effect
 scattered run here). Runtime-flag-off emits no diagnostics; a compile-disabled
@@ -279,7 +279,7 @@ rows or caches), per-thread counter state, saturating counts with explicit
 lost-event reporting, and hand-counted branch/CALL/301-PC fixture tests.
 Computed-goto and switch full fixture logs match exactly; a diagnostic binary
 with the flag off and a compile-disabled binary with the flag on both emit
-nothing. Test-only `JANET_SITE_COUNTER_MAX=2` caps per-site totals at two and
+nothing. Test-only `BENDER_SITE_COUNTER_MAX=2` caps per-site totals at two and
 reports 12,590 lost increments; ASan/UBSan under temporary-function/GC churn
 completed with zero drops. Repeated scattered/wipe profile logs match the
 pre-hardening totals byte-for-byte (zero drops). Fixed 4,096-definition and
@@ -317,7 +317,7 @@ passed four interrupted workloads plus parked slot/PC comparisons. Budget-2
 ASan/UBSan executor and mixed-effects harnesses passed, with the known macOS
 alternate-stack ASan caveat. The default `test/suite-native-executor.sh`
 **still fails at its image step** when it links the ordinary macro-free
-`build/libjanet.a`; an isolated executor-enabled archive and image passes.
+`build/libbender.a`; an isolated executor-enabled archive and image passes.
 This is an opt-in semantic slice, not a ttfx speed claim. The 313-PC ttfx
 renderer still fails executor eligibility on other operations; independent
 verified-release parity/performance gates remain pending for any larger

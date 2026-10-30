@@ -1,22 +1,22 @@
-# Clojure surface for Janet — gap specification
+# Clojure surface for Bender — gap specification
 
 A self-contained brief for implementing the missing Clojure-compatible surface on
-Janet. Everything in "Verified present" and "Missing" below was checked against a
+Bender. Everything in "Verified present" and "Missing" below was checked against a
 live `build/bender` on 2026-10-27, not inferred from source reading.
 
 ---
 
 ## 0. Goal and non-goals
 
-**Goal.** Make Clojure-shaped code readable and runnable on Janet without a
-translator: a macro/function layer (`src/boot/boot.janet`) plus small runtime
+**Goal.** Make Clojure-shaped code readable and runnable on Bender without a
+translator: a macro/function layer (`src/boot/boot.ben`) plus small runtime
 helpers, so that ordinary Clojure idioms — data-first map/vector utilities,
 threading, lazily-realized flows, error handling — behave as a Clojure programmer
 expects.
 
 **Non-goals**, restated from the user's decisions:
 
-- **No JBVM classes for `deftype`.** Janet `struct` (immutable) and `table`
+- **No JBVM classes for `deftype`.** Bender `struct` (immutable) and `table`
   (`@{}`, mutable) already model records. `deftype` is not required.
 - **No persistent/immutable-by-default data structures.** No structural-sharing
   vectors or HAMTs. Concurrency is Erlang-style: fibers, callbacks,
@@ -27,7 +27,7 @@ expects.
   (`defn` already threads `^type` hints into `{:hint ...}`; that path is
   sufficient. See §4.5.)
 - **No `recur`.** `JOP_TAILCALL` gives true tail calls (verified: 10M-deep
-  recursion returns in constant stack). `loop` + Janet `while`/`var` covers the
+  recursion returns in constant stack). `loop` + Bender `while`/`var` covers the
   iteration case. Adding `recur` would fight the compiler for no gain.
 
 ---
@@ -47,7 +47,7 @@ regression.
 `eachp`, `eachk`, `while`, `repeat`, `forever`.
 
 **Error handling**
-`try` with the Janet catch-tuple form `(try body ([e] ...))`, `error` (throw),
+`try` with the Bender catch-tuple form `(try body ([e] ...))`, `error` (throw),
 `protect`, `defer`, `edefer`, `with`, `assert`, `assertf`, `errorf`, `label`,
 `prompt`, `return`.
 
@@ -80,7 +80,7 @@ exact dispatch value plus a `:default` fallback, single arity, no hierarchy.
 **Destructuring**
 Positional, `&rest`, direct-key (`{:a a}`), `:keys`, `:or` with literal
 defaults and nil-triggers-default, nested, in every binding form.
-**`:as` is deliberately unavailable** — it holds its legacy Janet meaning and
+**`:as` is deliberately unavailable** — it holds its legacy Bender meaning and
 `import*`'s calling convention depends on that. Do not "fix" it.
 
 **Misc**
@@ -93,7 +93,7 @@ comparison), `tuple`/`array` for sequences.
 
 ¹ `partial` resolved present in the final probe but was absent from an earlier
 one; verify it evaluates before assuming, and add it if the probe was stale.
-² `delay` exists at `boot.janet:4705`; confirm `force` semantics against it.
+² `delay` exists at `boot.ben:4705`; confirm `force` semantics against it.
 
 ---
 
@@ -103,10 +103,10 @@ Grouped by cost and risk. Every name below returned "missing" from `dyn`.
 
 ### 2.1 Collections and dictionaries — mechanical, high value
 
-Plain functions over Janet `table`/`struct`/`array`/`tuple`. No compiler
+Plain functions over Bender `table`/`struct`/`array`/`tuple`. No compiler
 involvement, no new types.
 
-| Name | Clojure contract | Janet shape |
+| Name | Clojure contract | Bender shape |
 |---|---|---|
 | `assoc` | `(assoc m k v & kvs)` → new map | copy table, `put` each pair; return `struct` when input is a `struct` |
 | `dissoc` | `(dissoc m & ks)` → map minus keys | copy, `put k nil` or build fresh excluding ks |
@@ -122,7 +122,7 @@ involvement, no new types.
 | `update-vals` | `(update-vals m f)` | rebuild with `(f v)` |
 | `reduce-kv` | `(reduce-kv f init m)` over k,v | iterate `pairs` |
 | `zipmap` | `(zipmap ks vs)` → map | walk two seqs |
-| `set` | build a set from a seq | Janet has no set type; model as `@{k true}` — **document the representation** |
+| `set` | build a set from a seq | Bender has no set type; model as `@{k true}` — **document the representation** |
 | `vec` | coerce to vector | `(array ;xs)` |
 | `sorted-set` | ordered unique | not meaningful without a set type; **defer or omit with a note** |
 | `subvec` | slice | `(tuple/slice v start end)` |
@@ -137,7 +137,7 @@ involvement, no new types.
 
 Notes:
 - `mapv`/`filterv` need real vectors. Since the project rejected persistent
-  vectors, they return Janet `array` (`@[]`). **This must be stated in the doc**,
+  vectors, they return Bender `array` (`@[]`). **This must be stated in the doc**,
   because Clojure's `mapv` returns a vector and code indexes it.
 - `distinct?` is a predicate over varargs, not a seq op.
 - `keep-indexed`/`map-indexed` should take `(fn [i x])`.
@@ -147,7 +147,7 @@ Notes:
 `constantly`, `fnil`, `memoize`, `trampoline`, `some-fn`, `every-pred`,
 `not-any?`, `not-every?`.
 
-- `memoize` must key on the argument list; Janet tables accept tuples as keys, so
+- `memoize` must key on the argument list; Bender tables accept tuples as keys, so
   a plain `@{}` works. Note it is not thread-safe across VMs (consistent with the
   same-VM atoms decision).
 - `trampoline` is nearly free because tail calls already do not grow the stack;
@@ -159,11 +159,11 @@ Notes:
 `letfn`, `binding`, `with-redefs`, `with-redefs-fn`, `doseq`, `dotimes`.
 
 - `doto`/`some->`/`some->>` are pure rewrites in the style of the existing `->`.
-- `binding` maps onto Janet's `with-dyns` / `setdyn`; Clojure's rebinding of vars
+- `binding` maps onto Bender's `with-dyns` / `setdyn`; Clojure's rebinding of vars
   has no direct analogue, so **document what it actually does**.
-- `with-redefs` needs Janet's `*redef*` dynamic (present at `boot.janet:1568`).
+- `with-redefs` needs Bender's `*redef*` dynamic (present at `boot.ben:1568`).
   Confirm behavior before promising Clojure parity.
-- `letfn` expands to mutually-recursive `defn`s; Janet `def` opens scope, so this
+- `letfn` expands to mutually-recursive `defn`s; Bender `def` opens scope, so this
   may need a `do`-free expansion — mind the note at the bottom of
   `docs/internals/clojure-surface.md` about `do`-wrapped `def` scoping invisibly.
 - `doseq`/`dotimes` can delegate to the existing `loop`/`each`.
@@ -172,7 +172,7 @@ Notes:
 
 `lazy-seq`, `lazy-cat`, `realize`, `force`, `promise`, `deliver`, `realized?`.
 
-`examples/lazyseqs.janet` already implements lazy linked-list sequences with
+`examples/lazyseqs.ben` already implements lazy linked-list sequences with
 memoized realization. **Decide**: promote that example into core, or keep it an
 example and document that Clojure laziness is opt-in. Do not silently half-implement
 `lazy-seq` — a Clojure programmer will assume `(take 5 (map f (range)))` never
@@ -180,7 +180,7 @@ realizes the tail.
 
 `promise`/`deliver` are distinct from `delay`: they are one-shot write-once cells
 that block on `deref`. Given the Erlang-style decision, implement them over
-Janet fibers and say clearly whether `deref` blocks or returns a fiber.
+Bender fibers and say clearly whether `deref` blocks or returns a fiber.
 
 ### 2.6 Protocols and records — decide, then document
 
@@ -198,7 +198,7 @@ Per the user's decision: **no JBVM classes.** The realistic mapping is:
 - `reify` → a `table` with the method entries closed over.
 - `definterface`/`proxy` → **omit**, and say so.
 
-Important: Janet's `defmulti` supports **exact dispatch values only, no
+Important: Bender's `defmulti` supports **exact dispatch values only, no
 hierarchy** (`isa?`, `derive`, `prefer-method` are all absent). Protocols that
 rely on Java-style interface inheritance cannot be emulated faithfully. Scope this
 as "single-level tagging", not Clojure protocols.
@@ -208,16 +208,16 @@ as "single-level tagging", not Clojure protocols.
 `deftest`, `is`, `are`, `testing`, `run-tests`, `use-fixtures`;
 `ns`, `in-ns`, `refer`, `alias`.
 
-Janet has its own test conventions and `import`/`use` already shadow some of these
+Bender has its own test conventions and `import`/`use` already shadow some of these
 names. **Recommendation: skip `ns`/`in-ns`/`refer`/`alias` entirely** — they
-conflict with Janet's module system and buy nothing. Testing macros are worth it
+conflict with Bender's module system and buy nothing. Testing macros are worth it
 only if the intent is to run real Clojure test suites.
 
 ---
 
 ## 3. Semantic traps — reconcile or document, do not ignore
 
-These are the places where existing Janet behavior differs from Clojure and a
+These are the places where existing Bender behavior differs from Clojure and a
 naive port will produce silent wrong answers. Each needs an explicit decision
 recorded in `docs/internals/clojure-surface.md`.
 
@@ -231,14 +231,14 @@ Verified:
 ({:shape :square} :shape)     => :square   ; works
 ```
 
-In Janet a keyword call is a **method invocation on the object**, not a map
+In Bender a keyword call is a **method invocation on the object**, not a map
 lookup. `(:kw m)` is the single most common access idiom in Clojure source.
 Consequences: any ported Clojure code that uses keyword access silently reads
 `nil`.
 
 Options:
 1. **Leave it and document loudly.** Cannot be fixed without changing keyword
-   semantics globally, which would break Janet's method dispatch.
+   semantics globally, which would break Bender's method dispatch.
 2. Provide a reader/wrapper shim (`kw-get`) and a lint rule flagging `(:kw x)`.
 3. Compiler-level: make a keyword call fall back to a map lookup when the target
    is a table/struct and no method is found. **This is the tempting one and it is
@@ -258,7 +258,7 @@ Verified:
 ```
 
 Clojure's `=` is structural everywhere. A ported test that compares two built
-maps will fail on Janet. Decision needed: either document "use `deep=` for
+maps will fail on Bender. Decision needed: either document "use `deep=` for
 mutable", or provide a `clj=` that always recurses. **Do not shadow `=`.**
 (`differs-from-clojure` note belongs next to every collection helper.)
 
@@ -271,7 +271,7 @@ multi-arity methods. Protocol emulation inherits this limit. State it.
 ### 3.4 Structs are immutable
 
 `(put (struct :a 1) :b 2)` errors. Clojure's `assoc` returns a new map, so this
-is compatible in spirit — but `put` is the Janet idiom and it fails on structs.
+is compatible in spirit — but `put` is the Bender idiom and it fails on structs.
 Every `assoc`-family helper must branch on `struct?` vs `table?`.
 
 ### 3.5 `^{}` metadata on `def` is rejected
@@ -309,19 +309,19 @@ immutable case, or the helper silently mutates its input.
 
 ### 4.1 Where the code goes
 
-- Macros and pure functions: `src/boot/boot.janet`, in the existing style.
+- Macros and pure functions: `src/boot/boot.ben`, in the existing style.
 - Anything needing C (a real set type, blocking `promise`): `src/core/corelib.c`,
-  but **prefer boot.janet** — the user's framing is "mostly macro work".
+  but **prefer boot.ben** — the user's framing is "mostly macro work".
 - Documentation: extend `docs/internals/clojure-surface.md`; it already has
   "Already present" and "Deliberate omissions with cause" sections. Add a
   "Semantic differences from Clojure" section per §3.
 
 ### 4.2 Naming discipline
 
-Some Clojure names are already taken by Janet with different meaning
+Some Clojure names are already taken by Bender with different meaning
 (`merge` exists; verify its arg order and nil handling before aliasing).
 **Audit each name for a collision before defining it.** A duplicate top-level
-`def` in `boot.janet` is a silent shadow at best and a runtime error at worst.
+`def` in `boot.ben` is a silent shadow at best and a runtime error at worst.
 
 ### 4.3 `def` scoping gotcha
 
@@ -362,15 +362,15 @@ metadata model.
 
 ## 6. Acceptance criteria
 
-- Each new name resolves from a clean `build/janet` (not only `bender`) and has a
+- Each new name resolves from a clean `build/bender` (not only `bender`) and has a
   docstring in the house style.
-- A test file per group (`test/suite-clojure-core.janet` or extend
-  `test/suite-destructure.janet`) proving the Clojure contract: arity, nil
+- A test file per group (`test/suite-clojure-core.ben` or extend
+  `test/suite-destructure.ben`) proving the Clojure contract: arity, nil
   handling, and immutability behavior of each collection helper.
 - Every entry in §3 has a written decision in
   `docs/internals/clojure-surface.md` under "Semantic differences from Clojure",
   including the two that will bite (`:kw` access, `=` on mutable containers).
 - `make test` green; no change to `src/core/compile.c`, `bytecode.c`, `vm.c`, or
   `asm.c`.
-- Boot image still builds: `make` from clean produces `build/janet` and
-  `build/janet_boot` without warnings.
+- Boot image still builds: `make` from clean produces `build/bender` and
+  `build/bender_boot` without warnings.

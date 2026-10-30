@@ -1,5 +1,5 @@
 #include <stdint.h>
-#include <janet.h>
+#include <bender.h>
 
 /* Disable leak sanitizer */
 int __lsan_is_turned_off(void) {
@@ -8,20 +8,20 @@ int __lsan_is_turned_off(void) {
 
 int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
 
-    /* init Janet */
-    janet_init();
+    /* init Bender */
+    bender_init();
 
     /* fuzz the compile + bytecode VM path (parse, compile, run) in src/core/compile.c and src/core/vm.c */
-    JanetTable *env = janet_core_env(NULL);
-    JanetTryState tstate;
-    if (janet_try(&tstate) == JANET_SIGNAL_OK) {
-        Janet out;
-        janet_dobytes(env, data, (int32_t) size, "<fuzz>", &out);
+    BenderTable *env = bender_core_env(NULL);
+    BenderTryState tstate;
+    if (bender_try(&tstate) == BENDER_SIGNAL_OK) {
+        Bender out;
+        bender_dobytes(env, data, (int32_t) size, "<fuzz>", &out);
     }
-    janet_restore(&tstate);
+    bender_restore(&tstate);
 
-    /* cleanup Janet */
-    janet_deinit();
+    /* cleanup Bender */
+    bender_deinit();
 
     return 0;
 }

@@ -1,17 +1,17 @@
 image: freebsd/14.x
 sources:
-- https://git.sr.ht/~bakpakin/janet
+- https://git.sr.ht/~bakpakin/bender
 packages:
 - gmake
 tasks:
 - build: |
-    cd janet
+    cd bender
     gmake
     gmake test
     sudo gmake install
     sudo gmake uninstall
 - build-sanitizers: |
-    cd janet
+    cd bender
     CFLAGS="-g -O2 -fsanitize=address,undefined" gmake
     gmake test
     sudo gmake install

@@ -5,19 +5,19 @@ records *what* was built and *why*). This document records *how it
 works*: the hint surface, the width system, opcode coverage, externs,
 hybrid binaries, and the parity methodology — with examples.
 
-Pipeline shape: Janet source → parse → macroexpand/compile (macros
-run as today) → disassemble → `tools/infer.janet` (hybrid
+Pipeline shape: Bender source → parse → macroexpand/compile (macros
+run as today) → disassemble → `tools/infer.ben` (hybrid
 inference: hint contracts + call-site widening + fixpoint) →
-`tools/callgraph.janet` (registration, reachability, flow-check,
+`tools/callgraph.ben` (registration, reachability, flow-check,
 C emission) → `cc` → native binary or hybrid library. Nothing is
 trusted until the parity harness agrees byte-for-byte
-(`expected.txt` vs `actual.txt` via the janet oracle).
+(`expected.txt` vs `actual.txt` via the bender oracle).
 
 ## 1. Hint surface
 
 Three spellings, one meaning (canonicalized at extraction):
 
-```janet
+```bender
 (defn hyp ^double [a ^double b] (+ (* a a) (* b b)))
 (defn hyp ^:double [a ^:double b] (+ (* a a) (* b b)))   # ^:keyword too
 (defn hyp {:hint {:params [:double :double] :returns :double}} [a b]
@@ -41,7 +41,7 @@ Width vocabulary (canonical forms; 64-bit is the default integer):
 | `:u64` `:u32` `:u16` `:u8` | `uint64_t` … | unsigned family |
 | `:double` | `double` | default float |
 | `:float` | `float` | **true float32 arithmetic** (see divergences) |
-| `:array` | `JanetArray*` | boxed-number arrays, Step 11 (below) |
+| `:array` | `BenderArray*` | boxed-number arrays, Step 11 (below) |
 
 Aliases fold at extraction (`:i64`/`:int64`→`:long`,
 `:int`/`:int32`→`:i32`, `:f64`→`:double`, `:f32`→`:float`,
@@ -57,7 +57,7 @@ widen conservatively to `:number`.
 - `promote`: int widths compute as `double` (oracle-identical
   everywhere; exact parity by construction), reboxed via
   `wrap_number`. Extern C declarations keep exact foreign signatures.
-- Boxed janet truncates at 2^53 in both modes — native-vs-boxed
+- Boxed bender truncates at 2^53 in both modes — native-vs-boxed
   divergence past 2^53 is by design, now explicit and flagged.
 
 ## 3. Opcode coverage (fail-closed)
@@ -76,7 +76,7 @@ Anything else skips **with a reason** (`native-skip <id> <name>
   PGO-nonneg int operands (below).
 - `divf`/`mod`/`rem`/`divim` (2026-10-09): `divf` is `floor(a/b)`,
   `mod` is `b==0?a:a-b*floor(a/b)`, `rem` is `fmod(a,b)` — exact
-  libm matches of boxed. Int widths refuse (C `%` truncates, Janet
+  libm matches of boxed. Int widths refuse (C `%` truncates, Bender
   floors) unless PGO-unanimous `min >= 0` on unrebound params, in
   which case trunc == floor; the int path guards the whole nonneg
   domain fail-loud (`b <= 0 || a < 0` aborts — PGO evidence is not
@@ -107,18 +107,18 @@ Anything else skips **with a reason** (`native-skip <id> <name>
   `lt`-exit + same-array bound + access-before-increment + no count
   mutation, all positional). `< 0` stays as defense-in-depth.
 - Branches: `if`/`goto` via CFG + dataflow join; conditions must be
-  `:bool` (janet truthiness makes `0` truthy — C wouldn't).
+  `:bool` (bender truthiness makes `0` truthy — C wouldn't).
 - Loops: back edges + loop-carried slots (`lte`/`gte` supported).
 - Comparisons: full `lt/gt/eq/neq` family (+ immediates).
 - Moves: `movn`/`movf` (cross-tier copies).
 - Calls: direct calls to other emitted natives (multi-round
   fixpoint); tail calls; declared externs (below).
 - Arrays (`:array` params): `len` → `->count`; `get`/`put` →
-  `->data[]` with an explicit bounds guard that aborts (janet
+  `->data[]` with an explicit bounds guard that aborts (bender
   OOB-`nil` has no unboxed form). Rules: base must be `:array`,
   index int-family, `put` value numeric, returns stay numeric.
   Kernels never retain pointers (caller-rooted for the call), so
-  zero collector work. Pointer temps (`JanetArray*`) are exempt
+  zero collector work. Pointer temps (`BenderArray*`) are exempt
   from numeric purity. Counted `for i 0 (len a)` loops elide the
   upper half (above).
 - Dead code never reaches emission (reachability from entry thunks;
@@ -126,8 +126,8 @@ Anything else skips **with a reason** (`native-skip <id> <name>
 
 ## 4. Extern C calls (`--externs FILE`)
 
-```janet
-# decls.janet
+```bender
+# decls.ben
 (def externs
   {"game-clamp" {:c "game_clamp"
                  :params [:double :double :double]
@@ -147,11 +147,11 @@ Anything else skips **with a reason** (`native-skip <id> <name>
   `void*` params stay boxed/shim-side. Signature mismatches (arity,
   spread, return mismatch) fail closed with reasons.
 
-## 5. Hybrid binaries (`--emit-native-lib`, `janet-aot.sh --native`)
+## 5. Hybrid binaries (`--emit-native-lib`, `bender-aot.sh --native`)
 
-`emit-native-lib` emits kernels + `janet-cfunction` wrappers
+`emit-native-lib` emits kernels + `bender-cfunction` wrappers
 (unbox → kernel → rebox with per-width boundary casts) +
-`native_init(JanetTable*)` registering them. `mkimage --native`
+`native_init(BenderTable*)` registering them. `mkimage --native`
 strips proven defns from the unit and prepends a prelude rebind, so
 same-unit call sites compile against the wrappers (native stays
 native-to-native internally) while boxed code and `eval`'d mod code
@@ -161,7 +161,7 @@ path prints the same `native-skip` diagnostics as `--emit-native`
 to hide all signal). Build:
 
 ```sh
-tools/janet-aot.sh game.janet --native -o game   # needs a C compiler
+tools/bender-aot.sh game.ben --native -o game   # needs a C compiler
 ```
 
 The boxed tier (embedded VM) keeps running dynamic code; eval and
@@ -173,7 +173,7 @@ boxed-side keeps the boxed copy (correct, just interpreted).
 
 `--emit-native DIR` writes `native.c` (kernels + a `main` that calls
 each kernel over a sample grid) and `expected.txt` (same calls
-through the janet oracle by `eval`ing the original defns):
+through the bender oracle by `eval`ing the original defns):
 
 - Scalar samples: ints from `[-3 -1 0 1 3]`, floats from
   `[-2.5 0.5 1.5 2.5]`; int kernels get integer samples only.
@@ -181,8 +181,8 @@ through the janet oracle by `eval`ing the original defns):
   `[4 5]`); int params in array kernels sample `[0 1]` (variants
   have length ≥ 2; OOB aborts by design).
 - Compile the harness with `cc -O2` (`-fwrapv` for int kernels,
-  `-Isrc/include -Isrc/conf` + `build/janet.o` when array kernels
-  pull `janet.h` layouts/macros), diff actual vs expected —
+  `-Isrc/include -Isrc/conf` + `build/bender.o` when array kernels
+  pull `bender.h` layouts/macros), diff actual vs expected —
   byte-identical or it doesn't ship.
 
 ## 7. Divergences catalog (all opt-in, all documented)
@@ -199,25 +199,25 @@ through the janet oracle by `eval`ing the original defns):
 ## 8. CLI reference
 
 ```
-tools/callgraph.janet FILE... [--emit-native DIR]
+tools/callgraph.ben FILE... [--emit-native DIR]
                               [--emit-native-lib DIR]
                               [--externs FILE]
                               [--profile FILE]
                               [--include FILE]...
                               [--int-policy wrap|promote]
-tools/janet-aot.sh app.janet [-o app] [-c] [-S] [-E args...] [--native]
+tools/bender-aot.sh app.ben [-o app] [-c] [-S] [-E args...] [--native]
 ```
 
 ## 9. Worked example
 
-```janet
-# w.janet
+```bender
+# w.ben
 (defn add-i32 {:hint {:params [:i32 :i32] :returns :i32}} [a b] (+ a b))
 (defn main [] (print (add-i32 2 3)))
 ```
 
 ```sh
-./build/bender tools/callgraph.janet w.janet --emit-native /tmp/gw
+./build/bender tools/callgraph.ben w.ben --emit-native /tmp/gw
 # native 1 fns ... /tmp/gw   (+ native-skip lines for thunk/main)
 grep -E "int32_t add_i32" /tmp/gw/native.c
 # int32_t add_i32(int32_t p0, int32_t p1) {
@@ -228,7 +228,7 @@ cc -O2 -w -fwrapv /tmp/gw/native.c -o /tmp/gw/native
 Step 13's DCE is the reachability already in the pipeline
 (Phase 4 step 2: reachability from entry thunks); Step 11's SoA story is N
 `:array` params (positions, velocities, …) through the same
-mechanism. `test/suite-callgraph.janet` (171 pins as of 2026-10-09)
+mechanism. `test/suite-callgraph.ben` (171 pins as of 2026-10-09)
 locks all of the above: exact C text, parity runs, alias
 canonicalization, fail-closed reasons, policy modes, DCE absence.
 
@@ -255,16 +255,16 @@ canonicalization, fail-closed reasons, policy modes, DCE absence.
 
 ## 11. 2026-10-08/09 batch (ttfx-driven)
 
-`bender --aot bin/ttfx-cli.janet --native` emitted 0 kernels with no
+`bender --aot bin/ttfx-cli.ben --native` emitted 0 kernels with no
 diagnostics; now 4 (`k_next_word_bang`, `color_clamp`, `floor_div`,
 `bitlen`) with reasons for all 148 skips. Landed, in order:
 
 1. AOT cc flags `-O3 -fwrapv -fno-math-errno
-   -fno-trapping-math` (`boot.janet`; `-fwrapv` is a correctness
+   -fno-trapping-math` (`boot.ben`; `-fwrapv` is a correctness
    fix for `:wrap`).
-2. VM `JANET_LIKELY/UNLIKELY` on ALU fast paths + GC polls
+2. VM `BENDER_LIKELY/UNLIKELY` on ALU fast paths + GC polls
    (`vm.c`; ttfx interp 547 → 637 fps).
-3. `bench/run.janet` micro-harness (ALU/array/table-get/alloc).
+3. `bench/run.ben` micro-harness (ALU/array/table-get/alloc).
 4. `divf`/`mod`/`rem` float emission + `k_` reserved-name prefix
    (fixed a real miscompile: folded `fmod` gave `-1` vs `0.5`).
 5. `divim` emission + lib-path skip diagnostics.
@@ -338,32 +338,32 @@ Manual `--pgo` (collect with workload, widen, gate, install) works
 but needs expert plumbing per build. The automatic loop closes it with no
 manual intervention after a one-time workload:
 
-- **Interpreter development runs collect by default.** `bender app.janet`
+- **Interpreter development runs collect by default.** `bender app.ben`
   writes a per-run diagnostic dump under
-  `$XDG_CACHE_HOME/janet/pgo/interpreter/source-<key>/` (or `~/.cache/...`),
+  `$XDG_CACHE_HOME/bender/pgo/interpreter/source-<key>/` (or `~/.cache/...`),
   keyed by canonical source path. Each completed PID/attempt run carries
   source-path-and-bytes metadata. Under a per-source lock, compatible runs
   recompute `cumulative.jdn` from immutable run inputs (no replayed increments
   after interrupted publication). Changed source bytes cannot join an old
-  aggregate; unknown runs remain separate. `JANET_NO_PROFILE=1` disables
-  implicit collection. Explicit `JANET_PROFILE=1` / `JANET_PROFILE_OUT=path`
+  aggregate; unknown runs remain separate. `BENDER_NO_PROFILE=1` disables
+  implicit collection. Explicit `BENDER_PROFILE=1` / `BENDER_PROFILE_OUT=path`
   keep their existing behavior. Interpreter diagnostics are **not** promoted
   into the gateable AOT cache: they have no replayable workload identity.
   Only an explicit `--pgo` collection can seed that cache. Failed cache
   writes never change application output.
 - **AOT binary runs collect on demand.** AOT binaries (generated `main`) collect a
   type profile into the standard cache when no profile exists yet;
-  `JANET_AUTO_PGO=1` forces additional runs into unique sidecars rather
-  than replacing cached evidence. Never when `JANET_NO_PROFILE` is set;
+  `BENDER_AUTO_PGO=1` forces additional runs into unique sidecars rather
+  than replacing cached evidence. Never when `BENDER_NO_PROFILE` is set;
   an unwritable cache silently runs clean. Collection costs ~10%
   (16-line direct-mapped entry cache, exact type masks; min/max and
   element evidence sampled 1-in-8 after a 16-call warmup).
 - **Trivial runs don't clobber.** Auto dumps additionally require a
-  minimum call count (`JANET_AUTO_PGO_MIN_CALLS`, default 10000), so
+  minimum call count (`BENDER_AUTO_PGO_MIN_CALLS`, default 10000), so
   `--help` runs never overwrite a useful profile. Explicit dumps
   always write.
-- **Cache layout and accumulation.** `$XDG_CACHE_HOME/janet/pgo/<key>.{jdn,workload,stdin}`,
-  key = sanitized binary basename (same algorithm in C and Janet).
+- **Cache layout and accumulation.** `$XDG_CACHE_HOME/bender/pgo/<key>.{jdn,workload,stdin}`,
+  key = sanitized binary basename (same algorithm in C and Bender).
   Forced binary runs claim `<key>.jdn.run-<pid>-<attempt>.pending`
   and publish `.jdn` sidecars only after the dump finishes.
   Binary sidecars have no replayable workload identity, so remain diagnostic:
@@ -383,9 +383,9 @@ manual intervention after a one-time workload:
   same parity gate. Gate failure falls back to unoptimized with a
   warning (never breaks the build); `--pgo` still dies on mismatch.
   `--no-auto-pgo` opts out; missing/stale pieces print what to do.
-- **Verified release builds.** First seed with `bender --aot app.janet
+- **Verified release builds.** First seed with `bender --aot app.ben
   --native --pgo "args" -o app` (optionally `--pgo-stdin file`). Then
-  `bender --aot app.janet --native --release -o app` demands compatible
+  `bender --aot app.ben --native --release -o app` demands compatible
   cached evidence and its replayable workload, reruns the interpreter oracle,
   and installs only when the native candidate exits successfully with matching
   stdout. Unlike ordinary automatic builds, absent/stale evidence or failed
@@ -395,8 +395,8 @@ manual intervention after a one-time workload:
   cannot be combined with `--pgo`, `--no-auto-pgo`, `-c`, `-S`, or `-E`.
   It does not yet establish content-addressed source identity or verify
   stderr/side effects; treat the parity workload as a deliberately scoped gate.
-- **Size builds.** `bender --aot app.janet -Oz -o app` and
-  `bender --aot app.janet --native -Oz -o app` request compiler size
+- **Size builds.** `bender --aot app.ben -Oz -o app` and
+  `bender --aot app.ben --native -Oz -o app` request compiler size
   optimization, function/data sections and platform dead-section removal,
   then strip debug symbols from a staged binary before installation. `-Oz`
   requires a binary build (not `-c`, `-S`, or `-E`); unsupported compiler
@@ -416,6 +416,6 @@ manual intervention after a one-time workload:
   candidate. Injected compression and `upx -t` failures both left the
   previously installed output unchanged. These results are target/toolchain
   specific; stderr and external side effects are not parity-gated.
-- **Locked-down targets.** `-DJANET_NO_PGO` (iOS: no JIT/dynamic
+- **Locked-down targets.** `-DBENDER_NO_PGO` (iOS: no JIT/dynamic
   codegen) compiles the binary-side mechanism out entirely; explicit
   profiling APIs keep working.

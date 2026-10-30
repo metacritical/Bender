@@ -15,7 +15,7 @@ and the garbage collector cannot see raw pointers at all.
 A `:ptr` flows through signatures, `unsafe/malloc`, and `ffi/lookup`.
 Three operations make it usable as a value:
 
-```janet
+```bender
 (def p (unsafe/malloc 64))
 (unsafe/ptr-eq p p)                  # => true
 (def q (unsafe/ptr-add p 16))        # 16 bytes forward
@@ -27,7 +27,7 @@ Three operations make it usable as a value:
 
 Rules: offsets are signed byte counts; nothing is bounds-checked;
 `nil` is the only null. Keep every malloc'd pointer reachable from a
-Janet root (table, array, fiber slot) or accept leaks/crashes — the
+Bender root (table, array, fiber slot) or accept leaks/crashes — the
 GC never traces raw addresses.
 
 ## 2. Typed peek and poke through raw pointers
@@ -35,7 +35,7 @@ GC never traces raw addresses.
 `ffi/read` already accepts raw pointers; `unsafe/poke` is its inverse
 (any `ffi` type, optional byte offset):
 
-```janet
+```bender
 (def p (unsafe/malloc 64))
 (unsafe/poke :int p 0x12345678)
 (unsafe/poke :double p 2.5 8)
@@ -48,7 +48,7 @@ GC never traces raw addresses.
 
 Struct values marshal as tuples, exactly like everywhere else:
 
-```janet
+```bender
 (def vec2 (ffi/struct :float :float))
 (unsafe/poke vec2 p [60.0 80.0] 16)
 (ffi/read vec2 p 16)  # => [60.0 80.0]
@@ -60,7 +60,7 @@ buffer-function surface instead.
 
 ## 3. Allocation: malloc / calloc / realloc / free
 
-```janet
+```bender
 (def c (unsafe/calloc 4 8))     # 4x8 zeroed bytes
 (ffi/read :int c 24)          # => 0
 (unsafe/poke :int c 99)
@@ -79,7 +79,7 @@ addresses, no `unsafe/pointer-buffer` interiors, no exec mappings).
 
 Two shapes. One-shot — bytes in, callable function out:
 
-```janet
+```bender
 # aarch64 only: movz x0, #42 ; ret
 (def code (buffer/new-filled 8 0))
 (put code 0 0x40) (put code 1 0x05) (put code 2 0x80) (put code 3 0xD2)
@@ -91,7 +91,7 @@ Two shapes. One-shot — bytes in, callable function out:
 
 Hand-rolled — for JITs that emit code incrementally:
 
-```janet
+```bender
 (def page (unsafe/exec-alloc 4096))  # mapped read/write, NOT executable
 # ... emit bytes via unsafe/poke on (unsafe/pointer-buffer page 4096) ...
 (unsafe/exec-protect page 4096)      # flip to read/execute; writing now faults
@@ -100,9 +100,9 @@ Hand-rolled — for JITs that emit code incrementally:
 ```
 
 `unsafe/trampoline` covers the reverse direction (C calling back into
-Janet). All three executable-memory bindings require the
-`JANET_SANDBOX_FFI_JIT` capability; the rest require
-`JANET_SANDBOX_FFI_USE`. Sizes round up to whole pages.
+Bender). All three executable-memory bindings require the
+`BENDER_SANDBOX_FFI_JIT` capability; the rest require
+`BENDER_SANDBOX_FFI_USE`. Sizes round up to whole pages.
 
 ## 5. What can go wrong (read twice)
 
@@ -113,10 +113,10 @@ Janet). All three executable-memory bindings require the
 - Use-after-free and double-free behave like C: anything, later.
 - W^X violations: never write to an exec-protected page; never call
   a merely-writable page.
-- Callbacks (`unsafe/trampoline`, Janet functions passed as `:ptr`)
+- Callbacks (`unsafe/trampoline`, Bender functions passed as `:ptr`)
   are gc-rooted on pass — that root is never released implicitly.
 
-Test pins live in `test/suite-ffi.janet` (portable subset) and
+Test pins live in `test/suite-ffi.ben` (portable subset) and
 `examples/ffi/` (arch-specific calls). Anything new here gets both.
 
 ## 6. `ffi/defstruct`: named structs with kernel-mapped fields
@@ -125,7 +125,7 @@ For structs the compiler can see through, declare once and get both
 worlds -- a tuple-compatible descriptor plus native allocation with
 field accessors that AOT kernels inline as direct memory access:
 
-```janet
+```bender
 (ffi/defstruct Point x :double y :double n :int)
 Point/descriptor  # => (:double :double :int), ffi/defbind-compatible
 Point/size        # => 24
@@ -142,7 +142,7 @@ Fields of type `:double`, `:float`, or `:int` additionally carry
 `:kernel {:pread ...}` / `{:pwrite ...}` metadata on their accessors,
 so a kernel calling `(Point/x p)` emits `(*(double*)((char*)(p) + 0))`
 instead of a call (8x measured on a stepping loop; parity oracle in
-`test/suite-callgraph.janet`). Other field types (`:long` reads back
+`test/suite-callgraph.ben`). Other field types (`:long` reads back
 `s64`, `:ptr` stays opaque) get plain boxed accessors -- kernels using
 them refuse fail-closed. Rules that keep this sound:
 
@@ -154,7 +154,7 @@ them refuse fail-closed. Rules that keep this sound:
 - The callee is never emitted itself (its body is interpreter-only);
   only direct-access call sites compile. Tail calls refuse for now.
 - Macro-generated defns register via top-level expansion splicing in
-  `tools/callgraph.janet`: a macro call expanding to `(do ...)` joins
+  `tools/callgraph.ben`: a macro call expanding to `(do ...)` joins
   the stream as siblings, since do-nested defns never register.
   `defn`/`defmacro` heads are never expanded (their shape is the scan
   contract).

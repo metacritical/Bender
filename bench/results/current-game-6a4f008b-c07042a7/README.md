@@ -34,9 +34,9 @@ tip182.5FPS/229776KiB/worst24.5ms. All four arms validated exact frame counts.
   Logs preserve compiler flags. These are script/interpreter runs, NOT AOT/PGO
   native game artifacts. Enabled build support alone does not establish native
   actor/game kernel execution.
-- Profiling OFF (`JANET_NO_PROFILE=1`), lanes0, uncapped rendering, fresh per-arm
+- Profiling OFF (`BENDER_NO_PROFILE=1`), lanes0, uncapped rendering, fresh per-arm
   cache at smoke. Long runs reuse their respective smoke cache directories;
-  profiling remains disabled. Other JANET_/BENDER_ env keys scrubbed.
+  profiling remains disabled. Other BENDER_/BENDER_ env keys scrubbed.
 - Baseline binary SHA2568355f162165c0957acd312ea92153e78c98a4d5e7bcf4bf04e4f71c2b965a8d1;
   tip4ef0e7dea4cbe648c07e5d1f321167c83644277f89f2c130dad82eaa95690e9a.
 
@@ -67,7 +67,7 @@ commands, identities, frame summaries, exit status and resource outcomes.
 Raw stdout/stderr files disappeared from the shared temporary evidence directory
 after results were captured; the JSON summaries are retained, but are not full
 raw logs. The runner and manifest are saved here; the ~54MiB game plus saved
-world remain in `/tmp/janet-current-game-ab-evidence/game-source` and are NOT
+world remain in `/tmp/bender-current-game-ab-evidence/game-source` and are NOT
 embedded in this commit. `FREEZE-NOTE.md` predates addition of the saved world;
 its exclusion statement is superseded by this README and saved-world manifest.
 

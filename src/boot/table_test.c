@@ -20,51 +20,51 @@
 * IN THE SOFTWARE.
 */
 
-#include <janet.h>
+#include <bender.h>
 #include <assert.h>
 
 #include "tests.h"
 
 int table_test() {
 
-    JanetTable *t1, *t2;
+    BenderTable *t1, *t2;
 
-    t1 = janet_table(10);
-    t2 = janet_table(0);
+    t1 = bender_table(10);
+    t2 = bender_table(0);
 
-    janet_table_put(t1, janet_cstringv("hello"), janet_wrap_integer(2));
-    janet_table_put(t1, janet_cstringv("akey"), janet_wrap_integer(5));
-    janet_table_put(t1, janet_cstringv("box"), janet_wrap_boolean(0));
-    janet_table_put(t1, janet_cstringv("square"), janet_cstringv("avalue"));
+    bender_table_put(t1, bender_cstringv("hello"), bender_wrap_integer(2));
+    bender_table_put(t1, bender_cstringv("akey"), bender_wrap_integer(5));
+    bender_table_put(t1, bender_cstringv("box"), bender_wrap_boolean(0));
+    bender_table_put(t1, bender_cstringv("square"), bender_cstringv("avalue"));
 
     assert(t1->count == 4);
     assert(t1->capacity >= t1->count);
 
-    assert(janet_equals(janet_table_get(t1, janet_cstringv("hello")), janet_wrap_integer(2)));
-    assert(janet_equals(janet_table_get(t1, janet_cstringv("akey")), janet_wrap_integer(5)));
-    assert(janet_equals(janet_table_get(t1, janet_cstringv("box")), janet_wrap_boolean(0)));
-    assert(janet_equals(janet_table_get(t1, janet_cstringv("square")), janet_cstringv("avalue")));
+    assert(bender_equals(bender_table_get(t1, bender_cstringv("hello")), bender_wrap_integer(2)));
+    assert(bender_equals(bender_table_get(t1, bender_cstringv("akey")), bender_wrap_integer(5)));
+    assert(bender_equals(bender_table_get(t1, bender_cstringv("box")), bender_wrap_boolean(0)));
+    assert(bender_equals(bender_table_get(t1, bender_cstringv("square")), bender_cstringv("avalue")));
 
-    janet_table_remove(t1, janet_cstringv("hello"));
-    janet_table_put(t1, janet_cstringv("box"), janet_wrap_nil());
+    bender_table_remove(t1, bender_cstringv("hello"));
+    bender_table_put(t1, bender_cstringv("box"), bender_wrap_nil());
 
     assert(t1->count == 2);
 
-    assert(janet_equals(janet_table_get(t1, janet_cstringv("hello")), janet_wrap_nil()));
-    assert(janet_equals(janet_table_get(t1, janet_cstringv("box")), janet_wrap_nil()));
+    assert(bender_equals(bender_table_get(t1, bender_cstringv("hello")), bender_wrap_nil()));
+    assert(bender_equals(bender_table_get(t1, bender_cstringv("box")), bender_wrap_nil()));
 
-    janet_table_put(t2, janet_csymbolv("t2key1"), janet_wrap_integer(10));
-    janet_table_put(t2, janet_csymbolv("t2key2"), janet_wrap_integer(100));
-    janet_table_put(t2, janet_csymbolv("some key "), janet_wrap_integer(-2));
-    janet_table_put(t2, janet_csymbolv("a thing"), janet_wrap_integer(10));
+    bender_table_put(t2, bender_csymbolv("t2key1"), bender_wrap_integer(10));
+    bender_table_put(t2, bender_csymbolv("t2key2"), bender_wrap_integer(100));
+    bender_table_put(t2, bender_csymbolv("some key "), bender_wrap_integer(-2));
+    bender_table_put(t2, bender_csymbolv("a thing"), bender_wrap_integer(10));
 
-    assert(janet_equals(janet_table_get(t2, janet_csymbolv("t2key1")), janet_wrap_integer(10)));
-    assert(janet_equals(janet_table_get(t2, janet_csymbolv("t2key2")), janet_wrap_integer(100)));
+    assert(bender_equals(bender_table_get(t2, bender_csymbolv("t2key1")), bender_wrap_integer(10)));
+    assert(bender_equals(bender_table_get(t2, bender_csymbolv("t2key2")), bender_wrap_integer(100)));
 
     assert(t2->count == 4);
-    assert(janet_equals(janet_table_remove(t2, janet_csymbolv("t2key1")), janet_wrap_integer(10)));
+    assert(bender_equals(bender_table_remove(t2, bender_csymbolv("t2key1")), bender_wrap_integer(10)));
     assert(t2->count == 3);
-    assert(janet_equals(janet_table_remove(t2, janet_csymbolv("t2key2")), janet_wrap_integer(100)));
+    assert(bender_equals(bender_table_remove(t2, bender_csymbolv("t2key2")), bender_wrap_integer(100)));
     assert(t2->count == 2);
 
     return 0;

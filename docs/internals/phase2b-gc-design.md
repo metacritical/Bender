@@ -11,34 +11,34 @@ reports folded into this session's history for the complete citation trail.
 
 **Collector:** stop-the-world, generational mark-sweep, per-VM thread-local heap.
 Marking uses a 4-bit rolling epoch stamp (not a single mark bit) stored in the
-`JanetGCObject` flags word (`gc.h:38-52`, `gc.c:85-96`); an object is "reachable this
+`BenderGCObject` flags word (`gc.h:38-52`, `gc.c:85-96`); an object is "reachable this
 cycle" iff its epoch field equals the current epoch. Minor collections mark full
 roots but skip old-clean containers and only sweep young blocks; major collections
 free every unmarked block, merge freelists, and reset slab age/dirty bits
 (`gc.c:745-754, 926, 1372`). Correctness of the minor/major split depends entirely on
-the write barrier: `janet_gc_barrier(obj, value)` must be called after every store of
-a Janet value into a heap table/array/equivalent container, because minors skip
+the write barrier: `bender_gc_barrier(obj, value)` must be called after every store of
+a Bender value into a heap table/array/equivalent container, because minors skip
 scanning old-but-clean containers and rely on the barrier to have dirtied the page if
 a new young edge was written (`gc.c:1801-1807, 1765-1773`). This is the exact
-contract Phase 1's `e816546a` fix restored for `JanetThreadHandle`.
+contract Phase 1's `e816546a` fix restored for `BenderThreadHandle`.
 
 **Root enumeration:** a mix of implicit and explicit, not pure stack-scanning.
-`janet_mark_roots` (`gc.c:2119`) scans: the EV pending-work queues (runnable/timeout
+`bender_mark_roots` (`gc.c:2119`) scans: the EV pending-work queues (runnable/timeout
 fibers), the dynamic-bindings table, the profiler table, exactly one implicit fiber
-root (`janet_vm.root_fiber`), the live-compilation stack, and a cross-fiber
-remembered set. Critically, **Janet already has a first-class explicit-root API**:
-`janet_gcroot`/`janet_gcunroot`/`janet_gcunrootall` backed by a growable
-`janet_vm.roots` array (`gc.c:2747, 2828, 2841`), plus a companion LIFO
+root (`bender_vm.root_fiber`), the live-compilation stack, and a cross-fiber
+remembered set. Critically, **Bender already has a first-class explicit-root API**:
+`bender_gcroot`/`bender_gcunroot`/`bender_gcunrootall` backed by a growable
+`bender_vm.roots` array (`gc.c:2747, 2828, 2841`), plus a companion LIFO
 "gcshadow" stack for scoped C-stack-depth-bounded pinning (`gc.c:2800,2815,2819`).
 There is no conservative C-stack scan — the documented contract is that C code must
-either place a value in one of the scanned sets above or explicitly `janet_gcroot`
+either place a value in one of the scanned sets above or explicitly `bender_gcroot`
 it. This API is already the backbone of thread/async completion safety: a parked
-join pins `(waiter, handle)` via `janet_gcroot` for the duration of the wait
+join pins `(waiter, handle)` via `bender_gcroot` for the duration of the wait
 (`ev.c:4641-4642, 4653-4654`), unrooted exactly on completion (`ev.c:4287-4288`).
 
 **Per-proc/thread isolation:** each OS thread has its own fully independent
-`JanetVM` heap — own block lists, own epoch counter, own collection-trigger state,
-all `JANET_THREAD_LOCAL` (`state.c:34`, `state.h:167-201`). However, **threaded
+`BenderVM` heap — own block lists, own epoch counter, own collection-trigger state,
+all `BENDER_THREAD_LOCAL` (`state.c:34`, `state.h:167-201`). However, **threaded
 abstracts** (values usable across VM/thread boundaries, e.g. channels) break full
 isolation: they are `malloc`-backed (not `gcalloc`-backed), carry a `home_vm`
 pointer, `home_vm_generation`, and a `home_gc_authorized` bit (`abstract.c:108-130`),
@@ -75,9 +75,9 @@ per-object dirty bits). Real engineering lift: changes the allocator, not just t
 collector, and every `gcalloc` call site / abstract-type boundary needs auditing.
 Worth scoping as a *follow-on* to (a), not a Phase 2b blocker.
 
-**(c) Incremental/concurrent collection.** Not recommended now. Janet's embedding
+**(c) Incremental/concurrent collection.** Not recommended now. Bender's embedding
 model (fibers, continuations, C API reentrancy, signal-handler-callable
-`janet_ev_post_event`) makes incremental marking materially harder to get right
+`bender_ev_post_event`) makes incremental marking materially harder to get right
 safely, and none of the three filed findings require it — they're about cross-thread
 *coordination* of an already-stop-the-world collector, not about pause times.
 
@@ -88,32 +88,32 @@ they are independent axes.
 --------------------------------------------------------------------------------
 ## 3. Explicit-roots model
 
-Since `janet_gcroot`/`janet_gcunroot`/the gcshadow stack already exist and are
+Since `bender_gcroot`/`bender_gcunroot`/the gcshadow stack already exist and are
 already used correctly for the thread-join pinning case, this is **not** a
 greenfield design — it's a hardening and extension of existing infrastructure:
 
 1. **Audit for under-use.** The root-enumeration report's §5 notes a narrow but
-   real gap: between a worker's marshal and the owner-loop's `janet_thread_new_complete`,
+   real gap: between a worker's marshal and the owner-loop's `bender_thread_new_complete`,
    the in-flight result exists only as opaque malloc'd bytes (correctly invisible to
    GC, since it isn't a heap object yet) — but the moment it's unmarshaled, its
    liveness depends entirely on being stored into an already-marked handle with a
-   barrier, not on an independent `janet_gcroot`. This is fine in the common case
+   barrier, not on an independent `bender_gcroot`. This is fine in the common case
    but means liveness is coupled to the handle's own mark state, which is exactly
    the coarse-grained registry-flag mechanism flagged as suspect. **Proposed
-   hardening:** `janet_gcroot` the freshly-unmarshaled `result`/`profile_rows`
+   hardening:** `bender_gcroot` the freshly-unmarshaled `result`/`profile_rows`
    for the narrow window between unmarshal and the barrier-protected store, then
    unroot once published. This closes the chronology gap with the *existing* API,
    no new mechanism needed.
 2. **Formalize the contract for threaded-abstract internals.** Currently, a threaded
-   abstract's internal Janet values survive via the `gc.c:196-211` per-VM-first-visit
+   abstract's internal Bender values survive via the `gc.c:196-211` per-VM-first-visit
    mark path, gated by the coarse `home_gc_authorized` bit. A more explicit model:
-   require every threaded-abstract type's `gcmark` callback to `janet_gcroot` any
-   Janet value it hands across a VM boundary for the duration that boundary is open,
+   require every threaded-abstract type's `gcmark` callback to `bender_gcroot` any
+   Bender value it hands across a VM boundary for the duration that boundary is open,
    rather than relying on the home-VM-major-cycle authorization window. This would
    make per-edge liveness explicit instead of per-object-per-major-cycle, directly
    addressing the self-pipe-saturation and fiber-rooting-chronology findings by
    removing their dependence on collection-cycle timing.
-3. **No new C-level API is needed for (1) or (2)** — `janet_gcroot`/`janet_gcunroot`
+3. **No new C-level API is needed for (1) or (2)** — `bender_gcroot`/`bender_gcunroot`
    already exist with the right semantics (identity-based, swap-remove, growable
    array). The work is call-site discipline, not new infrastructure.
 
@@ -134,7 +134,7 @@ threaded abstracts:
 - `malloc`'d threaded-block lifetime living outside any single owner's heap
 
 **Design implication:** "independent per-proc GC" and "threaded abstracts" are in
-direct tension. Threaded abstracts exist specifically to let one Janet value (a
+direct tension. Threaded abstracts exist specifically to let one Bender value (a
 channel, a thread handle) be touched safely from multiple independent heaps — that
 *is* the shared-state mechanism. Three paths forward:
 
@@ -148,8 +148,8 @@ work across procs).
 
 **(b) True independence: copy, don't share.** Threaded abstracts would marshal/copy
 their payload across the VM boundary instead of sharing a live `malloc` block (i.e.,
-treat every cross-VM handoff like the existing `janet_unmarshal` path already used
-for `result`/`profile_rows` in `janet_thread_new_complete`, rather than a live
+treat every cross-VM handoff like the existing `bender_unmarshal` path already used
+for `result`/`profile_rows` in `bender_thread_new_complete`, rather than a live
 shared reference). This would eliminate the global registry/lock entirely for new
 code, but is a breaking semantic change for any code relying on a channel being a
 *live, mutable, shared* object across threads (not just a result handoff) —
@@ -168,7 +168,7 @@ still proves insufficient in practice.**
 ## 5. Migration/compatibility risk
 
 - Collector-algorithm choice (§2a) is a no-op for existing programs — no risk.
-- §3's rooting hardening is additive (`janet_gcroot` calls around already-correct
+- §3's rooting hardening is additive (`bender_gcroot` calls around already-correct
   code paths) — low risk, testable by re-running the existing scoped Phase 1 AOT
   battery plus the three filed GC/event findings as regression targets.
 - §4's narrowed-sharing-surface work (a) touches `abstract.c`'s home-authorization
@@ -179,8 +179,8 @@ still proves insufficient in practice.**
 - Self-pipe saturation (filed finding (c)) is architecturally separate from all of
   the above — it's a transport-layer backpressure gap, not a GC design gap. It
   should be scheduled as its own small fix once a signal-safe design is chosen
-  (unifying `janet_ev_post_event`'s signal-handler callers and the direct
-  `janet_thread_body` selfpipe writer), independent of this GC work.
+  (unifying `bender_ev_post_event`'s signal-handler callers and the direct
+  `bender_thread_body` selfpipe writer), independent of this GC work.
 
 --------------------------------------------------------------------------------
 ## 6. Staged implementation plan (future phase, not started)
@@ -199,26 +199,26 @@ still proves insufficient in practice.**
 
 No step in this plan has been implemented. This document is the design artifact
 requested for Phase 2b; implementation requires a separate go/no-go decision per
-step, following the same pattern used for Phase 1's `mkimage.janet` decision.
+step, following the same pattern used for Phase 1's `mkimage.ben` decision.
 
 --------------------------------------------------------------------------------
 ## 7. Implementation outcomes (this phase, completed)
 
-**Step 1 (`8509c0e5`)**: implemented as designed — explicit `janet_gcroot`/
-`janet_gcunroot` around the unrooted C-local window for the thread-completion
-result in `janet_thread_new_complete`, symmetric regardless of result type
+**Step 1 (`8509c0e5`)**: implemented as designed — explicit `bender_gcroot`/
+`bender_gcunroot` around the unrooted C-local window for the thread-completion
+result in `bender_thread_new_complete`, symmetric regardless of result type
 (nil-skip handled via an explicit `result_rooted` flag, not implicit typecheck,
 to avoid a leaked stale root on the asymmetric nil path).
 
 **Step 2 (`ac22703f`)**: upgraded from hypothesis to proven bug via direct call-
-graph tracing (not inference): `janet_collect_minor`, `janet_collect_fiber_minor`,
-and `janet_collect_process` can each flip a threaded abstract's "visited this
+graph tracing (not inference): `bender_collect_minor`, `bender_collect_fiber_minor`,
+and `bender_collect_process` can each flip a threaded abstract's "visited this
 cycle" registry marker true (first-visit `gcmark` dispatch, `gc.c:195-209`), but
-none of them ever call `janet_sweep` — only the full major's sweep loop resets
+none of them ever call `bender_sweep` — only the full major's sweep loop resets
 that marker (`gc.c:883-929`). The marker stayed stale-`true` across every
 subsequent minor/scoped collection and the next major's mark phase, silently
 skipping re-marking of that abstract's internals for a whole cycle. Fixed with
-`janet_reset_threaded_visited_minor()`, wired into the end of all three narrow
+`bender_reset_threaded_visited_minor()`, wired into the end of all three narrow
 mark phases, touching only the visited marker — never refcount,
 `home_gc_authorized`, or any teardown decision.
 
@@ -227,7 +227,7 @@ flag lifecycles across all four collection entry points (`gc.c:2389-2453` fiber-
 minor, `gc.c:2624-2678` process, `gc.c:2701-2715` minor, `gc.c:2755-2766` major).
 `home_gc_authorized`'s grant (`gc.c:184-186`, gated on
 `gc_mark_phase && !gc_minor_phase`) and its sole revocation site (inside
-`janet_sweep`, major-only, `gc.c:918-920`) were **already** correctly scoped to
+`bender_sweep`, major-only, `gc.c:918-920`) were **already** correctly scoped to
 major-only before step 2 — independent of, and unaffected by, the visited-marker
 staleness step 2 fixed. No narrowing was needed; this is a confirmed-sound
 finding, not a gap. No change applied.
@@ -235,19 +235,19 @@ finding, not a gap. No change applied.
 **Step 4 (committed alongside step 3's finding)**: self-pipe saturation is
 architecturally separate from the GC work (transport backpressure, not a GC
 design gap), exactly as §5 anticipated. A true backpressure mechanism is not
-possible from `janet_ev_post_event`'s signal-handler callers (`os.c`): a signal
+possible from `bender_ev_post_event`'s signal-handler callers (`os.c`): a signal
 handler cannot block, lock, or allocate, so the existing bounded-retry-then-abort
 fallback (`ev.c:3067-3103`, asserted correct by `test-ev-selfpipe-saturation`)
 must stay exactly as-is. Implemented the only safe improvement available: best-
 effort `F_SETPIPE_SZ` growth (1MiB, Linux-only, guarded `#if defined(__linux__)
-&& defined(F_SETPIPE_SZ)`) in `janet_ev_setup_selfpipe`, widening the margin
+&& defined(F_SETPIPE_SZ)`) in `bender_ev_setup_selfpipe`, widening the margin
 before the fallback triggers without touching the write/retry control flow at
 all. No-op on macOS/BSD/Windows.
 
 **Step 5 (full battery)**: dual-target (interpreter via `./build/bender` +
 real AOT via `bender --aot`, not an ad hoc image/marshal substitute) re-run
 across proc(99)/thread(30)/ev(776)/marsh(73)/mailbox(76)/pool(56) — all green on
-both targets, identical counts. `JANET_GC_VERIFY=1` clean on proc/thread/ev.
+both targets, identical counts. `BENDER_GC_VERIFY=1` clean on proc/thread/ev.
 All four `ripwire`-flagged C regressions recompiled fresh and pass:
 `test-threaded-abstract-mark-claim`, `test-ev-selfpipe-interrupt`,
 `test-ev-selfpipe-saturation` (expected bounded SIGABRT, unchanged). `test-gc-

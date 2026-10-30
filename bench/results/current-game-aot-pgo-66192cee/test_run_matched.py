@@ -316,31 +316,31 @@ class EnvironmentContract(unittest.TestCase):
         os.environ.update(self.saved)
 
     def test_scrub_removes_both_prefixes_and_reports_names_only(self):
-        os.environ["JANET_SECRET_TOKEN"] = "hunter2"
+        os.environ["BENDER_SECRET_TOKEN"] = "hunter2"
         os.environ["BENDER_THING"] = "x"
         os.environ["KEEP_ME"] = "yes"
         dropped = rm.scrub_process_environment()
-        self.assertIn("JANET_SECRET_TOKEN", dropped)
+        self.assertIn("BENDER_SECRET_TOKEN", dropped)
         self.assertIn("BENDER_THING", dropped)
-        self.assertNotIn("JANET_SECRET_TOKEN", os.environ)
+        self.assertNotIn("BENDER_SECRET_TOKEN", os.environ)
         self.assertNotIn("BENDER_THING", os.environ)
         self.assertEqual(os.environ["KEEP_ME"], "yes")
         self.assertNotIn("hunter2", json.dumps(dropped))
 
     def test_bench_arm_disables_profiling(self):
         env = rm.build_environment("/tmp/cache", "/tmp/ev", train=False)
-        self.assertEqual(env["JANET_NO_PROFILE"], "1")
-        self.assertEqual(env["JANET_LANES"], "0")
-        self.assertNotIn("JANET_PROFILE", env)
-        self.assertNotIn("JANET_PROFILE_OUT", env)
+        self.assertEqual(env["BENDER_NO_PROFILE"], "1")
+        self.assertEqual(env["BENDER_LANES"], "0")
+        self.assertNotIn("BENDER_PROFILE", env)
+        self.assertNotIn("BENDER_PROFILE_OUT", env)
 
     def test_train_arm_requests_a_profile_into_evidence(self):
         env = rm.build_environment("/tmp/cache", "/tmp/ev", train=True)
-        self.assertEqual(env["JANET_PROFILE"], "1")
-        self.assertEqual(env["JANET_PROFILE_OUT"], "/tmp/ev/profile.jdn")
-        self.assertEqual(env["JANET_LANES"], "0")
+        self.assertEqual(env["BENDER_PROFILE"], "1")
+        self.assertEqual(env["BENDER_PROFILE_OUT"], "/tmp/ev/profile.jdn")
+        self.assertEqual(env["BENDER_LANES"], "0")
         # The dump is suppressed when this is set: TRAIN must never set it.
-        self.assertNotIn("JANET_NO_PROFILE", env)
+        self.assertNotIn("BENDER_NO_PROFILE", env)
 
 
 # ---------------------------------------------------------------------------

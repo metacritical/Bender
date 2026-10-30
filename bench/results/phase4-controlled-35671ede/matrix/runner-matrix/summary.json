@@ -63,7 +63,7 @@
           "repeat": 1,
           "term_signal": null,
           "timed_out": false,
-          "trial_dir": "/tmp/janet-wave-evidence-35671ede/runner-matrix/native-lanes2/n1000/rep1",
+          "trial_dir": "/tmp/bender-wave-evidence-35671ede/runner-matrix/native-lanes2/n1000/rep1",
           "wall_s": 0.019758
         },
         {
@@ -80,7 +80,7 @@
           "repeat": 2,
           "term_signal": null,
           "timed_out": false,
-          "trial_dir": "/tmp/janet-wave-evidence-35671ede/runner-matrix/native-lanes2/n1000/rep2",
+          "trial_dir": "/tmp/bender-wave-evidence-35671ede/runner-matrix/native-lanes2/n1000/rep2",
           "wall_s": 0.022233
         },
         {
@@ -97,7 +97,7 @@
           "repeat": 3,
           "term_signal": null,
           "timed_out": false,
-          "trial_dir": "/tmp/janet-wave-evidence-35671ede/runner-matrix/native-lanes2/n1000/rep3",
+          "trial_dir": "/tmp/bender-wave-evidence-35671ede/runner-matrix/native-lanes2/n1000/rep3",
           "wall_s": 0.02428
         }
       ],
@@ -175,7 +175,7 @@
           "repeat": 1,
           "term_signal": null,
           "timed_out": false,
-          "trial_dir": "/tmp/janet-wave-evidence-35671ede/runner-matrix/native-lanes2/n2000/rep1",
+          "trial_dir": "/tmp/bender-wave-evidence-35671ede/runner-matrix/native-lanes2/n2000/rep1",
           "wall_s": 0.043027
         },
         {
@@ -192,7 +192,7 @@
           "repeat": 2,
           "term_signal": null,
           "timed_out": false,
-          "trial_dir": "/tmp/janet-wave-evidence-35671ede/runner-matrix/native-lanes2/n2000/rep2",
+          "trial_dir": "/tmp/bender-wave-evidence-35671ede/runner-matrix/native-lanes2/n2000/rep2",
           "wall_s": 0.039619
         },
         {
@@ -209,7 +209,7 @@
           "repeat": 3,
           "term_signal": null,
           "timed_out": false,
-          "trial_dir": "/tmp/janet-wave-evidence-35671ede/runner-matrix/native-lanes2/n2000/rep3",
+          "trial_dir": "/tmp/bender-wave-evidence-35671ede/runner-matrix/native-lanes2/n2000/rep3",
           "wall_s": 0.038355
         }
       ],
@@ -287,7 +287,7 @@
           "repeat": 1,
           "term_signal": null,
           "timed_out": false,
-          "trial_dir": "/tmp/janet-wave-evidence-35671ede/runner-matrix/native-local/n1000/rep1",
+          "trial_dir": "/tmp/bender-wave-evidence-35671ede/runner-matrix/native-local/n1000/rep1",
           "wall_s": 0.293944
         },
         {
@@ -304,7 +304,7 @@
           "repeat": 2,
           "term_signal": null,
           "timed_out": false,
-          "trial_dir": "/tmp/janet-wave-evidence-35671ede/runner-matrix/native-local/n1000/rep2",
+          "trial_dir": "/tmp/bender-wave-evidence-35671ede/runner-matrix/native-local/n1000/rep2",
           "wall_s": 0.292795
         },
         {
@@ -321,7 +321,7 @@
           "repeat": 3,
           "term_signal": null,
           "timed_out": false,
-          "trial_dir": "/tmp/janet-wave-evidence-35671ede/runner-matrix/native-local/n1000/rep3",
+          "trial_dir": "/tmp/bender-wave-evidence-35671ede/runner-matrix/native-local/n1000/rep3",
           "wall_s": 0.340548
         }
       ],
@@ -399,7 +399,7 @@
           "repeat": 1,
           "term_signal": null,
           "timed_out": false,
-          "trial_dir": "/tmp/janet-wave-evidence-35671ede/runner-matrix/native-local/n2000/rep1",
+          "trial_dir": "/tmp/bender-wave-evidence-35671ede/runner-matrix/native-local/n2000/rep1",
           "wall_s": 0.765579
         },
         {
@@ -416,7 +416,7 @@
           "repeat": 2,
           "term_signal": null,
           "timed_out": false,
-          "trial_dir": "/tmp/janet-wave-evidence-35671ede/runner-matrix/native-local/n2000/rep2",
+          "trial_dir": "/tmp/bender-wave-evidence-35671ede/runner-matrix/native-local/n2000/rep2",
           "wall_s": 0.780845
         },
         {
@@ -433,7 +433,7 @@
           "repeat": 3,
           "term_signal": null,
           "timed_out": false,
-          "trial_dir": "/tmp/janet-wave-evidence-35671ede/runner-matrix/native-local/n2000/rep3",
+          "trial_dir": "/tmp/bender-wave-evidence-35671ede/runner-matrix/native-local/n2000/rep3",
           "wall_s": 0.790472
         }
       ],
@@ -511,7 +511,7 @@
           "repeat": 1,
           "term_signal": null,
           "timed_out": false,
-          "trial_dir": "/tmp/janet-wave-evidence-35671ede/runner-matrix/plain-lanes2/n1000/rep1",
+          "trial_dir": "/tmp/bender-wave-evidence-35671ede/runner-matrix/plain-lanes2/n1000/rep1",
           "wall_s": 0.020355
         },
         {
@@ -528,7 +528,7 @@
           "repeat": 2,
           "term_signal": null,
           "timed_out": false,
-          "trial_dir": "/tmp/janet-wave-evidence-35671ede/runner-matrix/plain-lanes2/n1000/rep2",
+          "trial_dir": "/tmp/bender-wave-evidence-35671ede/runner-matrix/plain-lanes2/n1000/rep2",
           "wall_s": 0.022802
         },
         {
@@ -545,7 +545,7 @@
           "repeat": 3,
           "term_signal": null,
           "timed_out": false,
-          "trial_dir": "/tmp/janet-wave-evidence-35671ede/runner-matrix/plain-lanes2/n1000/rep3",
+          "trial_dir": "/tmp/bender-wave-evidence-35671ede/runner-matrix/plain-lanes2/n1000/rep3",
           "wall_s": 0.019893
         }
       ],
@@ -623,7 +623,7 @@
           "repeat": 1,
           "term_signal": null,
           "timed_out": false,
-          "trial_dir": "/tmp/janet-wave-evidence-35671ede/runner-matrix/plain-lanes2/n2000/rep1",
+          "trial_dir": "/tmp/bender-wave-evidence-35671ede/runner-matrix/plain-lanes2/n2000/rep1",
           "wall_s": 0.042701
         },
         {
@@ -640,7 +640,7 @@
           "repeat": 2,
           "term_signal": null,
           "timed_out": false,
-          "trial_dir": "/tmp/janet-wave-evidence-35671ede/runner-matrix/plain-lanes2/n2000/rep2",
+          "trial_dir": "/tmp/bender-wave-evidence-35671ede/runner-matrix/plain-lanes2/n2000/rep2",
           "wall_s": 0.032684
         },
         {
@@ -657,7 +657,7 @@
           "repeat": 3,
           "term_signal": null,
           "timed_out": false,
-          "trial_dir": "/tmp/janet-wave-evidence-35671ede/runner-matrix/plain-lanes2/n2000/rep3",
+          "trial_dir": "/tmp/bender-wave-evidence-35671ede/runner-matrix/plain-lanes2/n2000/rep3",
           "wall_s": 0.053087
         }
       ],
@@ -735,7 +735,7 @@
           "repeat": 1,
           "term_signal": null,
           "timed_out": false,
-          "trial_dir": "/tmp/janet-wave-evidence-35671ede/runner-matrix/plain-local/n1000/rep1",
+          "trial_dir": "/tmp/bender-wave-evidence-35671ede/runner-matrix/plain-local/n1000/rep1",
           "wall_s": 0.303493
         },
         {
@@ -752,7 +752,7 @@
           "repeat": 2,
           "term_signal": null,
           "timed_out": false,
-          "trial_dir": "/tmp/janet-wave-evidence-35671ede/runner-matrix/plain-local/n1000/rep2",
+          "trial_dir": "/tmp/bender-wave-evidence-35671ede/runner-matrix/plain-local/n1000/rep2",
           "wall_s": 0.286912
         },
         {
@@ -769,7 +769,7 @@
           "repeat": 3,
           "term_signal": null,
           "timed_out": false,
-          "trial_dir": "/tmp/janet-wave-evidence-35671ede/runner-matrix/plain-local/n1000/rep3",
+          "trial_dir": "/tmp/bender-wave-evidence-35671ede/runner-matrix/plain-local/n1000/rep3",
           "wall_s": 0.297507
         }
       ],
@@ -847,7 +847,7 @@
           "repeat": 1,
           "term_signal": null,
           "timed_out": false,
-          "trial_dir": "/tmp/janet-wave-evidence-35671ede/runner-matrix/plain-local/n2000/rep1",
+          "trial_dir": "/tmp/bender-wave-evidence-35671ede/runner-matrix/plain-local/n2000/rep1",
           "wall_s": 0.785504
         },
         {
@@ -864,7 +864,7 @@
           "repeat": 2,
           "term_signal": null,
           "timed_out": false,
-          "trial_dir": "/tmp/janet-wave-evidence-35671ede/runner-matrix/plain-local/n2000/rep2",
+          "trial_dir": "/tmp/bender-wave-evidence-35671ede/runner-matrix/plain-local/n2000/rep2",
           "wall_s": 0.789516
         },
         {
@@ -881,7 +881,7 @@
           "repeat": 3,
           "term_signal": null,
           "timed_out": false,
-          "trial_dir": "/tmp/janet-wave-evidence-35671ede/runner-matrix/plain-local/n2000/rep3",
+          "trial_dir": "/tmp/bender-wave-evidence-35671ede/runner-matrix/plain-local/n2000/rep3",
           "wall_s": 0.777287
         }
       ],
@@ -959,7 +959,7 @@
           "repeat": 1,
           "term_signal": null,
           "timed_out": false,
-          "trial_dir": "/tmp/janet-wave-evidence-35671ede/runner-matrix/release-lanes2/n1000/rep1",
+          "trial_dir": "/tmp/bender-wave-evidence-35671ede/runner-matrix/release-lanes2/n1000/rep1",
           "wall_s": 0.023682
         },
         {
@@ -976,7 +976,7 @@
           "repeat": 2,
           "term_signal": null,
           "timed_out": false,
-          "trial_dir": "/tmp/janet-wave-evidence-35671ede/runner-matrix/release-lanes2/n1000/rep2",
+          "trial_dir": "/tmp/bender-wave-evidence-35671ede/runner-matrix/release-lanes2/n1000/rep2",
           "wall_s": 0.022093
         },
         {
@@ -993,7 +993,7 @@
           "repeat": 3,
           "term_signal": null,
           "timed_out": false,
-          "trial_dir": "/tmp/janet-wave-evidence-35671ede/runner-matrix/release-lanes2/n1000/rep3",
+          "trial_dir": "/tmp/bender-wave-evidence-35671ede/runner-matrix/release-lanes2/n1000/rep3",
           "wall_s": 0.022978
         }
       ],
@@ -1071,7 +1071,7 @@
           "repeat": 1,
           "term_signal": null,
           "timed_out": false,
-          "trial_dir": "/tmp/janet-wave-evidence-35671ede/runner-matrix/release-lanes2/n2000/rep1",
+          "trial_dir": "/tmp/bender-wave-evidence-35671ede/runner-matrix/release-lanes2/n2000/rep1",
           "wall_s": 0.037229
         },
         {
@@ -1088,7 +1088,7 @@
           "repeat": 2,
           "term_signal": null,
           "timed_out": false,
-          "trial_dir": "/tmp/janet-wave-evidence-35671ede/runner-matrix/release-lanes2/n2000/rep2",
+          "trial_dir": "/tmp/bender-wave-evidence-35671ede/runner-matrix/release-lanes2/n2000/rep2",
           "wall_s": 0.050416
         },
         {
@@ -1105,7 +1105,7 @@
           "repeat": 3,
           "term_signal": null,
           "timed_out": false,
-          "trial_dir": "/tmp/janet-wave-evidence-35671ede/runner-matrix/release-lanes2/n2000/rep3",
+          "trial_dir": "/tmp/bender-wave-evidence-35671ede/runner-matrix/release-lanes2/n2000/rep3",
           "wall_s": 0.038811
         }
       ],
@@ -1183,7 +1183,7 @@
           "repeat": 1,
           "term_signal": null,
           "timed_out": false,
-          "trial_dir": "/tmp/janet-wave-evidence-35671ede/runner-matrix/release-local/n1000/rep1",
+          "trial_dir": "/tmp/bender-wave-evidence-35671ede/runner-matrix/release-local/n1000/rep1",
           "wall_s": 0.294772
         },
         {
@@ -1200,7 +1200,7 @@
           "repeat": 2,
           "term_signal": null,
           "timed_out": false,
-          "trial_dir": "/tmp/janet-wave-evidence-35671ede/runner-matrix/release-local/n1000/rep2",
+          "trial_dir": "/tmp/bender-wave-evidence-35671ede/runner-matrix/release-local/n1000/rep2",
           "wall_s": 0.284028
         },
         {
@@ -1217,7 +1217,7 @@
           "repeat": 3,
           "term_signal": null,
           "timed_out": false,
-          "trial_dir": "/tmp/janet-wave-evidence-35671ede/runner-matrix/release-local/n1000/rep3",
+          "trial_dir": "/tmp/bender-wave-evidence-35671ede/runner-matrix/release-local/n1000/rep3",
           "wall_s": 0.280507
         }
       ],
@@ -1295,7 +1295,7 @@
           "repeat": 1,
           "term_signal": null,
           "timed_out": false,
-          "trial_dir": "/tmp/janet-wave-evidence-35671ede/runner-matrix/release-local/n2000/rep1",
+          "trial_dir": "/tmp/bender-wave-evidence-35671ede/runner-matrix/release-local/n2000/rep1",
           "wall_s": 0.797977
         },
         {
@@ -1312,7 +1312,7 @@
           "repeat": 2,
           "term_signal": null,
           "timed_out": false,
-          "trial_dir": "/tmp/janet-wave-evidence-35671ede/runner-matrix/release-local/n2000/rep2",
+          "trial_dir": "/tmp/bender-wave-evidence-35671ede/runner-matrix/release-local/n2000/rep2",
           "wall_s": 0.791735
         },
         {
@@ -1329,7 +1329,7 @@
           "repeat": 3,
           "term_signal": null,
           "timed_out": false,
-          "trial_dir": "/tmp/janet-wave-evidence-35671ede/runner-matrix/release-local/n2000/rep3",
+          "trial_dir": "/tmp/bender-wave-evidence-35671ede/runner-matrix/release-local/n2000/rep3",
           "wall_s": 0.794065
         }
       ],
@@ -1407,7 +1407,7 @@
           "repeat": 1,
           "term_signal": null,
           "timed_out": false,
-          "trial_dir": "/tmp/janet-wave-evidence-35671ede/runner-matrix/script-lanes2/n1000/rep1",
+          "trial_dir": "/tmp/bender-wave-evidence-35671ede/runner-matrix/script-lanes2/n1000/rep1",
           "wall_s": 0.024243
         },
         {
@@ -1424,7 +1424,7 @@
           "repeat": 2,
           "term_signal": null,
           "timed_out": false,
-          "trial_dir": "/tmp/janet-wave-evidence-35671ede/runner-matrix/script-lanes2/n1000/rep2",
+          "trial_dir": "/tmp/bender-wave-evidence-35671ede/runner-matrix/script-lanes2/n1000/rep2",
           "wall_s": 0.021912
         },
         {
@@ -1441,7 +1441,7 @@
           "repeat": 3,
           "term_signal": null,
           "timed_out": false,
-          "trial_dir": "/tmp/janet-wave-evidence-35671ede/runner-matrix/script-lanes2/n1000/rep3",
+          "trial_dir": "/tmp/bender-wave-evidence-35671ede/runner-matrix/script-lanes2/n1000/rep3",
           "wall_s": 0.021902
         }
       ],
@@ -1519,7 +1519,7 @@
           "repeat": 1,
           "term_signal": null,
           "timed_out": false,
-          "trial_dir": "/tmp/janet-wave-evidence-35671ede/runner-matrix/script-lanes2/n2000/rep1",
+          "trial_dir": "/tmp/bender-wave-evidence-35671ede/runner-matrix/script-lanes2/n2000/rep1",
           "wall_s": 0.038386
         },
         {
@@ -1536,7 +1536,7 @@
           "repeat": 2,
           "term_signal": null,
           "timed_out": false,
-          "trial_dir": "/tmp/janet-wave-evidence-35671ede/runner-matrix/script-lanes2/n2000/rep2",
+          "trial_dir": "/tmp/bender-wave-evidence-35671ede/runner-matrix/script-lanes2/n2000/rep2",
           "wall_s": 0.036882
         },
         {
@@ -1553,7 +1553,7 @@
           "repeat": 3,
           "term_signal": null,
           "timed_out": false,
-          "trial_dir": "/tmp/janet-wave-evidence-35671ede/runner-matrix/script-lanes2/n2000/rep3",
+          "trial_dir": "/tmp/bender-wave-evidence-35671ede/runner-matrix/script-lanes2/n2000/rep3",
           "wall_s": 0.033918
         }
       ],
@@ -1631,7 +1631,7 @@
           "repeat": 1,
           "term_signal": null,
           "timed_out": false,
-          "trial_dir": "/tmp/janet-wave-evidence-35671ede/runner-matrix/script-local/n1000/rep1",
+          "trial_dir": "/tmp/bender-wave-evidence-35671ede/runner-matrix/script-local/n1000/rep1",
           "wall_s": 0.108381
         },
         {
@@ -1648,7 +1648,7 @@
           "repeat": 2,
           "term_signal": null,
           "timed_out": false,
-          "trial_dir": "/tmp/janet-wave-evidence-35671ede/runner-matrix/script-local/n1000/rep2",
+          "trial_dir": "/tmp/bender-wave-evidence-35671ede/runner-matrix/script-local/n1000/rep2",
           "wall_s": 0.107775
         },
         {
@@ -1665,7 +1665,7 @@
           "repeat": 3,
           "term_signal": null,
           "timed_out": false,
-          "trial_dir": "/tmp/janet-wave-evidence-35671ede/runner-matrix/script-local/n1000/rep3",
+          "trial_dir": "/tmp/bender-wave-evidence-35671ede/runner-matrix/script-local/n1000/rep3",
           "wall_s": 0.10563
         }
       ],
@@ -1743,7 +1743,7 @@
           "repeat": 1,
           "term_signal": null,
           "timed_out": false,
-          "trial_dir": "/tmp/janet-wave-evidence-35671ede/runner-matrix/script-local/n2000/rep1",
+          "trial_dir": "/tmp/bender-wave-evidence-35671ede/runner-matrix/script-local/n2000/rep1",
           "wall_s": 0.421727
         },
         {
@@ -1760,7 +1760,7 @@
           "repeat": 2,
           "term_signal": null,
           "timed_out": false,
-          "trial_dir": "/tmp/janet-wave-evidence-35671ede/runner-matrix/script-local/n2000/rep2",
+          "trial_dir": "/tmp/bender-wave-evidence-35671ede/runner-matrix/script-local/n2000/rep2",
           "wall_s": 0.410883
         },
         {
@@ -1777,7 +1777,7 @@
           "repeat": 3,
           "term_signal": null,
           "timed_out": false,
-          "trial_dir": "/tmp/janet-wave-evidence-35671ede/runner-matrix/script-local/n2000/rep3",
+          "trial_dir": "/tmp/bender-wave-evidence-35671ede/runner-matrix/script-local/n2000/rep3",
           "wall_s": 0.412606
         }
       ],
@@ -1795,7 +1795,7 @@
   ],
   "manifest_sha256": "33183f349a0eb82bb38a312bf20788fe80cb39e28be3743a54e9a47bdadda014",
   "ok": true,
-  "output_dir": "/tmp/janet-wave-evidence-35671ede/runner-matrix",
+  "output_dir": "/tmp/bender-wave-evidence-35671ede/runner-matrix",
   "schema": "wave-controlled-run/1",
   "started_at": "2026-10-28T17:00:46+00:00",
   "trials": 48

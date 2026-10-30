@@ -9,19 +9,19 @@ simply be enabled.
 
 `to_optimization_level` (`src/core/compile.c:1331`) returns **0** when
 `*optimize*` is not an integer, and `*optimize*`'s own docstring
-(`src/boot/boot.janet:1573`) says *"Default is 0, and higher integer
+(`src/boot/boot.ben:1573`) says *"Default is 0, and higher integer
 levels will enable more optimization."*
 
-Meanwhile `src/boot/boot.janet:10` does `(setdyn :optimize 1)` — so
-**Janet's own core library is compiled at level 1 while all user code
+Meanwhile `src/boot/boot.ben:10` does `(setdyn :optimize 1)` — so
+**Bender's own core library is compiled at level 1 while all user code
 compiles at level 0.**
 
 Note the level is read from the *module's own env*
-(`janet_table_get_keyword(c->env, "optimize")`), not from the caller's
+(`bender_table_get_keyword(c->env, "optimize")`), not from the caller's
 dynamic bindings. `(setdyn :optimize 1)` before a `dofile` therefore
 does nothing; the value must be in the env being compiled into, as a
 RAW integer (`(put e :optimize 1)`), because a `@{:value 1}` metadata
-wrapper fails `janet_checkint` and silently yields level 0. Both
+wrapper fails `bender_checkint` and silently yields level 0. Both
 mistakes cost real time during this investigation.
 
 ## 2. What level 0 leaves on the table
@@ -54,7 +54,7 @@ Measured in-process, same workload, 200k iterations:
 everything the immediate-fusion work in `6e17b064`/`6651d8d8`/`5f1bb86f`
 achieved combined (~1.5% wall clock), for zero new code.
 
-On real ttfx `src/scene.janet` (131 functions): level 1 gives 6061 ->
+On real ttfx `src/scene.ben` (131 functions): level 1 gives 6061 ->
 6016 static instructions and 548 -> 506 `movn`. Level 2 and 3 are
 notably WORSE on static size (6844 instrs, 705 movn) and no faster than
 level 1, so level 1 is the sweet spot.
@@ -90,7 +90,7 @@ written), but it means slot 3 now holds an integer index (from `ldi`) at
 one program point and an array element (from `get`) at another.
 
 The kernel emitter's gate is `infer/int-family?` on the index slot's
-inferred type, and **inference in `tools/infer.janet` is SLOT-based, not
+inferred type, and **inference in `tools/infer.ben` is SLOT-based, not
 flow-sensitive**: one type per slot for the whole function. Two
 differently-typed writes to a slot therefore JOIN to `:unknown`, the
 int-family check fails, and the kernel is refused.
@@ -118,7 +118,7 @@ In rough order of cost:
    rebinds it to the element type. This is the real fix, unlocks ~5.7%
    on hot numeric code, and would ALSO fix the pre-existing
    `mixes array/long/number` refusals. It is a substantial change to
-   `tools/infer.janet` — effectively per-instruction state or SSA — not
+   `tools/infer.ben` — effectively per-instruction state or SSA — not
    a small patch.
 2. **Per-unit opt-in.** Set `(put env :optimize 1)` for modules that
    contain no kernel candidates, leaving kernel-bearing modules at 0.
@@ -141,15 +141,15 @@ The 5.7% above is a BEST-CASE MICROBENCHMARK — one instruction removed
 from the body of a 200,000-iteration loop. Before treating it as a real
 win, it was tested end to end.
 
-The level is read per MODULE (`janet_table_get_keyword(c->env,
+The level is read per MODULE (`bender_table_get_keyword(c->env,
 "optimize")`), and an in-file `(setdyn :optimize 1)` does affect that
-module's own compilation — verified: ttfx `src/scene.janet` goes
+module's own compilation — verified: ttfx `src/scene.ben` goes
 6061/548 -> 6014/504 (instructions / `movn`). Only
-`src/rng-kernels.janet` carries `:hint` kernel candidates, so every
+`src/rng-kernels.ben` carries `:hint` kernel candidates, so every
 other ttfx module can take level 1 while that one stays at 0, which
 sidesteps the slot-coalescing problem in §3 entirely.
 
-Did that for `src/scene.janet` + `src/canvas.janet` (the two hottest
+Did that for `src/scene.ben` + `src/canvas.ben` (the two hottest
 non-kernel modules) and measured:
 
 - native kernels: still 4, unchanged
@@ -180,7 +180,7 @@ reverted.
 ## 6. Standing caution
 
 Do not enable level 2 or 3. Measured larger static code (+13%
-instructions on scene.janet) with no speed gain over level 1, on this
+instructions on scene.ben) with no speed gain over level 1, on this
 workload.
 
 ## 7. Resolution (2026-10-19): emitter fixed, default flipped to 1
@@ -200,7 +200,7 @@ state rule (put and infer already accepted them; the guard's :number
 arm was dead).
 
 With that, `to_optimization_level`'s absent-value default is 1
-(matching boot.janet:10's own core compilation), the *optimize*
+(matching boot.ben:10's own core compilation), the *optimize*
 docstring is updated, and suite-unknown's symbolmap fixture pins its
 level explicitly (level 1 legitimately constant-folds dead defs and
 prunes their symbolmap entries — a coherent, smaller map — so that
@@ -216,11 +216,11 @@ Verification, all with default 1:
   buffer 77/77, table 15/15, string 69/69, capi 9/9, ev 776/776,
   pool 56/56, aot-release 14/14, dce-strip 61/61,
   native-struct-shape 30/30, native-executor matrix pass, and a full
-  sweep of every `test/suite*.janet` green except:
+  sweep of every `test/suite*.ben` green except:
   - suite-proc 98/99 ("both land") — PRE-EXISTING at HEAD f9780afd
     with level 0, with and without the uncommitted gc.c edit; not
     caused by the optimizer.
-  - suite-aot-profile-env fails ONLY under `JANET_NO_PROFILE=1`
+  - suite-aot-profile-env fails ONLY under `BENDER_NO_PROFILE=1`
     (it asserts an auto-PGO dump exists; 16/16 without the variable).
 - ttfx, identical PGO protocol both sides (two decrypt workloads,
   seeds 42 and 7, bounded 12 frames, then `--release`, private
@@ -228,7 +228,7 @@ Verification, all with default 1:
   each (`plain-length`, `k-next-word!`, `k-next-pack!`,
   `k-next-scale!`). **No kernel loss.** (The older verified binary
   shows 6 because the app tree has since changed: `floor-div` now
-  refuses on a duplicate definition in `src/canvas.janet` — the same
+  refuses on a duplicate definition in `src/canvas.ben` — the same
   refusal at level 0 — and `round-half-even`/`out-bounce` classify
   ambiguous — also identical at level 0.)
 - Byte parity: all 37 effects, FULL dumps, seed 42,
@@ -242,7 +242,7 @@ Verification, all with default 1:
   within round-to-round spread except matrix, which over 8 paired
   rounds is reproducibly ~1.1% SLOWER. Verdict: **end-to-end ~0%**,
   exactly as §5 measured — the optimizer demonstrably applies
-  (scene.janet static 5876→5809 instructions, 543→485 `movn`) but
+  (scene.ben static 5876→5809 instructions, 543→485 `movn`) but
   ttfx's hot path is call-heavy, not `movn`-bound.
 
 So the default flip stands on: consistency with the core's own
@@ -261,7 +261,7 @@ collapses to ~3.5x. Three findings, two of them negative, all measured.
 ## A. The GUI is raylib-draw bound — confirmed, with a number
 
 The GUI PGO profile's top TWO entries were not ttfx code: two anonymous
-`boot.janet:4768` thunks at 1,238,657 calls each, **40.6% of all calls**.
+`boot.ben:4768` thunks at 1,238,657 calls each, **40.6% of all calls**.
 That is `ffi/defbind-alias`'s lazy branch re-forcing a memoized pointer
 and signature on every FFI call:
 
@@ -270,7 +270,7 @@ lazy  -> ldc call ldc call push3 ldc tcall
 eager -> ldc      ldc      push3 ldc tcall
 ```
 
-ttfx set `:lazy true` but only `bin/ttfx-gui.janet` imports `gui.janet`,
+ttfx set `:lazy true` but only `bin/ttfx-gui.ben` imports `gui.ben`,
 and that entry requires raylib anyway, so lazy bought nothing. Dropping
 it (ttfx commit `4b8edc3`) gave, same workload:
 
@@ -279,11 +279,11 @@ it (ttfx commit `4b8edc3`) gave, same workload:
 | lazy | 5,962,634 | 1,161,656 | 2,400,610 | 5.13 |
 | eager | 3,494,034 | 1,096,642 | **0** | **3.19** |
 
-37.9% fewer Janet calls per draw, and **fps UNCHANGED** (eager mean
+37.9% fewer Bender calls per draw, and **fps UNCHANGED** (eager mean
 1653.6 vs lazy 1671.6 across 4 probes, inside a +/-10% band).
 
-**Removing 2.4 MILLION Janet calls per 3-second probe moved nothing.**
-That is the cleanest possible proof the GUI is not Janet-bound. Kept
+**Removing 2.4 MILLION Bender calls per 3-second probe moved nothing.**
+That is the cleanest possible proof the GUI is not Bender-bound. Kept
 anyway: it removes pointless work and unmasks the profile, where those
 thunks were crowding out real application work.
 
@@ -312,13 +312,13 @@ Implemented it, and it was **~2x slower**:
 
 Cause: `cells` arrives in character-creation order (it is built by
 walking `(ctx :chars)`, whose entries move independently), so batching
-requires a per-frame sort. That sort — a Janet comparator closure over
+requires a per-frame sort. That sort — a Bender comparator closure over
 ~400 tuples, plus building the intermediate array and per-run buffers —
 costs far more than the saved FFI draw calls.
 
 **The correct lesson, which contradicts the naive reading of finding A:**
-raylib-bound means *removing* Janet work does not help. It does NOT mean
-Janet work is free. Adding Janet work hurts immediately and heavily.
+raylib-bound means *removing* Bender work does not help. It does NOT mean
+Bender work is free. Adding Bender work hurts immediately and heavily.
 
 Reverted. Any real version of this must produce cells in row-major order
 at the SOURCE (in `ctx-frame-cells`, or by maintaining a row-indexed
@@ -475,13 +475,13 @@ few blocks (fireworks -4.0%) pay a per-cell table lookup for nothing.
 
 | hypothesis | test | result |
 |------------|------|--------|
-| Janet-call bound | removed 2.4M FFI lazy thunks (-37.9% calls/draw) | **0%** |
+| Bender-call bound | removed 2.4M FFI lazy thunks (-37.9% calls/draw) | **0%** |
 | draw-call bound | run batching (1.9-3.6x fewer calls) | **slower** |
 | atlas-sampling bound | rects instead of glyphs | **0%** |
 | **per-cell pixel-fill bound** | cells x fps constant at 345,274 +/- 2.0% | **confirmed** |
 
 Frame time is proportional to cells rasterized, and every strategy
-tested rasterizes the same pixels. There is no Janet-side or
+tested rasterizes the same pixels. There is no Bender-side or
 draw-strategy win available in this GUI. Any real improvement must
 reduce the NUMBER of cells filled (dirty-rect / occlusion culling, i.e.
 skip cells unchanged since the last frame) or change resolution.

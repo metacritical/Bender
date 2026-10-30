@@ -1,0 +1,88 @@
+# Regression: bender_profile_call use-after-free (Phase 4 Part A).
+#
+# At JOP_CALL / JOP_TAILCALL the profiler used to receive `callargv`
+# captured BEFORE bender_fiber_funcframe[_tail], which can realloc
+# fiber->data when the stack must grow (fiber.c bender_fiber_setcapacity).
+# The profiler then read argv[i] from the freed old stack array
+# (ASAN: READ of size 8, vm.c:607, 1072-byte freed region). The fix
+# re-derives the arg pointer AFTER the frame push, from
+# fiber->data + fiber->frame (with vararg calls sampled through the
+# post-consolidation view: named params + one tuple at arity).
+#
+# This suite is a functional guard: profiling through stack GROWTH at
+# call boundaries must record exactly the types actually passed (a
+# stale argv read corrupts the param type masks), and the program's
+# results must stay correct. (The ASAN repro itself is a build-time
+# procedure, not runnable from a normal suite -- see
+# docs/internals/erlang-parity-handoff.md §7.)
+(import ./helper :prefix "" :exit true)
+(start-suite)
+
+(assert (nil? (debug/profile-start)) "profile-start returns nil")
+
+(defn inner [x y z]
+  (+ x (length y) (if z 1 0)))
+
+(defn rec [n]
+  (if (zero? n)
+    (inner n "aaaa" true)
+    (+ 1 (rec (dec n)))))
+
+# Recurse deeply enough that the root fiber's data stack must grow at
+# a JOP_CALL boundary while profiling is active.
+(var acc 0)
+(loop [i :range [0 50]]
+  (set acc (+ acc (rec 200))))
+(assert (= 10250 acc) "deep recursion under profiling gives correct result")
+
+# Vararg calls through the same growth-heavy region: post-fix the
+# profiler samples the consolidated view (named params + tuple at the
+# arity slot) from the NEW stack array.
+(defn va [a b & rest] (+ a b (length rest)))
+(var vsum 0)
+(loop [i :range [0 300]]
+  (set vsum (+ vsum (va i 2 :x :y))))
+(assert (= vsum (+ (sum (range 300)) 1200)) "vararg calls under profiling correct")
+
+(def prof (debug/profile-stop))
+(assert (table? prof) "profile-stop returns the profile table")
+
+# Collect rows for our functions (keyed by def pointer; each row
+# carries :func and a :params array of per-slot type masks).
+(defn row-for [f]
+  (var out nil)
+  (eachp [_ v] prof
+    (when (and (table? v) (= f (get v :func)))
+      (set out v)))
+  out)
+
+(def r-inner (row-for inner))
+(def r-rec (row-for rec))
+(def r-va (row-for va))
+(assert (not (nil? r-inner)) "inner was profiled")
+(assert (not (nil? r-rec)) "rec was profiled")
+(assert (not (nil? r-va)) "va was profiled")
+
+# BenderType bit order in THIS fork (bender.h): number=0 nil=1 boolean=2
+# fiber=3 string=4 symbol=5 keyword=6 array=7 tuple=8 ...
+(def number-bit (blshift 1 0))
+(def string-bit (blshift 1 4))
+(def boolean-bit (blshift 1 2))
+(def tuple-bit (blshift 1 8))
+
+# inner is always called as (inner 0 "aaaa" true): the masks must be
+# EXACTLY those types -- growth-time stale reads showed up here as
+# corrupted/garbage masks, and a wrong arg offset would show up as
+# shifted types.
+(assert (= number-bit (get (get r-inner :params) 0)) "inner param 0 mask is exactly :number")
+(assert (= string-bit (get (get r-inner :params) 1)) "inner param 1 mask is exactly :string")
+(assert (= boolean-bit (get (get r-inner :params) 2)) "inner param 2 mask is exactly :boolean")
+(assert (= number-bit (get (get r-rec :params) 0)) "rec param 0 mask is exactly :number")
+
+# Vararg view: named params at 0/1, the consolidated rest-tuple at the
+# arity slot (2). Exact-type checks, same reasoning as inner.
+(assert (= number-bit (get (get r-va :params) 0)) "va param 0 mask is exactly :number")
+(assert (= number-bit (get (get r-va :params) 1)) "va param 1 mask is exactly :number")
+(assert (= tuple-bit (get (get r-va :params) 2)) "va vararg slot mask is exactly :tuple")
+
+(end-suite)

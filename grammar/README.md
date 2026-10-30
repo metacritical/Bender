@@ -28,7 +28,7 @@ The grammar is generated from the running core library, so new core functions
 and macros are picked up automatically:
 
 ```sh
-bender tools/linguist_grammar.janet > grammar/syntaxes/bender.tmLanguage.json
+bender tools/linguist_grammar.ben > grammar/syntaxes/bender.tmLanguage.json
 ```
 
 Special forms are always `keyword.control.bender`, macros are detected through
@@ -75,5 +75,5 @@ Two things to know before opening the PR:
 
 ## License
 
-MIT. The grammar derives from the Janet TextMate grammar, which is MIT and
-copyright Calvin Rose and contributors.
+MIT. The grammar derives from the upstream project's TextMate grammar, which
+is MIT and copyright Calvin Rose and contributors.

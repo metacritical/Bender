@@ -1,11 +1,11 @@
-%% bench/agents_erl.erl — Erlang equivalent of bench/agents.janet, for a
+%% bench/agents_erl.erl — Erlang equivalent of bench/agents.ben, for a
 %% direct, same-machine comparative measurement (not a theoretical claim).
 %%
 %% Same actor kernel shape: N processes, each parked in receive, T tick
 %% messages sent to each, trivial arithmetic per tick, then the actor
 %% exits. Single Erlang node (erl's default: one BEAM scheduler per core,
 %% NOT a single OS thread, but presented to the user as "the one Erlang
-%% process/runtime" the same way bench/agents.janet is "the one janet
+%% process/runtime" the same way bench/agents.ben is "the one bender
 %% process" -- a fair comparison at the application level).
 %%
 %% Usage: erl -noshell -run agents_erl main N T -s init stop

@@ -1,4 +1,4 @@
-@[@[@["test/fixtures/hinted-export/profile-module.janet" 1 "hot"]
+@[@[@["test/fixtures/hinted-export/profile-module.ben" 1 "hot"]
     @{:calls 2 :params @[@[:number]] :from :home}]
-  @[@["./test/fixtures/hinted-export/profile-module.janet" 1 "hot"]
+  @[@["./test/fixtures/hinted-export/profile-module.ben" 1 "hot"]
     @{:calls 3 :params @[@[:string]] :from :worker}]]

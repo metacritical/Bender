@@ -1,7 +1,7 @@
-# General Janet optimization driven by ttfx
+# General Bender optimization driven by ttfx
 
 Updated 2026-10-21. **This is the authoritative compiler work/status record.**
-The original repository is `/Users/pankajdoharey/Development/Projects/janet`.
+The original repository is `/Users/pankajdoharey/Development/Projects/bender`.
 All ongoing optimization design and status belong in this compiler repository.
 The ttfx port is an unchanged integration fixture, not an optimization target.
 Its existing `bench-engines.md` contains historical measurements; temporary
@@ -60,15 +60,15 @@ are **1.005×** (noise). No broad GUI speedup is claimed.
 
 ## Goal and correctness contract
 
-Optimize the general Janet compiler/VM, not effect-specific kernels. Unmodified
+Optimize the general Bender compiler/VM, not effect-specific kernels. Unmodified
 ttfx is the workload: use its `ruby-port/logo.txt` Omarchy artwork (81×10), not
 hello or the historical repeated-fox input. Train with seeds 42/7/99/2026 and
 reserve 13/314159 for held-out parity when all four train PGO.
 
 Do not add custom kernels, benchmark-specific shortcuts, source reshapes, or
-optimization tracking documents to `janet-port`. Existing handwritten application
+optimization tracking documents to `bender-port`. Existing handwritten application
 kernels are historical inputs to the fixture, not templates to special-case in
-Bender. Any new mechanism must be tested with generic Janet programs first and
+Bender. Any new mechanism must be tested with generic Bender programs first and
 must apply without changing the application's source.
 
 The requested goal is at least 1.10× Rust and Node on every comparable benchmark.
@@ -79,7 +79,7 @@ are not performance measurements. Use focused matched timing only after correctn
 
 Latest verified CLI release comparison:
 [Omarchy AOT/PGO versus Rust](omarchy-cli-release-comparison.md). Full output
-parity passes, but the rebuilt release remains within noise of previous Janet;
+parity passes, but the rebuilt release remains within noise of previous Bender;
 Rust fx is 6–39× faster on the measured whole-process dump workloads. Six leaf
 kernels remain; the current compiler infrastructure has not nativeized the hot
 mixed-operation scene loops. Do not describe these changes as a measured speedup.
@@ -109,7 +109,7 @@ checkout as **`58268620`**, preserving component and merge history. The incoming
 files did not overlap the shared checkout's 12 pre-existing dirty/untracked files;
 SHA-256 checks confirmed all 12 were preserved byte-for-byte. The original checkout
 was subsequently rebuilt: `build/bender` reports `1.43.0-dev-5180da8a` and
-`build/libjanet.a` was refreshed, with experimental executors default-off.
+`build/libbender.a` was refreshed, with experimental executors default-off.
 Array-result 16, joint-dispatch 28, hinted-export 78, multiseed 35, release 14,
 and auto-PGO 98 assertions passed (269 total), plus hinted-callgraph checks.
 
@@ -120,7 +120,7 @@ and auto-PGO 98 assertions passed (269 total), plus hinted-callgraph checks.
 Array-returning native calls can assign to proven, join-safe array slots even in
 a double-returning caller. Direct-call argument proof occurs before a reused
 destination register changes type. Tail return and mixed-slot checks remain.
-This passes `JanetArray*`, **not unboxed array elements**. Regression: 16 checks.
+This passes `BenderArray*`, **not unboxed array elements**. Regression: 16 checks.
 Current ttfx still makes separate step/tail calls; no standalone speedup claim.
 
 ### Multi-workload PGO and guarded variants
@@ -175,8 +175,8 @@ Bounded Omarchy decrypt/fireworks six-seed parity passed. No speedup claim.
 ## Current work: mixed-operation native regions (stage 2)
 
 Stage 2 is implemented on branch `ttfx-mixed-regions`, still **off by
-default** (same double opt-in: `-DJANET_NATIVE_EXECUTORS` runtime build
-plus `JANET_NATIVE_EXECUTORS=1` at emission). Mixed-op loop bodies are
+default** (same double opt-in: `-DBENDER_NATIVE_EXECUTORS` runtime build
+plus `BENDER_NATIVE_EXECUTORS=1` at emission). Mixed-op loop bodies are
 admitted with native arithmetic/control regions around explicit VM
 boundaries (`call`, `tcall`, `push*`, `get`, `in`, `len`, `next`,
 `put`, `mkarr`, `mkbuf`, `mktup`, the divide/modulo family) that exit
@@ -234,7 +234,7 @@ reset dirty checkouts, force-push, squash away component history, blanket-stage
 untracked files, or delete unknown work. Reconcile newer approved master commits
 in the isolated integration branch, then coordinate a normal merge into clean master.
 
-Shared-tree inventories initially recorded 11 Janet and 202 ttfx dirty/untracked
+Shared-tree inventories initially recorded 11 Bender and 202 ttfx dirty/untracked
 entries; a subsequent SHA-256 comparison found them unchanged. Review source,
 tests/docs, generated artifacts, CI/ignore edits and ownership independently.
 At the user's request, remaining original-checkout WIP was then organized into
@@ -242,7 +242,7 @@ feature commits rather than blanket-staged:
 
 | Commit | Preserved work |
 |---|---|
-| `ebb83566` | Archive the unrelated partial recovery at `recovered/role-subagents-plan.partial.md`; restore the tracked Janet plan |
+| `ebb83566` | Archive the unrelated partial recovery at `recovered/role-subagents-plan.partial.md`; restore the tracked Bender plan |
 | `151bdc24` | Ignore Finder metadata without deleting it |
 | `5ada1e33` | Historical combined compiler/messaging roadmap |
 | `092269e1` | Historical DCE safety-gate/stripping plans |
@@ -253,7 +253,7 @@ feature commits rather than blanket-staged:
 The original partial plan cannot be fully reconstructed; its fragment and recovery
 note remain preserved, not endorsed as current instructions. Both manual pool
 probes exited 0 under a timeout. Historical plans include provenance/status warnings.
-The original Janet worktree was clean after these commits; ttfx's separate WIP was
+The original Bender worktree was clean after these commits; ttfx's separate WIP was
 not included in this compiler cleanup. Branch/worktree references remain available.
 
 ## Guarded native-executor fast paths (2026-10-22, `efe625e5`)
@@ -262,7 +262,7 @@ Committed guarded, same-PC fast paths for primitive table get/put, in-range
 array put, capacity-checked `buffer/push-string`, canonical core predicates,
 and one-argument container-as-function reads (`(table key)`, `(struct key)`,
 `(array i)`, tuples, strings, symbols, keywords, buffers). The container path
-is exactly `janet_in`; composite keys and out-of-range indices remain VM
+is exactly `bender_in`; composite keys and out-of-range indices remain VM
 boundaries. Table/struct/string/tuple allocation opcodes are now admitted as
 VM boundaries, so functions containing literals can still carry frame
 executors.
@@ -298,7 +298,7 @@ claim is made from this step.
 The earlier GUI container-vs-`gcR10` result was confounded: `gcR10` has
 **zero** frame executors, while the container candidate had 85. To isolate
 execution from code size and PGO, I rebuilt the GUI and CLI releases from
-their exact existing PGO caches with `JANET_NATIVE_EXECUTORS` unset. The
+their exact existing PGO caches with `BENDER_NATIVE_EXECUTORS` unset. The
 resulting controls have the same compiler, source, profile, and nine kernels,
 but zero frame executors. Same-sitting paired runs:
 
@@ -329,14 +329,14 @@ such gate was shipped.
 ### Leaf executor experiment (opt-in, not enabled in the final release)
 
 I added a separate no-loop leaf tier behind
-`JANET_EXECUTOR_LEAF_MIN_CALLS` (default `math/inf`, i.e. off). It requires a
+`BENDER_EXECUTOR_LEAF_MIN_CALLS` (default `math/inf`, i.e. off). It requires a
 native run at entry and excludes FFI alias wrappers; a leaf wrapper around
 void/struct-return aliases hung a GUI `highlight` probe, while the loop
 executor's existing alias fast path already covers those calls. With a
 threshold of 1000 it selected 16 CLI and 12 GUI leaf definitions.
 
 Evidence: 37/37 bounded CLI frame streams identical; `test/suite-native-executor.sh`
-passes with `JANET_EXECUTOR_LEAF_MIN_CALLS=0` (budget 1/2, portable dispatch,
+passes with `BENDER_EXECUTOR_LEAF_MIN_CALLS=0` (budget 1/2, portable dispatch,
 interrupts off, ASan+UBSan, GC across boundaries, breakpoint/step,
 parked marshal, preemption); leaf executors `callee`/`reset`/`short-fn`
 actually attach and execute. Paired leaf-vs-loop release runs gave 0.9846
@@ -383,8 +383,8 @@ faster 12/25), i.e. slower.
 The merged profiles also produced expected type divergences across workloads
 (for example `scene-new` and `filter` argument shapes) and did not change
 executor count or code size. Both full-workload candidates were rejected and
-retained as `janet-port/build/ttfx-cli-fullpgo` and
-`janet-port/build/ttfx-gui-bender-fullpgo` for reproduction. The release
+retained as `bender-port/build/ttfx-cli-fullpgo` and
+`bender-port/build/ttfx-gui-bender-fullpgo` for reproduction. The release
 profiles remain one-effect; no full-workload PGO claim is made.
 
 ### All-37 effect survey against Rust
@@ -419,11 +419,11 @@ their callees and in build-time scene construction:
 | Effect | Dominant profile rows | Effect-specific part | Native coverage |
 |---|---|---|---|
 | rings | `ctx-anim` 800k, `ctx-step-animation`/`ctx-char-active?` 512k, `ctx-motion-move` 504k, path/segment/lerp helpers 487k each | `rings-next-frame` 1.4k, `rings-set-disperse-path` 1.2k | only `ctx-path-step` and `rings-set-disperse-path` |
-| binarypath | `nil?` 862k, `round-half-even` 517k, `empty?` 267k, step/active 248k, motion/path 230k | `binarypath.janet:82` 21.9k, `travel-complete?` 16.4k | `travel-complete?`; the 82 loop is VM |
-| waves | active/step 190k each, `ease`/`scene-next-eased`/`round-half-even` 138k each, frame creation 74k | `waves.janet:71` 69.1k build-loop map, `while` at 70 3.2k | `waves-next-frame`; helpers VM |
-| vhstape | `nil?` 924k, `xor64` 302k, `ctx-anim` 267k, RNG bit helpers 121-181k | `vhstape.janet:100` 85.4k, line 156 1.2k | no effect-specific executor |
-| smoke | active/step 102k each, `color-clamp` 31k, frame creation 26k | `smoke.janet:73`/`:77` 12.8k each build-loop maps | `smoke-next-frame`; helpers VM |
-| colorshift | active/step 209k each, frame creation 37k, `color-clamp` 10k | `colorshift.janet:103` 3.6k, line 73 1.2k | `colorshift-next-frame` absent from executor set; helpers VM |
+| binarypath | `nil?` 862k, `round-half-even` 517k, `empty?` 267k, step/active 248k, motion/path 230k | `binarypath.ben:82` 21.9k, `travel-complete?` 16.4k | `travel-complete?`; the 82 loop is VM |
+| waves | active/step 190k each, `ease`/`scene-next-eased`/`round-half-even` 138k each, frame creation 74k | `waves.ben:71` 69.1k build-loop map, `while` at 70 3.2k | `waves-next-frame`; helpers VM |
+| vhstape | `nil?` 924k, `xor64` 302k, `ctx-anim` 267k, RNG bit helpers 121-181k | `vhstape.ben:100` 85.4k, line 156 1.2k | no effect-specific executor |
+| smoke | active/step 102k each, `color-clamp` 31k, frame creation 26k | `smoke.ben:73`/`:77` 12.8k each build-loop maps | `smoke-next-frame`; helpers VM |
+| colorshift | active/step 209k each, frame creation 37k, `color-clamp` 10k | `colorshift.ben:103` 3.6k, line 73 1.2k | `colorshift-next-frame` absent from executor set; helpers VM |
 
 Only five of the hot names (`ctx-path-step`, `waves-next-frame`,
 `smoke-next-frame`, `travel-complete?`, `rings-set-disperse-path`) are in the
@@ -457,7 +457,7 @@ release gave a PGO/base FPS geomean of **0.9992** (median **0.9930**; PGO
 faster in 17/37 effects). The five target effects alone were 0.9938. The
 outliers are not a broad win: `binarypath` +19.6% and `decrypt`/`crumble`
 about +7%, but `fireworks` -10.0%, `synthgrid` -8.0%, and `unstable` -5.7%.
-The candidate remains `janet-port/build/ttfx-gui-bender-all37pgo` for
+The candidate remains `bender-port/build/ttfx-gui-bender-all37pgo` for
 reproduction; the release GUI stays the scattered-only noexec build.
 
 The all-37 profiles identify where the remaining work is. CLI aggregate hot
@@ -465,8 +465,8 @@ rows are `nil?` 11.6M calls, `xor64` 10.0M, `round-half-even` 6.6M,
 `cfunction?` 6.2M, `shl64` 6.0M, `ctx-step-animation` 5.6M,
 `ctx-char-active?` 5.5M, `ctx-motion-move` 4.5M, and the other 64-bit RNG
 helpers around 4M each. The GUI aggregate is dominated by the FFI alias
-`rl-draw-text-ex` (44.8M) and a generated `boot.janet:4768` wrapper (92.3M);
-the next Janet functions are much smaller (`nil?` 4.7M, `ctx-anim` 1.3M).
+`rl-draw-text-ex` (44.8M) and a generated `boot.ben:4768` wrapper (92.3M);
+the next Bender functions are much smaller (`nil?` 4.7M, `ctx-anim` 1.3M).
 This is draw/FFI-call and VM-entry cost, not missing profile coverage. The
 next compiler target remains native-to-native continuation/inlining for the
 hot helpers and a lower-overhead batched FFI draw path; another merged PGO
@@ -481,9 +481,9 @@ such as the RNG limb helpers are not the main cost.
 
 | Effect | Samples | Dominant release stacks |
 |---|---:|---|
-| rings | 1,388 | `run_vm` 433; `janet_gc_barrier` 103; `janet_dict_find` 78; `janet_equals` 75; `ctx-fire-event` executor 68; `janet_in` 67; `janet_next_impl` 48; `janet_mark` 39; `janet_native_poll` 37; container-call fast 35; `native_structure_matches` 31; `ctx-path-step` 23; `ctx-frame-string` 16 |
-| vhstape | 382 | `run_vm` 117; `janet_gc_barrier` 47; `janet_dict_find` 18; `janet_hash` 13; `janet_in` 13; `native_structure_matches` 12; `ctx-frame-string` 10; `ctx-path-step` 6; `ctx-fire-event` 6 |
-| decrypt | 94 | `run_vm` 21; `ctx-frame-string` 9; `janet_dict_find` 8; buffer-push fast 7; `janet_core_string` 6; `janet_gc_barrier` 6 |
+| rings | 1,388 | `run_vm` 433; `bender_gc_barrier` 103; `bender_dict_find` 78; `bender_equals` 75; `ctx-fire-event` executor 68; `bender_in` 67; `bender_next_impl` 48; `bender_mark` 39; `bender_native_poll` 37; container-call fast 35; `native_structure_matches` 31; `ctx-path-step` 23; `ctx-frame-string` 16 |
+| vhstape | 382 | `run_vm` 117; `bender_gc_barrier` 47; `bender_dict_find` 18; `bender_hash` 13; `bender_in` 13; `native_structure_matches` 12; `ctx-frame-string` 10; `ctx-path-step` 6; `ctx-fire-event` 6 |
+| decrypt | 94 | `run_vm` 21; `ctx-frame-string` 9; `bender_dict_find` 8; buffer-push fast 7; `bender_core_string` 6; `bender_gc_barrier` 6 |
 
 The hot release paths are therefore **table/event operations, GC write
 barriers, VM excursions from already-native frame functions, and frame
@@ -523,7 +523,7 @@ the previous release gave a packed/base time geomean of **0.9744** (median
 regressions are `matrix` 1.033, `overflow` 1.024, `bubbles` 1.018,
 `slice` 1.017, `spotlights` 1.010, and `orbittingvolley` 1.007.
 
-The candidate is `janet-port/build/ttfx-cli-packed-pgo`; the source change
+The candidate is `bender-port/build/ttfx-cli-packed-pgo`; the source change
 is committed in the ttfx worktree as
 `ttfx: pack scene frame state into arrays`. The previous release remains
 `ttfx-cli-container-rel` until the next changes are combined and the final
@@ -545,7 +545,7 @@ all-37 A/B against the packed-frame release: **0.9779** geomean, median
 `burn` 0.946, `decrypt` 0.947, `errorcorrect` 0.950, `unstable` 0.954,
 `smoke` 0.957. Remaining regressions: `spotlights` 1.056, `scattered` 1.055,
 `sweep` 1.007, `middleout` 1.004. Candidate:
-`janet-port/build/ttfx-cli-packed-scene-pgo`; source commit
+`bender-port/build/ttfx-cli-packed-scene-pgo`; source commit
 `ttfx: pack scene state into arrays`.
 
 The combined packed-frame + packed-scene candidate is about **4.7% faster**
@@ -564,7 +564,7 @@ all-37 A/B against the packed-scene release: **0.9893** geomean, median
 `randomsequence` 0.952, `swarm` 0.960, `vhstape` 0.961, `laseretch` 0.970,
 `rain` 0.972. Remaining regressions: `matrix` 1.025, `slice` 1.024,
 `beams` 1.018, `unstable` 1.010. Candidate:
-`janet-port/build/ttfx-cli-packed-path-pgo`; source commit
+`bender-port/build/ttfx-cli-packed-path-pgo`; source commit
 `ttfx: pack motion path state into arrays`.
 
 The three accepted unboxing steps combined are about **5.8% faster** than
@@ -580,19 +580,19 @@ reverted.
 
 ### Final artifacts
 
-- `janet-port/build/ttfx-cli-container-rel`: 83 loop executors, 9 kernels,
+- `bender-port/build/ttfx-cli-container-rel`: 83 loop executors, 9 kernels,
   2.8 MB, 37/37 bounded CLI parity against `ttfx-cli-rel2` (36/37 against
   Rust; `swarm` differs). This is the release CLI.
-- `janet-port/build/ttfx-gui-bender-container-rel`: 0 frame executors,
+- `bender-port/build/ttfx-gui-bender-container-rel`: 0 frame executors,
   9 kernels, 1.7 MB. This is the release GUI; the 85-executor build is
   retained as `...-on-rel`, and the leaf candidate as `...-leaf-noffi-rel`.
-- `janet-port/build/ttfx-cli-container-leaf-rel`: 99 executors (16 leaf),
+- `bender-port/build/ttfx-cli-container-leaf-rel`: 99 executors (16 leaf),
   37/37 parity, retained only as an opt-in experiment.
-- Rejected full-workload candidates: `janet-port/build/ttfx-cli-fullpgo`
+- Rejected full-workload candidates: `bender-port/build/ttfx-cli-fullpgo`
   (83 executors, 37/37 parity against `ttfx-cli-rel2`, 1.0128 time ratio
-  versus the one-effect loop release), `janet-port/build/ttfx-gui-bender-fullpgo`
+  versus the one-effect loop release), `bender-port/build/ttfx-gui-bender-fullpgo`
   (five-effect profile, 0 executors, 0.9859 FPS ratio versus the one-effect
-  noexec release), and `janet-port/build/ttfx-gui-bender-all37pgo`
+  noexec release), and `bender-port/build/ttfx-gui-bender-all37pgo`
   (all-37 profile, 0 executors, 9 kernels, 0.9992 FPS ratio versus the
   one-effect noexec release).
 

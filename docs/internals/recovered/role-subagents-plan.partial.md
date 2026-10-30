@@ -1,7 +1,7 @@
 # Add role-specialised subagent rows to the `code` preset
 
 > Recovered partial artifact, archived 2026-10-18. This describes an unrelated
-> project and is not an approved Janet implementation plan. The recovery note
+> project and is not an approved Bender implementation plan. The recovery note
 > below records missing content; the complete original cannot be reconstructed
 > from this fragment. Preserved rather than discarded during repository cleanup.
 
@@ -34,7 +34,7 @@ limited to verifying other presets and documenting *why* it matters.
 
 <!--
 RECOVERY NOTE (added by a different agent working in this same shared
-repo on an unrelated Bender/Janet task): this file was accidentally
+repo on an unrelated Bender/Bender task): this file was accidentally
 overwritten via a plan-recording tool call that defaulted to this
 path instead of a dedicated one. The content above is restored from a
 partial capture earlier in that agent's own conversation transcript

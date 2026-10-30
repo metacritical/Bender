@@ -1,43 +1,43 @@
 rm -rf build vgcore.* callgrind.*
 rm -rf test/install/build test/install/modpath
-cc -DJANET_BOOTSTRAP -DJANET_BUILD="\"35671ede\"" -O0 -std=c99 -Wall -Wextra -Isrc/include -Isrc/conf -fvisibility=hidden -fPIC -g -o build/core/abstract.boot.o -c src/core/abstract.c
-cc -DJANET_BOOTSTRAP -DJANET_BUILD="\"35671ede\"" -O0 -std=c99 -Wall -Wextra -Isrc/include -Isrc/conf -fvisibility=hidden -fPIC -g -o build/core/array.boot.o -c src/core/array.c
-cc -DJANET_BOOTSTRAP -DJANET_BUILD="\"35671ede\"" -O0 -std=c99 -Wall -Wextra -Isrc/include -Isrc/conf -fvisibility=hidden -fPIC -g -o build/core/asm.boot.o -c src/core/asm.c
-cc -DJANET_BOOTSTRAP -DJANET_BUILD="\"35671ede\"" -O0 -std=c99 -Wall -Wextra -Isrc/include -Isrc/conf -fvisibility=hidden -fPIC -g -o build/core/buffer.boot.o -c src/core/buffer.c
-src/core/abstract.c:265:13: warning: unused function 'janet_abstract_release_cb' [-Wunused-function]
-  265 | static void janet_abstract_release_cb(JanetEVGenericMessage msg) {
+cc -DBENDER_BOOTSTRAP -DBENDER_BUILD="\"35671ede\"" -O0 -std=c99 -Wall -Wextra -Isrc/include -Isrc/conf -fvisibility=hidden -fPIC -g -o build/core/abstract.boot.o -c src/core/abstract.c
+cc -DBENDER_BOOTSTRAP -DBENDER_BUILD="\"35671ede\"" -O0 -std=c99 -Wall -Wextra -Isrc/include -Isrc/conf -fvisibility=hidden -fPIC -g -o build/core/array.boot.o -c src/core/array.c
+cc -DBENDER_BOOTSTRAP -DBENDER_BUILD="\"35671ede\"" -O0 -std=c99 -Wall -Wextra -Isrc/include -Isrc/conf -fvisibility=hidden -fPIC -g -o build/core/asm.boot.o -c src/core/asm.c
+cc -DBENDER_BOOTSTRAP -DBENDER_BUILD="\"35671ede\"" -O0 -std=c99 -Wall -Wextra -Isrc/include -Isrc/conf -fvisibility=hidden -fPIC -g -o build/core/buffer.boot.o -c src/core/buffer.c
+src/core/abstract.c:265:13: warning: unused function 'bender_abstract_release_cb' [-Wunused-function]
+  265 | static void bender_abstract_release_cb(BenderEVGenericMessage msg) {
       |             ^~~~~~~~~~~~~~~~~~~~~~~~~
-cc -DJANET_BOOTSTRAP -DJANET_BUILD="\"35671ede\"" -O0 -std=c99 -Wall -Wextra -Isrc/include -Isrc/conf -fvisibility=hidden -fPIC -g -o build/core/bytecode.boot.o -c src/core/bytecode.c
+cc -DBENDER_BOOTSTRAP -DBENDER_BUILD="\"35671ede\"" -O0 -std=c99 -Wall -Wextra -Isrc/include -Isrc/conf -fvisibility=hidden -fPIC -g -o build/core/bytecode.boot.o -c src/core/bytecode.c
 1 warning generated.
-cc -DJANET_BOOTSTRAP -DJANET_BUILD="\"35671ede\"" -O0 -std=c99 -Wall -Wextra -Isrc/include -Isrc/conf -fvisibility=hidden -fPIC -g -o build/core/capi.boot.o -c src/core/capi.c
-cc -DJANET_BOOTSTRAP -DJANET_BUILD="\"35671ede\"" -O0 -std=c99 -Wall -Wextra -Isrc/include -Isrc/conf -fvisibility=hidden -fPIC -g -o build/core/cfuns.boot.o -c src/core/cfuns.c
-cc -DJANET_BOOTSTRAP -DJANET_BUILD="\"35671ede\"" -O0 -std=c99 -Wall -Wextra -Isrc/include -Isrc/conf -fvisibility=hidden -fPIC -g -o build/core/compile.boot.o -c src/core/compile.c
-cc -DJANET_BOOTSTRAP -DJANET_BUILD="\"35671ede\"" -O0 -std=c99 -Wall -Wextra -Isrc/include -Isrc/conf -fvisibility=hidden -fPIC -g -o build/core/corelib.boot.o -c src/core/corelib.c
-cc -DJANET_BOOTSTRAP -DJANET_BUILD="\"35671ede\"" -O0 -std=c99 -Wall -Wextra -Isrc/include -Isrc/conf -fvisibility=hidden -fPIC -g -o build/core/debug.boot.o -c src/core/debug.c
-cc -DJANET_BOOTSTRAP -DJANET_BUILD="\"35671ede\"" -O0 -std=c99 -Wall -Wextra -Isrc/include -Isrc/conf -fvisibility=hidden -fPIC -g -o build/core/emit.boot.o -c src/core/emit.c
-cc -DJANET_BOOTSTRAP -DJANET_BUILD="\"35671ede\"" -O0 -std=c99 -Wall -Wextra -Isrc/include -Isrc/conf -fvisibility=hidden -fPIC -g -o build/core/ev.boot.o -c src/core/ev.c
-cc -DJANET_BOOTSTRAP -DJANET_BUILD="\"35671ede\"" -O0 -std=c99 -Wall -Wextra -Isrc/include -Isrc/conf -fvisibility=hidden -fPIC -g -o build/core/ffi.boot.o -c src/core/ffi.c
-cc -DJANET_BOOTSTRAP -DJANET_BUILD="\"35671ede\"" -O0 -std=c99 -Wall -Wextra -Isrc/include -Isrc/conf -fvisibility=hidden -fPIC -g -o build/core/fiber.boot.o -c src/core/fiber.c
-cc -DJANET_BOOTSTRAP -DJANET_BUILD="\"35671ede\"" -O0 -std=c99 -Wall -Wextra -Isrc/include -Isrc/conf -fvisibility=hidden -fPIC -g -o build/core/filewatch.boot.o -c src/core/filewatch.c
-src/core/ev.c:107:3: warning: redefinition of typedef 'JanetChanPendReg' is a C11 feature [-Wtypedef-redefinition]
-  107 | } JanetChanPendReg;
+cc -DBENDER_BOOTSTRAP -DBENDER_BUILD="\"35671ede\"" -O0 -std=c99 -Wall -Wextra -Isrc/include -Isrc/conf -fvisibility=hidden -fPIC -g -o build/core/capi.boot.o -c src/core/capi.c
+cc -DBENDER_BOOTSTRAP -DBENDER_BUILD="\"35671ede\"" -O0 -std=c99 -Wall -Wextra -Isrc/include -Isrc/conf -fvisibility=hidden -fPIC -g -o build/core/cfuns.boot.o -c src/core/cfuns.c
+cc -DBENDER_BOOTSTRAP -DBENDER_BUILD="\"35671ede\"" -O0 -std=c99 -Wall -Wextra -Isrc/include -Isrc/conf -fvisibility=hidden -fPIC -g -o build/core/compile.boot.o -c src/core/compile.c
+cc -DBENDER_BOOTSTRAP -DBENDER_BUILD="\"35671ede\"" -O0 -std=c99 -Wall -Wextra -Isrc/include -Isrc/conf -fvisibility=hidden -fPIC -g -o build/core/corelib.boot.o -c src/core/corelib.c
+cc -DBENDER_BOOTSTRAP -DBENDER_BUILD="\"35671ede\"" -O0 -std=c99 -Wall -Wextra -Isrc/include -Isrc/conf -fvisibility=hidden -fPIC -g -o build/core/debug.boot.o -c src/core/debug.c
+cc -DBENDER_BOOTSTRAP -DBENDER_BUILD="\"35671ede\"" -O0 -std=c99 -Wall -Wextra -Isrc/include -Isrc/conf -fvisibility=hidden -fPIC -g -o build/core/emit.boot.o -c src/core/emit.c
+cc -DBENDER_BOOTSTRAP -DBENDER_BUILD="\"35671ede\"" -O0 -std=c99 -Wall -Wextra -Isrc/include -Isrc/conf -fvisibility=hidden -fPIC -g -o build/core/ev.boot.o -c src/core/ev.c
+cc -DBENDER_BOOTSTRAP -DBENDER_BUILD="\"35671ede\"" -O0 -std=c99 -Wall -Wextra -Isrc/include -Isrc/conf -fvisibility=hidden -fPIC -g -o build/core/ffi.boot.o -c src/core/ffi.c
+cc -DBENDER_BOOTSTRAP -DBENDER_BUILD="\"35671ede\"" -O0 -std=c99 -Wall -Wextra -Isrc/include -Isrc/conf -fvisibility=hidden -fPIC -g -o build/core/fiber.boot.o -c src/core/fiber.c
+cc -DBENDER_BOOTSTRAP -DBENDER_BUILD="\"35671ede\"" -O0 -std=c99 -Wall -Wextra -Isrc/include -Isrc/conf -fvisibility=hidden -fPIC -g -o build/core/filewatch.boot.o -c src/core/filewatch.c
+src/core/ev.c:107:3: warning: redefinition of typedef 'BenderChanPendReg' is a C11 feature [-Wtypedef-redefinition]
+  107 | } BenderChanPendReg;
       |   ^
 src/core/ev.c:66:33: note: previous definition is here
-   66 | typedef struct JanetChanPendReg JanetChanPendReg;
+   66 | typedef struct BenderChanPendReg BenderChanPendReg;
       |                                 ^
 src/core/ffi.c:246:1: warning: missing field 'gcperthread' initializer [-Wmissing-field-initializers]
   246 | };
       | ^
 src/core/ev.c:5895:17: warning: unused variable 'root' [-Wunused-variable]
- 5895 |     JanetFiber *root = call_waiter;
+ 5895 |     BenderFiber *root = call_waiter;
       |                 ^~~~
 src/core/ev.c:1138:13: warning: unused function 'flag_chanpend_node' [-Wunused-function]
- 1138 | static void flag_chanpend_node(JanetChannelPending *p) {
+ 1138 | static void flag_chanpend_node(BenderChannelPending *p) {
       |             ^~~~~~~~~~~~~~~~~~
-cc -DJANET_BOOTSTRAP -DJANET_BUILD="\"35671ede\"" -O0 -std=c99 -Wall -Wextra -Isrc/include -Isrc/conf -fvisibility=hidden -fPIC -g -o build/core/gc.boot.o -c src/core/gc.c
+cc -DBENDER_BOOTSTRAP -DBENDER_BUILD="\"35671ede\"" -O0 -std=c99 -Wall -Wextra -Isrc/include -Isrc/conf -fvisibility=hidden -fPIC -g -o build/core/gc.boot.o -c src/core/gc.c
 1 warning generated.
-cc -DJANET_BOOTSTRAP -DJANET_BUILD="\"35671ede\"" -O0 -std=c99 -Wall -Wextra -Isrc/include -Isrc/conf -fvisibility=hidden -fPIC -g -o build/core/inttypes.boot.o -c src/core/inttypes.c
-cc -DJANET_BOOTSTRAP -DJANET_BUILD="\"35671ede\"" -O0 -std=c99 -Wall -Wextra -Isrc/include -Isrc/conf -fvisibility=hidden -fPIC -g -o build/core/io.boot.o -c src/core/io.c
+cc -DBENDER_BOOTSTRAP -DBENDER_BUILD="\"35671ede\"" -O0 -std=c99 -Wall -Wextra -Isrc/include -Isrc/conf -fvisibility=hidden -fPIC -g -o build/core/inttypes.boot.o -c src/core/inttypes.c
+cc -DBENDER_BOOTSTRAP -DBENDER_BUILD="\"35671ede\"" -O0 -std=c99 -Wall -Wextra -Isrc/include -Isrc/conf -fvisibility=hidden -fPIC -g -o build/core/io.boot.o -c src/core/io.c
 src/core/gc.c:3057:9: warning: variable 'f' is used uninitialized whenever '||' condition is true [-Wsometimes-uninitialized]
  3057 |     if (NULL == proc || NULL == (f = proc->fiber) || 0 == f->gc_owner ||
       |         ^~~~~~~~~~~~
@@ -54,80 +54,80 @@ src/core/gc.c:3057:9: note: remove the '||' if its condition is always false
    26 | #define NULL ((void*)0)
       |              ^
 src/core/gc.c:3038:18: note: initialize the variable 'f' to silence this warning
- 3038 |     JanetFiber *f;
+ 3038 |     BenderFiber *f;
       |                  ^
       |                   = NULL
-src/core/gc.c:1052:13: warning: unused function 'janet_quarantine_maybe_drain' [-Wunused-function]
- 1052 | static void janet_quarantine_maybe_drain(void) {
+src/core/gc.c:1052:13: warning: unused function 'bender_quarantine_maybe_drain' [-Wunused-function]
+ 1052 | static void bender_quarantine_maybe_drain(void) {
       |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~
-cc -DJANET_BOOTSTRAP -DJANET_BUILD="\"35671ede\"" -O0 -std=c99 -Wall -Wextra -Isrc/include -Isrc/conf -fvisibility=hidden -fPIC -g -o build/core/marsh.boot.o -c src/core/marsh.c
+cc -DBENDER_BOOTSTRAP -DBENDER_BUILD="\"35671ede\"" -O0 -std=c99 -Wall -Wextra -Isrc/include -Isrc/conf -fvisibility=hidden -fPIC -g -o build/core/marsh.boot.o -c src/core/marsh.c
 3 warnings generated.
-cc -DJANET_BOOTSTRAP -DJANET_BUILD="\"35671ede\"" -O0 -std=c99 -Wall -Wextra -Isrc/include -Isrc/conf -fvisibility=hidden -fPIC -g -o build/core/math.boot.o -c src/core/math.c
-cc -DJANET_BOOTSTRAP -DJANET_BUILD="\"35671ede\"" -O0 -std=c99 -Wall -Wextra -Isrc/include -Isrc/conf -fvisibility=hidden -fPIC -g -o build/core/net.boot.o -c src/core/net.c
+cc -DBENDER_BOOTSTRAP -DBENDER_BUILD="\"35671ede\"" -O0 -std=c99 -Wall -Wextra -Isrc/include -Isrc/conf -fvisibility=hidden -fPIC -g -o build/core/math.boot.o -c src/core/math.c
+cc -DBENDER_BOOTSTRAP -DBENDER_BUILD="\"35671ede\"" -O0 -std=c99 -Wall -Wextra -Isrc/include -Isrc/conf -fvisibility=hidden -fPIC -g -o build/core/net.boot.o -c src/core/net.c
 2 warnings generated.
-cc -DJANET_BOOTSTRAP -DJANET_BUILD="\"35671ede\"" -O0 -std=c99 -Wall -Wextra -Isrc/include -Isrc/conf -fvisibility=hidden -fPIC -g -o build/core/os.boot.o -c src/core/os.c
-cc -DJANET_BOOTSTRAP -DJANET_BUILD="\"35671ede\"" -O0 -std=c99 -Wall -Wextra -Isrc/include -Isrc/conf -fvisibility=hidden -fPIC -g -o build/core/parse.boot.o -c src/core/parse.c
-cc -DJANET_BOOTSTRAP -DJANET_BUILD="\"35671ede\"" -O0 -std=c99 -Wall -Wextra -Isrc/include -Isrc/conf -fvisibility=hidden -fPIC -g -o build/core/peg.boot.o -c src/core/peg.c
-cc -DJANET_BOOTSTRAP -DJANET_BUILD="\"35671ede\"" -O0 -std=c99 -Wall -Wextra -Isrc/include -Isrc/conf -fvisibility=hidden -fPIC -g -o build/core/pp.boot.o -c src/core/pp.c
+cc -DBENDER_BOOTSTRAP -DBENDER_BUILD="\"35671ede\"" -O0 -std=c99 -Wall -Wextra -Isrc/include -Isrc/conf -fvisibility=hidden -fPIC -g -o build/core/os.boot.o -c src/core/os.c
+cc -DBENDER_BOOTSTRAP -DBENDER_BUILD="\"35671ede\"" -O0 -std=c99 -Wall -Wextra -Isrc/include -Isrc/conf -fvisibility=hidden -fPIC -g -o build/core/parse.boot.o -c src/core/parse.c
+cc -DBENDER_BOOTSTRAP -DBENDER_BUILD="\"35671ede\"" -O0 -std=c99 -Wall -Wextra -Isrc/include -Isrc/conf -fvisibility=hidden -fPIC -g -o build/core/peg.boot.o -c src/core/peg.c
+cc -DBENDER_BOOTSTRAP -DBENDER_BUILD="\"35671ede\"" -O0 -std=c99 -Wall -Wextra -Isrc/include -Isrc/conf -fvisibility=hidden -fPIC -g -o build/core/pp.boot.o -c src/core/pp.c
 src/core/os.c:1431:9: warning: 'posix_spawn_file_actions_addchdir_np' is deprecated: first deprecated in macOS 26.0 - posix_spawn_file_actions_addchdir(3) has replaced posix_spawn_file_actions_addchdir_np(3) [-Wdeprecated-declarations]
  1431 |         posix_spawn_file_actions_addchdir_np(&actions, chdir_path);
       |         ^
 /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/include/spawn.h:184:9: note: 'posix_spawn_file_actions_addchdir_np' has been explicitly marked deprecated here
   184 | int     posix_spawn_file_actions_addchdir_np(posix_spawn_file_actions_t *,
       |         ^
-cc -DJANET_BOOTSTRAP -DJANET_BUILD="\"35671ede\"" -O0 -std=c99 -Wall -Wextra -Isrc/include -Isrc/conf -fvisibility=hidden -fPIC -g -o build/core/proc.boot.o -c src/core/proc.c
+cc -DBENDER_BOOTSTRAP -DBENDER_BUILD="\"35671ede\"" -O0 -std=c99 -Wall -Wextra -Isrc/include -Isrc/conf -fvisibility=hidden -fPIC -g -o build/core/proc.boot.o -c src/core/proc.c
 1 warning generated.
-cc -DJANET_BOOTSTRAP -DJANET_BUILD="\"35671ede\"" -O0 -std=c99 -Wall -Wextra -Isrc/include -Isrc/conf -fvisibility=hidden -fPIC -g -o build/core/regalloc.boot.o -c src/core/regalloc.c
-cc -DJANET_BOOTSTRAP -DJANET_BUILD="\"35671ede\"" -O0 -std=c99 -Wall -Wextra -Isrc/include -Isrc/conf -fvisibility=hidden -fPIC -g -o build/core/run.boot.o -c src/core/run.c
-cc -DJANET_BOOTSTRAP -DJANET_BUILD="\"35671ede\"" -O0 -std=c99 -Wall -Wextra -Isrc/include -Isrc/conf -fvisibility=hidden -fPIC -g -o build/core/specials.boot.o -c src/core/specials.c
-cc -DJANET_BOOTSTRAP -DJANET_BUILD="\"35671ede\"" -O0 -std=c99 -Wall -Wextra -Isrc/include -Isrc/conf -fvisibility=hidden -fPIC -g -o build/core/state.boot.o -c src/core/state.c
+cc -DBENDER_BOOTSTRAP -DBENDER_BUILD="\"35671ede\"" -O0 -std=c99 -Wall -Wextra -Isrc/include -Isrc/conf -fvisibility=hidden -fPIC -g -o build/core/regalloc.boot.o -c src/core/regalloc.c
+cc -DBENDER_BOOTSTRAP -DBENDER_BUILD="\"35671ede\"" -O0 -std=c99 -Wall -Wextra -Isrc/include -Isrc/conf -fvisibility=hidden -fPIC -g -o build/core/run.boot.o -c src/core/run.c
+cc -DBENDER_BOOTSTRAP -DBENDER_BUILD="\"35671ede\"" -O0 -std=c99 -Wall -Wextra -Isrc/include -Isrc/conf -fvisibility=hidden -fPIC -g -o build/core/specials.boot.o -c src/core/specials.c
+cc -DBENDER_BOOTSTRAP -DBENDER_BUILD="\"35671ede\"" -O0 -std=c99 -Wall -Wextra -Isrc/include -Isrc/conf -fvisibility=hidden -fPIC -g -o build/core/state.boot.o -c src/core/state.c
 src/core/proc.csrc/core/specials.c:326:35: warning: unused variable 'vv' [-Wunused-variable]
 :  326 | 1036:1:   warning: missing field 'gcperthread' initializer [-Wmissing-field-initializers]
   1036 | };
-      | ^                         Janet vv 
+      | ^                         Bender vv 
 = kvs[oi].value;
       |                                   ^~
-cc -DJANET_BOOTSTRAP -DJANET_BUILD="\"35671ede\"" -O0 -std=c99 -Wall -Wextra -Isrc/include -Isrc/conf -fvisibility=hidden -fPIC -g -o build/core/string.boot.o -c src/core/string.c
-cc -DJANET_BOOTSTRAP -DJANET_BUILD="\"35671ede\"" -O0 -std=c99 -Wall -Wextra -Isrc/include -Isrc/conf -fvisibility=hidden -fPIC -g -o build/core/strtod.boot.o -c src/core/strtod.c
+cc -DBENDER_BOOTSTRAP -DBENDER_BUILD="\"35671ede\"" -O0 -std=c99 -Wall -Wextra -Isrc/include -Isrc/conf -fvisibility=hidden -fPIC -g -o build/core/string.boot.o -c src/core/string.c
+cc -DBENDER_BOOTSTRAP -DBENDER_BUILD="\"35671ede\"" -O0 -std=c99 -Wall -Wextra -Isrc/include -Isrc/conf -fvisibility=hidden -fPIC -g -o build/core/strtod.boot.o -c src/core/strtod.c
 1 warning generated.
 1 warning generated.
-cc -DJANET_BOOTSTRAP -DJANET_BUILD="\"35671ede\"" -O0 -std=c99 -Wall -Wextra -Isrc/include -Isrc/conf -fvisibility=hidden -fPIC -g -o build/core/struct.boot.o -c src/core/struct.c
-cc -DJANET_BOOTSTRAP -DJANET_BUILD="\"35671ede\"" -O0 -std=c99 -Wall -Wextra -Isrc/include -Isrc/conf -fvisibility=hidden -fPIC -g -o build/core/symcache.boot.o -c src/core/symcache.c
-cc -DJANET_BOOTSTRAP -DJANET_BUILD="\"35671ede\"" -O0 -std=c99 -Wall -Wextra -Isrc/include -Isrc/conf -fvisibility=hidden -fPIC -g -o build/core/table.boot.o -c src/core/table.c
-cc -DJANET_BOOTSTRAP -DJANET_BUILD="\"35671ede\"" -O0 -std=c99 -Wall -Wextra -Isrc/include -Isrc/conf -fvisibility=hidden -fPIC -g -o build/core/tuple.boot.o -c src/core/tuple.c
-cc -DJANET_BOOTSTRAP -DJANET_BUILD="\"35671ede\"" -O0 -std=c99 -Wall -Wextra -Isrc/include -Isrc/conf -fvisibility=hidden -fPIC -g -o build/core/util.boot.o -c src/core/util.c
-cc -DJANET_BOOTSTRAP -DJANET_BUILD="\"35671ede\"" -O0 -std=c99 -Wall -Wextra -Isrc/include -Isrc/conf -fvisibility=hidden -fPIC -g -o build/core/value.boot.o -c src/core/value.c
-cc -DJANET_BOOTSTRAP -DJANET_BUILD="\"35671ede\"" -O0 -std=c99 -Wall -Wextra -Isrc/include -Isrc/conf -fvisibility=hidden -fPIC -g -o build/core/vector.boot.o -c src/core/vector.c
-cc -DJANET_BOOTSTRAP -DJANET_BUILD="\"35671ede\"" -O0 -std=c99 -Wall -Wextra -Isrc/include -Isrc/conf -fvisibility=hidden -fPIC -g -o build/core/vm.boot.o -c src/core/vm.c
-cc -DJANET_BOOTSTRAP -DJANET_BUILD="\"35671ede\"" -O0 -std=c99 -Wall -Wextra -Isrc/include -Isrc/conf -fvisibility=hidden -fPIC -g -o build/core/wrap.boot.o -c src/core/wrap.c
-cc -DJANET_BOOTSTRAP -DJANET_BUILD="\"35671ede\"" -O0 -std=c99 -Wall -Wextra -Isrc/include -Isrc/conf -fvisibility=hidden -fPIC -g -o build/boot/array_test.boot.o -c src/boot/array_test.c
-cc -DJANET_BOOTSTRAP -DJANET_BUILD="\"35671ede\"" -O0 -std=c99 -Wall -Wextra -Isrc/include -Isrc/conf -fvisibility=hidden -fPIC -g -o build/boot/boot.boot.o -c src/boot/boot.c
+cc -DBENDER_BOOTSTRAP -DBENDER_BUILD="\"35671ede\"" -O0 -std=c99 -Wall -Wextra -Isrc/include -Isrc/conf -fvisibility=hidden -fPIC -g -o build/core/struct.boot.o -c src/core/struct.c
+cc -DBENDER_BOOTSTRAP -DBENDER_BUILD="\"35671ede\"" -O0 -std=c99 -Wall -Wextra -Isrc/include -Isrc/conf -fvisibility=hidden -fPIC -g -o build/core/symcache.boot.o -c src/core/symcache.c
+cc -DBENDER_BOOTSTRAP -DBENDER_BUILD="\"35671ede\"" -O0 -std=c99 -Wall -Wextra -Isrc/include -Isrc/conf -fvisibility=hidden -fPIC -g -o build/core/table.boot.o -c src/core/table.c
+cc -DBENDER_BOOTSTRAP -DBENDER_BUILD="\"35671ede\"" -O0 -std=c99 -Wall -Wextra -Isrc/include -Isrc/conf -fvisibility=hidden -fPIC -g -o build/core/tuple.boot.o -c src/core/tuple.c
+cc -DBENDER_BOOTSTRAP -DBENDER_BUILD="\"35671ede\"" -O0 -std=c99 -Wall -Wextra -Isrc/include -Isrc/conf -fvisibility=hidden -fPIC -g -o build/core/util.boot.o -c src/core/util.c
+cc -DBENDER_BOOTSTRAP -DBENDER_BUILD="\"35671ede\"" -O0 -std=c99 -Wall -Wextra -Isrc/include -Isrc/conf -fvisibility=hidden -fPIC -g -o build/core/value.boot.o -c src/core/value.c
+cc -DBENDER_BOOTSTRAP -DBENDER_BUILD="\"35671ede\"" -O0 -std=c99 -Wall -Wextra -Isrc/include -Isrc/conf -fvisibility=hidden -fPIC -g -o build/core/vector.boot.o -c src/core/vector.c
+cc -DBENDER_BOOTSTRAP -DBENDER_BUILD="\"35671ede\"" -O0 -std=c99 -Wall -Wextra -Isrc/include -Isrc/conf -fvisibility=hidden -fPIC -g -o build/core/vm.boot.o -c src/core/vm.c
+cc -DBENDER_BOOTSTRAP -DBENDER_BUILD="\"35671ede\"" -O0 -std=c99 -Wall -Wextra -Isrc/include -Isrc/conf -fvisibility=hidden -fPIC -g -o build/core/wrap.boot.o -c src/core/wrap.c
+cc -DBENDER_BOOTSTRAP -DBENDER_BUILD="\"35671ede\"" -O0 -std=c99 -Wall -Wextra -Isrc/include -Isrc/conf -fvisibility=hidden -fPIC -g -o build/boot/array_test.boot.o -c src/boot/array_test.c
+cc -DBENDER_BOOTSTRAP -DBENDER_BUILD="\"35671ede\"" -O0 -std=c99 -Wall -Wextra -Isrc/include -Isrc/conf -fvisibility=hidden -fPIC -g -o build/boot/boot.boot.o -c src/boot/boot.c
 src/core/vm.c:2141:9: warning: excess elements in array initializer [-Wexcess-initializers]
  2141 |         &&label_unknown_op
       |         ^~~~~~~~~~~~~~~~~~
-cc -DJANET_BOOTSTRAP -DJANET_BUILD="\"35671ede\"" -O0 -std=c99 -Wall -Wextra -Isrc/include -Isrc/conf -fvisibility=hidden -fPIC -g -o build/boot/buffer_test.boot.o -c src/boot/buffer_test.c
-cc -DJANET_BOOTSTRAP -DJANET_BUILD="\"35671ede\"" -O0 -std=c99 -Wall -Wextra -Isrc/include -Isrc/conf -fvisibility=hidden -fPIC -g -o build/boot/number_test.boot.o -c src/boot/number_test.c
-cc -DJANET_BOOTSTRAP -DJANET_BUILD="\"35671ede\"" -O0 -std=c99 -Wall -Wextra -Isrc/include -Isrc/conf -fvisibility=hidden -fPIC -g -o build/boot/system_test.boot.o -c src/boot/system_test.c
-cc -DJANET_BOOTSTRAP -DJANET_BUILD="\"35671ede\"" -O0 -std=c99 -Wall -Wextra -Isrc/include -Isrc/conf -fvisibility=hidden -fPIC -g -o build/boot/table_test.boot.o -c src/boot/table_test.c
+cc -DBENDER_BOOTSTRAP -DBENDER_BUILD="\"35671ede\"" -O0 -std=c99 -Wall -Wextra -Isrc/include -Isrc/conf -fvisibility=hidden -fPIC -g -o build/boot/buffer_test.boot.o -c src/boot/buffer_test.c
+cc -DBENDER_BOOTSTRAP -DBENDER_BUILD="\"35671ede\"" -O0 -std=c99 -Wall -Wextra -Isrc/include -Isrc/conf -fvisibility=hidden -fPIC -g -o build/boot/number_test.boot.o -c src/boot/number_test.c
+cc -DBENDER_BOOTSTRAP -DBENDER_BUILD="\"35671ede\"" -O0 -std=c99 -Wall -Wextra -Isrc/include -Isrc/conf -fvisibility=hidden -fPIC -g -o build/boot/system_test.boot.o -c src/boot/system_test.c
+cc -DBENDER_BOOTSTRAP -DBENDER_BUILD="\"35671ede\"" -O0 -std=c99 -Wall -Wextra -Isrc/include -Isrc/conf -fvisibility=hidden -fPIC -g -o build/boot/table_test.boot.o -c src/boot/table_test.c
 cp src/mainclient/shell.c build/c/shell.c
-cc -O2 -g -std=c99 -Wall -Wextra -Isrc/include -Isrc/conf -fvisibility=hidden -fPIC -DJANET_NATIVE_EXECUTORS -c build/c/shell.c -o build/shell.o
+cc -O2 -g -std=c99 -Wall -Wextra -Isrc/include -Isrc/conf -fvisibility=hidden -fPIC -DBENDER_NATIVE_EXECUTORS -c build/c/shell.c -o build/shell.o
 1 warning generated.
-cc -DJANET_BOOTSTRAP -DJANET_BUILD="\"35671ede\"" -O0 -std=c99 -Wall -Wextra -Isrc/include -Isrc/conf -fvisibility=hidden -fPIC -g -o build/janet_boot build/core/abstract.boot.o build/core/array.boot.o build/core/asm.boot.o build/core/buffer.boot.o build/core/bytecode.boot.o build/core/capi.boot.o build/core/cfuns.boot.o build/core/compile.boot.o build/core/corelib.boot.o build/core/debug.boot.o build/core/emit.boot.o build/core/ev.boot.o build/core/ffi.boot.o build/core/fiber.boot.o build/core/filewatch.boot.o build/core/gc.boot.o build/core/inttypes.boot.o build/core/io.boot.o build/core/marsh.boot.o build/core/math.boot.o build/core/net.boot.o build/core/os.boot.o build/core/parse.boot.o build/core/peg.boot.o build/core/pp.boot.o build/core/proc.boot.o build/core/regalloc.boot.o build/core/run.boot.o build/core/specials.boot.o build/core/state.boot.o build/core/string.boot.o build/core/strtod.boot.o build/core/struct.boot.o build/core/symcache.boot.o build/core/table.boot.o build/core/tuple.boot.o build/core/util.boot.o build/core/value.boot.o build/core/vector.boot.o build/core/vm.boot.o build/core/wrap.boot.o build/boot/array_test.boot.o build/boot/boot.boot.o build/boot/buffer_test.boot.o build/boot/number_test.boot.o build/boot/system_test.boot.o build/boot/table_test.boot.o -lm -lpthread -ldl
-build/janet_boot . JANET_PATH '/usr/local/lib/janet' > build/c/janet.c
+cc -DBENDER_BOOTSTRAP -DBENDER_BUILD="\"35671ede\"" -O0 -std=c99 -Wall -Wextra -Isrc/include -Isrc/conf -fvisibility=hidden -fPIC -g -o build/bender_boot build/core/abstract.boot.o build/core/array.boot.o build/core/asm.boot.o build/core/buffer.boot.o build/core/bytecode.boot.o build/core/capi.boot.o build/core/cfuns.boot.o build/core/compile.boot.o build/core/corelib.boot.o build/core/debug.boot.o build/core/emit.boot.o build/core/ev.boot.o build/core/ffi.boot.o build/core/fiber.boot.o build/core/filewatch.boot.o build/core/gc.boot.o build/core/inttypes.boot.o build/core/io.boot.o build/core/marsh.boot.o build/core/math.boot.o build/core/net.boot.o build/core/os.boot.o build/core/parse.boot.o build/core/peg.boot.o build/core/pp.boot.o build/core/proc.boot.o build/core/regalloc.boot.o build/core/run.boot.o build/core/specials.boot.o build/core/state.boot.o build/core/string.boot.o build/core/strtod.boot.o build/core/struct.boot.o build/core/symcache.boot.o build/core/table.boot.o build/core/tuple.boot.o build/core/util.boot.o build/core/value.boot.o build/core/vector.boot.o build/core/vm.boot.o build/core/wrap.boot.o build/boot/array_test.boot.o build/boot/boot.boot.o build/boot/buffer_test.boot.o build/boot/number_test.boot.o build/boot/system_test.boot.o build/boot/table_test.boot.o -lm -lpthread -ldl
+build/bender_boot . BENDER_PATH '/usr/local/lib/bender' > build/c/bender.c
 total bytecode instructions created: 26109
 total function definitions optimized: 1166
 total optimization loops executed: 2134
-cksum build/c/janet.c
-3198367646 4798868 build/c/janet.c
-cc -O2 -g -std=c99 -Wall -Wextra -Isrc/include -Isrc/conf -fvisibility=hidden -fPIC -DJANET_NATIVE_EXECUTORS -c build/c/janet.c -o build/janet.o
-src/core/ev.c:107:3: warning: redefinition of typedef 'JanetChanPendReg' is a C11 feature [-Wtypedef-redefinition]
-  107 | } JanetChanPendReg;
+cksum build/c/bender.c
+3198367646 4798868 build/c/bender.c
+cc -O2 -g -std=c99 -Wall -Wextra -Isrc/include -Isrc/conf -fvisibility=hidden -fPIC -DBENDER_NATIVE_EXECUTORS -c build/c/bender.c -o build/bender.o
+src/core/ev.c:107:3: warning: redefinition of typedef 'BenderChanPendReg' is a C11 feature [-Wtypedef-redefinition]
+  107 | } BenderChanPendReg;
       |   ^
 src/core/ev.c:66:33: note: previous definition is here
-   66 | typedef struct JanetChanPendReg JanetChanPendReg;
+   66 | typedef struct BenderChanPendReg BenderChanPendReg;
       |                                 ^
 src/core/ev.c:5895:17: warning: unused variable 'root' [-Wunused-variable]
- 5895 |     JanetFiber *root = call_waiter;
+ 5895 |     BenderFiber *root = call_waiter;
       |                 ^~~~
 src/core/ffi.c:246:1: warning: missing field 'gcperthread' initializer [-Wmissing-field-initializers]
   246 | };
@@ -148,7 +148,7 @@ src/core/gc.c:3057:9: note: remove the '||' if its condition is always false
    26 | #define NULL ((void*)0)
       |              ^
 src/core/gc.c:3038:18: note: initialize the variable 'f' to silence this warning
- 3038 |     JanetFiber *f;
+ 3038 |     BenderFiber *f;
       |                  ^
       |                   = NULL
 src/core/os.c:1431:9: warning: 'posix_spawn_file_actions_addchdir_np' is deprecated: first deprecated in macOS 26.0 - posix_spawn_file_actions_addchdir(3) has replaced posix_spawn_file_actions_addchdir_np(3) [-Wdeprecated-declarations]
@@ -161,20 +161,20 @@ src/core/proc.c:1036:1: warning: missing field 'gcperthread' initializer [-Wmiss
  1036 | };
       | ^
 src/core/specials.c:326:35: warning: unused variable 'vv' [-Wunused-variable]
-  326 |                             Janet vv = kvs[oi].value;
+  326 |                             Bender vv = kvs[oi].value;
       |                                   ^~
 src/core/vm.c:2141:9: warning: excess elements in array initializer [-Wexcess-initializers]
  2141 |         &&label_unknown_op
       |         ^~~~~~~~~~~~~~~~~~
-src/core/abstract.c:265:13: warning: unused function 'janet_abstract_release_cb' [-Wunused-function]
-  265 | static void janet_abstract_release_cb(JanetEVGenericMessage msg) {
+src/core/abstract.c:265:13: warning: unused function 'bender_abstract_release_cb' [-Wunused-function]
+  265 | static void bender_abstract_release_cb(BenderEVGenericMessage msg) {
       |             ^~~~~~~~~~~~~~~~~~~~~~~~~
 src/core/ev.c:1138:13: warning: unused function 'flag_chanpend_node' [-Wunused-function]
- 1138 | static void flag_chanpend_node(JanetChannelPending *p) {
+ 1138 | static void flag_chanpend_node(BenderChannelPending *p) {
       |             ^~~~~~~~~~~~~~~~~~
-src/core/gc.c:1052:13: warning: unused function 'janet_quarantine_maybe_drain' [-Wunused-function]
- 1052 | static void janet_quarantine_maybe_drain(void) {
+src/core/gc.c:1052:13: warning: unused function 'bender_quarantine_maybe_drain' [-Wunused-function]
+ 1052 | static void bender_quarantine_maybe_drain(void) {
       |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~
 11 warnings generated.
-cc -rdynamic -O2 -g -std=c99 -Wall -Wextra -Isrc/include -Isrc/conf -fvisibility=hidden -fPIC -DJANET_NATIVE_EXECUTORS -o build/bender build/janet.o build/shell.o -lm -lpthread -ldl
-ar rcs build/libjanet.a build/janet.o build/shell.o
+cc -rdynamic -O2 -g -std=c99 -Wall -Wextra -Isrc/include -Isrc/conf -fvisibility=hidden -fPIC -DBENDER_NATIVE_EXECUTORS -o build/bender build/bender.o build/shell.o -lm -lpthread -ldl
+ar rcs build/libbender.a build/bender.o build/shell.o

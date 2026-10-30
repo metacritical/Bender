@@ -6,17 +6,17 @@
 > compiler-only scope: ttfx remains an unchanged integration fixture. Current work:
 > [ttfx-driven-compiler-work.md](ttfx-driven-compiler-work.md).
 > References below to “in tree”, `TODO-effects.md`, engine `src/`, and
-> `bin/ttfx-cli.janet` refer to the external ttfx repository's `janet-port/`;
+> `bin/ttfx-cli.ben` refer to the external ttfx repository's `bender-port/`;
 > Stalin `source/*.sc` paths refer to that external compiler checkout.
 
 Date: 2026-10-14/15. Status: diagnosis complete, packages scoped, not started.
 Machine for all numbers below: Apple M2 Pro, 12 cores, seed 42 unless noted.
 
 Related work in tree: `TODO-effects.md` (37/37 ported, byte-identical vs
-Rust ground truth), `src/` engine, `bin/ttfx-cli.janet --bench`.
+Rust ground truth), `src/` engine, `bin/ttfx-cli.ben --bench`.
 
 --------------------------------------------------------------------------------
-## 1. The instrumentation runs (Rust vs Janet, same methodology both sides)
+## 1. The instrumentation runs (Rust vs Bender, same methodology both sides)
 
 Target picked for being the worst case: `rings` on `ruby-port/logo.txt`
 (81x10 canvas), 1398 frames, seed 42.
@@ -41,13 +41,13 @@ Result (1398 frames, 62ms total):
     render_ms=5.7 (9.1%) motion_us/frame=32.3 anim_us/frame=8.2
     render_us/frame=4.1
 
-### 1.2 Janet side (`janet-port/src/scene.janet`, temporarily instrumented)
+### 1.2 Bender side (`bender-port/src/scene.ben`, temporarily instrumented)
 
 Same methodology: `ctx-update` accumulated per-tick motion vs animation
 time into `(ctx :prof)` (via `os/clock`), `ctx-frame-string` accumulated
 render time + frame count. Measured over the full 1398-frame run, then
 **reverted** (`git diff` back to baseline, smoke-tested). Caveat: two
-`os/clock` calls per char per phase inflates Janet's absolute numbers
+`os/clock` calls per char per phase inflates Bender's absolute numbers
 somewhat; shares are still comparable.
 
 Result (1398 frames, ~1933ms total):
@@ -62,7 +62,7 @@ motion 5x animation. The full-run numbers above supersede them.)
 
 ### 1.3 The comparison (per-frame means, full run)
 
-| Phase            | Rust            | Janet              | Ratio |
+| Phase            | Rust            | Bender              | Ratio |
 |------------------|-----------------|--------------------|-------|
 | Motion stepping  | 32.3us (72%)    | 1007us (73%)       | ~31x  |
 | Scene animation  | 8.2us (18%)     | 164us (12%)        | ~20x  |
@@ -82,11 +82,11 @@ motion 5x animation. The full-run numbers above supersede them.)
    formatting fast-path (or kernel) belongs alongside motion work.
 3. **Motion is the biggest absolute prize (73% of time).** Per active
    char per tick: bezier/lerp math, easing eval, segment walking, all
-   boxed. Rust: ~81ns/active. Janet: ~1.5us/active. Pure numeric f64
+   boxed. Rust: ~81ns/active. Bender: ~1.5us/active. Pure numeric f64
    work — ideal kernel material.
-4. **Earlier misread, corrected:** first Janet probes used bulk passes
+4. **Earlier misread, corrected:** first Bender probes used bulk passes
    over a fixed 395-active snapshot (different denominators from Rust's
-   run-long averages), so the first table lacked Janet per-frame
+   run-long averages), so the first table lacked Bender per-frame
    figures. Re-measured with identical accumulate-over-the-run
    methodology; the table above is apples-to-apples.
 5. **Not the cause (ruled out):** build cost (51ms once), canvas size
@@ -185,7 +185,7 @@ tests) → squished (single word, alignment tags) → general (only then:
 
 ## 4. Where the gaps lie and how to fix them (ordered)
 
-1. **Whole-program type fixpoint, no hints.** `infer.janet` walks
+1. **Whole-program type fixpoint, no hints.** `infer.ben` walks
    functions; extend it across the image boundary to fixpoint
    (monotone type-set widening + worklist, Stalin `stalin3a.sc`
    pattern). Kills the `:hint` requirement for the common monomorphic
@@ -212,7 +212,7 @@ tests) → squished (single word, alignment tags) → general (only then:
    per step. The 37-gate + Rust `--parity-dump` differential is the
    acceptance harness for every kernel.
 
-Boundary: kernel emission lives with the compiler side; janet-port's
+Boundary: kernel emission lives with the compiler side; bender-port's
 part is hot-loop reshaping onto numeric arrays + PGO workloads per
 effect (motion-heavy: rings, matrix, swarm first).
 

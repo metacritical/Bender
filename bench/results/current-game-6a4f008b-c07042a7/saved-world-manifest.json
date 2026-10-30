@@ -4,7 +4,7 @@
     "sha256": "8de210621dc31c0bcad0b4e0c903bf0ef9e6adde9ab0a5825070d42452f57401"
   },
   {
-    "path": "38457c768f8b3cf96ce3cff979b5b30f/scenic/manifest.janet",
+    "path": "38457c768f8b3cf96ce3cff979b5b30f/scenic/manifest.ben",
     "sha256": "59228db416f2d55c5c3d9dd4a57c499c5dd81aaa1e229fce2a176e4e9f3be383"
   },
   {
@@ -280,7 +280,7 @@
     "sha256": "49b6371c01656440b0b355aaff1f911478e9c2df177eb3955d1413c981d0a9b2"
   },
   {
-    "path": "38457c768f8b3cf96ce3cff979b5b30f/world.trcr.terrain.janet",
+    "path": "38457c768f8b3cf96ce3cff979b5b30f/world.trcr.terrain.ben",
     "sha256": "0c10e8c55d75a26722bf4a3777277e72088cb8d1445a7841faf5d1c6d7f21880"
   },
   {
@@ -288,7 +288,7 @@
     "sha256": "8de210621dc31c0bcad0b4e0c903bf0ef9e6adde9ab0a5825070d42452f57401"
   },
   {
-    "path": "99874085db7248b6bd66f0c903112746/scenic/manifest.janet",
+    "path": "99874085db7248b6bd66f0c903112746/scenic/manifest.ben",
     "sha256": "59228db416f2d55c5c3d9dd4a57c499c5dd81aaa1e229fce2a176e4e9f3be383"
   },
   {
@@ -564,7 +564,7 @@
     "sha256": "9feee135900684a68576e9ddaf14023819667ed8fa49364c8789c5c3f6d1c5b5"
   },
   {
-    "path": "99874085db7248b6bd66f0c903112746/world.trcr.terrain.janet",
+    "path": "99874085db7248b6bd66f0c903112746/world.trcr.terrain.ben",
     "sha256": "22f5b4d54ec2cdf660d68647e74d7cc7705e9ef7d58cd3946b9763ea9593d5d8"
   },
   {
@@ -572,7 +572,7 @@
     "sha256": "8de210621dc31c0bcad0b4e0c903bf0ef9e6adde9ab0a5825070d42452f57401"
   },
   {
-    "path": "c363ab01e6d1d1d067e3a16a9bc1bf5a/scenic/manifest.janet",
+    "path": "c363ab01e6d1d1d067e3a16a9bc1bf5a/scenic/manifest.ben",
     "sha256": "59228db416f2d55c5c3d9dd4a57c499c5dd81aaa1e229fce2a176e4e9f3be383"
   },
   {
@@ -848,11 +848,11 @@
     "sha256": "cdc4ccbcf011ec3486450b73b1a7cb0f21b173114ce0583df9496f1f92c8ace2"
   },
   {
-    "path": "c363ab01e6d1d1d067e3a16a9bc1bf5a/world.trcr.terrain.janet",
+    "path": "c363ab01e6d1d1d067e3a16a9bc1bf5a/world.trcr.terrain.ben",
     "sha256": "a9e35980852f6285f07f522a115cdcbb5ba7ce48dabfbbba3a3e13a26a6c52be"
   },
   {
-    "path": "manifest.janet",
+    "path": "manifest.ben",
     "sha256": "8f4774061e7322e5406b85d2d6c24d93c6a20a21b49789418534092120eb090f"
   }
 ]

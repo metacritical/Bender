@@ -1,6 +1,6 @@
 # proc/lanes: VM-per-Core Process Parallelism
 
-> Practical operator guide (captured-state semantics, `JANET_LANES`,
+> Practical operator guide (captured-state semantics, `BENDER_LANES`,
 > per-process memory, measurement discipline):
 > `docs/internals/lanes-and-captured-state.md`.
 
@@ -23,7 +23,7 @@ collector, its own event loop). The properties that fall out:
 
 ## API
 
-```janet
+```bender
 (proc/lanes)                 # active worker count; 0 = single-VM mode (default)
 (proc/lanes-start)           # auto: cpu-count - 1 (min 1), round-robin, no affinity
 (proc/lanes-start 4)         # explicit worker count
@@ -48,14 +48,14 @@ single-VM; lanes are opt-in and process-lifetime.
 Three layers:
 
 1. **Substrate (pre-existing).** `ev/thread`'s body gives OS threads each
-   running a fresh VM: `janet_init()`, unmarshal a function + value, run the
-   event loop until that fiber exits. Lanes reuse `janet_go_thread_subr`
-   verbatim (exported from ev.c) via `janet_ev_threaded_call`.
+   running a fresh VM: `bender_init()`, unmarshal a function + value, run the
+   event loop until that fiber exits. Lanes reuse `bender_go_thread_subr`
+   verbatim (exported from ev.c) via `bender_ev_threaded_call`.
 2. **Lane registry (C, proc.c).** Thread-local state on the main VM:
-   `janet_lane_ctls[N]` (one threaded control channel per worker),
-   `janet_lane0_ctl` (the main VM's inbound channel), the round-robin counter,
-   and a C-side serial registry. All fields are `JANET_THREAD_LOCAL`.
-3. **Residency (boot.janet).** Each lane runs `proc/lane-worker` — a resident
+   `bender_lane_ctls[N]` (one threaded control channel per worker),
+   `bender_lane0_ctl` (the main VM's inbound channel), the round-robin counter,
+   and a C-side serial registry. All fields are `BENDER_THREAD_LOCAL`.
+3. **Residency (boot.ben).** Each lane runs `proc/lane-worker` — a resident
    dispatcher looping on its control channel:
    * `[:spawn serial cap entry]` → VM-local `proc/spawn`, register serial→proc
    * `[:deliver serial payload]` → lookup serial, `proc/send` into local mbox
@@ -70,7 +70,7 @@ subr's unmarshaler is order-sensitive:
 1. the abstract registry table (so threaded channels resolve by reference),
 2. the RAW cfunction registry copy (`uint32` count + bytes — not marshaled),
 3. the dispatcher function (`proc/lane-worker`, resolved from the boot fiber
-   env where boot.janet `setdyn`'d it),
+   env where boot.ben `setdyn`'d it),
 4. the launch value `[ctl lane-id affinity]`.
 
 The dispatcher takes ONE argument (the subr enforces arity 0-1) and
@@ -98,10 +98,10 @@ registry keys on the SPAWNER's serial, so no collision arises.
 
 ### Routing and the TLS trap
 
-Routing lives in `janet_proc_spawn_routed` (called only from `proc/spawn`);
+Routing lives in `bender_proc_spawn_routed` (called only from `proc/spawn`);
 `proc/spawn-local` and lane-internal spawns call the impl directly. The single
 most important implementation detail: **the amalgam's file statics are
-process-global.** Without `JANET_THREAD_LOCAL`, worker VMs saw the main VM's
+process-global.** Without `BENDER_THREAD_LOCAL`, worker VMs saw the main VM's
 `lanes_count` and re-routed every "local" spawn back to a lane — kids
 ping-ponged between lanes forever. Every lane-state static must be TLS.
 
@@ -111,7 +111,7 @@ ping-ponged between lanes forever. Every lane-state static must be TLS.
   Worker threads stay parked on their ctls (detached, share-nothing) and are
   reaped at process exit. Suites should end with `(os/exit 0)`.
 * Deliberately NOT done yet: pushing `:stop` to workers races their
-  `janet_deinit()` against the main VM's teardown (libmalloc abort observed).
+  `bender_deinit()` against the main VM's teardown (libmalloc abort observed).
   Graceful worker shutdown needs a pool-style join — milestone 2.
 
 ## Work-stealing (milestone 2 design)
@@ -163,7 +163,7 @@ submissions*, not resident procs — the Erlang-friendly shape.
 launch record. `proc/lanes-stop` (and a new `proc/lanes-join`) delivers
 `[:stop]` to ALL lane ctls including lane 0, then joins every worker pthread
 with a bounded grace period. The worker's exit path currently runs
-`janet_deinit` for its own VM while the main VM keeps running — the observed
+`bender_deinit` for its own VM while the main VM keeps running — the observed
 teardown abort — so join requires either (a) the subr growing a
 no-deinit exit mode (a new launch flag the fork owns), or (b) deferring
 worker deinit to a completion handshake the main loop drains. Postcondition:
@@ -203,18 +203,18 @@ measured margin, plus a no-regression check on the uniform case.
 
 Symptom: 1M procs across 4 lanes (~250k/lane) crashes above ~750k total;
 8-lane 1M (125k/lane) and 640k/4-lane (160k/lane) complete. Crash stack
-(worker thread, libmalloc abort): `janet_hash <- janet_dict_find <-
-janet_mark_abstract table.c:114 <- janet_gc_minor_skip <- janet_mark_array
-<- janet_mark` — the minor's mark walk hashed a garbage slot in an old
+(worker thread, libmalloc abort): `bender_hash <- bender_dict_find <-
+bender_mark_abstract table.c:114 <- bender_gc_minor_skip <- bender_mark_array
+<- bender_mark` — the minor's mark walk hashed a garbage slot in an old
 table (use-after-free-then-reuse: the slot's block was freed and its
 memory reused).
 
 Narrowed so far:
 - NOT the xfb cap alone: per-worker cross-fiber edges at 250k/lane stay
-  under JANET_XFB_MAX (1M), so the stuck path does not fire there. The
-  stuck-degradation fix committed alongside (janet_collect_process now
+  under BENDER_XFB_MAX (1M), so the stuck path does not fire there. The
+  stuck-degradation fix committed alongside (bender_collect_process now
   degrades to the global minor when stuck, mirroring
-  janet_collect_fiber_minor) closes a real adjacent hole but does not
+  bender_collect_fiber_minor) closes a real adjacent hole but does not
   change this crash.
 - The remembered mechanism is TWO-layer: per-object xfb (cross-fiber
   stores) AND per-page dirty bits (old->young within traversal). The
@@ -222,17 +222,17 @@ Narrowed so far:
   garbage => a young block referenced from an old container was freed
   WITHOUT its container's page being (or staying) dirty — a missed or
   lost barrier somewhere in the spawn-dense path.
-- Suspect list for the missing barrier: C-level janet_table_put sites in
+- Suspect list for the missing barrier: C-level bender_table_put sites in
   the routed-spawn path (env construction, serials bookkeeping), the
   mbox q's C array values, and page aging racing dirty marks (page goes
   old between store and minor).
 - Next probe (prepared, not yet run): slab-poison-on-free — stamp freed
   young blocks with an impossible epoch (0x1F) + body magic at
-  janet_quarantine_drain's release; janet_mark aborts with a header dump
+  bender_quarantine_drain's release; bender_mark aborts with a header dump
   when it touches one. One instrumented 1M run identifies the freed
   block's type and the walker.
 - Note: /tmp scratch was purged mid-investigation; reproduce from
-  test/lanes-1m-regression.janet. The clone instrumented runs used the
+  test/lanes-1m-regression.ben. The clone instrumented runs used the
   same source as master plus probes.
 
 ## AOT build status (measured)
@@ -251,7 +251,7 @@ verified (sanity scripts + 1M/8-lanes to full parking).
 - Comms matrix on AOT: not separately rerun; the interpreter numbers
   below stand as the reference (the paths are identical C code).
 
-## Messaging speed (measured, `bench/lanes-comms.janet`)
+## Messaging speed (measured, `bench/lanes-comms.ben`)
 
 | Shape | Throughput | Per-send |
 |---|---|---|
@@ -270,7 +270,7 @@ on the SAME VM via proc/spawn-local, with collector mbox caps 64 and 4096;
 100-10000 senders complete reliably, 20000 is flaky). Same-VM, so the lane
 wake path is exonerated; suspicion falls on the isolated-mbox pending
 registration/reclaim under bulk completion minors. Record: reproduce with
-`/tmp/fo_cap.janet` shape (20k spawn-local senders, one collector).
+`/tmp/fo_cap.ben` shape (20k spawn-local senders, one collector).
 
 Diagnosis so far (instrumented runs + lldb sampling of the stuck loop):
 - The stalled loop sits in `kevent` with `has_timeout=0` — infinite wait,
@@ -286,7 +286,7 @@ Diagnosis so far (instrumented runs + lldb sampling of the stuck loop):
 
 ## Evidence
 
-* `test/suite-lanes.janet`: 2-lane and 4-lane round trips (kids compute i²
+* `test/suite-lanes.ben`: 2-lane and 4-lane round trips (kids compute i²
   across lanes, forward to a lane-0 collector, main verifies the sum), auto
   count, affinity option, spawn-local, single-VM unaffected.
 * Full battery at `fc32f7c5`: make test 52/52, suite-proc 5/5, all nine
@@ -321,13 +321,13 @@ Supporting C changes:
   both keys.
 - spawn wrapper pid nodes are `lane-id + 1` (0 reserved for the main
   VM), so cached cross-pids agree with routed handles.
-- `janet_channel_cancel_reader` purge: a recv-parked kill victim is
+- `bender_channel_cancel_reader` purge: a recv-parked kill victim is
   cancelled and its pending removed immediately (Erlang-parity kill
   landing), instead of at a next resume that may never come.
 
-Tests: `test/suite-lanes.janet` M2b section (monitor+kill reason
+Tests: `test/suite-lanes.ben` M2b section (monitor+kill reason
 delivery, error/normal reasons, pid-tuple watchers, `:noproc`,
-kill-of-dead no-op) green under `JANET_SKIP_DENSITY=1`, plus
+kill-of-dead no-op) green under `BENDER_SKIP_DENSITY=1`, plus
 suite-proc's P2.3/P1.4 monitor suites.
 
 ## BUG 2 evidence: density GC race (OPEN)
@@ -335,11 +335,11 @@ suite-proc's P2.3/P1.4 monitor suites.
 The per-lane density barrier is a **layout-sensitive latent race** in
 the GC/completion boundary, now pinned much sharper:
 
-* ASAN (heap-use-after-free): `janet_mark_function` (gc.c) reading a
-  freed 512-byte block from inside `janet_mark_fiber`'s frame walk —
+* ASAN (heap-use-after-free): `bender_mark_function` (gc.c) reading a
+  freed 512-byte block from inside `bender_mark_fiber`'s frame walk —
   the completion minor freed the young `frame->func` of a fiber that
   stays reachable, and a later global mark re-walked the stale frames.
-* Partial fix landed (this commit): `janet_mark_fiber` walks frames
+* Partial fix landed (this commit): `bender_mark_fiber` walks frames
   only for resumable statuses (NEW/ALIVE/PENDING/DEBUG); terminal
   fibers skip the walk. Semantically forced — nothing resumes them.
 * The race is **layout-sensitive**: semantically-inert code changes
@@ -359,15 +359,15 @@ the GC/completion boundary, now pinned much sharper:
 1. **Fan-in n=4000 deadlock (ALL builds post-M2b)**: the collector's
    recv parks on its own mailbox -- which 2b made a THREADED channel.
    Every same-VM send/recv handoff on a threaded channel went through
-   `janet_ev_post_event` -- a self-pipe write from the loop's own
+   `bender_ev_post_event` -- a self-pipe write from the loop's own
    thread. ~8000 writes at n=4000 fill the 64KB pipe; the loop then
    blocks inside its own wakeup write. Fix: same-VM pendings on
-   threaded channels schedule inline (`janet_schedule` + unroot),
+   threaded channels schedule inline (`bender_schedule` + unroot),
    mirroring the close path's existing pattern. Fan-in 5/5 green;
    suite-proc 88/88 in 11s.
 2. **Density deterministic crash (quantum yield UAF)**: M4b quantum
-   yields (status USER9 via JANET_SIGNAL_INTERRUPT) pass through the
-   drain's completion block (`janet_fiber_can_resume` is false for
+   yields (status USER9 via BENDER_SIGNAL_INTERRUPT) pass through the
+   drain's completion block (`bender_fiber_can_resume` is false for
    them), so the completion minor freed the fiber's young nursery --
    then the quantum path re-queued the fiber onto the freed memory
    (ASAN: fiber->data poisoned, walked by later marks). Fix: the
@@ -379,7 +379,7 @@ the GC/completion boundary, now pinned much sharper:
 ### Residual (still open, sharply narrowed)
 
 Density segfaults ~1-in-3 runs (was deterministic). ASAN signature:
-`janet_mark_fiber` called with an ALREADY-SWEPT fiber struct (512B
+`bender_mark_fiber` called with an ALREADY-SWEPT fiber struct (512B
 block freed; the status read itself faults). Meaning: the sweep
 freed a fiber that a surviving reference re-marked afterwards --
 a mark/sweep root inconsistency where the reference holder was not
@@ -387,8 +387,8 @@ traversed during that collection's mark phase. Audit surface: which
 holder re-marks swept fibers at density (serials, proc->fiber,
 chanpend nodes, spawn queue) and why its mark edge was missing in
 the sweeping collection. Next instrument: poison-check at
-janet_mark_fiber entry + `__sanitizer_print_stack_trace()` of the
-marker (the harness is in gc.c under JANET_ASAN_UAF_TRACE; note the
+bender_mark_fiber entry + `__sanitizer_print_stack_trace()` of the
+marker (the harness is in gc.c under BENDER_ASAN_UAF_TRACE; note the
 eprintf reentrancy -- write the trace via write(2) instead).
 
 ### Round 4: stale-reader keep + unroot-on-delivery; rejected scrub
@@ -408,24 +408,24 @@ match the walk's per-frame value ranges (`[i, j)` off the
 scrub must mirror the walk's exact `j` chain. Reverted; density
 residual unchanged (~1/5 green, segfault during the 200k-640k
 spawn phase; ASAN: the walked fiber's frame->func / fiber->data
-freed, reached via janet_mark_roots in a full collect).
+freed, reached via bender_mark_roots in a full collect).
 
 ### Round 5: free-site proof + minor fiber defer
 
 New probe (fiber deinit in gc.c): prints when a destroyed fiber is
 STILL present in vm.roots. Result: `[free-rooted] fiber=... rootidx=8`
--- a rooted fiber WAS destroyed, reached from janet_sweep's deinit
-pass (inlined janet_sweep_list/quarantine path). So the density
+-- a rooted fiber WAS destroyed, reached from bender_sweep's deinit
+pass (inlined bender_sweep_list/quarantine path). So the density
 residual is a genuine mark/sweep disagreement: some collection judged
 a rooted fiber unreachable (stale-epoch or scoped-mark gap), freed it
 via quarantine, and the surviving roots entry dangles into reused
 memory (the later ASAN crashes at mark time).
 
-Landed: minors now NEVER free JANET_MEMORY_FIBER blocks (fiber frees
+Landed: minors now NEVER free BENDER_MEMORY_FIBER blocks (fiber frees
 defer to full collects, which walk vm.roots). This closes the
 minor-scoped route and is regression-free (proc/lanes/ev2/gc suites
 green), but the flake persists (~1/5) -- the freeing collection in
-the traced run sits on the full/scoped path. Next: audit janet_mark's
+the traced run sits on the full/scoped path. Next: audit bender_mark's
 recursion-guard/epoch handling for fiber blocks (a stale or unsset
 epoch on a rooted fiber explains every observation), and whether
 sweep_proc_owned's narrow mark can miss a root-honoring block.
@@ -438,36 +438,36 @@ correctly judged unreachable and quarantined at collect N (unrooted
 then); LATER, a registration path gcrooted the stale F pointer
 (roots[8]); a subsequent drain deinit'd F -- the probe saw "rooted".
 The bug to hunt: WHICH registration path roots a dead-or-dying fiber.
-Probe: in janet_gcroot, for FIBER values, check
+Probe: in bender_gcroot, for FIBER values, check
 __asan_address_is_poisoned(fiber) (or block-quarantined state) and
 backtrace -- any hit names the culprit registration site directly.
-Epoch cycling (janet_gc_epoch_next, % 15) was eliminated: the sweep
+Epoch cycling (bender_gc_epoch_next, % 15) was eliminated: the sweep
 clears survivor epochs, so stale-epoch collisions only over-retain.
 
 ### Round 7: cross-thread free routed home; 600k now reachable
 
-ASAN on density caught a worker (T22) in `janet_equals` reading a
+ASAN on density caught a worker (T22) in `bender_equals` reading a
 proc abstract that MAIN (T0) had freed -- main's threaded-registry
 purge decrefs entries not visited by MAIN's mark, and the last
 decref frees on whichever thread purges last, even while the home
 worker still has in-flight operations touching the block. Fix:
-`JanetAbstractHead.home_vm` records the creating VM; the refcount-0
+`BenderAbstractHead.home_vm` records the creating VM; the refcount-0
 release of a foreign-homed threaded abstract is deferred via
-`janet_ev_post_event` to the home VM's loop (finalizers and poison
+`bender_ev_post_event` to the home VM's loop (finalizers and poison
 still run on the observing thread). All suites green.
 
 Effect: under ASAN the density phase now passes 200k and 400k for
 the first time; the crash moved to 600k and regressed to the
-HISTORICAL BUG 2 signature -- `janet_hash` on a freed abstract in
+HISTORICAL BUG 2 signature -- `bender_hash` on a freed abstract in
 worker run_vm (the "cross-thread pid reference surviving per-lane
 GC" face). Next probe: capture ASAN's freed-by stack for the
-janet_hash crash to identify which free path (worker's own registry
+bender_hash crash to identify which free path (worker's own registry
 purge vs fiber-death migration) still releases a block the parked
 proc's env tuple references.
 
 ### Round 8: home teardown completion; channel deinit lock; double-deinit lead
 
-The janet_hash crash decoded: `janet_hash` dereferenced the
+The bender_hash crash decoded: `bender_hash` dereferenced the
 type==NULL POISON -- the observing thread had poisoned the abstract
 while the home worker hashed it mid-operation. Fix: the ENTIRE
 teardown (finalizer + poison + release) now routes to the home VM
@@ -479,11 +479,11 @@ tombstones).
 Density: 2/4 full interpreter passes after that fix (best to date).
 
 New residual, sharply characterized: `flag_chanpend_node` UAF during
-`janet_chanat_gc -> janet_chan_deinit` on a worker. Locking the whole
+`bender_chanat_gc -> bender_chan_deinit` on a worker. Locking the whole
 deinit (previously only pack channels locked) did NOT close it -- the
 walk now holds the lock, so the freeing thread does NOT: evidence for
 a DOUBLE DEINIT. Candidate: the abstract SWEEP path
-(janet_deinit_block's ABSTRACT case) runs the channel's gc hook
+(bender_deinit_block's ABSTRACT case) runs the channel's gc hook
 directly on the sweeping VM, while the home-routed teardown cb runs
 it again on the home VM. Next: make threaded-abstract deinit hooks
 single-shot (a deinit'd bit on the head, checked under the chan
@@ -492,7 +492,7 @@ deferral.
 
 ### Round 9: single-shot teardown guard; density full passes; in-flight ref gap
 
-Landed the double-deinit fix: `JanetAbstractHead.teardown_started`
+Landed the double-deinit fix: `BenderAbstractHead.teardown_started`
 (atomic single-shot) arbitrates the sweep's deinit_block hook, the
 home teardown callback, and the same-VM refcount path -- exactly one
 runs the finalizer/poison/release.
@@ -503,7 +503,7 @@ in 8s; a 108s pass when a big collect lands mid-loop). ASAN reaches
 
 New residual, precisely characterized: worker T23 pushing to a
 channel whose STRUCT was freed by main's home teardown (ASAN:
-janet_channel_push_with_lock reading a T0-freed, T23-realloc'd 128B
+bender_channel_push_with_lock reading a T0-freed, T23-realloc'd 128B
 block at 600k). Mechanism: in-flight channel operations on foreign
 VMs hold no refcount; main's teardown at refcount-0 destroys the
 struct (and deinit's its mutex) while a foreign push is entering.
@@ -519,7 +519,7 @@ Three fixes, one round:
    drop it before each synchronous return (parked-waiter safety keeps
    coming from the pending-node discipline). The zero-drop teardown
    defers to a loop even under the chan lock.
-2. janet_chan_deinit_q restructured flag-then-free: duplicate pending
+2. bender_chan_deinit_q restructured flag-then-free: duplicate pending
    entries sharing a reg freed the reg then revisited it (single-pass
    aliasing).
 3. THE KEY ONE: the same-VM refcount teardown ran the FINALIZER
@@ -539,12 +539,12 @@ is smaller and more specific. proc/lanes-skip/ev2 green throughout.
 New head: a worker-homed teardown freed a proc abstract still held by
 a same-VM channel queue (queue items are GC-marked but hold no
 registry claim). Design fix: the home teardown callback now defers
-when the last collect marked the abstract (janet_gc_object_reachable)
+when the last collect marked the abstract (bender_gc_object_reachable)
 -- it re-arms a GC-watch claim (count 0->1, registry entry false) and
 the next purge re-routes when the hold dies. All threaded teardowns
 now flow uniformly through the routed callback; decref_maybe_free
 only routes. Shutdown gets an inline mode (gc_teardown_inline):
-posting to the loop from janet_clear_memory blocked forever on the
+posting to the loop from bender_clear_memory blocked forever on the
 dead self-pipe. Also fixed a double INFLIGHT_DROP on the pop closed
 path (macro-wrapping artifact).
 
@@ -561,7 +561,7 @@ queue items, parked payloads, serials) reference lane-homed
 abstracts with no registry claims, so ANY refcount-0 free raced a
 consumer. Design resolution: lanes PIN their homed threaded
 abstracts (quarantine list linked via gc.data.next) instead of
-freeing at refcount-0; janet_clear_memory drains the quarantine at
+freeing at refcount-0; bender_clear_memory drains the quarantine at
 lane stop (finalizer, poison, free). Main-VM teardowns keep prompt
 semantics (suite-ev2's weakref/count tests unchanged). Bounded cost:
 pinned abstracts live until stop (640k procs x ~216B ~= 138MB, well
@@ -581,10 +581,10 @@ ASAN run.
 
 ### Round 13: exported-abstract pinning
 
-Interpreter-side signature captured via lldb: janet_mark_abstract on
+Interpreter-side signature captured via lldb: bender_mark_abstract on
 a main-freed threaded abstract reached from worker mark state --
 main-homed channels tear down promptly and dangle for lanes holding
-marshaled values. Fix: JanetAbstractHead.exported is set when an
+marshaled values. Fix: BenderAbstractHead.exported is set when an
 abstract is marshaled cross-VM (marsh.c LB_THREADED_ABSTRACT send);
 the home teardown quarantines exported abstracts (pin until exit)
 like lane-homed ones. Same-VM-only abstracts keep prompt teardown
@@ -596,8 +596,8 @@ restart).
 
 ### Round 14: the tail head narrowed to a freed mbox behind a stale holder
 
-New mark-side probes (JANET_ASAN_UAF_TRACE, inert in normal builds):
-janet_mark_abstract tombstone/bogus guards + procat_mark mbox/sup
+New mark-side probes (BENDER_ASAN_UAF_TRACE, inert in normal builds):
+bender_mark_abstract tombstone/bogus guards + procat_mark mbox/sup
 checks. Result: `[proc-mbox-tombstoned] home=0x0 exported=0 refcnt=
 1024 lane=1` -- the mbox pointer dangles into MALLOC-REUSED memory
 (home never set, refcount arbitrary): a worker proc wrapper's mbox
@@ -612,7 +612,7 @@ class.
 
 ### Round 15: procat_mark prunes tombstoned channels — DENSITY 5/5
 
-The RA chain named the holder: janet_mark_fiber -> mark -> mark_table
+The RA chain named the holder: bender_mark_fiber -> mark -> mark_table
 (the fiber's env) -> mark -> procat_mark -- a live fiber's :proc-self
 env binding outlives its mbox's registry life, and procat_mark marked
 through the dangling pointer (malloc-reused memory: home=0x0,
@@ -635,9 +635,9 @@ Implemented per the recorded design:
   dedup hash -- channels cross as ctl messages the way pid tuples
   always have).
 - Routed spawn under :steal: when the target ctl depth >= 1
-  (janet_channel_count), try-push to overflow (never blocks).
+  (bender_channel_count), try-push to overflow (never blocks).
 - Dispatcher idle pull: up to K=4 tasks drained before parking on an
-  empty ctl (boot.janet lane-worker handle-spawn refactor).
+  empty ctl (boot.ben lane-worker handle-spawn refactor).
 - `proc/lanes-stats` counters {:overflow-pushed :overflow-pulled} --
   the feature indication.
 - Documented limitation: the spawner's pid tuple keeps the spawn-time
@@ -654,7 +654,7 @@ plus all nine siblings).
 
 ### Round 17: milestone 2d — agents benchmark numbers
 
-test/agents-1vN.janet (W tasks x K messages to a main-VM collector;
+test/agents-1vN.ben (W tasks x K messages to a main-VM collector;
 checksum-verified; the clog is a CPU-bound loop that occupies its
 lane's dispatcher -- ev/sleep yields and does NOT skew a lane).
 
@@ -680,9 +680,9 @@ limitation recorded in the design), and one 250ms clog dominates the
 wall either way. Recovery shows up at scale (50k msgs: 265 -> 255).
 
 Three 2c implementation bugs fixed this round (caught by the bench):
-- lane-pull inverted janet_channel_pop's convention (1 = obtained) --
+- lane-pull inverted bender_channel_pop's convention (1 = obtained) --
   pulled tasks were consumed and discarded.
-- the :steal try-push inverted janet_channel_push's try-mode
+- the :steal try-push inverted bender_channel_push's try-mode
   convention (0 = refused) -- "pushed" tasks were never enqueued and
   silently skipped their ctl fallback.
 - pull-then-park race: overflow pushes landing after a dispatcher's
@@ -693,7 +693,7 @@ Three 2c implementation bugs fixed this round (caught by the bench):
 
 ### Round 18: dual-target pass triage (AOT battery)
 
-AOT compile+run via `bender --aot test/<suite>.janet -o <bin>`; the
+AOT compile+run via `bender --aot test/<suite>.ben -o <bin>`; the
 binary runs the suite natively. Results: ev2 13/13, mailbox 76/76,
 gc-minor 12/12, interrupt 15/15, pool 56/56, thread 30/30 -- GREEN.
 Three failures, distinct signatures:
@@ -716,12 +716,12 @@ under AOT already.
 ### Round 18 addendum: suite-ev root cause
 
 suite-ev under AOT: its os/spawn subprocess tests run
-`[janet -e "(print ...)"]`; the AOT binary's embedded main ignores
+`[bender -e "(print ...)"]`; the AOT binary's embedded main ignores
 `-e` and re-runs the embedded suite, so the child prints "Starting
-suite" (and worse, parses "janet" as a script: "invalid utf-8 in
+suite" (and worse, parses "bender" as a script: "invalid utf-8 in
 symbol"). The interpreter build honors -e (776/776 green). Fix
 direction: the AOT main should pass unrecognized args (esp. -e) to
-the embedded janet runtime, or the AOT test runner must plumb SUBRUN
+the embedded bender runtime, or the AOT test runner must plumb SUBRUN
 to a true interpreter.
 
 Dual-target status: interpreter 11/11 green. AOT 6/11 green (ev2,
@@ -755,7 +755,7 @@ so a section's closures capture only their own frame.
 
 Result: the env-walk refusal DID disappear (suite-proc ran past 317),
 but cross-form def visibility broke completely (later forms saw top
-level defs as nil). Root cause, proven empirically (/tmp/defenv.janet):
+level defs as nil). Root cause, proven empirically (/tmp/defenv.ben):
 a top-level def writes into the COMPILE-TIME env table (a bytecode
 constant), NOT the running fiber's env — and the compiler folds a
 def reference to its compile-time value. run-context works per-form
@@ -786,31 +786,31 @@ Root causes found and fixed for the AOT battery failures:
 
 1. **One-do-form env scoping** (suite-proc "cannot marshal <core/proc>"):
    mkimage now compiles each top-level form as its own chunk against the
-   shared env — exactly `janet script.janet` semantics (run.c runs
+   shared env — exactly `bender script.ben` semantics (run.c runs
    scripts form by form). A chunk's closures capture only their own
    frame, so spawn-isolated entry marshals walk real captures.
 2. **Chunk env proto** (curenv/getproto nil): the generated main gives
    chunk fibers a fresh env table proto-linked to the module env
    (run-context shape); a bare core env has no proto.
 3. **Profiler vs strict procs** (the big one): AOT binaries auto-PGO —
-   janet_profile_entry's plain puts tripped the strict-escape barrier
+   bender_profile_entry's plain puts tripped the strict-escape barrier
    from TWO sites: the pt identity-map put, and the e-table "func" put
    (protect's fresh NON-strict fiber profiling a call to a child-heap
    function: isolated value into a shared-page entry table). Every
    strict proc's handler call died with "strict proc value escaping"
    — the interpreter passed only because it never profiles. All
-   profiler-internal puts now use janet_table_put_raw (the P3.4
+   profiler-internal puts now use bender_table_put_raw (the P3.4
    bookkeeping-put precedent: identity maps, dirty-mark, no barrier).
 4. **Chunk lifecycle**: chunks run from a rooted array with slots
    cleared after their chunk; ONE fiber re-primed per chunk via
-   janet_fiber_reset (run-context reuses one evaluation context).
+   bender_fiber_reset (run-context reuses one evaluation context).
 
 State: AOT suite-proc 88/88 GREEN (was env-refusal + hang);
 suite-marsh 66/73 — the remaining 7 are weak-table entries that
 never clear post-gccollect: ANY value touched by a completed top-
 level chunk stays pinned (even runtime-built buffers — bisection
 esK/esL), pointing at stale fiber-stack slots surviving the mark in
-the AOT path; NOT the profiler (JANET_NO_PROFILE identical), NOT
+the AOT path; NOT the profiler (BENDER_NO_PROFILE identical), NOT
 chunk roots (array-clearing + fiber reuse did not change it), NOT
 literal constants (buffer/new pinned too). Next: instrument the
 fiber-stack mark extent in gc.c for the chunk fiber. suite-ev CLI
@@ -819,9 +819,9 @@ green AOT suites re-verified green after all changes.
 
 ### Round 22: suite-ev -e parity + the do-thread funcenv forensics
 
-Landed: the generated AOT main now honors `-e CODE` (janet CLI
+Landed: the generated AOT main now honors `-e CODE` (bender CLI
 parity). Root: the interpreter's os/spawn falls back to argv[0] for
-bare names, so suite-ev's [janet -e ...] subprocess tests exec the
+bare names, so suite-ev's [bender -e ...] subprocess tests exec the
 binary itself — the interpreter's -e prints "hello", the AOT binary
 re-ran its embedded image. With -e parity those tests pass; the
 line-338 do-thread section also fixed by same-form scoping (cross-
@@ -836,7 +836,7 @@ named do-thread); the memset-after-reset runs (emitted C verified);
 the process is (re)written into a frame slot during the let chunk's
 own execution — not env-table contents (probed: no abstracts in
 curenv either backend), not literal constants (buffer/new pinned
-too in the weak bisection), not the profiler (JANET_NO_PROFILE
+too in the weak bisection), not the profiler (BENDER_NO_PROFILE
 identical). Suspect: the deferred cross-form binding fetch
 materializes more than the binding (env/ref structures written into
 frame slots that the open-funcenv marshal then walks). Next probe:
@@ -859,7 +859,7 @@ compiled def sources from line 22, frame offset 4, length 151, with
 machinery). That refusal is (evidently) recovered — the suite runs on.
 The REPORTED failure (ev/thread refusing <core/process>, stack: ev.c
 4095 <- thunk line 402) is a LATER hit. Next round: break at ev.c:4095
-(the janet_marshal inside cfun_ev_thread) directly, then dump the
+(the bender_marshal inside cfun_ev_thread) directly, then dump the
 thunk's funcenv there — the do-thread section forensics so far were
 debugging the wrong refusal.
 
@@ -904,7 +904,7 @@ claim implementation):
    clog experiment is the regression gate).
 4. Distribution design doc: node ids in pid tuples (the :pid node
    field exists), marshal-over-socket lanes, cross-node registry.
-5. Hot-code-loading design doc: module swap with proc drain (janet
+5. Hot-code-loading design doc: module swap with proc drain (bender
    image re-link semantics) — sketch before any implementation.
 6. Standing hardening: every battery stays green under soak loops
    (density x lanes x AOT), plus a fuzz harness for the marshal/
@@ -914,19 +914,19 @@ claim implementation):
 
 Confirmed with a minimal weak-array + marshal + major-collect repro:
 interpreter clears the unreferenced entry (`nil? a=true, b=true`), AOT
-retains it (`false, false`). AOT `janet_collect()` reports
+retains it (`false, false`). AOT `bender_collect()` reports
 `gc_suspend=2`, so it returns without marking/sweeping. This explains
 all seven suite-marsh weak failures; it is NOT proven to be an AOT
 mark/weak-drop bug yet.
 
-Narrowing so far: every `janet_gclock`/`janet_gcunlock` pair in
+Narrowing so far: every `bender_gclock`/`bender_gcunlock` pair in
 marsh.c and vm.c appears locally balanced. The core env unmarshal
 starts at 0 and ends at 0. The AOT image unmarshal starts at 1 and
 ends at 1; a later source-level unmarshal starts at 1 and ends at 1.
 The collect then sees 2. The extra held lock predates the second
 image unmarshal; the next step is same-process symbolic instrumentation
-of AOT main initialization around `janet_core_env`, image unmarshal,
-and `janet_loop_fiber` (previous cross-process return-address
+of AOT main initialization around `bender_core_env`, image unmarshal,
+and `bender_loop_fiber` (previous cross-process return-address
 symbolization was invalidated by ASLR). Do NOT set `gc_suspend=0`
 blindly: it is a nesting counter protecting in-flight C-side
 marshal/compile structures, and forcing it open may cause use-after-
@@ -934,25 +934,25 @@ free. Find the exact unmatched owner and make its unlock path correct.
 
 ### Round 26: correct the AOT chunk assumption; lock owner still open
 
-Important correction: checked-in `tools/mkimage.janet` currently emits
+Important correction: checked-in `tools/mkimage.ben` currently emits
 ONE whole-file `do` function (lines 172-184). The per-form chunk runner
 was tried and reverted because earlier defs compile as build-time
 constants (nil). Do not interpret current traces as per-form behavior.
 
-Clean focused repro (`test/weak-epoch-probe.janet`, temporary, removed):
+Clean focused repro (`test/weak-epoch-probe.ben`, temporary, removed):
 interpreter `nil? a=true, b=true`; AOT `nil? a=false, b=false`.
-LLDB at `janet_collect` confirms `gc_suspend=2` in the AOT image; the
+LLDB at `bender_collect` confirms `gc_suspend=2` in the AOT image; the
 weak drop is skipped by the intentional guard. Tagged source traces
 show these locally balanced pairs: core-env unmarshal lock 0/restore 0;
 image unmarshal lock 1/restore 1; user marshal lock 0/restore 0; user
-unmarshal lock 1/restore 1. `janet_continue` and both compile locks do
+unmarshal lock 1/restore 1. `bender_continue` and both compile locks do
 not appear in this repro. Therefore the extra nesting exists BEFORE
 the image unmarshal and survives to user code; the instrumentation has
 not yet named its owner. Temporary instrumentation/repros were removed;
 no speculative counter reset was kept. Next safe step: break at each
-`janet_gcunlock` in the SAME debug AOT process (not cross-run ASLR
+`bender_gcunlock` in the SAME debug AOT process (not cross-run ASLR
 addresses), inspect caller plus current `gc_suspend`, and identify why
-`janet_core_env` returns with one lock held when called from generated
+`bender_core_env` returns with one lock held when called from generated
 AOT main. Only then change code.
 
 ### Round 27: focused battery and host-baseline finding
@@ -962,17 +962,17 @@ suite-ev, ev2, proc, mailbox, lanes, marsh all GREEN. AOT suite-ev,
 ev2, proc, mailbox, lanes all GREEN; only AOT suite-marsh remains
 66/73 (the same 7 weak-entry checks).
 
-AOT at `janet_collect` still has `gc_suspend=2`. New scheduler-path
-lead: `janet_vmregs_load_base()` restores `janet_vm.base_gc_suspend`,
-which is captured by `janet_vmregs_save_base()` at root-fiber resume
+AOT at `bender_collect` still has `gc_suspend=2`. New scheduler-path
+lead: `bender_vmregs_load_base()` restores `bender_vm.base_gc_suspend`,
+which is captured by `bender_vmregs_save_base()` at root-fiber resume
 entry. A temporary `[BASE SAVE]` trace observed `gc=1` on entry to
 that host-baseline save for the focused AOT weak repro — so the host
 baseline is already nonzero before the AOT main fiber enters the
 scheduler. The core-env and image unmarshals each locally restore
 their saved values; neither explains the incoming 1. A generated-main
 trace probe failed to link because its temporary accessor was not
-present in `libjanet.a`; all diagnostics were removed. Next safe step:
-trace the source that sets the baseline before `janet_loop_fiber`
+present in `libbender.a`; all diagnostics were removed. Next safe step:
+trace the source that sets the baseline before `bender_loop_fiber`
 (entry to generated main, profile setup, core-env init), using
 existing debugger-visible fields or a correctly linked internal probe.
 Do not alter the scheduler's saved-register discipline without that
@@ -980,7 +980,7 @@ trace.
 
 ### Round 23: full AOT suite-lanes pass
 
-Built with `bender --aot test/suite-lanes.janet -o /tmp/suite-lanes-aot`,
+Built with `bender --aot test/suite-lanes.ben -o /tmp/suite-lanes-aot`,
 then executed the native image: exit 0, density at 600000, density
 section passed, join after 640k-park stop in 8.0166s, all assertions
 passed. Phase 1 now has the feature-indication lanes suite green on
@@ -1018,20 +1018,20 @@ against current HEAD (`678ea4cd`):
 
 **Gap 1, copy-by-default message semantics — ALREADY SATISFIED, no implementation
 needed.** `proc/send`'s mailbox is always a threaded channel
-(`janet_channel_make_threaded_c`, `proc.c:877`), and `janet_chan_needs_pack`
-(`ev.c:947-949`) returns true for `is_threaded || isolated` — so `janet_chan_pack`/
-`janet_chan_unpack` (`ev.c:951-1004`) already marshal-copy every non-immediate
+(`bender_channel_make_threaded_c`, `proc.c:877`), and `bender_chan_needs_pack`
+(`ev.c:947-949`) returns true for `is_threaded || isolated` — so `bender_chan_pack`/
+`bender_chan_unpack` (`ev.c:951-1004`) already marshal-copy every non-immediate
 `proc/send` payload (mutable table/array/buffer/struct/function), regardless of
 whether the sending or receiving proc is `strict`/isolated. Verified empirically:
 spawn a plain (non-isolated) proc, `proc/send` it a mutable table, mutate the
 table after sending — the proc observes the pre-mutation snapshot, not the
-mutated table (`/tmp/test-copy-send.janet`, informal, not checked in). The
+mutated table (`/tmp/test-copy-send.ben`, informal, not checked in). The
 2026-10-14 roadmap note predates recognizing that mailboxes are unconditionally
 threaded channels; the gap row should be read as CLOSED, not open. No code
 change required for this item.
 
 **Gap 2, messaging throughput campaign — baseline measurement taken, full
-optimization pass not started.** `bench/agents.janet 5000 8` (interpreter,
+optimization pass not started.** `bench/agents.ben 5000 8` (interpreter,
 this session): spawn 98537 spawns/s, but **tick/message throughput only
 ~3187 msgs/s** — far below the roadmap's recorded "160-170k msg/s interpreted"
 figure from the 100k-actor/8-tick run. This specific small-N (5000) run is not
@@ -1046,7 +1046,7 @@ battle-hardening) are unchanged multi-session epics, not touched this session.
 
 ### Messaging throughput: scaling probe reveals superlinear degradation (not just low)
 
-Follow-up to the N=5000 baseline: scaled `bench/agents.janet` across N with ticks
+Follow-up to the N=5000 baseline: scaled `bench/agents.ben` across N with ticks
 held small, interpreter target, this machine:
 
 | N (actors) | ticks | total msgs | result |
@@ -1062,7 +1062,7 @@ If per-message cost were flat (~3500 msgs/s), N=20000/T=4 (80000 msgs) should ta
 syscall), not `user` (compute) -- 5x more kernel time than compute time. This points
 at superlinear (likely O(N) or worse per send, not O(1)) overhead somewhere in the
 scheduler/mailbox/dispatch path as actor count grows, NOT a flat low per-message
-rate. The driver loop itself (`bench/agents.janet:50-57`) is a plain O(N) per-round
+rate. The driver loop itself (`bench/agents.ben:50-57`) is a plain O(N) per-round
 scan -- not the suspect; the blowup is inside `proc/send`/scheduling.
 
 This contradicts the roadmap's recorded "100k actors, 160-170k msg/s interpreted"
@@ -1075,42 +1075,42 @@ attempted here. Do not guess at a fix without that profile.
 
 Followed through on the open next step: profiled a live N=20000 hang with
 `sample` (macOS; `perf`/`dtrace` equivalent) instead of guessing further after
-two hypotheses (Phase 2b visited-marker reset; persistent `janet_gcroot` of
+two hypotheses (Phase 2b visited-marker reset; persistent `bender_gcroot` of
 proc handles) were checked directly against the source and falsified (both
 pre-step-2 AND pre-Phase-2b builds (`8509c0e5`, `e816546a`) reproduce the exact
 same N=20000/90s hang, ruling out this session's changes; `proc/spawn` roots
 `proc_j` only across its own construction window and unroots it before
-returning, `proc.c:850,928`, so live procs are NOT held in `janet_vm.roots`).
+returning, `proc.c:850,928`, so live procs are NOT held in `bender_vm.roots`).
 
 **Confirmed mechanism (call-graph from the live profile, not inferred):**
 
 ```
-janet_collect_fiber_minor (gc.c:2404)
-  -> janet_mark_fiber (gc.c:540)
-    -> janet_mark_table (gc.c:286)          # f->env
-      -> janet_mark (gc.c:118/229)           # walks env->proto chain
-        -> janet_mark_table (gc.c:286)       # the TOP-LEVEL driver env
-          -> janet_procat_mark (proc.c:753)  # marks every proc IN that env
-            -> janet_mark (gc.c:138)         # proc->fiber
-              -> janet_mark_fiber (gc.c:540) # RECURSES into another actor
+bender_collect_fiber_minor (gc.c:2404)
+  -> bender_mark_fiber (gc.c:540)
+    -> bender_mark_table (gc.c:286)          # f->env
+      -> bender_mark (gc.c:118/229)           # walks env->proto chain
+        -> bender_mark_table (gc.c:286)       # the TOP-LEVEL driver env
+          -> bender_procat_mark (proc.c:753)  # marks every proc IN that env
+            -> bender_mark (gc.c:138)         # proc->fiber
+              -> bender_mark_fiber (gc.c:540) # RECURSES into another actor
 ```
 
-`proc.c:912` sets `fiber->env->proto = janet_vm.fiber->env` at spawn time --
+`proc.c:912` sets `fiber->env->proto = bender_vm.fiber->env` at spawn time --
 every spawned actor's env lexically chains to the SPAWNING fiber's env. In
-`bench/agents.janet`, all N actors are spawned from the same top-level driver
+`bench/agents.ben`, all N actors are spawned from the same top-level driver
 script, whose env holds `(def procs @[])` -- the array the driver fills with
 all N proc handles so it can join on them later. Marking ANY ONE actor's env
 chain therefore reaches that shared top-level env, which pulls in the `procs`
 array, which marks every other proc handle in it, each of which
-(`janet_procat_mark`) marks ITS fiber, recursing into `janet_mark_fiber` for
-every other actor. `janet_collect_fiber_minor` fires per-actor as each one
+(`bender_procat_mark`) marks ITS fiber, recursing into `bender_mark_fiber` for
+every other actor. `bender_collect_fiber_minor` fires per-actor as each one
 allocates during its own tick processing, so every actor's own minor collection
 walks all N siblings: O(N) work triggered by N independent minors = O(N^2)
 total, exactly matching the observed superlinear wall (fine at N=2000-5000,
 unfinished at N=20000/100000).
 
 **This is not a GC bug and not a Phase 2b regression.** It is a
-correctness-preserving consequence of Janet's lexical env-proto reachability
+correctness-preserving consequence of Bender's lexical env-proto reachability
 model: an actor's closure could legitimately read a lexically-enclosing
 binding, so the mark pass is right to consider it reachable. It collides with
 the extremely natural "keep spawned handles in an array so the driver can join
@@ -1146,27 +1146,27 @@ no implicit inheritance of the caller's workspace).
 
 ### Scoping (c): this is narrower and more tractable than it first looks
 
-The observed hazard is NOT about Janet's closure/upvalue capture mechanism
+The observed hazard is NOT about Bender's closure/upvalue capture mechanism
 (that is resolved separately at compile time, baked into the function object,
-and is unaffected by any of this). `bench/agents.janet`'s `actor` function
+and is unaffected by any of this). `bench/agents.ben`'s `actor` function
 never references `procs` as an upvalue -- it is reached ONLY via
 `fiber->env->proto`, the RUNTIME dynamic-bindings env table (used for
 `(dyn :key)` lookups and fiber-local flags like `*out*`/`*err*`), which
 `proc.c:912` (and `ev.c:3932`, `fiber.c:1142` for ev/go and raw fiber spawn)
 points at the SPAWNER'S FULL fiber env. For a top-level script, that env table
 is also where every top-level `(def ...)` lands, which is why `procs` ends up
-reachable. **Fixing this does not require touching Janet's closure semantics
+reachable. **Fixing this does not require touching Bender's closure semantics
 at all** -- only how much of the spawner's dynamic env a spawned proc's own
 env proto-chains into.
 
 ### Design: narrow, explicit, allowlisted inheritance
 
-Replace the blanket `fiber->env->proto = janet_vm.fiber->env` with a small
+Replace the blanket `fiber->env->proto = bender_vm.fiber->env` with a small
 fixed set of ambient dynamic bindings copied BY VALUE into the child's env at
 spawn time (no proto-chain at all) -- the same bounded, no-chain shape
-`janet_proc_copy_entry` already uses for marshal-copying a strict entry
+`bender_proc_copy_entry` already uses for marshal-copying a strict entry
 function. Candidates for the ambient allowlist: `*out*`, `*err*`,
-`*module-cache*`, anything else `boot.janet` already treats as inheritable
+`*module-cache*`, anything else `boot.ben` already treats as inheritable
 VM-wide state. Everything else a spawner wants the child to see must travel
 either as an explicit argument to the spawned thunk (today's `(fn [] ...)` is
 required to take 0 args for `proc/spawn`; a future `(proc/spawn-with fn args)`
@@ -1193,8 +1193,8 @@ mechanism inside `dyn`.** Concretely:
   flagged in the question. The mitigation is making the CHANGE loud, not
   making every miss loud: ship it as a documented breaking change (version
   note, CHANGELOG entry, docstring update), and add a one-time opt-in
-  diagnostic (`JANET_PROC_ENV_TRACE=1` env var, mirroring the existing
-  `JANET_TRACE_STRICT`/`JANET_ROOT_TRACE` pattern already in this file) that
+  diagnostic (`BENDER_PROC_ENV_TRACE=1` env var, mirroring the existing
+  `BENDER_TRACE_STRICT`/`BENDER_ROOT_TRACE` pattern already in this file) that
   logs when a spawned proc's `(dyn :key)` call would have resolved under the
   OLD full-proto-chain but misses under the new narrow one -- a migration aid,
   not a permanent error path.
@@ -1210,7 +1210,7 @@ were not proven to have the same acute O(n^2) severity -- they are short-lived
 single-shot spawns, not N independently-re-marking long-lived actors -- so
 fixing proc.c first and re-measuring before touching the other two sites is
 the right order), a new ambient-allowlist mechanism, the `:inherit-env`
-opt-in, and the `JANET_PROC_ENV_TRACE` migration diagnostic. This is real
+opt-in, and the `BENDER_PROC_ENV_TRACE` migration diagnostic. This is real
 core-semantics work requiring its own dual-target battery (at minimum
 proc/thread/ev/mailbox/pool, since dynamic-binding inheritance is exercised
 across all of them) and should be scoped as its own session, not folded into
@@ -1223,32 +1223,32 @@ proc/thread/ev/marsh/mailbox/pool (all green). Re-running the regression
 benchmark after that fix: **N=20000 still times out identically (exit 124 at
 25s, zero output)** -- no improvement whatsoever. This is a wrong-diagnosis
 correction, found by going past `sample`'s ambiguous/inlined call graph to
-real `lldb breakpoint + bt` backtraces on `janet_procat_mark`, which is the
+real `lldb breakpoint + bt` backtraces on `bender_procat_mark`, which is the
 only way to get an exact, unambiguous call chain.
 
 **The real mechanism** (confirmed via `lldb`, three separate live backtraces,
-`bench/agents.janet 8000 4` / `4000 2`):
+`bench/agents.ben 8000 4` / `4000 2`):
 
 ```
-janet_collect_fiber_minor(f=<actor's fiber>)
-  -> janet_mark_fiber(f)                          # the actor, as expected
+bender_collect_fiber_minor(f=<actor's fiber>)
+  -> bender_mark_fiber(f)                          # the actor, as expected
     -> ... (several frames of the actor's own closure/env marking)
-      -> janet_mark_funcenv / janet_mark_function   # the actor closure's
+      -> bender_mark_funcenv / bender_mark_function   # the actor closure's
                                                       # UPVALUE environment
-        -> janet_mark_fiber(fiber=<ROOT/DRIVER fiber>)   # !! marks the
+        -> bender_mark_fiber(fiber=<ROOT/DRIVER fiber>)   # !! marks the
                                                            # whole live
                                                            # top-level fiber
-          -> janet_mark_many(values=..., n=12)      # the ROOT fiber's OWN
+          -> bender_mark_many(values=..., n=12)      # the ROOT fiber's OWN
                                                       # live stack frame
-            -> janet_mark_fiber(<another fiber>)
-              -> ... -> janet_mark_funcdef -> janet_mark_many(n=8000)
-                -> janet_mark_array                 # the `procs` array,
+            -> bender_mark_fiber(<another fiber>)
+              -> ... -> bender_mark_funcdef -> bender_mark_many(n=8000)
+                -> bender_mark_array                 # the `procs` array,
                                                       # ALL 8000 elements
-                  -> janet_procat_mark (x8000)       # every sibling proc
+                  -> bender_procat_mark (x8000)       # every sibling proc
 ```
 
 `actor` captures `ticks` (`(def ticks ...)` at top level) as an upvalue. Since
-`bench/agents.janet` executes as ONE long-running top-level script, the root/
+`bench/agents.ben` executes as ONE long-running top-level script, the root/
 driver fiber that evaluates each top-level form is STILL ON-STACK/alive for
 the whole run -- it never returns until the script finishes. `actor`'s
 upvalue for `ticks` is therefore an OPEN reference into that still-live root
@@ -1279,7 +1279,7 @@ No real fix implemented for this corrected root cause. Candidate directions
   inner function that returns, closing its upvalues, before any procs are
   spawned) -- works around it without touching the VM, but doesn't fix the
   general hazard for other programs with the same shape.
-- VM-side: investigate whether Janet's compiler/VM could close upvalues
+- VM-side: investigate whether Bender's compiler/VM could close upvalues
   eagerly once a stack region can no longer gain new closures over it (deep
   bytecode/funcenv semantics work, not scoped or attempted here).
 - Re-measure with `ticks` and `actor`'s body rewritten to take NO top-level
@@ -1304,39 +1304,39 @@ live stack of the fiber that upvalue points into, not just the one captured
 slot. That conservative over-marking is what turns "protect one captured
 local" into "mark everything else alive on that frame too," including
 `procs`. This is a VM/closure stack-marking GRANULARITY question (does
-`janet_mark_fiber` support marking only the slots an open funcenv actually
+`bender_mark_fiber` support marking only the slots an open funcenv actually
 references, vs. the whole frame?) -- genuinely deep core-VM semantics, not a
 proc-spawn or GC-collector-phase issue at all, and not something to patch
-without a dedicated investigation into `janet_mark_fiber`'s stack-marking
-precision and how `JanetFuncEnv`'s offset bookkeeping is supposed to bound it.
+without a dedicated investigation into `bender_mark_fiber`'s stack-marking
+precision and how `BenderFuncEnv`'s offset bookkeeping is supposed to bound it.
 
 Not attempted further this session. This is now accurately scoped as a
 distinct, deeper open item, separate from (and likely more consequential
 than) the original proc-lanes roadmap's "messaging throughput" framing.
 
-## REAL FIX FOUND AND APPLIED: janet_sweep_fiber_owned's wide census walk (the dominant term)
+## REAL FIX FOUND AND APPLIED: bender_sweep_fiber_owned's wide census walk (the dominant term)
 
 Following a direct challenge to apply BEAM's actual architecture rather than
 keep profiling ad hoc: the stated BEAM invariant is that a process's GC
 touches *only that process's own heap*, full stop -- no global structure is
-ever scanned by every process's own collection. Auditing `janet_collect_fiber_minor`
+ever scanned by every process's own collection. Auditing `bender_collect_fiber_minor`
 against that invariant (not more sampling) surfaced the real, dominant,
 *mechanically provable* O(n^2) term, no profiling ambiguity required:
 
 ```c
-static void janet_sweep_fiber_owned(JanetFiber *f) {
+static void bender_sweep_fiber_owned(BenderFiber *f) {
     /* "Plain fibers need census marking O(N) regardless, so narrowing
      * their sweep buys no complexity win." */
-    janet_sweep_kind(2, 1, owner, 1);   /* walk_fibers=1 */
-    janet_sweep_kind(0, 1, owner, 1);   /* walk_fibers=1 */
-    janet_sweep_kind(1, 1, owner, 1);   /* walk_fibers=1 */
+    bender_sweep_kind(2, 1, owner, 1);   /* walk_fibers=1 */
+    bender_sweep_kind(0, 1, owner, 1);   /* walk_fibers=1 */
+    bender_sweep_kind(1, 1, owner, 1);   /* walk_fibers=1 */
 }
 ```
 
-`janet_sweep_kind`'s `walk_fibers=1` loops over **every fiber in the global
+`bender_sweep_kind`'s `walk_fibers=1` loops over **every fiber in the global
 census** (`ss->fibers_count`, all N live actors) on every call.
-`janet_sweep_fiber_owned` is called once per actor per minor
-(`janet_collect_fiber_minor` -> `janet_sweep_heaps_owned` -> this). A for-loop
+`bender_sweep_fiber_owned` is called once per actor per minor
+(`bender_collect_fiber_minor` -> `bender_sweep_heaps_owned` -> this). A for-loop
 over N, called N times: O(n^2) by simple code inspection.
 
 **Historical root cause, confirmed via git log.** The original author of
@@ -1345,7 +1345,7 @@ superlinear (global minors O(world) every 256KB young dominate); P3.5c is the
 linearizer. No scale win claimed."* P3.5c (`a5d9168e`) then shipped "the
 linearizer" -- but **only for strict/isolated spawn** (`proc/spawn-isolated`),
 giving it owner-attributed memory and the narrow O(own) sweep
-(`janet_sweep_proc_owned`, already existed, already proven safe). Plain
+(`bender_sweep_proc_owned`, already existed, already proven safe). Plain
 `proc/spawn` -- what this entire investigation's benchmark uses, and what
 most real code would default to -- was deliberately left on the wide path,
 exactly as documented. Nobody ever came back to extend P3.5c's linearizer to
@@ -1354,8 +1354,8 @@ never-closed gap, now finally closed.
 
 **The routing bug, confirmed at `vm.c:122-123`:**
 ```c
-if (mcf_->heap_strict && NULL != mcf_->proc) janet_collect_process(mcf_->proc);
-else janet_collect_fiber_minor(mcf_);
+if (mcf_->heap_strict && NULL != mcf_->proc) bender_collect_process(mcf_->proc);
+else bender_collect_fiber_minor(mcf_);
 ```
 A plain proc's fiber has `proc != NULL` but `heap_strict == 0` (`proc.c`'s
 `cfun_proc_spawn_impl` sets `fiber->proc = proc` unconditionally, regardless
@@ -1363,10 +1363,10 @@ of the `isolated` flag) -- so it falls into the wide path purely because of
 the `heap_strict &&` conjunction, even though it IS a proc with perfectly
 well-controlled, predictable allocation attribution.
 
-**Fix applied** (in `janet_collect_fiber_minor`, after the unchanged marking
+**Fix applied** (in `bender_collect_fiber_minor`, after the unchanged marking
 phase): route any fiber with `f->proc != NULL` -- strict or plain -- to the
-already-existing, already-proven-safe `janet_sweep_proc_owned` (narrow,
-O(own)) instead of the wide `janet_sweep_heaps_owned`. Fibers with no proc
+already-existing, already-proven-safe `bender_sweep_proc_owned` (narrow,
+O(own)) instead of the wide `bender_sweep_heaps_owned`. Fibers with no proc
 (raw tasklets, boot/image-generation's own fibers) keep the wide path
 unchanged -- that is the documented "crashes boot image generation
 deterministically" risk from `a739009e`, which this change does not touch at
@@ -1376,10 +1376,10 @@ correct and necessary for a plain proc's genuine cross-heap sharing -- only
 the sweep's now-redundant wide census walk is narrowed.
 
 **Verification:** dual-target (interpreter + real AOT via `bender --aot`,
-which exercises `mkimage.janet`'s image-generation path directly -- the exact
+which exercises `mkimage.ben`'s image-generation path directly -- the exact
 scenario the "crashes boot image generation" warning is about) across
 proc(99)/thread(30)/ev(776)/marsh(73)/mailbox(76)/pool(56): all green,
-identical counts both targets, zero AOT build failures. `JANET_GC_VERIFY=1`'s
+identical counts both targets, zero AOT build failures. `BENDER_GC_VERIFY=1`'s
 one failure (suite-ev, "young unmarked... minor mark incomplete") reproduces
 byte-identically on a clean pre-session baseline (confirmed via `git stash`) --
 pre-existing, explicitly matches `a739009e`'s own note ("GC_VERIFY-over-boot
@@ -1387,7 +1387,7 @@ abort is pre-existing, identical on clean base"), not a regression. All four
 ripwire-flagged C regressions pass fresh; `test-gc-pcall` unchanged
 pre-existing failure.
 
-**Measured impact** (`bench/agents.janet`, interpreter, `JANET_NO_PROFILE=1`):
+**Measured impact** (`bench/agents.ben`, interpreter, `BENDER_NO_PROFILE=1`):
 
 | N | before (this session's earlier measurement) | after |
 |---|---|---|
@@ -1403,18 +1403,18 @@ with xfb active, because of a **second, smaller, but still real O(n^2) term**:
 
 ## SECOND CONFIRMED O(n^2) TERM: the global xfb remembered set (not yet fixed)
 
-`ss->xfb` (`JanetSlabState.xfb`) is one global, VM-wide array recording every
+`ss->xfb` (`BenderSlabState.xfb`) is one global, VM-wide array recording every
 cross-fiber write-barrier edge, reset to empty ONLY at a full major collection
-(`janet_slab_major_reset`). `janet_collect_fiber_minor` scans it **in full**
+(`bender_slab_major_reset`). `bender_collect_fiber_minor` scans it **in full**
 on every call (`for (xi = 0; xi < ss->xfb_count; xi++) if
-(janet_xfb_relevant(...)) ...`), filtered by `janet_xfb_relevant` checking
-`janet_slab_obj_owner(p) == owner`. Confirmed via direct inspection (not
+(bender_xfb_relevant(...)) ...`), filtered by `bender_xfb_relevant` checking
+`bender_slab_obj_owner(p) == owner`. Confirmed via direct inspection (not
 sampling): `xfb_count` stayed flat at exactly 60015 (~3 per actor: mailbox +
 sup channel + one more) across the whole N=20000 run -- genuinely O(n), not
 exploding -- and majors apparently never fire in this workload (the
 `gc-count` print only fires inside the major-collect path), so xfb never
 resets. The real cost is structural: O(minors) x O(xfb_count) x O(log(live
-slab pages)) (the per-check cost includes `janet_slab_page_for`'s binary
+slab pages)) (the per-check cost includes `bender_slab_page_for`'s binary
 search over the page directory) -- with minors and xfb_count both O(n), this
 is O(n^2 log n) overall, a second genuine quadratic term, smaller in constant
 factor than the sweep bug (no full stack walks) but with the same shape, so
@@ -1435,50 +1435,50 @@ attempted in this commit.
 ## SECOND O(n^2) TERM FIXED: owner-sorted xfb index
 
 Implemented the owner-bucketing fix designed above, verified safe via direct
-code inspection: `janet_slab_obj_owner`'s only possible transition is
+code inspection: `bender_slab_obj_owner`'s only possible transition is
 `owner=K -> mixed/0` (confirmed `page->owner` has exactly one write site,
 page allocation, never reassigned), and a mixed-page object is already
 immune to any single-owner's scoped sweep regardless of marking (traced
-`janet_sweep_list`'s own filter: `0 == only_owner || obj_owner == only_owner`
+`bender_sweep_list`'s own filter: `0 == only_owner || obj_owner == only_owner`
 -- a mixed object with `obj_owner==0` matches neither branch for any
 non-zero scoped owner, so it floats to the next major either way). A stale
 cached owner can therefore never cause a premature free.
 
 **Implementation** (additive only -- the main `ss->xfb` array, its insertion
-order, rollback truncation in `janet_slab_owner_stats`, and major-reset are
+order, rollback truncation in `bender_slab_owner_stats`, and major-reset are
 completely untouched):
-- `JanetXfbIndexEntry {owner, idx}` + `JanetSlabState.xfb_index`/
+- `BenderXfbIndexEntry {owner, idx}` + `BenderSlabState.xfb_index`/
   `xfb_index_built_count`: a lazily-rebuilt, qsort-sorted-by-owner auxiliary
   index over the existing array.
-- `janet_xfb_index_ensure`: rebuilds (O(n log n)) only when `xfb_count` has
+- `bender_xfb_index_ensure`: rebuilds (O(n log n)) only when `xfb_count` has
   grown since the last build; a no-op when stable (the common case once most
   cross-fiber containers age past the young window and stop needing new
   xfb entries).
-- `janet_xfb_mark_owned`: binary-searches to this owner's contiguous sorted
+- `bender_xfb_mark_owned`: binary-searches to this owner's contiguous sorted
   run and marks only those entries (O(log n) + O(this owner's own count))
   instead of a full linear scan. Falls back to the original, always-correct
-  `janet_xfb_relevant` linear scan if the index failed to build (OOM) --
+  `bender_xfb_relevant` linear scan if the index failed to build (OOM) --
   never less correct than before, only sometimes not faster.
 - Wired into both scoped collectors that had the O(n) scan:
-  `janet_collect_fiber_minor` (the dominant case, plain procs) and
-  `janet_mark_proc_shared` (isolated procs' narrow path, same risk at scale,
+  `bender_collect_fiber_minor` (the dominant case, plain procs) and
+  `bender_mark_proc_shared` (isolated procs' narrow path, same risk at scale,
   fixed for consistency even though not the originally measured case).
-- `janet_slab_major_reset` additionally invalidates `xfb_index_built_count`
+- `bender_slab_major_reset` additionally invalidates `xfb_index_built_count`
   (the main reset already zeroed `xfb_count`; the index must not be trusted
   against stale indices past the new, smaller count).
 
 **Verification:** dual-target (interpreter + AOT) across
 proc(99)/thread(30)/ev(776)/marsh(73)/mailbox(76)/pool(56), all green,
-identical counts both targets. `JANET_HEAP_VERIFY=1`, `JANET_GC_VERIFY=1`
+identical counts both targets. `BENDER_HEAP_VERIFY=1`, `BENDER_GC_VERIFY=1`
 (proc/thread/mailbox; suite-ev's one failure reproduces on the
 already-committed `a7bcedcc` baseline, confirmed via `git stash`, unrelated
-to this change) clean. `JANET_PROC_VERIFY=1`'s one report ("foreign fiber
+to this change) clean. `BENDER_PROC_VERIFY=1`'s one report ("foreign fiber
 field holds swept candidate") reproduces byte-identically on the `a7bcedcc`
 baseline before this change (confirmed via `git stash`) -- pre-existing, not
 a regression. All four ripwire-flagged C regressions pass fresh; `test-gc-pcall`
 unchanged pre-existing failure.
 
-**Measured impact** (`bench/agents.janet`, interpreter, `JANET_NO_PROFILE=1`,
+**Measured impact** (`bench/agents.ben`, interpreter, `BENDER_NO_PROFILE=1`,
 with the sweep fix from the previous commit also active):
 
 | N | before this fix (sweep fix only) | after (sweep + xfb index) |
@@ -1509,10 +1509,10 @@ O(n) linear scan it replaced at this N.
 **Refinement applied:** classic amortized-doubling -- only re-sort when the
 unsorted tail (entries appended since the index was last built) exceeds
 roughly half the already-sorted prefix (plus a small floor). Between
-rebuilds, `janet_xfb_mark_owned` binary-searches the sorted prefix and
+rebuilds, `bender_xfb_mark_owned` binary-searches the sorted prefix and
 linearly scans only the small unsorted tail. Re-profiling confirmed this
 measurably works: qsort's share of the N=100000 profile dropped from
-dominant to a sliver (7 of ~5800 samples in `janet_collect_fiber_minor`).
+dominant to a sliver (7 of ~5800 samples in `bender_collect_fiber_minor`).
 
 **Honest assessment: this does NOT fully solve N=100000.** Re-deriving the
 amortization argument caught my own mistake before committing it as "the
@@ -1535,7 +1535,7 @@ index over an append-only array) -- route each new xfb entry directly into
 a per-owner bucket the moment it's recorded (the owner, `own_o`, is already
 computed at the single insert site), giving true O(1) amortized insert and
 O(this owner's own entries) scan, no sort/merge of any kind needed. This
-requires either a proper hash table keyed by owner (outside Janet's
+requires either a proper hash table keyed by owner (outside Bender's
 GC-visible heap, matching how `ss->xfb`/`ss->fibers` already are, to avoid
 a circular "the structure that protects things also needs protecting"
 problem) or an LSM-style multi-run structure -- genuinely new data-structure
@@ -1551,7 +1551,7 @@ real, measured improvement (reduces rebuild frequency, never makes anything
 worse than the previous committed version) and is kept; it is simply not,
 by itself, the complete fix for N=100000+.
 
-**Status table** (`bench/agents.janet`, interpreter, `JANET_NO_PROFILE=1`):
+**Status table** (`bench/agents.ben`, interpreter, `BENDER_NO_PROFILE=1`):
 
 | N | sweep fix only | + xfb index (always-rebuild) | + xfb index (amortized) |
 |---|---|---|---|
@@ -1570,13 +1570,13 @@ index) rather than an unknown mystery.
 Replaced the amortized sorted-index approach entirely with true owner-
 bucketing: a fixed 4096-slot hash table (chained on collision) keyed by
 owner, populated at the SAME single insert site (the owner, `own_o`, was
-already computed there -- free to reuse). `janet_xfb_bucket_append` is O(1)
+already computed there -- free to reuse). `bender_xfb_bucket_append` is O(1)
 amortized (same doubling-array growth as the main xfb array itself, per
-bucket). `janet_xfb_mark_owned` is O(1) hash lookup + O(this owner's own
+bucket). `bender_xfb_mark_owned` is O(1) hash lookup + O(this owner's own
 entry count) -- no sort, no rebuild, no unsorted-tail scan of any kind. The
-old `janet_xfb_relevant`/sorted-index machinery is removed entirely (dead
+old `bender_xfb_relevant`/sorted-index machinery is removed entirely (dead
 code once both scoped collectors route through buckets). The main `ss->xfb`
-array, its insertion order, and `janet_slab_owner_stats`' rollback are
+array, its insertion order, and `bender_slab_owner_stats`' rollback are
 STILL completely untouched -- the bucket table is a parallel, additive
 dual-write at the same insert site, freed (not rolled back) at major-reset
 and VM clear, same hygiene as the main array.
@@ -1595,12 +1595,12 @@ performing exactly as designed, cheap and O(1)-ish per minor.
 ## N=100000: a DIFFERENT mechanism, not a scan-cost problem at all
 
 Re-profiling N=100000 after the true-bucketing fix still shows it not
-finishing in 60s -- but the profile and a direct `JANET_ROOT_TRACE` call
+finishing in 60s -- but the profile and a direct `BENDER_ROOT_TRACE` call
 count now point at something qualitatively different from everything found
-so far. In a 15-second window, only **3** total `janet_collect_fiber_minor`
+so far. In a 15-second window, only **3** total `bender_collect_fiber_minor`
 calls fired, and all three were for the **same single fiber** (`owner=10`),
 whose nursery had ballooned to ~16MB (64x the normal 256KB minor-trigger
-threshold, `JANET_MINOR_THRESHOLD`) before each of those 3 minors finally
+threshold, `BENDER_MINOR_THRESHOLD`) before each of those 3 minors finally
 ran. Nothing else in the entire program progressed during that window --
 no other actor's minor fired at all.
 
@@ -1625,47 +1625,47 @@ not a scan-cost issue) that is now narrowly scoped (one specific fiber,
 ## N=100000 FIXED: the fourth mechanism was the stale wide-sweep fallback itself
 
 Direct investigation of the "owner=10, 16MB nursery" fiber (previous entry)
-found it is NOT a proc (`f->proc == NULL`) and not `janet_vm.root_fiber` --
+found it is NOT a proc (`f->proc == NULL`) and not `bender_vm.root_fiber` --
 most likely a `dofile`/run-context wrapper fiber executing the top-level
 send loop, doing continuous allocation from marshal-copying 400,000 sends.
 Because it has no `proc`, the earlier fix (`a7bcedcc`, scoped to
 `f->proc != NULL`) does not cover it -- it still took the WIDE
-`janet_sweep_fiber_owned` path (global fiber census walk) on every one of
+`bender_sweep_fiber_owned` path (global fiber census walk) on every one of
 its own, now-frequent minors.
 
 **Re-tested the historical "crashes boot image generation deterministically"
 warning (`a739009e`) directly, not by proxy**, before touching this:
-- `build/janet_boot`'s actual bootstrap image generation (not an AOT test
+- `build/bender_boot`'s actual bootstrap image generation (not an AOT test
   proxy) run 3/3 times under full narrowing (every fiber, not just procs):
-  byte-identical `janet.c` output every time (verified via `diff`).
-- All 60 `test/suite-*.janet` files run individually under full narrowing:
+  byte-identical `bender.c` output every time (verified via `diff`).
+- All 60 `test/suite-*.ben` files run individually under full narrowing:
   zero behavioral differences from normal (two apparent anomalies --
   `suite-lanes` and `suite-shared` -- both confirmed identical with or
   without narrowing: `suite-lanes` just needs more than my first 30s probe
   (120s run passed completely, "640k-park stop in 8.02s" matching the
   historical baseline almost exactly), `suite-shared` always SKIPs without
-  `JANET_SHARED_STACKS=1` regardless).
-- `bench/agents.janet` at N=100000 (the actual target workload, which the
+  `BENDER_SHARED_STACKS=1` regardless).
+- `bench/agents.ben` at N=100000 (the actual target workload, which the
   wide path could not complete at all) finished cleanly under narrowing.
 
 Whatever caused the historical crash was evidently fixed by other GC/
 marking work done in the long history since that commit (this session's
 own marking-scope fixes are plausible candidates, though not confirmed
-which specific change closed it). **Made narrow sweep (`janet_sweep_proc_owned`)
+which specific change closed it). **Made narrow sweep (`bender_sweep_proc_owned`)
 the universal default for every fiber**, not just procs. The wide path
-(`janet_sweep_kind` with `walk_fibers=1`) is kept as dead code behind
+(`bender_sweep_kind` with `walk_fibers=1`) is kept as dead code behind
 `#if 0`, not deleted, so a future regression can bisect to it quickly if
 the historical failure mode ever resurfaces.
 
 **Verification:** dual-target (interpreter + AOT) across
 proc/thread/ev/marsh/mailbox/pool, all green. Actual bootstrap image
 generation re-verified byte-identical after the real (non-diagnostic) code
-change (textual diff in the generated `janet.c` is exactly the edited
+change (textual diff in the generated `bender.c` is exactly the edited
 comment/code region, i.e. the amalgamation literally embeds source text --
 expected, not a correctness signal). All four ripwire-flagged C regressions
 pass fresh; `test-gc-pcall` unchanged pre-existing failure.
 
-**Final status** (`bench/agents.janet`, interpreter, `JANET_NO_PROFILE=1`,
+**Final status** (`bench/agents.ben`, interpreter, `BENDER_NO_PROFILE=1`,
 no flags -- this is now the permanent default behavior):
 
 | N | msgs/s | total time |
@@ -1713,15 +1713,15 @@ disproving) what was already tried here.
    reproduces (byte-identical actual bootstrap output, 3/3 runs, plus 60
    suites individually) before doing this -- if a future regression
    resurfaces that historical crash, the dead `#if 0` wide-path code in
-   `janet_sweep_fiber_owned` is the bisection target.
+   `bender_sweep_fiber_owned` is the bisection target.
 
 ### Tried and did NOT help (don't re-try these specific things)
-- **Lowering `JANET_FIBER_MINOR_CAP`** from 16MB to 1MB (`vm.c`): tested,
+- **Lowering `BENDER_FIBER_MINOR_CAP`** from 16MB to 1MB (`vm.c`): tested,
   reverted. Increased minor frequency for the one heavily-allocating
   fiber but did nothing for the N^2 shape -- the real issue was the wide
   sweep (fixed separately in `4d18a636`), not the trigger threshold. The
   16MB cap and its `block_count`-scaling formula (`vm.c`'s `maybe_collect()`
-  macro, `JANET_FIBER_MINOR_SCALE`/`JANET_FIBER_MINOR_CAP`) were NOT
+  macro, `BENDER_FIBER_MINOR_SCALE`/`BENDER_FIBER_MINOR_CAP`) were NOT
   touched in the final committed fix and remain exactly as upstream. If
   revisited, remember: this formula scales a PER-FIBER threshold by the
   GLOBAL block count, which is architecturally the wrong granularity for
@@ -1735,34 +1735,34 @@ msgs/s). Per-minor average cost: ~0.2ms at N=20000, ~0.9ms at N=100000 --
 roughly a 4.5x increase in PER-CALL cost for a 5x increase in N, meaning
 something still scales ~O(n) per minor call even after all four mechanisms
 above were fixed. Total minors were confirmed to equal N almost exactly
-(one per actor, via `JANET_ROOT_TRACE`), and each has a tiny, correct
+(one per actor, via `BENDER_ROOT_TRACE`), and each has a tiny, correct
 `nurs=320`-ish nursery (not the earlier 16MB pathology) -- so this is NOT
 a repeat of any previous mechanism; it is smaller in magnitude but still
 real. Candidate found but NOT YET CONFIRMED (ran out of session time
 budget investigating it; a quick env-gated instrumentation attempt
 produced no output and was not debugged further):
 
-- **`janet_sweep_drain_pending`** (`gc.c`, called from `janet_sweep_proc_owned`
+- **`bender_sweep_drain_pending`** (`gc.c`, called from `bender_sweep_proc_owned`
   on every single minor now that narrowing is universal): walks a GLOBAL
-  `janet_vm.sweep_pending[0..2]` linked-list to find its TAIL before
-  splicing onto `janet_vm.blocks`/`string_blocks`/`weak_blocks`. Dying
-  fibers (`JANET_MEMORY_FIBER` deinit case, `gc.c` ~618-630) PREPEND their
+  `bender_vm.sweep_pending[0..2]` linked-list to find its TAIL before
+  splicing onto `bender_vm.blocks`/`string_blocks`/`weak_blocks`. Dying
+  fibers (`BENDER_MEMORY_FIBER` deinit case, `gc.c` ~618-630) PREPEND their
   entire remaining `heap_lists[]` onto this SAME global list. IF fiber
-  deaths at scale outpace how often `janet_sweep_drain_pending` actually
+  deaths at scale outpace how often `bender_sweep_drain_pending` actually
   drains them (plausible if many actors finish their ticks and die in a
   tight burst), `sweep_pending[k]`'s length -- and therefore the tail-walk
   cost paid by literally every subsequent minor, for every fiber, until
   it's finally drained -- could grow with N. This is a real, structurally
   plausible O(n)-per-call mechanism matching the measured shape, but it
   was NOT measured directly before this session's time ran out (a
-  diagnostic instrumentation attempt via `JANET_DIAG_PENDING_TRACE`
+  diagnostic instrumentation attempt via `BENDER_DIAG_PENDING_TRACE`
   compiled but produced zero output on a test run and was abandoned
   rather than debugged, per explicit user direction to stop chasing
   performance and prioritize finishing functional correctness first).
   **Next step for the optimization phase**: get the trace actually
   working (check whether the DPT build's dpt_calls counter condition or
   env var detection was the bug) or use `sample`/lldb to directly measure
-  `janet_vm.sweep_pending[0..2]` list lengths at increasing points through
+  `bender_vm.sweep_pending[0..2]` list lengths at increasing points through
   an N=100000 and an N=20000 run, and see if length grows with N/time
   mid-run. If confirmed, the fix is almost certainly: track the list's
   own tail pointer incrementally (O(1) append) instead of re-walking to
@@ -1770,13 +1770,13 @@ produced no output and was not debugged further):
   already avoid exactly this class of walk.
 
 ### Other NOT YET RULED OUT candidates for the same residual cost (not measured)
-- `janet_slab_page_for`'s binary search over `ss->dir` (sorted page
+- `bender_slab_page_for`'s binary search over `ss->dir` (sorted page
   directory): O(log total_pages), grows with total live pages. Sublinear,
   probably NOT the dominant term, but called from several hot paths
-  (`janet_slab_obj_owner`, `janet_xfb_owner_of` call sites) and not ruled
+  (`bender_slab_obj_owner`, `bender_xfb_owner_of` call sites) and not ruled
   out definitively.
-- Per-minor fixed overhead (`janet_gc_epoch_next()`, `janet_heap_verify`
-  no-op check, `getenv("JANET_ROOT_TRACE")` called unconditionally on
+- Per-minor fixed overhead (`bender_gc_epoch_next()`, `bender_heap_verify`
+  no-op check, `getenv("BENDER_ROOT_TRACE")` called unconditionally on
   every minor even when unset -- a `getenv` syscall-ish lookup on the HOT
   path of every single minor, seen literally in the `sample` profile
   output this session as non-trivial sample share). Cheap individually,
@@ -1785,17 +1785,17 @@ produced no output and was not debugged further):
 ## RESOLVED (2026-10-17): the residual O(n)-per-minor cost — NOT sweep_pending
 
 The sweep_pending tail-walk hypothesis above is **disproved**. By code
-inspection: `janet_sweep_drain_pending` runs at the end of *every* minor
+inspection: `bender_sweep_drain_pending` runs at the end of *every* minor
 (universal narrowing) and empties the list (`sweep_pending[k] = NULL`), so
 its cost is amortized O(deaths-since-last-drain) — the list never
 accumulates. It does not appear in the profile at all.
 
 **Actual root cause**, found via macOS `sample` on a clean non-ASAN
 rebuild of the N=100000 run sampled ~30s in (ticks phase): **97% of all
-samples** inside `janet_collect_fiber_minor` at the
-`janet_reset_threaded_visited_minor()` call site (pre-fix gc.c:2582).
+samples** inside `bender_collect_fiber_minor` at the
+`bender_reset_threaded_visited_minor()` call site (pre-fix gc.c:2582).
 That function — a Phase 2b-iii fix for stale threaded-abstract visit
-markers — walked the ENTIRE `janet_vm.threaded_abstracts` table
+markers — walked the ENTIRE `bender_vm.threaded_abstracts` table
 (capacity-sized loop; ~2 channel registrations per proc ⇒ ≈O(N) entries,
 and table capacity never shrinks) after EVERY fiber minor. Minors ≈ N ⇒
 O(N²) total; per-minor cost ~O(n): exactly the measured 4.5x-per-call-
@@ -1803,21 +1803,21 @@ for-5x-N shape.
 
 **Fix (landed this session, uncommitted diff per workspace rules)**:
 replaced the registry's boolean visited marker with a per-collection
-**cycle stamp** — `JanetVM.gc_visit_cycle` (uint32), bumped inside
-`janet_gc_epoch_next()` which already runs exactly once at the start of
+**cycle stamp** — `BenderVM.gc_visit_cycle` (uint32), bumped inside
+`bender_gc_epoch_next()` which already runs exactly once at the start of
 every collection (fiber/proc/global minor and full major — all four call
 sites verified). "Visited this collection" = registry value is a number
-equal to the current cycle (`janet_threaded_visited`, gc.c). The whole
+equal to the current cycle (`bender_threaded_visited`, gc.c). The whole
 registry reset pass and its three call sites are deleted. Mark-site flip
-(gc.c ~200) now stamps the cycle; `janet_sweep`'s unvisited test
+(gc.c ~200) now stamps the cycle; `bender_sweep`'s unvisited test
 (~gc.c:956) uses the same compare. `false` writers (abstract.c
-registration + home_gc_authorized re-arm, marsh.c transfer, janet_sweep's
+registration + home_gc_authorized re-arm, marsh.c transfer, bender_sweep's
 post-major reset, tombstones) stay valid — false and stale stamps both
 read as not-visited; the nil ⇒ incref single-claim rule is unchanged.
 uint32 wrap needs one entry to sit unvisited through exactly 2^32
 collections — accounting noise, same accepted class as gc_owner wrap.
 
-**Before/after** (`bench/agents.janet`, interpreter, JANET_NO_PROFILE=1,
+**Before/after** (`bench/agents.ben`, interpreter, BENDER_NO_PROFILE=1,
 clean rebuild, same machine):
 
 | N | ticks before | ticks after | speedup |
@@ -1835,7 +1835,7 @@ against §5.6's constant-factor list.
 failure, "both land" line 185, reproduces 3/3 on a stashed clean
 baseline — pre-existing timing flake; AOT proc is 99/99), thread 30/30,
 ev 776/776, marsh 73/73, mailbox 76/76, pool 56/56, gc-minor 12/12;
-JANET_GC_VERIFY/HEAP_VERIFY/PROC_VERIFY targeted runs green;
+BENDER_GC_VERIFY/HEAP_VERIFY/PROC_VERIFY targeted runs green;
 gcsetinterval-65536 stress on suite-boot (1591/1591) and suite-ev
 (776/776) green; AOT dual-target green for proc/marsh/gc-minor; C
 regressions: test-threaded-abstract-mark-claim PASS (the one that
@@ -1854,7 +1854,7 @@ most promising next measurement, not a confirmed root cause.
 
 ## Multi-thread scaling observation (user-directed, post-blocked-goal)
 
-Confirmed via `bench/agents-multithread.janet` (`79a0135c`): real OS-thread
+Confirmed via `bench/agents-multithread.ben` (`79a0135c`): real OS-thread
 parallelism (via `thread/new`, share-nothing isolated VMs, true multi-core)
 shows genuine throughput scaling that the single-VM numbers don't capture:
 
@@ -1879,7 +1879,7 @@ startup cost multiplied by 100-500).
 ## Multi-thread scaling: escalation to 500 threads (user-directed)
 
 Three escalating combinations tested per explicit user request, all via
-`bench/agents-multithread.janet`:
+`bench/agents-multithread.ben`:
 
 | threads | procs/thread | total actors | wall time | aggregate msgs/s | per-thread avg msgs/s |
 |---|---|---|---|---|---|
@@ -1919,7 +1919,7 @@ threads alone.
 
 ## Multi-thread scaling: 1000 threads x 1000 procs/thread = 1,000,000 total actors
 
-The full escalation series, all via `bench/agents-multithread.janet`:
+The full escalation series, all via `bench/agents-multithread.ben`:
 
 | threads | procs/thread | total actors | wall time | aggregate msgs/s | sys/user ratio |
 |---|---|---|---|---|---|
@@ -1959,13 +1959,13 @@ T ticks each, same trivial arithmetic kernel) and ran it on the SAME
 machine against the SAME N values, for a real, falsifiable comparison
 instead of a theoretical claim:
 
-| N | Janet (single VM) | Erlang (one `erl` node) | Erlang advantage |
+| N | Bender (single VM) | Erlang (one `erl` node) | Erlang advantage |
 |---|---|---|---|
 | 2,000 | 14,573 msgs/s | 1,000,000 msgs/s | ~69x |
 | 5,000 | 103,477 msgs/s | 952,380 msgs/s | ~9.2x |
 | 20,000 | 22,575 msgs/s | 963,855 msgs/s | ~43x |
 | 100,000 | 4,445 msgs/s (98s) | 896,860 msgs/s (0.79s total) | ~200x |
-| 1,000,000 | did not finish (single VM) | 377,287 msgs/s (12.4s total) | n/a (Janet needed 1000 manual threads, 72.8s, 55k msgs/s, to even complete) |
+| 1,000,000 | did not finish (single VM) | 377,287 msgs/s (12.4s total) | n/a (Bender needed 1000 manual threads, 72.8s, 55k msgs/s, to even complete) |
 
 **Root cause of the gap, confirmed by direct process inspection (not
 assumed):** `erl`'s default invocation on this 12-core machine spawns
@@ -1979,11 +1979,11 @@ a small, fixed pool of real OS threads, entirely automatically -- no
 application code decides how many threads to use or which process runs
 where.
 
-This is exactly what had to be FAKED manually for Janet this session: we
+This is exactly what had to be FAKED manually for Bender this session: we
 hand-spawned 1000 separate `thread/new` OS threads, each running a fully
 independent, fully isolated VM, to reach 1,000,000 actors at all -- and
 that still only reached ~1/200th of Erlang's single-node throughput,
-because (a) each of those 1000 Janet VMs is internally still cooperatively
+because (a) each of those 1000 Bender VMs is internally still cooperatively
 scheduled with no preemption, and (b) there is no shared scheduler
 spreading work across cores WITHIN one logical runtime the way BEAM's 12
 normal schedulers do.
@@ -2000,8 +2000,8 @@ standing todo tree as the explicitly reinforced next priority.
 ## Measured 2026-10-20: serial chain, spawn, kill — and the profiling trap
 
 **Method note (read first): all proc/GC benchmarks must run with
-`JANET_NO_PROFILE=1`, or from a release binary (release defines
-`-DJANET_NO_PGO`).** The interpreter and non-release AOT builds carry the
+`BENDER_NO_PROFILE=1`, or from a release binary (release defines
+`-DBENDER_NO_PGO`).** The interpreter and non-release AOT builds carry the
 runtime PGO type collector, and on proc workloads it is not a small tax:
 
 | workload | profiling on | off | ratio |
@@ -2012,8 +2012,8 @@ runtime PGO type collector, and on proc workloads it is not a small tax:
 
 The first measurements this session were taken without the flag and were
 dominated by the collector, not the engine: macOS `sample` showed 100%
-of the profiled exit phase in `janet_collect_fiber_minor` ->
-`janet_mark` -> `janet_mark_table` -> `janet_procat_mark`, i.e. the
+of the profiled exit phase in `bender_collect_fiber_minor` ->
+`bender_mark` -> `bender_mark_table` -> `bender_procat_mark`, i.e. the
 collector forcing a minor per death. With the flag off that path drops
 out of the profile. This is the strongest argument for benchmarking
 release builds: `--release` compiles the collector out.
@@ -2024,7 +2024,7 @@ recorded 2026-10-17 baselines are 4.4-9.5x faster than this machine
 today, and the baseline checkout (84c7a149) reproduces today's numbers
 exactly, so the absolute values are a lower bound, not a regression.
 
-### 1. Serial chain (test/scale-proc-chain.janet, NO_PROFILE=1)
+### 1. Serial chain (test/scale-proc-chain.ben, NO_PROFILE=1)
 
 | N | walk | us/hop | peak RSS |
 |---|---|---|---|
@@ -2047,12 +2047,12 @@ exactly, so the absolute values are a lower bound, not a regression.
   1M chain needs ~27 GB, more than this 17 GB machine has. Segmented 1M
   is the only feasible shape here.
 - `sample` during the walk (collector off) puts the time in
-  `janet_channel_push_with_lock` (mailbox delivery, gc.c:3112+) and
-  `janet_fiber_shared_prime` (fiber.c:624), with GC marking below them:
+  `bender_channel_push_with_lock` (mailbox delivery, gc.c:3112+) and
+  `bender_fiber_shared_prime` (fiber.c:624), with GC marking below them:
   every hop allocates (boxed increment + send envelope) and pays
   live-set-dependent costs.
 
-### 2. Spawn and kill (bench/spawn-exit-scaling.janet, NO_PROFILE=1)
+### 2. Spawn and kill (bench/spawn-exit-scaling.ben, NO_PROFILE=1)
 
 | live | per-spawn | per-kill |
 |---|---|---|

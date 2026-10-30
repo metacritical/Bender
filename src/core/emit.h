@@ -20,32 +20,32 @@
 * IN THE SOFTWARE.
 */
 
-#ifndef JANET_EMIT_H
-#define JANET_EMIT_H
+#ifndef BENDER_EMIT_H
+#define BENDER_EMIT_H
 
-#ifndef JANET_AMALG
+#ifndef BENDER_AMALG
 #include "compile.h"
 #endif
 
-void janetc_emit(JanetCompiler *c, uint32_t instr);
+void benderc_emit(BenderCompiler *c, uint32_t instr);
 
-int32_t janetc_allocfar(JanetCompiler *c);
-int32_t janetc_allocnear(JanetCompiler *c, JanetcRegisterTemp);
+int32_t benderc_allocfar(BenderCompiler *c);
+int32_t benderc_allocnear(BenderCompiler *c, BendercRegisterTemp);
 
-int32_t janetc_emit_s(JanetCompiler *c, uint8_t op, JanetSlot s, int wr);
-int32_t janetc_emit_sl(JanetCompiler *c, uint8_t op, JanetSlot s, int32_t label);
-int32_t janetc_emit_st(JanetCompiler *c, uint8_t op, JanetSlot s, int32_t tflags);
-int32_t janetc_emit_si(JanetCompiler *c, uint8_t op, JanetSlot s, int16_t immediate, int wr);
-int32_t janetc_emit_su(JanetCompiler *c, uint8_t op, JanetSlot s, uint16_t immediate, int wr);
-int32_t janetc_emit_ss(JanetCompiler *c, uint8_t op, JanetSlot s1, JanetSlot s2, int wr);
-int32_t janetc_emit_ssi(JanetCompiler *c, uint8_t op, JanetSlot s1, JanetSlot s2, int8_t immediate, int wr);
-int32_t janetc_emit_ssu(JanetCompiler *c, uint8_t op, JanetSlot s1, JanetSlot s2, uint8_t immediate, int wr);
-int32_t janetc_emit_sss(JanetCompiler *c, uint8_t op, JanetSlot s1, JanetSlot s2, JanetSlot s3, int wr);
+int32_t benderc_emit_s(BenderCompiler *c, uint8_t op, BenderSlot s, int wr);
+int32_t benderc_emit_sl(BenderCompiler *c, uint8_t op, BenderSlot s, int32_t label);
+int32_t benderc_emit_st(BenderCompiler *c, uint8_t op, BenderSlot s, int32_t tflags);
+int32_t benderc_emit_si(BenderCompiler *c, uint8_t op, BenderSlot s, int16_t immediate, int wr);
+int32_t benderc_emit_su(BenderCompiler *c, uint8_t op, BenderSlot s, uint16_t immediate, int wr);
+int32_t benderc_emit_ss(BenderCompiler *c, uint8_t op, BenderSlot s1, BenderSlot s2, int wr);
+int32_t benderc_emit_ssi(BenderCompiler *c, uint8_t op, BenderSlot s1, BenderSlot s2, int8_t immediate, int wr);
+int32_t benderc_emit_ssu(BenderCompiler *c, uint8_t op, BenderSlot s1, BenderSlot s2, uint8_t immediate, int wr);
+int32_t benderc_emit_sss(BenderCompiler *c, uint8_t op, BenderSlot s1, BenderSlot s2, BenderSlot s3, int wr);
 
 /* Check if two slots are equivalent */
-int janetc_sequal(JanetSlot x, JanetSlot y);
+int benderc_sequal(BenderSlot x, BenderSlot y);
 
 /* Move value from one slot to another. Cannot copy to constant slots. */
-void janetc_copy(JanetCompiler *c, JanetSlot dest, JanetSlot src);
+void benderc_copy(BenderCompiler *c, BenderSlot dest, BenderSlot src);
 
 #endif

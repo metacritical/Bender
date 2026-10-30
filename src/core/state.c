@@ -20,52 +20,52 @@
 * IN THE SOFTWARE.
 */
 
-#ifndef JANET_AMALG
+#ifndef BENDER_AMALG
 #include "features.h"
-#include <janet.h>
+#include <bender.h>
 #include "state.h"
 #include "util.h"
 #endif
 
-#ifdef JANET_WINDOWS
+#ifdef BENDER_WINDOWS
 #include <windows.h>
 #endif
 
-JANET_THREAD_LOCAL JanetVM janet_vm;
+BENDER_THREAD_LOCAL BenderVM bender_vm;
 
-JanetVM *janet_local_vm(void) {
-    return &janet_vm;
+BenderVM *bender_local_vm(void) {
+    return &bender_vm;
 }
 
-JanetVM *janet_vm_alloc(void) {
-    JanetVM *mem = janet_malloc(sizeof(JanetVM));
+BenderVM *bender_vm_alloc(void) {
+    BenderVM *mem = bender_malloc(sizeof(BenderVM));
     if (NULL == mem) {
-        JANET_OUT_OF_MEMORY;
+        BENDER_OUT_OF_MEMORY;
     }
     return mem;
 }
 
-void janet_vm_free(JanetVM *vm) {
-    janet_free(vm);
+void bender_vm_free(BenderVM *vm) {
+    bender_free(vm);
 }
 
-void janet_vm_save(JanetVM *into) {
-    *into = janet_vm;
+void bender_vm_save(BenderVM *into) {
+    *into = bender_vm;
 }
 
-void janet_vm_load(JanetVM *from) {
-    janet_vm = *from;
+void bender_vm_load(BenderVM *from) {
+    bender_vm = *from;
 }
 
-/* Trigger suspension of the Janet vm by trying to
+/* Trigger suspension of the Bender vm by trying to
  * exit the interpreter loop when convenient. You can optionally
  * use NULL to interrupt the current VM when convenient */
-void janet_interpreter_interrupt(JanetVM *vm) {
-    vm = vm ? vm : &janet_vm;
-    janet_atomic_inc(&vm->auto_suspend);
+void bender_interpreter_interrupt(BenderVM *vm) {
+    vm = vm ? vm : &bender_vm;
+    bender_atomic_inc(&vm->auto_suspend);
 }
 
-void janet_interpreter_interrupt_handled(JanetVM *vm) {
-    vm = vm ? vm : &janet_vm;
-    janet_atomic_dec(&vm->auto_suspend);
+void bender_interpreter_interrupt_handled(BenderVM *vm) {
+    vm = vm ? vm : &bender_vm;
+    bender_atomic_dec(&vm->auto_suspend);
 }

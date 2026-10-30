@@ -2,11 +2,11 @@
  * block count, so retaining many small objects raises the bar faster than
  * pressure can climb.
  *
- *   gc_interval updated only inside janet_collect(): block_count*sizeof(GC)
+ *   gc_interval updated only inside bender_collect(): block_count*sizeof(GC)
  *   major due when next_collection >= gc_interval + block_count*1024
  *
  * Per live small block: pressure grows by the object size (~48 B for a short
- * string) while the limit grows by sizeof(JanetGCObject)+1024 (~1040 B). The
+ * string) while the limit grows by sizeof(BenderGCObject)+1024 (~1040 B). The
  * gap therefore WIDENS with the live small-object count, and a heap full of
  * small survivors can never become due. This is not the branch-priority defect
  * and the priority patch does not change it.
@@ -15,10 +15,10 @@
  * retained small string and show that the major is NOW further from firing.
  *
  * Build (fixture only; reuses an already-built archive):
- *   cc -O2 -DJANET_NATIVE_EXECUTORS -Isrc/include -Isrc/conf -Isrc/core \
- *      test/c/test-gc-interval-feedback.c build/libjanet.a -lm -lpthread -ldl
+ *   cc -O2 -DBENDER_NATIVE_EXECUTORS -Isrc/include -Isrc/conf -Isrc/core \
+ *      test/c/test-gc-interval-feedback.c build/libbender.a -lm -lpthread -ldl
  */
-#include <janet.h>
+#include <bender.h>
 #include "state.h"
 #include <assert.h>
 #include <stdio.h>
@@ -27,7 +27,7 @@
 
 /* Per-block growth of the due-threshold. */
 static size_t limit_growth(void) {
-    return sizeof(JanetGCObject) + FULL_SCALE;
+    return sizeof(BenderGCObject) + FULL_SCALE;
 }
 
 int main(void) {
@@ -35,33 +35,33 @@ int main(void) {
     size_t blocks_before, blocks_after;
     char payload[8];
 
-    assert(!janet_init());
-    JanetTable *env = janet_core_env(NULL);
-    janet_gcroot(janet_wrap_table(env));
+    assert(!bender_init());
+    BenderTable *env = bender_core_env(NULL);
+    bender_gcroot(bender_wrap_table(env));
 
     /* Kill any pending pressure and pin the interval so `limit` is stable
      * except for block_count. */
-    janet_vm.next_collection = 0;
-    janet_vm.gc_interval = janet_vm.block_count * sizeof(JanetGCObject);
+    bender_vm.next_collection = 0;
+    bender_vm.gc_interval = bender_vm.block_count * sizeof(BenderGCObject);
 
-    limit_before = janet_vm.gc_interval + janet_vm.block_count * FULL_SCALE;
-    blocks_before = janet_vm.block_count;
+    limit_before = bender_vm.gc_interval + bender_vm.block_count * FULL_SCALE;
+    blocks_before = bender_vm.block_count;
     /* Exactly one byte short of due: the next accounted byte fires it. */
-    janet_vm.next_collection = limit_before - 1;
-    pressure_before = janet_vm.next_collection;
+    bender_vm.next_collection = limit_before - 1;
+    pressure_before = bender_vm.next_collection;
 
     /* One small RETAINED object: live, therefore not garbage that a sweep
      * would remove. Content is unique so nothing can dedupe it. */
     {
-        JanetString s;
+        BenderString s;
         snprintf(payload, sizeof(payload), "u%zu", blocks_before);
-        s = janet_string((const uint8_t *) payload, 6);
-        janet_gcroot(janet_wrap_string(s));
+        s = bender_string((const uint8_t *) payload, 6);
+        bender_gcroot(bender_wrap_string(s));
     }
 
-    blocks_after = janet_vm.block_count;
-    limit_after = janet_vm.gc_interval + blocks_after * FULL_SCALE;
-    pressure_after = janet_vm.next_collection;
+    blocks_after = bender_vm.block_count;
+    limit_after = bender_vm.gc_interval + blocks_after * FULL_SCALE;
+    pressure_after = bender_vm.next_collection;
 
     printf("blocks %zu -> %zu\n", blocks_before, blocks_after);
     printf("limit %zu -> %zu (grew %zu)\n",
@@ -85,8 +85,8 @@ int main(void) {
     /* The same arithmetic implies the gap is unbounded in the live count. */
     assert(limit_growth() > 1);
 
-    janet_gcunroot(janet_wrap_table(env));
-    janet_deinit();
+    bender_gcunroot(bender_wrap_table(env));
+    bender_deinit();
     puts("gc-interval-feedback: small survivors outrun the major threshold");
     return 0;
 }

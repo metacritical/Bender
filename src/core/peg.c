@@ -20,16 +20,16 @@
 * IN THE SOFTWARE.
 */
 
-#ifndef JANET_AMALG
+#ifndef BENDER_AMALG
 #include "features.h"
-#include <janet.h>
+#include <bender.h>
 #include <string.h>
 #include "util.h"
 #include "vector.h"
 #include "util.h"
 #endif
 
-#ifdef JANET_PEG
+#ifdef BENDER_PEG
 
 /*
  * Runtime
@@ -44,12 +44,12 @@ typedef struct {
        input, which we need to generate a line mapping */
     const uint8_t *outer_text_end;
     const uint32_t *bytecode;
-    const Janet *constants;
-    JanetArray *captures;
-    JanetBuffer *scratch;
-    JanetBuffer *tags;
-    JanetArray *tagged_captures;
-    const Janet *extrav;
+    const Bender *constants;
+    BenderArray *captures;
+    BenderBuffer *scratch;
+    BenderBuffer *tags;
+    BenderArray *tagged_captures;
+    const Bender *extrav;
     int32_t *linemap;
     int32_t extrac;
     int32_t depth;
@@ -95,16 +95,16 @@ static void cap_load_keept(PegState *s, CapState cs) {
 }
 
 /* Add a capture */
-static void pushcap(PegState *s, Janet capture, uint32_t tag) {
+static void pushcap(PegState *s, Bender capture, uint32_t tag) {
     if (s->mode == PEG_MODE_ACCUMULATE) {
-        janet_to_string_b(s->scratch, capture);
+        bender_to_string_b(s->scratch, capture);
     }
     if (s->mode == PEG_MODE_NORMAL) {
-        janet_array_push(s->captures, capture);
+        bender_array_push(s->captures, capture);
     }
     if (s->has_backref) {
-        janet_array_push(s->tagged_captures, capture);
-        janet_buffer_push_u8(s->tags, tag);
+        bender_array_push(s->tagged_captures, capture);
+        bender_buffer_push_u8(s->tags, tag);
     }
 }
 
@@ -121,7 +121,7 @@ static LineCol get_linecol_from_position(PegState *s, int32_t position) {
         for (const uint8_t *c = s->text_start; c < s->outer_text_end; c++) {
             if (*c == '\n') newline_count++;
         }
-        int32_t *mem = janet_smalloc(sizeof(int32_t) * newline_count);
+        int32_t *mem = bender_smalloc(sizeof(int32_t) * newline_count);
         size_t index = 0;
         for (const uint8_t *c = s->text_start; c < s->outer_text_end; c++) {
             if (*c == '\n') mem[index++] = (int32_t)(c - s->text_start);
@@ -167,7 +167,7 @@ static int64_t peg_convert_u64_s64(uint64_t from, int width) {
 
 /* Prevent stack overflow */
 #define down1(s) do { \
-    if (0 == --((s)->depth)) janet_panic("peg/match recursed too deeply"); \
+    if (0 == --((s)->depth)) bender_panic("peg/match recursed too deeply"); \
 } while (0)
 #define up1(s) ((s)->depth++)
 
@@ -185,7 +185,7 @@ static const uint8_t *peg_rule(
 tail:
     switch (*rule) {
         default:
-            janet_panic("unexpected opcode");
+            bender_panic("unexpected opcode");
             return NULL;
 
         case RULE_LITERAL: {
@@ -198,31 +198,31 @@ tail:
             char buffer[32] = {0};
             size_t len = (size_t)(s->outer_text_end - text);
             memcpy(buffer, text, (len > 31 ? 31 : len));
-            janet_eprintf("?? at [%s] (index %d)\n", buffer, (int32_t)(text - s->text_start));
-            int has_color = janet_truthy(janet_dyn("err-color"));
+            bender_eprintf("?? at [%s] (index %d)\n", buffer, (int32_t)(text - s->text_start));
+            int has_color = bender_truthy(bender_dyn("err-color"));
             /* Accumulate buffer */
             if (s->scratch->count) {
-                janet_eprintf("accumulate buffer: %v\n", janet_wrap_buffer(s->scratch));
+                bender_eprintf("accumulate buffer: %v\n", bender_wrap_buffer(s->scratch));
             }
             /* Normal captures */
             if (s->captures->count) {
-                janet_eprintf("stack [%d]:\n", s->captures->count);
+                bender_eprintf("stack [%d]:\n", s->captures->count);
                 for (int32_t i = 0; i < s->captures->count; i++) {
                     if (has_color) {
-                        janet_eprintf("  [%d]: %M\n", i, s->captures->data[i]);
+                        bender_eprintf("  [%d]: %M\n", i, s->captures->data[i]);
                     } else {
-                        janet_eprintf("  [%d]: %m\n", i, s->captures->data[i]);
+                        bender_eprintf("  [%d]: %m\n", i, s->captures->data[i]);
                     }
                 }
             }
             /* Tagged captures */
             if (s->tagged_captures->count) {
-                janet_eprintf("tag stack [%d]:\n", s->tagged_captures->count);
+                bender_eprintf("tag stack [%d]:\n", s->tagged_captures->count);
                 for (int32_t i = 0; i < s->tagged_captures->count; i++) {
                     if (has_color) {
-                        janet_eprintf("  [%d] tag=%d: %M\n", i, (int32_t) s->tags->data[i], s->tagged_captures->data[i]);
+                        bender_eprintf("  [%d] tag=%d: %M\n", i, (int32_t) s->tags->data[i], s->tagged_captures->data[i]);
                     } else {
-                        janet_eprintf("  [%d] tag=%d: %m\n", i, (int32_t) s->tags->data[i], s->tagged_captures->data[i]);
+                        bender_eprintf("  [%d] tag=%d: %m\n", i, (int32_t) s->tags->data[i], s->tagged_captures->data[i]);
                     }
                 }
             }
@@ -407,25 +407,25 @@ tail:
         }
 
         case RULE_POSITION: {
-            pushcap(s, janet_wrap_number((double)(text - s->text_start)), rule[1]);
+            pushcap(s, bender_wrap_number((double)(text - s->text_start)), rule[1]);
             return text;
         }
 
         case RULE_LINE: {
             LineCol lc = get_linecol_from_position(s, (int32_t)(text - s->text_start));
-            pushcap(s, janet_wrap_number((double)(lc.line)), rule[1]);
+            pushcap(s, bender_wrap_number((double)(lc.line)), rule[1]);
             return text;
         }
 
         case RULE_COLUMN: {
             LineCol lc = get_linecol_from_position(s, (int32_t)(text - s->text_start));
-            pushcap(s, janet_wrap_number((double)(lc.col)), rule[1]);
+            pushcap(s, bender_wrap_number((double)(lc.col)), rule[1]);
             return text;
         }
 
         case RULE_ARGUMENT: {
             int32_t index = ((int32_t *)rule)[1];
-            Janet capture = (index >= s->extrac) ? janet_wrap_nil() : s->extrav[index];
+            Bender capture = (index >= s->extrac) ? bender_wrap_nil() : s->extrav[index];
             pushcap(s, capture, rule[2]);
             return text;
         }
@@ -442,10 +442,10 @@ tail:
             if (!result) return NULL;
             /* Specialized pushcap - avoid intermediate string creation */
             if (!s->has_backref && s->mode == PEG_MODE_ACCUMULATE) {
-                janet_buffer_push_bytes(s->scratch, text, (int32_t)(result - text));
+                bender_buffer_push_bytes(s->scratch, text, (int32_t)(result - text));
             } else {
                 uint32_t tag = rule[2];
-                pushcap(s, janet_stringv(text, (int32_t)(result - text)), tag);
+                pushcap(s, bender_stringv(text, (int32_t)(result - text)), tag);
             }
             return result;
         }
@@ -458,13 +458,13 @@ tail:
             /* check number parsing */
             double x = 0.0;
             int32_t base = (int32_t) rule[2];
-            if (janet_scan_number_base(text, (int32_t)(result - text), base, &x)) return NULL;
+            if (bender_scan_number_base(text, (int32_t)(result - text), base, &x)) return NULL;
             /* Specialized pushcap - avoid intermediate string creation */
             if (!s->has_backref && s->mode == PEG_MODE_ACCUMULATE) {
-                janet_buffer_push_bytes(s->scratch, text, (int32_t)(result - text));
+                bender_buffer_push_bytes(s->scratch, text, (int32_t)(result - text));
             } else {
                 uint32_t tag = rule[3];
-                pushcap(s, janet_wrap_number(x), tag);
+                pushcap(s, bender_wrap_number(x), tag);
             }
             return result;
         }
@@ -483,7 +483,7 @@ tail:
             up1(s);
             s->mode = oldmode;
             if (!result) return NULL;
-            Janet cap = janet_stringv(s->scratch->data + cs.scratch,
+            Bender cap = bender_stringv(s->scratch->data + cs.scratch,
                                       s->scratch->count - cs.scratch);
             cap_load_keept(s, cs);
             pushcap(s, cap, tag);
@@ -521,13 +521,13 @@ tail:
             s->mode = oldmode;
             if (!result) return NULL;
             int32_t num_sub_captures = s->captures->count - cs.cap;
-            JanetArray *sub_captures = janet_array(num_sub_captures);
+            BenderArray *sub_captures = bender_array(num_sub_captures);
             safe_memcpy(sub_captures->data,
                         s->captures->data + cs.cap,
-                        sizeof(Janet) * num_sub_captures);
+                        sizeof(Bender) * num_sub_captures);
             sub_captures->count = num_sub_captures;
             cap_load_keept(s, cs);
-            pushcap(s, janet_wrap_array(sub_captures), tag);
+            pushcap(s, bender_wrap_array(sub_captures), tag);
             return result;
         }
 
@@ -544,7 +544,7 @@ tail:
             s->mode = oldmode;
             if (!result) return NULL;
             int32_t num_sub_captures = s->captures->count - cs.cap;
-            Janet cap;
+            Bender cap;
             if (num_sub_captures > (int32_t) nth) {
                 cap = s->captures->data[cs.cap + nth];
             } else {
@@ -669,39 +669,39 @@ tail:
             s->mode = oldmode;
             if (!result) return NULL;
 
-            Janet cap = janet_wrap_nil();
-            Janet constant = s->constants[rule[2]];
-            switch (janet_type(constant)) {
+            Bender cap = bender_wrap_nil();
+            Bender constant = s->constants[rule[2]];
+            switch (bender_type(constant)) {
                 default:
                     cap = constant;
                     break;
-                case JANET_STRUCT:
+                case BENDER_STRUCT:
                     if (s->captures->count) {
-                        cap = janet_struct_get(janet_unwrap_struct(constant),
+                        cap = bender_struct_get(bender_unwrap_struct(constant),
                                                s->captures->data[s->captures->count - 1]);
                     }
                     break;
-                case JANET_TABLE:
+                case BENDER_TABLE:
                     if (s->captures->count) {
-                        cap = janet_table_get(janet_unwrap_table(constant),
+                        cap = bender_table_get(bender_unwrap_table(constant),
                                               s->captures->data[s->captures->count - 1]);
                     }
                     break;
-                case JANET_CFUNCTION:
-                    cap = janet_unwrap_cfunction(constant)(s->captures->count - cs.cap,
+                case BENDER_CFUNCTION:
+                    cap = bender_unwrap_cfunction(constant)(s->captures->count - cs.cap,
                                                            s->captures->data + cs.cap);
                     break;
-                case JANET_FUNCTION:
-                    cap = janet_call(janet_unwrap_function(constant),
+                case BENDER_FUNCTION:
+                    cap = bender_call(bender_unwrap_function(constant),
                                      s->captures->count - cs.cap,
                                      s->captures->data + cs.cap);
                     break;
             }
             cap_load_keept(s, cs);
-            if (rule[0] != RULE_REPLACE && !janet_truthy(cap)) return NULL; /* matchtime or matchtime flatten */
-            const Janet *elements = NULL;
+            if (rule[0] != RULE_REPLACE && !bender_truthy(cap)) return NULL; /* matchtime or matchtime flatten */
+            const Bender *elements = NULL;
             int32_t len = 0;
-            if ((rule[0] == RULE_MATCHSPLICE) && janet_indexed_view(cap, &elements, &len)) {
+            if ((rule[0] == RULE_MATCHSPLICE) && bender_indexed_view(cap, &elements, &len)) {
                 /* unpack and flatten capture */
                 for (int32_t i = 0; i < len; i++) {
                     pushcap(s, elements[i], tag);
@@ -723,12 +723,12 @@ tail:
             if (!result) return NULL;
             if (s->captures->count > old_cap) {
                 /* Throw last capture */
-                janet_panicv(s->captures->data[s->captures->count - 1]);
+                bender_panicv(s->captures->data[s->captures->count - 1]);
             } else {
                 /* Throw generic error */
                 int32_t start = (int32_t)(text - s->text_start);
                 LineCol lc = get_linecol_from_position(s, start);
-                janet_panicf("match error at line %d, column %d", lc.line, lc.col);
+                bender_panicf("match error at line %d, column %d", lc.line, lc.col);
             }
             return NULL;
         }
@@ -737,11 +737,11 @@ tail:
             uint32_t search = rule[1];
             for (int32_t i = s->tags->count - 1; i >= 0; i--) {
                 if (s->tags->data[i] == search) {
-                    Janet capture = s->tagged_captures->data[i];
-                    if (!janet_checktype(capture, JANET_STRING))
+                    Bender capture = s->tagged_captures->data[i];
+                    if (!bender_checktype(capture, BENDER_STRING))
                         return NULL;
-                    const uint8_t *bytes = janet_unwrap_string(capture);
-                    int32_t len = janet_string_length(bytes);
+                    const uint8_t *bytes = bender_unwrap_string(capture);
+                    int32_t len = bender_string_length(bytes);
                     if (text + len > s->text_end)
                         return NULL;
                     return memcmp(text, bytes, len) ? NULL : text + len;
@@ -761,13 +761,13 @@ tail:
             if (NULL == next_text) return NULL;
             s->mode = oldmode;
             int32_t num_sub_captures = s->captures->count - cs.cap;
-            Janet lencap;
+            Bender lencap;
             if (num_sub_captures <= 0 ||
-                    (lencap = s->captures->data[cs.cap], !janet_checkint(lencap))) {
+                    (lencap = s->captures->data[cs.cap], !bender_checkint(lencap))) {
                 cap_load(s, cs);
                 return NULL;
             }
-            int32_t nrep = janet_unwrap_integer(lencap);
+            int32_t nrep = bender_unwrap_integer(lencap);
             /* drop captures from len pattern */
             cap_load(s, cs);
             for (int32_t i = 0; i < nrep; i++) {
@@ -797,15 +797,15 @@ tail:
                 for (int i = width - 1; i >= 0; i--) accum = (accum << 8) | text[i];
             }
 
-            Janet capture_value;
+            Bender capture_value;
             /* We can only parse integeres of greater than 6 bytes reliable if int-types are enabled.
              * Otherwise, we may lose precision, so 6 is the maximum size when int-types are disabled. */
-#ifdef JANET_INT_TYPES
+#ifdef BENDER_INT_TYPES
             if (width > 6) {
                 if (signedness) {
-                    capture_value = janet_wrap_s64(peg_convert_u64_s64(accum, width));
+                    capture_value = bender_wrap_s64(peg_convert_u64_s64(accum, width));
                 } else {
-                    capture_value = janet_wrap_u64(accum);
+                    capture_value = bender_wrap_u64(accum);
                 }
             } else
 #endif
@@ -816,7 +816,7 @@ tail:
                 } else {
                     double_value = (double)accum;
                 }
-                capture_value = janet_wrap_number(double_value);
+                capture_value = bender_wrap_number(double_value);
             }
 
             pushcap(s, capture_value, tag);
@@ -855,35 +855,35 @@ tail:
  */
 
 typedef struct {
-    JanetTable *grammar;
-    JanetTable *default_grammar;
-    JanetTable *tags;
-    Janet *constants;
+    BenderTable *grammar;
+    BenderTable *default_grammar;
+    BenderTable *tags;
+    Bender *constants;
     uint32_t *bytecode;
-    Janet form;
+    Bender form;
     int depth;
     uint32_t nexttag;
     int has_backref;
 } Builder;
 
 /* Forward declaration to allow recursion */
-static uint32_t peg_compile1(Builder *b, Janet peg);
+static uint32_t peg_compile1(Builder *b, Bender peg);
 
 /*
  * Errors
  */
 
 static void builder_cleanup(Builder *b) {
-    janet_v_free(b->constants);
-    janet_v_free(b->bytecode);
+    bender_v_free(b->constants);
+    bender_v_free(b->bytecode);
 }
 
-JANET_NO_RETURN static void peg_panic(Builder *b, const char *msg) {
+BENDER_NO_RETURN static void peg_panic(Builder *b, const char *msg) {
     builder_cleanup(b);
-    janet_panicf("grammar error in %p, %s", b->form, msg);
+    bender_panicf("grammar error in %p, %s", b->form, msg);
 }
 
-#define peg_panicf(b,...) peg_panic((b), (const char *) janet_formatc(__VA_ARGS__))
+#define peg_panicf(b,...) peg_panic((b), (const char *) bender_formatc(__VA_ARGS__))
 
 static void peg_fixarity(Builder *b, int32_t argc, int32_t arity) {
     if (argc != arity) {
@@ -901,31 +901,31 @@ static void peg_arity(Builder *b, int32_t arity, int32_t min, int32_t max) {
         peg_panicf(b, "arity mismatch, expected at most %d, got %d", max, arity);
 }
 
-static const uint8_t *peg_getset(Builder *b, Janet x) {
-    if (!janet_checktype(x, JANET_STRING))
+static const uint8_t *peg_getset(Builder *b, Bender x) {
+    if (!bender_checktype(x, BENDER_STRING))
         peg_panic(b, "expected string for character set");
-    const uint8_t *str = janet_unwrap_string(x);
+    const uint8_t *str = bender_unwrap_string(x);
     return str;
 }
 
-static const uint8_t *peg_getrange(Builder *b, Janet x) {
-    if (!janet_checktype(x, JANET_STRING))
+static const uint8_t *peg_getrange(Builder *b, Bender x) {
+    if (!bender_checktype(x, BENDER_STRING))
         peg_panic(b, "expected string for character range");
-    const uint8_t *str = janet_unwrap_string(x);
-    if (janet_string_length(str) != 2)
+    const uint8_t *str = bender_unwrap_string(x);
+    if (bender_string_length(str) != 2)
         peg_panicf(b, "expected string to have length 2, got %v", x);
     if (str[1] < str[0])
         peg_panicf(b, "range %v is empty", x);
     return str;
 }
 
-static int32_t peg_getinteger(Builder *b, Janet x) {
-    if (!janet_checkint(x))
+static int32_t peg_getinteger(Builder *b, Bender x) {
+    if (!bender_checkint(x))
         peg_panicf(b, "expected integer, got %v", x);
-    return janet_unwrap_integer(x);
+    return bender_unwrap_integer(x);
 }
 
-static int32_t peg_getnat(Builder *b, Janet x) {
+static int32_t peg_getnat(Builder *b, Bender x) {
     int32_t i = peg_getinteger(b, x);
     if (i < 0)
         peg_panicf(b, "expected non-negative integer, got %v", x);
@@ -936,26 +936,26 @@ static int32_t peg_getnat(Builder *b, Janet x) {
  * Emission
  */
 
-static uint32_t emit_constant(Builder *b, Janet c) {
-    uint32_t cindex = (uint32_t) janet_v_count(b->constants);
-    janet_v_push(b->constants, c);
+static uint32_t emit_constant(Builder *b, Bender c) {
+    uint32_t cindex = (uint32_t) bender_v_count(b->constants);
+    bender_v_push(b->constants, c);
     return cindex;
 }
 
-static uint32_t emit_tag(Builder *b, Janet t) {
-    if (!janet_checktype(t, JANET_KEYWORD))
+static uint32_t emit_tag(Builder *b, Bender t) {
+    if (!bender_checktype(t, BENDER_KEYWORD))
         peg_panicf(b, "expected keyword for capture tag, got %v", t);
-    Janet check = janet_table_get(b->tags, t);
-    if (janet_checktype(check, JANET_NIL)) {
+    Bender check = bender_table_get(b->tags, t);
+    if (bender_checktype(check, BENDER_NIL)) {
         uint32_t tag = b->nexttag++;
         if (tag > 255) {
             peg_panic(b, "too many tags - up to 255 tags are supported per peg");
         }
-        Janet val = janet_wrap_number(tag);
-        janet_table_put(b->tags, t, val);
+        Bender val = bender_wrap_number(tag);
+        bender_table_put(b->tags, t, val);
         return tag;
     } else {
-        return (uint32_t) janet_unwrap_number(check);
+        return (uint32_t) bender_unwrap_number(check);
     }
 }
 
@@ -971,29 +971,29 @@ typedef struct {
 
 static Reserve reserve(Builder *b, int32_t size) {
     Reserve r;
-    r.index = janet_v_count(b->bytecode);
+    r.index = bender_v_count(b->bytecode);
     r.builder = b;
     r.size = size;
     for (int32_t i = 0; i < size; i++)
-        janet_v_push(b->bytecode, 0);
+        bender_v_push(b->bytecode, 0);
     return r;
 }
 
 /* Emit a rule in the builder. Returns the index of the new rule */
 static void emit_rule(Reserve r, int32_t op, int32_t n, const uint32_t *body) {
-    janet_assert(r.size == n + 1, "bad reserve");
+    bender_assert(r.size == n + 1, "bad reserve");
     r.builder->bytecode[r.index] = op;
     memcpy(r.builder->bytecode + r.index + 1, body, n * sizeof(uint32_t));
 }
 
 /* For RULE_LITERAL */
 static void emit_bytes(Builder *b, uint32_t op, int32_t len, const uint8_t *bytes) {
-    uint32_t next_rule = janet_v_count(b->bytecode);
-    janet_v_push(b->bytecode, op);
-    janet_v_push(b->bytecode, len);
+    uint32_t next_rule = bender_v_count(b->bytecode);
+    bender_v_push(b->bytecode, op);
+    bender_v_push(b->bytecode, len);
     int32_t words = ((len + 3) >> 2);
     for (int32_t i = 0; i < words; i++)
-        janet_v_push(b->bytecode, 0);
+        bender_v_push(b->bytecode, 0);
     memcpy(b->bytecode + next_rule + 2, bytes, len);
 }
 
@@ -1018,7 +1018,7 @@ static void bitmap_set(uint32_t *bitmap, uint8_t c) {
     bitmap[c >> 5] |= ((uint32_t)1) << (c & 0x1F);
 }
 
-static void spec_range(Builder *b, int32_t argc, const Janet *argv) {
+static void spec_range(Builder *b, int32_t argc, const Bender *argv) {
     peg_arity(b, argc, 1, -1);
     if (argc == 1) {
         Reserve r = reserve(b, 2);
@@ -1038,17 +1038,17 @@ static void spec_range(Builder *b, int32_t argc, const Janet *argv) {
     }
 }
 
-static void spec_set(Builder *b, int32_t argc, const Janet *argv) {
+static void spec_set(Builder *b, int32_t argc, const Bender *argv) {
     peg_fixarity(b, argc, 1);
     Reserve r = reserve(b, 9);
     const uint8_t *str = peg_getset(b, argv[0]);
     uint32_t bitmap[8] = {0};
-    for (int32_t i = 0; i < janet_string_length(str); i++)
+    for (int32_t i = 0; i < bender_string_length(str); i++)
         bitmap_set(bitmap, str[i]);
     emit_rule(r, RULE_SET, 8, bitmap);
 }
 
-static void spec_look(Builder *b, int32_t argc, const Janet *argv) {
+static void spec_look(Builder *b, int32_t argc, const Bender *argv) {
     peg_arity(b, argc, 1, 2);
     Reserve r = reserve(b, 3);
     int32_t rulearg = argc == 2 ? 1 : 0;
@@ -1058,27 +1058,27 @@ static void spec_look(Builder *b, int32_t argc, const Janet *argv) {
 }
 
 /* Rule of the form [len, rules...] */
-static void spec_variadic(Builder *b, int32_t argc, const Janet *argv, uint32_t op) {
-    uint32_t rule = janet_v_count(b->bytecode);
-    janet_v_push(b->bytecode, op);
-    janet_v_push(b->bytecode, argc);
+static void spec_variadic(Builder *b, int32_t argc, const Bender *argv, uint32_t op) {
+    uint32_t rule = bender_v_count(b->bytecode);
+    bender_v_push(b->bytecode, op);
+    bender_v_push(b->bytecode, argc);
     for (int32_t i = 0; i < argc; i++)
-        janet_v_push(b->bytecode, 0);
+        bender_v_push(b->bytecode, 0);
     for (int32_t i = 0; i < argc; i++) {
         uint32_t rulei = peg_compile1(b, argv[i]);
         b->bytecode[rule + 2 + i] = rulei;
     }
 }
 
-static void spec_choice(Builder *b, int32_t argc, const Janet *argv) {
+static void spec_choice(Builder *b, int32_t argc, const Bender *argv) {
     spec_variadic(b, argc, argv, RULE_CHOICE);
 }
-static void spec_sequence(Builder *b, int32_t argc, const Janet *argv) {
+static void spec_sequence(Builder *b, int32_t argc, const Bender *argv) {
     spec_variadic(b, argc, argv, RULE_SEQUENCE);
 }
 
 /* For (if a b) and (if-not a b) */
-static void spec_branch(Builder *b, int32_t argc, const Janet *argv, uint32_t rule) {
+static void spec_branch(Builder *b, int32_t argc, const Bender *argv, uint32_t rule) {
     peg_fixarity(b, argc, 2);
     Reserve r = reserve(b, 3);
     uint32_t rule_a = peg_compile1(b, argv[0]);
@@ -1086,17 +1086,17 @@ static void spec_branch(Builder *b, int32_t argc, const Janet *argv, uint32_t ru
     emit_2(r, rule, rule_a, rule_b);
 }
 
-static void spec_if(Builder *b, int32_t argc, const Janet *argv) {
+static void spec_if(Builder *b, int32_t argc, const Bender *argv) {
     spec_branch(b, argc, argv, RULE_IF);
 }
-static void spec_ifnot(Builder *b, int32_t argc, const Janet *argv) {
+static void spec_ifnot(Builder *b, int32_t argc, const Bender *argv) {
     spec_branch(b, argc, argv, RULE_IFNOT);
 }
-static void spec_lenprefix(Builder *b, int32_t argc, const Janet *argv) {
+static void spec_lenprefix(Builder *b, int32_t argc, const Bender *argv) {
     spec_branch(b, argc, argv, RULE_LENPREFIX);
 }
 
-static void spec_between(Builder *b, int32_t argc, const Janet *argv) {
+static void spec_between(Builder *b, int32_t argc, const Bender *argv) {
     peg_fixarity(b, argc, 3);
     Reserve r = reserve(b, 4);
     int32_t lo = peg_getnat(b, argv[0]);
@@ -1105,21 +1105,21 @@ static void spec_between(Builder *b, int32_t argc, const Janet *argv) {
     emit_3(r, RULE_BETWEEN, lo, hi, subrule);
 }
 
-static void spec_repeater(Builder *b, int32_t argc, const Janet *argv, int32_t min) {
+static void spec_repeater(Builder *b, int32_t argc, const Bender *argv, int32_t min) {
     peg_fixarity(b, argc, 1);
     Reserve r = reserve(b, 4);
     uint32_t subrule = peg_compile1(b, argv[0]);
     emit_3(r, RULE_BETWEEN, min, UINT32_MAX, subrule);
 }
 
-static void spec_some(Builder *b, int32_t argc, const Janet *argv) {
+static void spec_some(Builder *b, int32_t argc, const Bender *argv) {
     spec_repeater(b, argc, argv, 1);
 }
-static void spec_any(Builder *b, int32_t argc, const Janet *argv) {
+static void spec_any(Builder *b, int32_t argc, const Bender *argv) {
     spec_repeater(b, argc, argv, 0);
 }
 
-static void spec_atleast(Builder *b, int32_t argc, const Janet *argv) {
+static void spec_atleast(Builder *b, int32_t argc, const Bender *argv) {
     peg_fixarity(b, argc, 2);
     Reserve r = reserve(b, 4);
     int32_t n = peg_getnat(b, argv[0]);
@@ -1127,7 +1127,7 @@ static void spec_atleast(Builder *b, int32_t argc, const Janet *argv) {
     emit_3(r, RULE_BETWEEN, n, UINT32_MAX, subrule);
 }
 
-static void spec_atmost(Builder *b, int32_t argc, const Janet *argv) {
+static void spec_atmost(Builder *b, int32_t argc, const Bender *argv) {
     peg_fixarity(b, argc, 2);
     Reserve r = reserve(b, 4);
     int32_t n = peg_getnat(b, argv[0]);
@@ -1135,14 +1135,14 @@ static void spec_atmost(Builder *b, int32_t argc, const Janet *argv) {
     emit_3(r, RULE_BETWEEN, 0, n, subrule);
 }
 
-static void spec_opt(Builder *b, int32_t argc, const Janet *argv) {
+static void spec_opt(Builder *b, int32_t argc, const Bender *argv) {
     peg_fixarity(b, argc, 1);
     Reserve r = reserve(b, 4);
     uint32_t subrule = peg_compile1(b, argv[0]);
     emit_3(r, RULE_BETWEEN, 0, 1, subrule);
 }
 
-static void spec_repeat(Builder *b, int32_t argc, const Janet *argv) {
+static void spec_repeat(Builder *b, int32_t argc, const Bender *argv) {
     peg_fixarity(b, argc, 2);
     Reserve r = reserve(b, 4);
     int32_t n = peg_getnat(b, argv[0]);
@@ -1151,40 +1151,40 @@ static void spec_repeat(Builder *b, int32_t argc, const Janet *argv) {
 }
 
 /* Rule of the form [rule] */
-static void spec_onerule(Builder *b, int32_t argc, const Janet *argv, uint32_t op) {
+static void spec_onerule(Builder *b, int32_t argc, const Bender *argv, uint32_t op) {
     peg_fixarity(b, argc, 1);
     Reserve r = reserve(b, 2);
     uint32_t rule = peg_compile1(b, argv[0]);
     emit_1(r, op, rule);
 }
 
-static void spec_not(Builder *b, int32_t argc, const Janet *argv) {
+static void spec_not(Builder *b, int32_t argc, const Bender *argv) {
     spec_onerule(b, argc, argv, RULE_NOT);
 }
-static void spec_error(Builder *b, int32_t argc, const Janet *argv) {
+static void spec_error(Builder *b, int32_t argc, const Bender *argv) {
     if (argc == 0) {
         Reserve r = reserve(b, 2);
-        uint32_t rule = peg_compile1(b, janet_wrap_number(0));
+        uint32_t rule = peg_compile1(b, bender_wrap_number(0));
         emit_1(r, RULE_ERROR, rule);
     } else {
         spec_onerule(b, argc, argv, RULE_ERROR);
     }
 }
-static void spec_to(Builder *b, int32_t argc, const Janet *argv) {
+static void spec_to(Builder *b, int32_t argc, const Bender *argv) {
     spec_onerule(b, argc, argv, RULE_TO);
 }
-static void spec_thru(Builder *b, int32_t argc, const Janet *argv) {
+static void spec_thru(Builder *b, int32_t argc, const Bender *argv) {
     spec_onerule(b, argc, argv, RULE_THRU);
 }
-static void spec_drop(Builder *b, int32_t argc, const Janet *argv) {
+static void spec_drop(Builder *b, int32_t argc, const Bender *argv) {
     spec_onerule(b, argc, argv, RULE_DROP);
 }
-static void spec_only_tags(Builder *b, int32_t argc, const Janet *argv) {
+static void spec_only_tags(Builder *b, int32_t argc, const Bender *argv) {
     spec_onerule(b, argc, argv, RULE_ONLY_TAGS);
 }
 
 /* Rule of the form [rule, tag] */
-static void spec_cap1(Builder *b, int32_t argc, const Janet *argv, uint32_t op) {
+static void spec_cap1(Builder *b, int32_t argc, const Bender *argv, uint32_t op) {
     peg_arity(b, argc, 1, 2);
     Reserve r = reserve(b, 3);
     uint32_t tag = (argc == 2) ? emit_tag(b, argv[1]) : 0;
@@ -1192,20 +1192,20 @@ static void spec_cap1(Builder *b, int32_t argc, const Janet *argv, uint32_t op) 
     emit_2(r, op, rule, tag);
 }
 
-static void spec_capture(Builder *b, int32_t argc, const Janet *argv) {
+static void spec_capture(Builder *b, int32_t argc, const Bender *argv) {
     spec_cap1(b, argc, argv, RULE_CAPTURE);
 }
-static void spec_accumulate(Builder *b, int32_t argc, const Janet *argv) {
+static void spec_accumulate(Builder *b, int32_t argc, const Bender *argv) {
     spec_cap1(b, argc, argv, RULE_ACCUMULATE);
 }
-static void spec_group(Builder *b, int32_t argc, const Janet *argv) {
+static void spec_group(Builder *b, int32_t argc, const Bender *argv) {
     spec_cap1(b, argc, argv, RULE_GROUP);
 }
-static void spec_unref(Builder *b, int32_t argc, const Janet *argv) {
+static void spec_unref(Builder *b, int32_t argc, const Bender *argv) {
     spec_cap1(b, argc, argv, RULE_UNREF);
 }
 
-static void spec_nth(Builder *b, int32_t argc, const Janet *argv) {
+static void spec_nth(Builder *b, int32_t argc, const Bender *argv) {
     peg_arity(b, argc, 2, 3);
     Reserve r = reserve(b, 4);
     uint32_t nth = peg_getnat(b, argv[0]);
@@ -1214,14 +1214,14 @@ static void spec_nth(Builder *b, int32_t argc, const Janet *argv) {
     emit_3(r, RULE_NTH, nth, rule, tag);
 }
 
-static void spec_capture_number(Builder *b, int32_t argc, const Janet *argv) {
+static void spec_capture_number(Builder *b, int32_t argc, const Bender *argv) {
     peg_arity(b, argc, 1, 3);
     Reserve r = reserve(b, 4);
     uint32_t base = 0;
     if (argc >= 2) {
-        if (!janet_checktype(argv[1], JANET_NIL)) {
-            if (!janet_checkint(argv[1])) goto error;
-            base = (uint32_t) janet_unwrap_integer(argv[1]);
+        if (!bender_checktype(argv[1], BENDER_NIL)) {
+            if (!bender_checkint(argv[1])) goto error;
+            base = (uint32_t) bender_unwrap_integer(argv[1]);
             if (base < 2 || base > 36) goto error;
         }
     }
@@ -1233,7 +1233,7 @@ error:
     peg_panicf(b, "expected integer between 2 and 36, got %v", argv[1]);
 }
 
-static void spec_reference(Builder *b, int32_t argc, const Janet *argv) {
+static void spec_reference(Builder *b, int32_t argc, const Bender *argv) {
     peg_arity(b, argc, 1, 2);
     Reserve r = reserve(b, 3);
     uint32_t search = emit_tag(b, argv[0]);
@@ -1242,7 +1242,7 @@ static void spec_reference(Builder *b, int32_t argc, const Janet *argv) {
     emit_2(r, RULE_GETTAG, search, tag);
 }
 
-static void spec_tag1(Builder *b, int32_t argc, const Janet *argv, uint32_t op) {
+static void spec_tag1(Builder *b, int32_t argc, const Bender *argv, uint32_t op) {
     peg_arity(b, argc, 0, 1);
     Reserve r = reserve(b, 2);
     uint32_t tag = (argc) ? emit_tag(b, argv[0]) : 0;
@@ -1250,22 +1250,22 @@ static void spec_tag1(Builder *b, int32_t argc, const Janet *argv, uint32_t op) 
     emit_1(r, op, tag);
 }
 
-static void spec_position(Builder *b, int32_t argc, const Janet *argv) {
+static void spec_position(Builder *b, int32_t argc, const Bender *argv) {
     spec_tag1(b, argc, argv, RULE_POSITION);
 }
-static void spec_line(Builder *b, int32_t argc, const Janet *argv) {
+static void spec_line(Builder *b, int32_t argc, const Bender *argv) {
     spec_tag1(b, argc, argv, RULE_LINE);
 }
-static void spec_column(Builder *b, int32_t argc, const Janet *argv) {
+static void spec_column(Builder *b, int32_t argc, const Bender *argv) {
     spec_tag1(b, argc, argv, RULE_COLUMN);
 }
 
-static void spec_backmatch(Builder *b, int32_t argc, const Janet *argv) {
+static void spec_backmatch(Builder *b, int32_t argc, const Bender *argv) {
     b->has_backref = 1;
     spec_tag1(b, argc, argv, RULE_BACKMATCH);
 }
 
-static void spec_argument(Builder *b, int32_t argc, const Janet *argv) {
+static void spec_argument(Builder *b, int32_t argc, const Bender *argv) {
     peg_arity(b, argc, 1, 2);
     Reserve r = reserve(b, 3);
     uint32_t tag = (argc == 2) ? emit_tag(b, argv[1]) : 0;
@@ -1273,14 +1273,14 @@ static void spec_argument(Builder *b, int32_t argc, const Janet *argv) {
     emit_2(r, RULE_ARGUMENT, index, tag);
 }
 
-static void spec_constant(Builder *b, int32_t argc, const Janet *argv) {
-    janet_arity(argc, 1, 2);
+static void spec_constant(Builder *b, int32_t argc, const Bender *argv) {
+    bender_arity(argc, 1, 2);
     Reserve r = reserve(b, 3);
     uint32_t tag = (argc == 2) ? emit_tag(b, argv[1]) : 0;
     emit_2(r, RULE_CONSTANT, emit_constant(b, argv[0]), tag);
 }
 
-static void spec_debug(Builder *b, int32_t argc, const Janet *argv) {
+static void spec_debug(Builder *b, int32_t argc, const Bender *argv) {
     peg_arity(b, argc, 0, 0);
     Reserve r = reserve(b, 1);
     uint32_t empty = 0;
@@ -1288,7 +1288,7 @@ static void spec_debug(Builder *b, int32_t argc, const Janet *argv) {
     emit_rule(r, RULE_DEBUG, 0, &empty);
 }
 
-static void spec_replace(Builder *b, int32_t argc, const Janet *argv) {
+static void spec_replace(Builder *b, int32_t argc, const Bender *argv) {
     peg_arity(b, argc, 2, 3);
     Reserve r = reserve(b, 4);
     uint32_t subrule = peg_compile1(b, argv[0]);
@@ -1297,13 +1297,13 @@ static void spec_replace(Builder *b, int32_t argc, const Janet *argv) {
     emit_3(r, RULE_REPLACE, subrule, constant, tag);
 }
 
-static void spec_matchtime_impl(Builder *b, int32_t argc, const Janet *argv, uint32_t op) {
+static void spec_matchtime_impl(Builder *b, int32_t argc, const Bender *argv, uint32_t op) {
     peg_arity(b, argc, 2, 3);
     Reserve r = reserve(b, 4);
     uint32_t subrule = peg_compile1(b, argv[0]);
-    Janet fun = argv[1];
-    if (!janet_checktype(fun, JANET_FUNCTION) &&
-            !janet_checktype(fun, JANET_CFUNCTION)) {
+    Bender fun = argv[1];
+    if (!bender_checktype(fun, BENDER_FUNCTION) &&
+            !bender_checktype(fun, BENDER_CFUNCTION)) {
         peg_panicf(b, "expected function or cfunction, got %v", fun);
     }
     uint32_t tag = (argc == 3) ? emit_tag(b, argv[2]) : 0;
@@ -1311,15 +1311,15 @@ static void spec_matchtime_impl(Builder *b, int32_t argc, const Janet *argv, uin
     emit_3(r, op, subrule, cindex, tag);
 }
 
-static void spec_matchtime(Builder *b, int32_t argc, const Janet *argv) {
+static void spec_matchtime(Builder *b, int32_t argc, const Bender *argv) {
     spec_matchtime_impl(b, argc, argv, RULE_MATCHTIME);
 }
 
-static void spec_matchtime_splice(Builder *b, int32_t argc, const Janet *argv) {
+static void spec_matchtime_splice(Builder *b, int32_t argc, const Bender *argv) {
     spec_matchtime_impl(b, argc, argv, RULE_MATCHSPLICE);
 }
 
-static void spec_sub(Builder *b, int32_t argc, const Janet *argv) {
+static void spec_sub(Builder *b, int32_t argc, const Bender *argv) {
     peg_fixarity(b, argc, 2);
     Reserve r = reserve(b, 3);
     uint32_t subrule1 = peg_compile1(b, argv[0]);
@@ -1327,7 +1327,7 @@ static void spec_sub(Builder *b, int32_t argc, const Janet *argv) {
     emit_2(r, RULE_SUB, subrule1, subrule2);
 }
 
-static void spec_til(Builder *b, int32_t argc, const Janet *argv) {
+static void spec_til(Builder *b, int32_t argc, const Bender *argv) {
     peg_fixarity(b, argc, 2);
     Reserve r = reserve(b, 3);
     uint32_t subrule1 = peg_compile1(b, argv[0]);
@@ -1335,7 +1335,7 @@ static void spec_til(Builder *b, int32_t argc, const Janet *argv) {
     emit_2(r, RULE_TIL, subrule1, subrule2);
 }
 
-static void spec_split(Builder *b, int32_t argc, const Janet *argv) {
+static void spec_split(Builder *b, int32_t argc, const Bender *argv) {
     peg_fixarity(b, argc, 2);
     Reserve r = reserve(b, 3);
     uint32_t subrule1 = peg_compile1(b, argv[0]);
@@ -1343,38 +1343,38 @@ static void spec_split(Builder *b, int32_t argc, const Janet *argv) {
     emit_2(r, RULE_SPLIT, subrule1, subrule2);
 }
 
-#ifdef JANET_INT_TYPES
-#define JANET_MAX_READINT_WIDTH 8
+#ifdef BENDER_INT_TYPES
+#define BENDER_MAX_READINT_WIDTH 8
 #else
-#define JANET_MAX_READINT_WIDTH 6
+#define BENDER_MAX_READINT_WIDTH 6
 #endif
 
-static void spec_readint(Builder *b, int32_t argc, const Janet *argv, uint32_t mask) {
+static void spec_readint(Builder *b, int32_t argc, const Bender *argv, uint32_t mask) {
     peg_arity(b, argc, 1, 2);
     Reserve r = reserve(b, 3);
     uint32_t tag = (argc == 2) ? emit_tag(b, argv[1]) : 0;
     int32_t width = peg_getnat(b, argv[0]);
-    if ((width < 0) || (width > JANET_MAX_READINT_WIDTH)) {
-        peg_panicf(b, "width must be between 0 and %d, got %d", JANET_MAX_READINT_WIDTH, width);
+    if ((width < 0) || (width > BENDER_MAX_READINT_WIDTH)) {
+        peg_panicf(b, "width must be between 0 and %d, got %d", BENDER_MAX_READINT_WIDTH, width);
     }
     emit_2(r, RULE_READINT, mask | ((uint32_t) width), tag);
 }
 
-static void spec_uint_le(Builder *b, int32_t argc, const Janet *argv) {
+static void spec_uint_le(Builder *b, int32_t argc, const Bender *argv) {
     spec_readint(b, argc, argv, 0x0u);
 }
-static void spec_int_le(Builder *b, int32_t argc, const Janet *argv) {
+static void spec_int_le(Builder *b, int32_t argc, const Bender *argv) {
     spec_readint(b, argc, argv, 0x10u);
 }
-static void spec_uint_be(Builder *b, int32_t argc, const Janet *argv) {
+static void spec_uint_be(Builder *b, int32_t argc, const Bender *argv) {
     spec_readint(b, argc, argv, 0x20u);
 }
-static void spec_int_be(Builder *b, int32_t argc, const Janet *argv) {
+static void spec_int_be(Builder *b, int32_t argc, const Bender *argv) {
     spec_readint(b, argc, argv, 0x30u);
 }
 
 /* Special compiler form */
-typedef void (*Special)(Builder *b, int32_t argc, const Janet *argv);
+typedef void (*Special)(Builder *b, int32_t argc, const Bender *argv);
 typedef struct {
     const char *name;
     Special special;
@@ -1441,24 +1441,24 @@ static const SpecialPair peg_specials[] = {
     {"unref", spec_unref},
 };
 
-/* Compile a janet value into a rule and return the rule index. */
-static uint32_t peg_compile1(Builder *b, Janet peg) {
+/* Compile a bender value into a rule and return the rule index. */
+static uint32_t peg_compile1(Builder *b, Bender peg) {
 
     /* Keep track of the form being compiled for error purposes */
-    Janet old_form = b->form;
-    JanetTable *old_grammar = b->grammar;
+    Bender old_form = b->form;
+    BenderTable *old_grammar = b->grammar;
     b->form = peg;
 
     /* Resolve keyword references */
-    int i = JANET_RECURSION_GUARD;
-    JanetTable *grammar = old_grammar;
-    for (; i > 0 && janet_checktype(peg, JANET_KEYWORD); --i) {
-        Janet nextPeg = janet_table_get_ex(grammar, peg, &grammar);
-        if (!grammar || janet_checktype(nextPeg, JANET_NIL)) {
+    int i = BENDER_RECURSION_GUARD;
+    BenderTable *grammar = old_grammar;
+    for (; i > 0 && bender_checktype(peg, BENDER_KEYWORD); --i) {
+        Bender nextPeg = bender_table_get_ex(grammar, peg, &grammar);
+        if (!grammar || bender_checktype(nextPeg, BENDER_NIL)) {
             nextPeg = (b->default_grammar == NULL)
-                      ? janet_wrap_nil()
-                      : janet_table_get(b->default_grammar, peg);
-            if (janet_checktype(nextPeg, JANET_NIL)) {
+                      ? bender_wrap_nil()
+                      : bender_table_get(b->default_grammar, peg);
+            if (bender_checktype(nextPeg, BENDER_NIL)) {
                 peg_panic(b, "unknown rule");
             }
         }
@@ -1472,13 +1472,13 @@ static uint32_t peg_compile1(Builder *b, Janet peg) {
     /* Check cache - for tuples we check only the local cache, as
      * in a different grammar, the same tuple can compile to a different
      * rule - for example, (+ :a :b) depends on whatever :a and :b are bound to. */
-    Janet check = janet_checktype(peg, JANET_TUPLE)
-                  ? janet_table_rawget(grammar, peg)
-                  : janet_table_get(grammar, peg);
-    if (!janet_checktype(check, JANET_NIL)) {
+    Bender check = bender_checktype(peg, BENDER_TUPLE)
+                  ? bender_table_rawget(grammar, peg)
+                  : bender_table_get(grammar, peg);
+    if (!bender_checktype(check, BENDER_NIL)) {
         b->form = old_form;
         b->grammar = old_grammar;
-        return (uint32_t) janet_unwrap_number(check);
+        return (uint32_t) bender_unwrap_number(check);
     }
 
     /* Check depth */
@@ -1486,33 +1486,33 @@ static uint32_t peg_compile1(Builder *b, Janet peg) {
         peg_panic(b, "peg grammar recursed too deeply");
 
     /* The final rule to return */
-    uint32_t rule = janet_v_count(b->bytecode);
+    uint32_t rule = bender_v_count(b->bytecode);
 
     /* Add to cache. Do not cache structs, as we don't yet know
      * what rule they will return! We can just as effectively cache
      * the structs main rule. */
-    if (!janet_checktype(peg, JANET_STRUCT)) {
-        JanetTable *which_grammar = grammar;
+    if (!bender_checktype(peg, BENDER_STRUCT)) {
+        BenderTable *which_grammar = grammar;
         /* If we are a primitive pattern, add to the global cache (root grammar table) */
-        if (!janet_checktype(peg, JANET_TUPLE)) {
+        if (!bender_checktype(peg, BENDER_TUPLE)) {
             while (which_grammar->proto)
                 which_grammar = which_grammar->proto;
         }
-        janet_table_put(which_grammar, peg, janet_wrap_number(rule));
+        bender_table_put(which_grammar, peg, bender_wrap_number(rule));
     }
 
-    switch (janet_type(peg)) {
+    switch (bender_type(peg)) {
         default:
             peg_panic(b, "unexpected peg source");
             return 0;
 
-        case JANET_BOOLEAN: {
-            int n = janet_unwrap_boolean(peg);
+        case BENDER_BOOLEAN: {
+            int n = bender_unwrap_boolean(peg);
             Reserve r = reserve(b, 2);
             emit_1(r, n ? RULE_NCHAR : RULE_NOTNCHAR, 0);
             break;
         }
-        case JANET_NUMBER: {
+        case BENDER_NUMBER: {
             int32_t n = peg_getinteger(b, peg);
             Reserve r = reserve(b, 2);
             if (n < 0) {
@@ -1522,63 +1522,63 @@ static uint32_t peg_compile1(Builder *b, Janet peg) {
             }
             break;
         }
-        case JANET_STRING: {
-            const uint8_t *str = janet_unwrap_string(peg);
-            int32_t len = janet_string_length(str);
+        case BENDER_STRING: {
+            const uint8_t *str = bender_unwrap_string(peg);
+            int32_t len = bender_string_length(str);
             emit_bytes(b, RULE_LITERAL, len, str);
             break;
         }
-        case JANET_BUFFER: {
-            const JanetBuffer *buf = janet_unwrap_buffer(peg);
+        case BENDER_BUFFER: {
+            const BenderBuffer *buf = bender_unwrap_buffer(peg);
             emit_bytes(b, RULE_LITERAL, buf->count, buf->data);
             break;
         }
-        case JANET_TABLE: {
+        case BENDER_TABLE: {
             /* Build grammar table */
-            JanetTable *new_grammar = janet_table_clone(janet_unwrap_table(peg));
+            BenderTable *new_grammar = bender_table_clone(bender_unwrap_table(peg));
             new_grammar->proto = grammar;
             b->grammar = grammar = new_grammar;
             /* Run the main rule */
-            Janet main_rule = janet_table_rawget(grammar, janet_ckeywordv("main"));
-            if (janet_checktype(main_rule, JANET_NIL))
+            Bender main_rule = bender_table_rawget(grammar, bender_ckeywordv("main"));
+            if (bender_checktype(main_rule, BENDER_NIL))
                 peg_panic(b, "grammar requires :main rule");
             rule = peg_compile1(b, main_rule);
             break;
         }
-        case JANET_STRUCT: {
+        case BENDER_STRUCT: {
             /* Build grammar table */
-            const JanetKV *st = janet_unwrap_struct(peg);
-            JanetTable *new_grammar = janet_table(2 * janet_struct_capacity(st));
-            for (int32_t i = 0; i < janet_struct_capacity(st); i++) {
-                if (janet_checktype(st[i].key, JANET_KEYWORD)) {
-                    janet_table_put(new_grammar, st[i].key, st[i].value);
+            const BenderKV *st = bender_unwrap_struct(peg);
+            BenderTable *new_grammar = bender_table(2 * bender_struct_capacity(st));
+            for (int32_t i = 0; i < bender_struct_capacity(st); i++) {
+                if (bender_checktype(st[i].key, BENDER_KEYWORD)) {
+                    bender_table_put(new_grammar, st[i].key, st[i].value);
                 }
             }
             new_grammar->proto = grammar;
             b->grammar = grammar = new_grammar;
             /* Run the main rule */
-            Janet main_rule = janet_table_rawget(grammar, janet_ckeywordv("main"));
-            if (janet_checktype(main_rule, JANET_NIL))
+            Bender main_rule = bender_table_rawget(grammar, bender_ckeywordv("main"));
+            if (bender_checktype(main_rule, BENDER_NIL))
                 peg_panic(b, "grammar requires :main rule");
             rule = peg_compile1(b, main_rule);
             break;
         }
-        case JANET_TUPLE: {
-            const Janet *tup = janet_unwrap_tuple(peg);
-            int32_t len = janet_tuple_length(tup);
+        case BENDER_TUPLE: {
+            const Bender *tup = bender_unwrap_tuple(peg);
+            int32_t len = bender_tuple_length(tup);
             if (len == 0) peg_panic(b, "tuple in grammar must have non-zero length");
-            if (janet_checkint(tup[0])) {
-                int32_t n = janet_unwrap_integer(tup[0]);
+            if (bender_checkint(tup[0])) {
+                int32_t n = bender_unwrap_integer(tup[0]);
                 if (n < 0) {
                     peg_panicf(b, "expected non-negative integer, got %d", n);
                 }
                 spec_repeat(b, len, tup);
                 break;
             }
-            if (!janet_checktype(tup[0], JANET_SYMBOL))
+            if (!bender_checktype(tup[0], BENDER_SYMBOL))
                 peg_panicf(b, "expected grammar command, found %v", tup[0]);
-            const uint8_t *sym = janet_unwrap_symbol(tup[0]);
-            const SpecialPair *sp = janet_strbinsearch(
+            const uint8_t *sym = bender_unwrap_symbol(tup[0]);
+            const SpecialPair *sp = bender_strbinsearch(
                                         &peg_specials,
                                         sizeof(peg_specials) / sizeof(SpecialPair),
                                         sizeof(SpecialPair),
@@ -1605,22 +1605,22 @@ static uint32_t peg_compile1(Builder *b, Janet peg) {
 
 static int peg_mark(void *p, size_t size) {
     (void) size;
-    JanetPeg *peg = (JanetPeg *)p;
+    BenderPeg *peg = (BenderPeg *)p;
     if (NULL != peg->constants)
         for (uint32_t i = 0; i < peg->num_constants; i++)
-            janet_mark(peg->constants[i]);
+            bender_mark(peg->constants[i]);
     return 0;
 }
 
-static void peg_marshal(void *p, JanetMarshalContext *ctx) {
-    JanetPeg *peg = (JanetPeg *)p;
-    janet_marshal_size(ctx, peg->bytecode_len);
-    janet_marshal_int(ctx, (int32_t)peg->num_constants);
-    janet_marshal_abstract(ctx, p);
+static void peg_marshal(void *p, BenderMarshalContext *ctx) {
+    BenderPeg *peg = (BenderPeg *)p;
+    bender_marshal_size(ctx, peg->bytecode_len);
+    bender_marshal_int(ctx, (int32_t)peg->num_constants);
+    bender_marshal_abstract(ctx, p);
     for (size_t i = 0; i < peg->bytecode_len; i++)
-        janet_marshal_int(ctx, (int32_t) peg->bytecode[i]);
+        bender_marshal_int(ctx, (int32_t) peg->bytecode[i]);
     for (uint32_t j = 0; j < peg->num_constants; j++)
-        janet_marshal_janet(ctx, peg->constants[j]);
+        bender_marshal_bender(ctx, peg->constants[j]);
 }
 
 /* Used to ensure that if we place several arrays in one memory chunk, each
@@ -1632,33 +1632,33 @@ static size_t size_padded(size_t offset, size_t size) {
 
 #define OVERFLOW_CHECK(n) do { if (i > blen - (n)) goto bad; } while (0) /* overflow */
 
-static void *peg_unmarshal(JanetMarshalContext *ctx) {
-    size_t bytecode_len = janet_unmarshal_size(ctx);
-    uint32_t num_constants = (uint32_t) janet_unmarshal_int(ctx);
+static void *peg_unmarshal(BenderMarshalContext *ctx) {
+    size_t bytecode_len = bender_unmarshal_size(ctx);
+    uint32_t num_constants = (uint32_t) bender_unmarshal_int(ctx);
 
     /* Calculate offsets. Should match those in make_peg */
-    size_t bytecode_start = size_padded(sizeof(JanetPeg), sizeof(uint32_t));
+    size_t bytecode_start = size_padded(sizeof(BenderPeg), sizeof(uint32_t));
     size_t bytecode_size = bytecode_len * sizeof(uint32_t);
-    size_t constants_start = size_padded(bytecode_start + bytecode_size, sizeof(Janet));
-    size_t total_size = constants_start + sizeof(Janet) * (size_t) num_constants;
+    size_t constants_start = size_padded(bytecode_start + bytecode_size, sizeof(Bender));
+    size_t total_size = constants_start + sizeof(Bender) * (size_t) num_constants;
 
     /* DOS prevention? I.E. we could read bytecode and constants before
      * hand so we don't allocated a ton of memory on bad, short input */
 
     /* Allocate PEG */
-    char *mem = janet_unmarshal_abstract(ctx, total_size);
-    JanetPeg *peg = (JanetPeg *)mem;
+    char *mem = bender_unmarshal_abstract(ctx, total_size);
+    BenderPeg *peg = (BenderPeg *)mem;
     uint32_t *bytecode = (uint32_t *)(mem + bytecode_start);
-    Janet *constants = (Janet *)(mem + constants_start);
+    Bender *constants = (Bender *)(mem + constants_start);
     peg->bytecode = NULL;
     peg->constants = NULL;
     peg->bytecode_len = bytecode_len;
     peg->num_constants = num_constants;
 
     for (size_t i = 0; i < peg->bytecode_len; i++)
-        bytecode[i] = (uint32_t) janet_unmarshal_int(ctx);
+        bytecode[i] = (uint32_t) bender_unmarshal_int(ctx);
     for (uint32_t j = 0; j < peg->num_constants; j++)
-        constants[j] = janet_unmarshal_janet(ctx);
+        constants[j] = bender_unmarshal_bender(ctx);
 
     /* After here, no panics except for the bad: label. */
 
@@ -1670,9 +1670,9 @@ static void *peg_unmarshal(JanetMarshalContext *ctx) {
      * bytecode. */
     uint32_t blen = (int32_t) peg->bytecode_len;
     uint32_t clen = peg->num_constants;
-    uint8_t *op_flags = janet_calloc(1, blen);
+    uint8_t *op_flags = bender_calloc(1, blen);
     if (NULL == op_flags) {
-        JANET_OUT_OF_MEMORY;
+        BENDER_OUT_OF_MEMORY;
     }
 
     /* verify peg bytecode */
@@ -1816,7 +1816,7 @@ static void *peg_unmarshal(JanetMarshalContext *ctx) {
             case RULE_READINT:
                 /* [ width | (endianness << 5) | (signedness << 6), tag ] */
                 OVERFLOW_CHECK(3);
-                if (rule[1] > JANET_MAX_READINT_WIDTH) goto bad;
+                if (rule[1] > BENDER_MAX_READINT_WIDTH) goto bad;
                 i += 3;
                 break;
             case RULE_NTH:
@@ -1843,20 +1843,20 @@ static void *peg_unmarshal(JanetMarshalContext *ctx) {
     peg->bytecode = bytecode;
     peg->constants = constants;
     peg->has_backref = has_backref;
-    janet_free(op_flags);
+    bender_free(op_flags);
     return peg;
 
 bad:
-    janet_free(op_flags);
-    janet_panic("invalid peg bytecode");
+    bender_free(op_flags);
+    bender_panic("invalid peg bytecode");
 }
 
 #undef OVERFLOW_CHECK
 
-static int cfun_peg_getter(JanetAbstract a, Janet key, Janet *out);
-static Janet peg_next(void *p, Janet key);
+static int cfun_peg_getter(BenderAbstract a, Bender key, Bender *out);
+static Bender peg_next(void *p, Bender key);
 
-const JanetAbstractType janet_peg_type = {
+const BenderAbstractType bender_peg_type = {
     "core/peg",
     NULL,
     peg_mark,
@@ -1868,58 +1868,58 @@ const JanetAbstractType janet_peg_type = {
     NULL, /* compare */
     NULL, /* hash */
     peg_next,
-    JANET_ATEND_NEXT
+    BENDER_ATEND_NEXT
 };
 
-/* Convert Builder to JanetPeg (Janet Abstract Value) */
-static JanetPeg *make_peg(Builder *b) {
-    size_t bytecode_start = size_padded(sizeof(JanetPeg), sizeof(uint32_t));
-    size_t bytecode_size = janet_v_count(b->bytecode) * sizeof(uint32_t);
-    size_t constants_start = size_padded(bytecode_start + bytecode_size, sizeof(Janet));
-    size_t constants_size = janet_v_count(b->constants) * sizeof(Janet);
+/* Convert Builder to BenderPeg (Bender Abstract Value) */
+static BenderPeg *make_peg(Builder *b) {
+    size_t bytecode_start = size_padded(sizeof(BenderPeg), sizeof(uint32_t));
+    size_t bytecode_size = bender_v_count(b->bytecode) * sizeof(uint32_t);
+    size_t constants_start = size_padded(bytecode_start + bytecode_size, sizeof(Bender));
+    size_t constants_size = bender_v_count(b->constants) * sizeof(Bender);
     size_t total_size = constants_start + constants_size;
-    char *mem = janet_abstract(&janet_peg_type, total_size);
-    JanetPeg *peg = (JanetPeg *)mem;
+    char *mem = bender_abstract(&bender_peg_type, total_size);
+    BenderPeg *peg = (BenderPeg *)mem;
     peg->bytecode = (uint32_t *)(mem + bytecode_start);
-    peg->constants = (Janet *)(mem + constants_start);
-    peg->num_constants = janet_v_count(b->constants);
+    peg->constants = (Bender *)(mem + constants_start);
+    peg->num_constants = bender_v_count(b->constants);
     safe_memcpy(peg->bytecode, b->bytecode, bytecode_size);
     safe_memcpy(peg->constants, b->constants, constants_size);
-    peg->bytecode_len = janet_v_count(b->bytecode);
+    peg->bytecode_len = bender_v_count(b->bytecode);
     peg->has_backref = b->has_backref;
     return peg;
 }
 
 /* Compiler entry point */
-static JanetPeg *compile_peg(Janet x) {
+static BenderPeg *compile_peg(Bender x) {
     Builder builder;
-    builder.grammar = janet_table(0);
+    builder.grammar = bender_table(0);
     builder.default_grammar = NULL;
     {
-        Janet default_grammarv = janet_dyn("peg-grammar");
-        if (janet_checktype(default_grammarv, JANET_TABLE)) {
-            builder.default_grammar = janet_unwrap_table(default_grammarv);
+        Bender default_grammarv = bender_dyn("peg-grammar");
+        if (bender_checktype(default_grammarv, BENDER_TABLE)) {
+            builder.default_grammar = bender_unwrap_table(default_grammarv);
         }
     }
-    builder.tags = janet_table(0);
+    builder.tags = bender_table(0);
     /* Phase 2a root discipline: grammar/tags are fresh tables held only in
      * the C-local Builder across peg_compile1, which allocates (and under
      * pressure, collects) throughout. Pin them; default_grammar comes from
      * dyn bindings (already reachable). Panics inside (peg_panic longjmp)
      * leak these two pins, matching the existing fiber_rooted convention. */
-    janet_gcroot(janet_wrap_table(builder.grammar));
-    janet_gcroot(janet_wrap_table(builder.tags));
+    bender_gcroot(bender_wrap_table(builder.grammar));
+    bender_gcroot(bender_wrap_table(builder.tags));
     builder.constants = NULL;
     builder.bytecode = NULL;
     builder.nexttag = 1;
     builder.form = x;
-    builder.depth = JANET_RECURSION_GUARD;
+    builder.depth = BENDER_RECURSION_GUARD;
     builder.has_backref = 0;
     peg_compile1(&builder, x);
-    JanetPeg *peg = make_peg(&builder);
+    BenderPeg *peg = make_peg(&builder);
     builder_cleanup(&builder);
-    janet_gcunroot(janet_wrap_table(builder.grammar));
-    janet_gcunroot(janet_wrap_table(builder.tags));
+    bender_gcunroot(bender_wrap_table(builder.grammar));
+    bender_gcunroot(bender_wrap_table(builder.tags));
     return peg;
 }
 
@@ -1927,46 +1927,46 @@ static JanetPeg *compile_peg(Janet x) {
  * C Functions
  */
 
-JANET_CORE_FN(cfun_peg_compile,
+BENDER_CORE_FN(cfun_peg_compile,
               "(peg/compile peg)",
               "Compiles a peg source data structure into a <core/peg>. This will speed up matching "
               "if the same peg will be used multiple times. `(dyn :peg-grammar)` replaces "
               "`default-peg-grammar` for the grammar of the peg.") {
-    janet_fixarity(argc, 1);
-    JanetPeg *peg = compile_peg(argv[0]);
-    return janet_wrap_abstract(peg);
+    bender_fixarity(argc, 1);
+    BenderPeg *peg = compile_peg(argv[0]);
+    return bender_wrap_abstract(peg);
 }
 
 /* Common data for peg cfunctions */
 typedef struct {
-    JanetPeg *peg;
+    BenderPeg *peg;
     PegState s;
-    JanetByteView bytes;
-    Janet subst;
+    BenderByteView bytes;
+    Bender subst;
     int32_t start;
 } PegCall;
 
 /* Initialize state for peg cfunctions */
-static PegCall peg_cfun_init(int32_t argc, Janet *argv, int get_replace) {
+static PegCall peg_cfun_init(int32_t argc, Bender *argv, int get_replace) {
     PegCall ret;
     int32_t min = get_replace ? 3 : 2;
-    janet_arity(argc, min, -1);
-    if (janet_checktype(argv[0], JANET_ABSTRACT) &&
-            janet_abstract_type(janet_unwrap_abstract(argv[0])) == &janet_peg_type) {
-        ret.peg = janet_unwrap_abstract(argv[0]);
+    bender_arity(argc, min, -1);
+    if (bender_checktype(argv[0], BENDER_ABSTRACT) &&
+            bender_abstract_type(bender_unwrap_abstract(argv[0])) == &bender_peg_type) {
+        ret.peg = bender_unwrap_abstract(argv[0]);
     } else {
         ret.peg = compile_peg(argv[0]);
     }
     if (get_replace) {
         ret.subst = argv[1];
-        ret.bytes = janet_getbytes(argv, 2);
+        ret.bytes = bender_getbytes(argv, 2);
     } else {
-        ret.bytes = janet_getbytes(argv, 1);
+        ret.bytes = bender_getbytes(argv, 1);
     }
     if (argc > min) {
-        ret.start = janet_gethalfrange(argv, min, ret.bytes.len, "offset");
+        ret.start = bender_gethalfrange(argv, min, ret.bytes.len, "offset");
         ret.s.extrac = argc - min - 1;
-        ret.s.extrav = janet_tuple_n(argv + min + 1, argc - min - 1);
+        ret.s.extrav = bender_tuple_n(argv + min + 1, argc - min - 1);
     } else {
         ret.start = 0;
         ret.s.extrac = 0;
@@ -1976,24 +1976,24 @@ static PegCall peg_cfun_init(int32_t argc, Janet *argv, int get_replace) {
     ret.s.text_start = ret.bytes.bytes;
     ret.s.text_end = ret.bytes.bytes + ret.bytes.len;
     ret.s.outer_text_end = ret.s.text_end;
-    ret.s.depth = JANET_RECURSION_GUARD;
-    ret.s.captures = janet_array(0);
-    janet_gcroot(janet_wrap_array(ret.s.captures));
-    ret.s.tagged_captures = janet_array(0);
-    janet_gcroot(janet_wrap_array(ret.s.tagged_captures));
-    ret.s.scratch = janet_buffer(10);
-    janet_gcroot(janet_wrap_buffer(ret.s.scratch));
-    ret.s.tags = janet_buffer(10);
-    janet_gcroot(janet_wrap_buffer(ret.s.tags));
+    ret.s.depth = BENDER_RECURSION_GUARD;
+    ret.s.captures = bender_array(0);
+    bender_gcroot(bender_wrap_array(ret.s.captures));
+    ret.s.tagged_captures = bender_array(0);
+    bender_gcroot(bender_wrap_array(ret.s.tagged_captures));
+    ret.s.scratch = bender_buffer(10);
+    bender_gcroot(bender_wrap_buffer(ret.s.scratch));
+    ret.s.tags = bender_buffer(10);
+    bender_gcroot(bender_wrap_buffer(ret.s.tags));
     /* Phase 2a root discipline: the working set is held only in C locals
      * across matching (whose growth triggers collections) and, for
-     * replace, across janet_call, which can suspend the fiber and collect
+     * replace, across bender_call, which can suspend the fiber and collect
      * while suspended. Pin every piece (gcroot itself never collects, so
      * each pin is atomic); argv-derived views stay reachable through the
      * VM stack. Released by peg_cfun_deinit. */
-    janet_gcroot(janet_wrap_abstract(ret.peg));
+    bender_gcroot(bender_wrap_abstract(ret.peg));
     if (ret.s.extrav != NULL) {
-        janet_gcroot(janet_wrap_tuple((JanetTuple) ret.s.extrav));
+        bender_gcroot(bender_wrap_tuple((BenderTuple) ret.s.extrav));
     }
     ret.s.constants = ret.peg->constants;
     ret.s.bytecode = ret.peg->bytecode;
@@ -2009,36 +2009,36 @@ static PegCall peg_cfun_init(int32_t argc, Janet *argv, int get_replace) {
  * via the VM stack). Panics inside callbacks leak these pins, matching
  * the existing fiber_rooted convention. */
 static void peg_cfun_deinit(PegCall *c) {
-    janet_gcunroot(janet_wrap_array(c->s.captures));
-    janet_gcunroot(janet_wrap_array(c->s.tagged_captures));
-    janet_gcunroot(janet_wrap_buffer(c->s.scratch));
-    janet_gcunroot(janet_wrap_buffer(c->s.tags));
-    janet_gcunroot(janet_wrap_abstract(c->peg));
+    bender_gcunroot(bender_wrap_array(c->s.captures));
+    bender_gcunroot(bender_wrap_array(c->s.tagged_captures));
+    bender_gcunroot(bender_wrap_buffer(c->s.scratch));
+    bender_gcunroot(bender_wrap_buffer(c->s.tags));
+    bender_gcunroot(bender_wrap_abstract(c->peg));
     if (c->s.extrav != NULL) {
-        janet_gcunroot(janet_wrap_tuple((JanetTuple) c->s.extrav));
+        bender_gcunroot(bender_wrap_tuple((BenderTuple) c->s.extrav));
     }
 }
 
 static void peg_call_reset(PegCall *c) {
-    c->s.depth = JANET_RECURSION_GUARD;
+    c->s.depth = BENDER_RECURSION_GUARD;
     c->s.captures->count = 0;
     c->s.tagged_captures->count = 0;
     c->s.scratch->count = 0;
     c->s.tags->count = 0;
 }
 
-JANET_CORE_FN(cfun_peg_match,
+BENDER_CORE_FN(cfun_peg_match,
               "(peg/match peg text &opt start & args)",
               "Match a Parsing Expression Grammar to a byte string and return an array of captured values. "
-              "Returns nil if text does not match the language defined by peg. The syntax of PEGs is documented on the Janet website.") {
+              "Returns nil if text does not match the language defined by peg. The syntax of PEGs is documented on the Bender website.") {
     PegCall c = peg_cfun_init(argc, argv, 0);
     const uint8_t *result = peg_rule(&c.s, c.s.bytecode, c.bytes.bytes + c.start);
-    Janet out = result ? janet_wrap_array(c.s.captures) : janet_wrap_nil();
+    Bender out = result ? bender_wrap_array(c.s.captures) : bender_wrap_nil();
     peg_cfun_deinit(&c);
     return out;
 }
 
-JANET_CORE_FN(cfun_peg_find,
+BENDER_CORE_FN(cfun_peg_find,
               "(peg/find peg text &opt start & args)",
               "Find first index where the peg matches in text. Returns an integer, or nil if not found.") {
     PegCall c = peg_cfun_init(argc, argv, 0);
@@ -2046,48 +2046,48 @@ JANET_CORE_FN(cfun_peg_find,
         peg_call_reset(&c);
         if (peg_rule(&c.s, c.s.bytecode, c.bytes.bytes + i)) {
             peg_cfun_deinit(&c);
-            return janet_wrap_integer(i);
+            return bender_wrap_integer(i);
         }
     }
     peg_cfun_deinit(&c);
-    return janet_wrap_nil();
+    return bender_wrap_nil();
 }
 
-JANET_CORE_FN(cfun_peg_find_all,
+BENDER_CORE_FN(cfun_peg_find_all,
               "(peg/find-all peg text &opt start & args)",
               "Find all indexes where the peg matches in text. Returns an array of integers.") {
     PegCall c = peg_cfun_init(argc, argv, 0);
-    JanetArray *ret = janet_array(0);
-    janet_gcroot(janet_wrap_array(ret));
+    BenderArray *ret = bender_array(0);
+    bender_gcroot(bender_wrap_array(ret));
     for (int32_t i = c.start; i < c.bytes.len; i++) {
         peg_call_reset(&c);
         if (peg_rule(&c.s, c.s.bytecode, c.bytes.bytes + i))
-            janet_array_push(ret, janet_wrap_integer(i));
+            bender_array_push(ret, bender_wrap_integer(i));
     }
-    Janet out = janet_wrap_array(ret);
-    janet_gcunroot(out);
+    Bender out = bender_wrap_array(ret);
+    bender_gcunroot(out);
     peg_cfun_deinit(&c);
     return out;
 }
 
-static Janet cfun_peg_replace_generic(int32_t argc, Janet *argv, int only_one) {
+static Bender cfun_peg_replace_generic(int32_t argc, Bender *argv, int only_one) {
     PegCall c = peg_cfun_init(argc, argv, 1);
-    JanetBuffer *ret = janet_buffer(0);
+    BenderBuffer *ret = bender_buffer(0);
     /* Phase 2a: ret is built here (not in init), so pin it separately;
      * the rest of the working set is already pinned by peg_cfun_init. */
-    janet_gcroot(janet_wrap_buffer(ret));
+    bender_gcroot(bender_wrap_buffer(ret));
     int32_t trail = 0;
     for (int32_t i = c.start; i < c.bytes.len;) {
         peg_call_reset(&c);
         const uint8_t *result = peg_rule(&c.s, c.s.bytecode, c.bytes.bytes + i);
         if (NULL != result) {
             if (trail < i) {
-                janet_buffer_push_bytes(ret, c.bytes.bytes + trail, (i - trail));
+                bender_buffer_push_bytes(ret, c.bytes.bytes + trail, (i - trail));
                 trail = i;
             }
             int32_t nexti = (int32_t)(result - c.bytes.bytes);
-            JanetByteView subst = janet_text_substitution(&c.subst, c.bytes.bytes + i, nexti - i, c.s.captures);
-            janet_buffer_push_bytes(ret, subst.bytes, subst.len);
+            BenderByteView subst = bender_text_substitution(&c.subst, c.bytes.bytes + i, nexti - i, c.s.captures);
+            bender_buffer_push_bytes(ret, subst.bytes, subst.len);
             trail = nexti;
             if (nexti == i) nexti++;
             i = nexti;
@@ -2097,15 +2097,15 @@ static Janet cfun_peg_replace_generic(int32_t argc, Janet *argv, int only_one) {
         }
     }
     if (trail < c.bytes.len) {
-        janet_buffer_push_bytes(ret, c.bytes.bytes + trail, (c.bytes.len - trail));
+        bender_buffer_push_bytes(ret, c.bytes.bytes + trail, (c.bytes.len - trail));
     }
-    Janet retv = janet_wrap_buffer(ret);
-    janet_gcunroot(retv);
+    Bender retv = bender_wrap_buffer(ret);
+    bender_gcunroot(retv);
     peg_cfun_deinit(&c);
     return retv;
 }
 
-JANET_CORE_FN(cfun_peg_replace_all,
+BENDER_CORE_FN(cfun_peg_replace_all,
               "(peg/replace-all peg subst text &opt start & args)",
               "Replace all matches of `peg` in `text` with `subst`, returning a new buffer. "
               "The peg does not need to make captures to do replacement. "
@@ -2114,7 +2114,7 @@ JANET_CORE_FN(cfun_peg_replace_all,
     return cfun_peg_replace_generic(argc, argv, 0);
 }
 
-JANET_CORE_FN(cfun_peg_replace,
+BENDER_CORE_FN(cfun_peg_replace,
               "(peg/replace peg subst text &opt start & args)",
               "Replace first match of `peg` in `text` with `subst`, returning a new buffer. "
               "The peg does not need to make captures to do replacement. "
@@ -2124,7 +2124,7 @@ JANET_CORE_FN(cfun_peg_replace,
     return cfun_peg_replace_generic(argc, argv, 1);
 }
 
-static JanetMethod peg_methods[] = {
+static BenderMethod peg_methods[] = {
     {"match", cfun_peg_match},
     {"find", cfun_peg_find},
     {"find-all", cfun_peg_find_all},
@@ -2133,31 +2133,31 @@ static JanetMethod peg_methods[] = {
     {NULL, NULL}
 };
 
-static int cfun_peg_getter(JanetAbstract a, Janet key, Janet *out) {
+static int cfun_peg_getter(BenderAbstract a, Bender key, Bender *out) {
     (void) a;
-    if (!janet_checktype(key, JANET_KEYWORD))
+    if (!bender_checktype(key, BENDER_KEYWORD))
         return 0;
-    return janet_getmethod(janet_unwrap_keyword(key), peg_methods, out);
+    return bender_getmethod(bender_unwrap_keyword(key), peg_methods, out);
 }
 
-static Janet peg_next(void *p, Janet key) {
+static Bender peg_next(void *p, Bender key) {
     (void) p;
-    return janet_nextmethod(peg_methods, key);
+    return bender_nextmethod(peg_methods, key);
 }
 
 /* Load the peg module */
-void janet_lib_peg(JanetTable *env) {
-    JanetRegExt cfuns[] = {
-        JANET_CORE_REG("peg/compile", cfun_peg_compile),
-        JANET_CORE_REG("peg/match", cfun_peg_match),
-        JANET_CORE_REG("peg/find", cfun_peg_find),
-        JANET_CORE_REG("peg/find-all", cfun_peg_find_all),
-        JANET_CORE_REG("peg/replace", cfun_peg_replace),
-        JANET_CORE_REG("peg/replace-all", cfun_peg_replace_all),
-        JANET_REG_END
+void bender_lib_peg(BenderTable *env) {
+    BenderRegExt cfuns[] = {
+        BENDER_CORE_REG("peg/compile", cfun_peg_compile),
+        BENDER_CORE_REG("peg/match", cfun_peg_match),
+        BENDER_CORE_REG("peg/find", cfun_peg_find),
+        BENDER_CORE_REG("peg/find-all", cfun_peg_find_all),
+        BENDER_CORE_REG("peg/replace", cfun_peg_replace),
+        BENDER_CORE_REG("peg/replace-all", cfun_peg_replace_all),
+        BENDER_REG_END
     };
-    janet_core_cfuns_ext(env, NULL, cfuns);
-    janet_register_abstract_type(&janet_peg_type);
+    bender_core_cfuns_ext(env, NULL, cfuns);
+    bender_register_abstract_type(&bender_peg_type);
 }
 
-#endif /* ifdef JANET_PEG */
+#endif /* ifdef BENDER_PEG */

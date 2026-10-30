@@ -1,0 +1,150 @@
+# Batched native kernel: proc actors coordinate, one Tier-B native kernel computes.
+#
+# EDUCATIONAL ILLUSTRATION, NOT A REPRESENTATIVE WORKLOAD.
+# This is a pedagogical example built to prove the *mechanism* -- that a
+# capture-free actor body can drive a kernel the native executor tier compiles --
+# not a TrineXraft-style game workload. Nothing here is a speedup claim.
+#
+#   BENDER_LANES=0 ./build/bender examples/batched-native-kernel.ben <units> <batch-size> [actors]
+#
+# <units>      how many batches to hand out (one job per batch, no more, no fewer)
+# <batch-size> elements per batch
+# [actors]     how many worker procs to spawn (default: min(units, cpus-1))
+#
+# Shape:
+#
+#   coordinator -- proc/send [start count reply] --> ACTOR 1 \
+#               -- proc/send [start count reply] --> ACTOR 2  >-- kernel-prefix-sum
+#               -- proc/send [start count reply] --> ACTOR 3 /         |
+#                        <-- ev/thread-chan [start count partial] <----+
+#                                    sum of partials == checksum
+#
+# The kernel is authored to the EXACT bytecode contract the Tier-B executor
+# specialises (tools/loop-executor.ben, numeric-sum-pattern?): arity 1,
+# slotcount 4, no constants, 8 instructions
+#   ldi 1 0 / ldi 2 0 / lt 3 2 0 / jmpno 3 4 / add 1 1 2 / addim 2 2 1 / jmp -4 / ret 1
+# Any other shape -- sum of squares, a nested loop, a float accumulator -- falls
+# back to the ordinary guarded executor. That fallback is correct but not native,
+# so this example deliberately uses the one shape that is proven native.
+#
+# Arithmetic: kernel-prefix-sum(n) = sum of k for k < n = n*(n-1)/2, exact in a
+# double for the whole domain allowed here (n <= 1e6, sum <= 5e11), which is the
+# same bound the native guard enforces before it will stay in-region.
+#
+# Cross-lane rules respected here (docs/internals/lanes-and-captured-state.md):
+#   * work arrives over proc/send (the actor's own mailbox), never a captured chan
+#   * results leave over one ev/thread-chan, which is the supported cross-lane carrier
+#   * the actor body is capture-free: `actor-loop` is a module-level defn with an
+#     empty environment, so a routed spawn copies no mutable state at all
+#   * shutdown is a :stop message and an explicit :done ack -- never a sleep
+
+(defn kernel-prefix-sum [n]
+  (var acc 0)
+  (var i 0)
+  (while (< i n) (+= acc i) (++ i))
+  acc)
+
+# Capture-free: references only module globals and C functions. Its closure
+# environment is empty, which is what makes it safe to route to another lane and
+# what keeps the spawn itself from copying mutable state.
+(defn actor-loop []
+  (var running true)
+  (while running
+    (def job (proc/recv))
+    (def tag (get job 0))
+    (if (= tag :stop)
+      (do
+        (ev/give (get job 1) :done)
+        (set running false))
+      (do
+        (def start tag)
+        (def count (get job 1))
+        (def reply (get job 2))
+        (def end (+ start count))
+        # Two calls, one subtraction: the range contribution is T(end) - T(start).
+        # Both call sites keep the kernel's own 8-instruction body untouched.
+        (ev/give reply [start count (- (kernel-prefix-sum end)
+                                       (kernel-prefix-sum start))])))))
+
+(defn fail [msg]
+  (eprintf "batched-native-kernel: %s" msg)
+  (os/exit 2))
+
+(defn int-arg [i name fallback]
+  (def raw (get (dyn :args) i))
+  (if (nil? raw)
+    fallback
+    (do
+      (def n (scan-number raw))
+      (if (nil? n) (fail (string name " must be an integer, got " raw)))
+      (if (not= n (math/floor n)) (fail (string name " must be an integer, got " raw)))
+      (if (< n 1) (fail (string name " must be >= 1, got " raw)))
+      n)))
+
+(def units (int-arg 1 "units (batch count)" nil))
+(def batch (int-arg 2 "batch-size" nil))
+(def total (* units batch))
+
+# The native guard refuses n > 1e6 or an accumulator > 5e11. Stay inside it, so
+# the run is inside the proven-native domain instead of silently falling back.
+(when (> total 1000000)
+  (fail (string "units*batch-size = " total
+                " exceeds the native guard domain (n <= 1000000)")))
+
+(defn ceil-div [a b] (div (+ a (- b 1)) b))
+
+(def actors (int-arg 3 "actors"
+                     (min units (max 1 (- (os/cpu-count) 1)))))
+(when (> actors units)
+  (fail (string "actors (" actors ") cannot exceed units (" units ")")))
+
+(def replies (ev/thread-chan (+ units actors 8)))
+(def per-actor (ceil-div units actors))
+
+(def t0 (os/clock))
+
+# Spawn first, then send: a sender that outruns a not-yet-started actor would
+# block on a mailbox nobody drains.
+(def handles
+  (seq [_ :range [0 actors]]
+    (proc/spawn actor-loop (+ per-actor 1))))
+
+# Round-robin so every actor gets either per-actor or per-actor-1 jobs; the
+# mailbox capacity above therefore never blocks the coordinator.
+(for b 0 units
+  (def actor-index (mod b actors))
+  (proc/send (handles actor-index)
+             [(* b batch) batch replies]))
+
+(var checksum 0)
+(var batches 0)
+(def first-partial @[])
+(var last-partial nil)
+(while (< batches units)
+  (def r (ev/take replies))
+  (def start (get r 0))
+  (def count (get r 1))
+  (def partial (get r 2))
+  (set checksum (+ checksum partial))
+  (when (= start 0) (array/push first-partial partial))
+  (when (= (+ start count) total) (set last-partial partial))
+  (++ batches))
+
+# Explicit shutdown handshake: every actor acks after it stops consuming.
+(each h handles (proc/send h [:stop replies]))
+(var stopped 0)
+(while (< stopped actors)
+  (def ack (ev/take replies))
+  (unless (= ack :done) (fail "actor stopped without an ack"))
+  (++ stopped))
+
+(def elapsed (* 1000.0 (- (os/clock) t0)))
+
+# One deterministic line, no timing-dependent content, parsed by
+# test/verify-batched-native-kernel.py against an independent closed form.
+(print (string/format "batched-kernel units=%d batch=%d total=%d actors=%d lanes=%d batches=%d first=%d last=%d checksum=%d"
+                      units batch total actors (proc/lanes) batches
+                      (get first-partial 0) last-partial checksum))
+(eprintf "batched-native-kernel: wall=%.1fms (reported separately, never a speed claim)" elapsed)
+
+(when (> (proc/lanes) 0) (proc/lanes-stop))

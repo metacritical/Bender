@@ -20,16 +20,16 @@
 * IN THE SOFTWARE.
 */
 
-#ifndef JANET_AMALG
+#ifndef BENDER_AMALG
 #include "features.h"
-#include <janet.h>
+#include <bender.h>
 #include "regalloc.h"
 #include "util.h"
 #endif
 
-/* The JanetRegisterAllocator is really just a bitset. */
+/* The BenderRegisterAllocator is really just a bitset. */
 
-void janetc_regalloc_init(JanetcRegisterAllocator *ra) {
+void benderc_regalloc_init(BendercRegisterAllocator *ra) {
     ra->chunks = NULL;
     ra->count = 0;
     ra->capacity = 0;
@@ -37,8 +37,8 @@ void janetc_regalloc_init(JanetcRegisterAllocator *ra) {
     ra->regtemps = 0;
 }
 
-void janetc_regalloc_deinit(JanetcRegisterAllocator *ra) {
-    janet_free(ra->chunks);
+void benderc_regalloc_deinit(BendercRegisterAllocator *ra) {
+    bender_free(ra->chunks);
 }
 
 /* Fallbacks for when ctz not available */
@@ -64,7 +64,7 @@ static int32_t count_trailing_ones(uint32_t x) {
 #define nbits(N) (ithbit(N) - 1)
 
 /* Copy a register allocator */
-void janetc_regalloc_clone(JanetcRegisterAllocator *dest, JanetcRegisterAllocator *src) {
+void benderc_regalloc_clone(BendercRegisterAllocator *dest, BendercRegisterAllocator *src) {
     size_t size;
     dest->count = src->count;
     dest->capacity = src->capacity;
@@ -72,9 +72,9 @@ void janetc_regalloc_clone(JanetcRegisterAllocator *dest, JanetcRegisterAllocato
     size = sizeof(uint32_t) * (size_t) dest->capacity;
     dest->regtemps = 0;
     if (size) {
-        dest->chunks = janet_malloc(size);
+        dest->chunks = bender_malloc(size);
         if (!dest->chunks) {
-            JANET_OUT_OF_MEMORY;
+            BENDER_OUT_OF_MEMORY;
         }
         memcpy(dest->chunks, src->chunks, size);
     } else {
@@ -83,15 +83,15 @@ void janetc_regalloc_clone(JanetcRegisterAllocator *dest, JanetcRegisterAllocato
 }
 
 /* Allocate one more chunk in chunks */
-static void pushchunk(JanetcRegisterAllocator *ra) {
+static void pushchunk(BendercRegisterAllocator *ra) {
     /* Registers 240-255 are always allocated (reserved) */
     uint32_t chunk = ra->count == 7 ? 0xFFFF0000 : 0;
     int32_t newcount = ra->count + 1;
     if (newcount > ra->capacity) {
         int32_t newcapacity = newcount * 2;
-        ra->chunks = janet_realloc(ra->chunks, (size_t) newcapacity * sizeof(uint32_t));
+        ra->chunks = bender_realloc(ra->chunks, (size_t) newcapacity * sizeof(uint32_t));
         if (!ra->chunks) {
-            JANET_OUT_OF_MEMORY;
+            BENDER_OUT_OF_MEMORY;
         }
         ra->capacity = newcapacity;
     }
@@ -100,7 +100,7 @@ static void pushchunk(JanetcRegisterAllocator *ra) {
 }
 
 /* Reallocate a given register */
-void janetc_regalloc_touch(JanetcRegisterAllocator *ra, int32_t reg) {
+void benderc_regalloc_touch(BendercRegisterAllocator *ra, int32_t reg) {
     int32_t chunk = reg >> 5;
     int32_t bit = reg & 0x1F;
     while (chunk >= ra->count) pushchunk(ra);
@@ -108,7 +108,7 @@ void janetc_regalloc_touch(JanetcRegisterAllocator *ra, int32_t reg) {
 }
 
 /* Allocate one register. */
-int32_t janetc_regalloc_1(JanetcRegisterAllocator *ra) {
+int32_t benderc_regalloc_1(BendercRegisterAllocator *ra) {
     /* Get the nth bit in the array */
     int32_t bit, chunk, nchunks, reg;
     bit = -1;
@@ -134,7 +134,7 @@ int32_t janetc_regalloc_1(JanetcRegisterAllocator *ra) {
 }
 
 /* Find n contiguous registers but do not allocate them. */
-int32_t janetc_regalloc_findn(JanetcRegisterAllocator *ra, int32_t n) {
+int32_t benderc_regalloc_findn(BendercRegisterAllocator *ra, int32_t n) {
     int32_t run = 0;
     int32_t i;
     for (i = 0; i < (ra->count * 32); i++) {
@@ -148,9 +148,9 @@ int32_t janetc_regalloc_findn(JanetcRegisterAllocator *ra, int32_t n) {
     return 1 + i - run;
 }
 
-int32_t janetc_regalloc_n(JanetcRegisterAllocator *ra, int32_t n) {
-    int32_t loc = janetc_regalloc_findn(ra, n);
-    for (int32_t i = 0; i < n; i++) janetc_regalloc_touch(ra, loc + i);
+int32_t benderc_regalloc_n(BendercRegisterAllocator *ra, int32_t n) {
+    int32_t loc = benderc_regalloc_findn(ra, n);
+    for (int32_t i = 0; i < n; i++) benderc_regalloc_touch(ra, loc + i);
     if (loc + n - 1 > ra->max)
         ra->max = loc + n - 1;
     return loc;
@@ -158,18 +158,18 @@ int32_t janetc_regalloc_n(JanetcRegisterAllocator *ra, int32_t n) {
 
 /* Free a register. The register must have been previously allocated
  * without being freed. */
-void janetc_regalloc_free(JanetcRegisterAllocator *ra, int32_t reg) {
+void benderc_regalloc_free(BendercRegisterAllocator *ra, int32_t reg) {
     int32_t chunk = reg >> 5;
     int32_t bit = reg & 0x1F;
     ra->chunks[chunk] &= ~ithbit(bit);
 }
 
-void janetc_regalloc_free_n(JanetcRegisterAllocator *ra, int32_t loc, int32_t n) {
-    for (int32_t i = 0; i < n; i++) janetc_regalloc_free(ra, loc + i);
+void benderc_regalloc_free_n(BendercRegisterAllocator *ra, int32_t loc, int32_t n) {
+    for (int32_t i = 0; i < n; i++) benderc_regalloc_free(ra, loc + i);
 }
 
 /* Check if a register is set. */
-int janetc_regalloc_check(JanetcRegisterAllocator *ra, int32_t reg) {
+int benderc_regalloc_check(BendercRegisterAllocator *ra, int32_t reg) {
     int32_t chunk = reg >> 5;
     int32_t bit = reg & 0x1F;
     while (chunk >= ra->count) pushchunk(ra);
@@ -177,15 +177,15 @@ int janetc_regalloc_check(JanetcRegisterAllocator *ra, int32_t reg) {
 }
 
 /* Get a register that will fit in 8 bits (< 256). Do not call this
- * twice with the same value of nth without calling janetc_regalloc_free
+ * twice with the same value of nth without calling benderc_regalloc_free
  * on the returned register before. */
-int32_t janetc_regalloc_temp(JanetcRegisterAllocator *ra, JanetcRegisterTemp nth) {
+int32_t benderc_regalloc_temp(BendercRegisterAllocator *ra, BendercRegisterTemp nth) {
     int32_t oldmax = ra->max;
     if (ra->regtemps & (1 << nth)) {
-        JANET_EXIT("regtemp already allocated");
+        BENDER_EXIT("regtemp already allocated");
     }
     ra->regtemps |= 1 << nth;
-    int32_t reg = janetc_regalloc_1(ra);
+    int32_t reg = benderc_regalloc_1(ra);
     if (reg > 0xFF) {
         reg = 0xF0 + nth;
         ra->max = (reg > oldmax) ? reg : oldmax;
@@ -193,8 +193,8 @@ int32_t janetc_regalloc_temp(JanetcRegisterAllocator *ra, JanetcRegisterTemp nth
     return reg;
 }
 
-void janetc_regalloc_freetemp(JanetcRegisterAllocator *ra, int32_t reg, JanetcRegisterTemp nth) {
+void benderc_regalloc_freetemp(BendercRegisterAllocator *ra, int32_t reg, BendercRegisterTemp nth) {
     ra->regtemps &= ~(1 << nth);
     if (reg < 0xF0)
-        janetc_regalloc_free(ra, reg);
+        benderc_regalloc_free(ra, reg);
 }

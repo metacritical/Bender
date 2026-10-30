@@ -1,0 +1,7 @@
+(defn install
+  [manifest &]
+  (bundle/add-file manifest "badmod.ben"))
+
+(defn check
+  [&]
+  (error "Check failed!"))

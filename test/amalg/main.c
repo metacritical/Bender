@@ -20,17 +20,17 @@
 * IN THE SOFTWARE.
 */
 
-/* A simple client for checking if the amalgamated Janet source compiles
+/* A simple client for checking if the amalgamated Bender source compiles
  * correctly. */
 
-#include <janet.h>
+#include <bender.h>
 
 int main(int argc, const char *argv[]) {
     (void) argc;
     (void) argv;
-    janet_init();
-    JanetTable *env = janet_core_env(NULL);
-    janet_dostring(env, "(print `hello, world!`)", "main", NULL);
-    janet_deinit();
+    bender_init();
+    BenderTable *env = bender_core_env(NULL);
+    bender_dostring(env, "(print `hello, world!`)", "main", NULL);
+    bender_deinit();
     return 0;
 }

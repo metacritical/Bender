@@ -20,35 +20,35 @@
 * IN THE SOFTWARE.
 */
 
-#ifndef JANET_AMALG
+#ifndef BENDER_AMALG
 #include "features.h"
 #include "vector.h"
 #include "util.h"
 #endif
 
 /* Grow the buffer dynamically. Used for push operations. */
-void *janet_v_grow(void *v, int32_t increment, int32_t itemsize) {
-    int32_t dbl_cur = (NULL != v) ? 2 * janet_v__cap(v) : 0;
-    int32_t min_needed = janet_v_count(v) + increment;
+void *bender_v_grow(void *v, int32_t increment, int32_t itemsize) {
+    int32_t dbl_cur = (NULL != v) ? 2 * bender_v__cap(v) : 0;
+    int32_t min_needed = bender_v_count(v) + increment;
     int32_t m = dbl_cur > min_needed ? dbl_cur : min_needed;
     size_t newsize = ((size_t) itemsize) * m + sizeof(int32_t) * 2;
-    int32_t *p = (int32_t *) janet_srealloc(v ? janet_v__raw(v) : 0, newsize);
+    int32_t *p = (int32_t *) bender_srealloc(v ? bender_v__raw(v) : 0, newsize);
     if (!v) p[1] = 0;
     p[0] = m;
     return p + 2;
 }
 
 /* Convert a buffer to normal allocated memory (forget capacity) */
-void *janet_v_flattenmem(void *v, int32_t itemsize) {
+void *bender_v_flattenmem(void *v, int32_t itemsize) {
     char *p;
     if (NULL == v) return NULL;
-    size_t size = (size_t) itemsize * janet_v__cnt(v);
-    p = janet_malloc(size);
+    size_t size = (size_t) itemsize * bender_v__cnt(v);
+    p = bender_malloc(size);
     if (NULL != p) {
         safe_memcpy(p, v, size);
         return p;
     } else {
-        JANET_OUT_OF_MEMORY;
+        BENDER_OUT_OF_MEMORY;
     }
 }
 

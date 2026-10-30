@@ -20,12 +20,12 @@
 * IN THE SOFTWARE.
 */
 
-#ifndef JANET_VECTOR_H_defined
-#define JANET_VECTOR_H_defined
+#ifndef BENDER_VECTOR_H_defined
+#define BENDER_VECTOR_H_defined
 
-#ifndef JANET_AMALG
+#ifndef BENDER_AMALG
 #include "features.h"
-#include <janet.h>
+#include <bender.h>
 #endif
 
 /*
@@ -37,24 +37,24 @@
  * need vector like data structures that are only garbage collected in case
  * of an error, and normally rely on malloc/free. */
 
-#define janet_v_free(v)         (((v) != NULL) ? (janet_sfree(janet_v__raw(v)), 0) : 0)
-#define janet_v_push(v, x)      (janet_v__maybegrow(v, 1), (v)[janet_v__cnt(v)++] = (x))
-#define janet_v_pop(v)          (janet_v_count(v) ? janet_v__cnt(v)-- : 0)
-#define janet_v_count(v)        (((v) != NULL) ? janet_v__cnt(v) : 0)
-#define janet_v_last(v)         ((v)[janet_v__cnt(v) - 1])
-#define janet_v_empty(v)        (((v) != NULL) ? (janet_v__cnt(v) = 0) : 0)
-#define janet_v_flatten(v)      (janet_v_flattenmem((v), sizeof(*(v))))
+#define bender_v_free(v)         (((v) != NULL) ? (bender_sfree(bender_v__raw(v)), 0) : 0)
+#define bender_v_push(v, x)      (bender_v__maybegrow(v, 1), (v)[bender_v__cnt(v)++] = (x))
+#define bender_v_pop(v)          (bender_v_count(v) ? bender_v__cnt(v)-- : 0)
+#define bender_v_count(v)        (((v) != NULL) ? bender_v__cnt(v) : 0)
+#define bender_v_last(v)         ((v)[bender_v__cnt(v) - 1])
+#define bender_v_empty(v)        (((v) != NULL) ? (bender_v__cnt(v) = 0) : 0)
+#define bender_v_flatten(v)      (bender_v_flattenmem((v), sizeof(*(v))))
 
-#define janet_v__raw(v) ((int32_t *)(v) - 2)
-#define janet_v__cap(v) janet_v__raw(v)[0]
-#define janet_v__cnt(v) janet_v__raw(v)[1]
+#define bender_v__raw(v) ((int32_t *)(v) - 2)
+#define bender_v__cap(v) bender_v__raw(v)[0]
+#define bender_v__cnt(v) bender_v__raw(v)[1]
 
-#define janet_v__needgrow(v, n)  ((v) == NULL || janet_v__cnt(v) + (n) >= janet_v__cap(v))
-#define janet_v__maybegrow(v, n) (janet_v__needgrow((v), (n)) ? janet_v__grow((v), (n)) : 0)
-#define janet_v__grow(v, n)      ((v) = janet_v_grow((v), (n), sizeof(*(v))))
+#define bender_v__needgrow(v, n)  ((v) == NULL || bender_v__cnt(v) + (n) >= bender_v__cap(v))
+#define bender_v__maybegrow(v, n) (bender_v__needgrow((v), (n)) ? bender_v__grow((v), (n)) : 0)
+#define bender_v__grow(v, n)      ((v) = bender_v_grow((v), (n), sizeof(*(v))))
 
 /* Actual functions defined in vector.c */
-void *janet_v_grow(void *v, int32_t increment, int32_t itemsize);
-void *janet_v_flattenmem(void *v, int32_t itemsize);
+void *bender_v_grow(void *v, int32_t increment, int32_t itemsize);
+void *bender_v_flattenmem(void *v, int32_t itemsize);
 
 #endif

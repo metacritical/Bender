@@ -17,7 +17,7 @@ Related: `docs/internals/messaging-guide.md` (the API ladder),
 a threaded control channel, which marshals (deep-copies) every captured value.
 The worker therefore runs against *copies* of everything the spawner captured.
 
-Consequences, all confirmed by tests in `test/suite-lane-chan.janet`:
+Consequences, all confirmed by tests in `test/suite-lane-chan.ben`:
 
 - Writing to a captured `ev/chan` from a worker does **nothing** the spawner can
   observe. Before the current guards this was silent — measured 0 of 12 values
@@ -55,31 +55,31 @@ channel and drains it); only a copy received on a worker lane is detached.
 Lanes only activate once `proc/lanes-start` runs. That is opt-in, and there is a
 second, lazy route:
 
-```janet
+```bender
 (proc/lanes-start 4)          ;; explicit
 ```
 
 ```sh
-JANET_LANES=4 ./my-program    # lazy: started on the first routed proc/spawn
-JANET_LANES=0 ./my-program    # keep the historic single-VM behaviour
+BENDER_LANES=4 ./my-program    # lazy: started on the first routed proc/spawn
+BENDER_LANES=0 ./my-program    # keep the historic single-VM behaviour
 ```
 
-### Why `JANET_LANES` is opt-in and NOT the default
+### Why `BENDER_LANES` is opt-in and NOT the default
 
 Enabling lanes changes `proc/spawn`'s **return type**: with lanes off you get a
 `core/proc` object, with lanes on you get a `[:pid lane serial ctl]` tuple.
 Code that calls `proc/pid`, `proc/alive?` or `proc/recv` on the handle behaves
 differently depending on which shape it got. Turning that on by default breaks
-`test/suite-proc.janet`'s own `"spawn returns a proc"` assertion — a real API
+`test/suite-proc.ben`'s own `"spawn returns a proc"` assertion — a real API
 break, not a test detail.
 
 The default can flip once proc handles are uniform across lanes (a local proxy
 for remote pids, or a tuple that satisfies `proc/pid?`). Until then, opt in
 deliberately.
 
-Autostart is hooked into the first routed spawn, **not** into `boot.janet`:
-`boot.janet` also runs during image generation, where starting lanes hangs the
-build (`janet_boot` was observed stuck in the lane join). Spawning never happens
+Autostart is hooked into the first routed spawn, **not** into `boot.ben`:
+`boot.ben` also runs during image generation, where starting lanes hangs the
+build (`bender_boot` was observed stuck in the lane join). Spawning never happens
 during image generation, so the lazy hook is safe by construction.
 
 ## 3. Measured cost of the switch
@@ -89,9 +89,9 @@ back over one `ev/thread-chan`:
 
 | configuration | wall | checksum |
 |---|---|---|
-| `JANET_LANES=0` | 22 ms | 1999000000 |
-| `JANET_LANES=4` | 9 ms | 1999000000 |
-| `JANET_LANES=11` | 8 ms | 1999000000 |
+| `BENDER_LANES=0` | 22 ms | 1999000000 |
+| `BENDER_LANES=4` | 9 ms | 1999000000 |
+| `BENDER_LANES=11` | 8 ms | 1999000000 |
 
 Identical checksums in every arm: the parallel path does the same work and loses
 nothing. This is the case lanes exist for — **independent** work.
@@ -184,7 +184,7 @@ So the rule is: use fibers for I/O-shaped or very numerous cooperative tasks
 
 `proc/lanes-start` with no argument starts **cores - 1** lanes; on this 12-core
 box that is 11, i.e. 12 schedulers counting the main VM -- the same shape as
-BEAM's one-scheduler-per-core. `JANET_LANES=<n>` sets it explicitly, and the
+BEAM's one-scheduler-per-core. `BENDER_LANES=<n>` sets it explicitly, and the
 guidance in 4b applies: ~11 for throughput, more for burst headroom.
 
 ## 5. Process memory, and why 1M processes is a memory question
@@ -193,7 +193,7 @@ Measured per-process footprint before and after the slab-page change:
 
 | | per-process | 1M procs |
 |---|---|---|
-| before (`JANET_SLAB_PAGE_SIZE` 16 KB) | 34 KB | ~34 GB (impossible) |
+| before (`BENDER_SLAB_PAGE_SIZE` 16 KB) | 34 KB | ~34 GB (impossible) |
 | after (4 KB page) | **10 KB** | **~9 GB** (feasible) |
 | Erlang, for reference | 2.7–3.2 KB | ~2.7 GB |
 
@@ -202,7 +202,7 @@ Instrumenting the slab allocator showed **2.06 pages claimed per process**, i.e.
 little the process actually allocated. Dropping the page to one OS page (4 KB)
 cut it 3.4× with no measurable cost to per-hop work (still ~6 µs/hop).
 
-`1M` in Janet is therefore feasible now, but only with roughly 9 GB free. Under
+`1M` in Bender is therefore feasible now, but only with roughly 9 GB free. Under
 memory pressure it swaps and every timing number becomes meaningless — see §6.
 
 ## 5a. Milestone: 1,000,000 processes in 1.31 GB
@@ -216,7 +216,7 @@ After sharing young pages across ordinary proc construction (3401dc30):
 | **1000000** | **1311 MB** | **1.31 KB** |
 
 All 1000000 bodies executed (verified by a shared counter reaching 1000000).
-For comparison: Erlang measured 2.7-3.2 KB/proc, so Janet is now BELOW BEAM's
+For comparison: Erlang measured 2.7-3.2 KB/proc, so Bender is now BELOW BEAM's
 per-process footprint, and comfortably inside a 16 GB machine.
 
 The win came from a specific defect, not a general rewrite. Instrumenting the
@@ -256,7 +256,7 @@ The two big items are structural, not oversights:
   across processes would make one process's minor collection able to free
   another's objects, which is the property the whole model relies on.
 - **A running proc needs a real C stack.** Reducing the RESERVED commit
-  (JANET_FIBER_STACK_INIT_BYTES 64 KiB -> 16 KiB) measured *no change at all*
+  (BENDER_FIBER_STACK_INIT_BYTES 64 KiB -> 16 KiB) measured *no change at all*
   because reservation is not the cost; touching is.
 
 So ~10 KB is close to the floor for a process that owns a heap and can run C
@@ -272,7 +272,7 @@ arity-0 thunk; it is now 16 (376MB -> 367MB at 40000 procs).
 
 > Diagram-first version of this section, with imagined syntax and a decision
 > picture: `docs/internals/concurrency-visual-guide.md`. Runnable example:
-> `examples/concurrency-hybrid.janet`.
+> `examples/concurrency-hybrid.ben`.
 
 The two tiers compose, and the composition is better than either alone. Put
 fibers inside procs: procs supply the cores, fibers supply the unit count.
@@ -301,11 +301,11 @@ bookkeeping rather than by memory or core count. Neither Go (goroutines share
 one heap, so GC cost scales with live set) nor Erlang (2.7-3.2 KB per PROCESS
 with no cheaper inner tier) offers a comparable two-level structure: in BEAM the
 process IS the cheap unit, so 5M live processes would cost ~14 GB, whereas the
-Janet hybrid costs 2.3 GB and runs across all cores.
+Bender hybrid costs 2.3 GB and runs across all cores.
 
 Practical shape:
 
-```janet
+```bender
 ;; one proc per core-group of work, many fibers inside each
 (proc/spawn (fn []
               (def ch (ev/chan 4096))
@@ -329,16 +329,16 @@ processes that stay ALIVE (blocked on receive) until the count is reached:
 | runtime | 1M live | per proc | 5M live | per proc |
 |---|---|---|---|---|
 | Erlang | 3032 MB | 3.10 KB | 13601 MB | **2.79 KB** |
-| **Janet, single VM** | **1810 MB** | **1.85 KB** | **4123 MB** | **0.84 KB** |
-| Janet, 4 lanes routed | 139 MB @ 20k | 7.13 KB | — | — |
+| **Bender, single VM** | **1810 MB** | **1.85 KB** | **4123 MB** | **0.84 KB** |
+| Bender, 4 lanes routed | 139 MB @ 20k | 7.13 KB | — | — |
 
-**Janet hosts more live processes per byte than Erlang**: 1.7x cheaper at 1M and
+**Bender hosts more live processes per byte than Erlang**: 1.7x cheaper at 1M and
 3.3x cheaper at 5M. The five-million-process claim HOLDS on a single VM, at
 4.1 GB rather than the ~14 GB Erlang needs.
 
 Two things this corrects:
 
-1. The earlier "Janet cannot do 5M" conclusion was wrong. It failed because the
+1. The earlier "Bender cannot do 5M" conclusion was wrong. It failed because the
    test routed every proc across lanes (7.13 KB each) AND because Erlang's own
    number had been taken from an exiting-process benchmark.
 2. The "Erlang 0.17-0.21 KB per process" figure derived from its documentation is
@@ -347,16 +347,16 @@ Two things this corrects:
 The remaining real defect is unchanged and narrower than believed: **routed**
 lane-hosted procs cost 7.13 KB against 2.19 KB for the same proc spawned
 locally. That is a 3.3x tax on the lane path only, and it is what limits
-`proc/spawn` at scale -- not Janet's process representation.
+`proc/spawn` at scale -- not Bender's process representation.
 
 ## 5c-ter. The lane dispatcher does not pump (root cause of the lane tax)
 
 The routed-proc tax is now explained, and it is an architectural gap rather than
 an allocator cost.
 
-A lane worker is a Janet function that loops:
+A lane worker is a Bender function that loops:
 
-```janet
+```bender
 (def [op serial x y] (ev/take ctl))     ; blocks waiting for commands
 ```
 
@@ -374,7 +374,7 @@ already-running scheduler on the lane.
 
 The lane worker should be a scheduler, not a blocking dispatcher:
 
-```janet
+```bender
 (while running
   (ev/take-with-pump ctl runnable)   ;; park on ctl, but keep pumping local procs
   (handle op))
@@ -490,7 +490,7 @@ Concrete false conclusions this discipline would have prevented:
 
 | want | use |
 |---|---|
-| N independent tasks, results collected | `JANET_LANES=n` or `proc/lanes-start`, plus `ev/thread-chan` for results |
+| N independent tasks, results collected | `BENDER_LANES=n` or `proc/lanes-start`, plus `ev/thread-chan` for results |
 | keep captured mutable state shared | do NOT cross lanes — stay on one VM |
 | pass data to a lane worker | `proc/send` to its mailbox (marshal-copied, by design) |
 | results out of a lane worker | `ev/thread-chan`, or the worker's supervisor channel |

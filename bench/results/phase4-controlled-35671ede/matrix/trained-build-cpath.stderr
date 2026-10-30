@@ -1,7 +1,7 @@
-bender --aot: pgo collect: /tmp/janet-wave-controlled-35671ede/bench/cross-runtime/wave.janet 1000
+bender --aot: pgo collect: /tmp/bender-wave-controlled-35671ede/bench/cross-runtime/wave.ben 1000
 procs=1000 result=1000 spawn_ms=1 wave_ms=287 total_ms=288
 bender --aot: pgo collected profile
 procs=1000 result=1000 spawn_ms=1 wave_ms=264 total_ms=265
-profile-merge: 31 rows -> /tmp/janet-wave-evidence-35671ede/cache/janet/pgo/trained.rev-86808-0/aggregate.jdn (home=31)
+profile-merge: 31 rows -> /tmp/bender-wave-evidence-35671ede/cache/bender/pgo/trained.rev-86808-0/aggregate.jdn (home=31)
 bender --aot: cached PGO profiles for 1 workloads
-bender --aot: pgo parity ok, installed /tmp/janet-wave-evidence-35671ede/trained
+bender --aot: pgo parity ok, installed /tmp/bender-wave-evidence-35671ede/trained

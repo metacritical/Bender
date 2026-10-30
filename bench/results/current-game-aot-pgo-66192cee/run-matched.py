@@ -8,9 +8,9 @@ input, and both a pre-flight and a post-run validation prove it stayed that way.
 
 Two arm kinds share one code path:
 
-  BENCH  profiling off (JANET_NO_PROFILE=1). This is the measurable arm.
-  TRAIN  explicit profile collection (JANET_PROFILE=1 + JANET_PROFILE_OUT)
-         with JANET_NO_PROFILE deliberately ABSENT, so the dump is written
+  BENCH  profiling off (BENDER_NO_PROFILE=1). This is the measurable arm.
+  TRAIN  explicit profile collection (BENDER_PROFILE=1 + BENDER_PROFILE_OUT)
+         with BENDER_NO_PROFILE deliberately ABSENT, so the dump is written
          into this arm's evidence directory.
 
 The capture implementation is not reimplemented here. `tools/benchmark_capture`
@@ -328,15 +328,15 @@ def host_snapshot():
 
 
 def scrub_process_environment():
-    """Delete every inherited JANET_/BENDER_ key from THIS process.
+    """Delete every inherited BENDER_/BENDER_ key from THIS process.
 
     The capture utility merges its overrides over the inherited environment, so
     it can add a key but cannot remove one. Scrubbing here is what makes
-    "JANET_* is gone unless this driver set it" true for the child. The removed
+    "BENDER_* is gone unless this driver set it" true for the child. The removed
     NAMES are returned for the record; their values are not, because an
     inherited value is not evidence and may be private.
     """
-    dropped = sorted(k for k in os.environ if k.startswith(("JANET_", "BENDER_")))
+    dropped = sorted(k for k in os.environ if k.startswith(("BENDER_", "BENDER_")))
     for key in dropped:
         del os.environ[key]
     return dropped
@@ -345,18 +345,18 @@ def scrub_process_environment():
 def build_environment(cache_root, evidence_dir, train):
     """The small override set this driver adds back after scrubbing."""
     overrides = {
-        "JANET_LANES": "0",
+        "BENDER_LANES": "0",
         "XDG_CACHE_HOME": os.path.abspath(cache_root),
     }
     if train:
-        # JANET_NO_PROFILE must be ABSENT here. With it set the dump is
+        # BENDER_NO_PROFILE must be ABSENT here. With it set the dump is
         # suppressed, and the arm would claim a profile it never wrote.
-        overrides["JANET_PROFILE"] = "1"
-        overrides["JANET_PROFILE_OUT"] = os.path.join(
+        overrides["BENDER_PROFILE"] = "1"
+        overrides["BENDER_PROFILE_OUT"] = os.path.join(
             os.path.abspath(evidence_dir), "profile.jdn"
         )
     else:
-        overrides["JANET_NO_PROFILE"] = "1"
+        overrides["BENDER_NO_PROFILE"] = "1"
     return overrides
 
 
@@ -464,7 +464,7 @@ def main(argv=None):
         return REFUSED
 
     # Scrub BEFORE building the override set, so nothing inherited can survive
-    # into the child and the recorded overrides are the whole JANET_/BENDER_ story.
+    # into the child and the recorded overrides are the whole BENDER_/BENDER_ story.
     dropped = scrub_process_environment()
     env_overrides = build_environment(args.cache_root, args.evidence_dir, args.train)
 
@@ -596,7 +596,7 @@ def main(argv=None):
         gated["failures"].append(f"wall: exceeded {WALL_CAP_S}s cap (killed)")
         gated["passed"] = False
 
-    profile_path = env_overrides.get("JANET_PROFILE_OUT")
+    profile_path = env_overrides.get("BENDER_PROFILE_OUT")
     profile = None
     if profile_path:
         exists = os.path.isfile(profile_path) and os.path.getsize(profile_path) > 0
@@ -614,11 +614,11 @@ def main(argv=None):
                 "no dump was written; this binary likely lacks profile support, "
                 "so this arm is NOT a training arm"
             )
-            gated["failures"].append("profile: JANET_PROFILE_OUT produced no dump")
+            gated["failures"].append("profile: BENDER_PROFILE_OUT produced no dump")
             gated["passed"] = False
 
     summary = {
-        "schema": "janet/run-matched/1",
+        "schema": "bender/run-matched/1",
         "label": args.label,
         "mode": "train" if args.train else "bench",
         "passed": gated["passed"],
@@ -628,7 +628,7 @@ def main(argv=None):
         "capture_utility": capture_identity,
         "workload": {"before": pre, "after": post},
         "environment": {
-            "scrubbed_prefixes": ["JANET_", "BENDER_"],
+            "scrubbed_prefixes": ["BENDER_", "BENDER_"],
             "scrubbed_variables_dropped": dropped,
             "overrides": env_overrides,
         },

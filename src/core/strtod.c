@@ -35,21 +35,21 @@
  * 10, the letters are used as digits. A through Z correspond to the digits 10
  * through 35, and the lowercase letters have the same values. The radix number
  * is always in base 10. For example, a hexadecimal number could be written
- * '16rdeadbeef'. janet_scan_number also supports some c style syntax for
+ * '16rdeadbeef'. bender_scan_number also supports some c style syntax for
  * hexadecimal literals. The previous number could also be written
  * '0xdeadbeef'.
  */
 
-#ifndef JANET_AMALG
+#ifndef BENDER_AMALG
 #include "features.h"
-#include <janet.h>
+#include <bender.h>
 #include "util.h"
 #endif
 
 #include <math.h>
 #include <string.h>
 
-#define JANET_NUMBER_LENGTH_RIDICULOUS 0xFFFF
+#define BENDER_NUMBER_LENGTH_RIDICULOUS 0xFFFF
 
 /* Lookup table for getting values of characters when parsing numbers. Handles
  * digits 0-9 and a-z (and A-Z). A-Z have values of 10 to 35. */
@@ -89,9 +89,9 @@ static uint32_t *bignat_extra(struct BigNat *mant, int32_t n) {
     int32_t newn = oldn + n;
     if (mant->cap < newn) {
         int32_t newcap = 2 * newn;
-        uint32_t *mem = janet_realloc(mant->digits, (size_t) newcap * sizeof(uint32_t));
+        uint32_t *mem = bender_realloc(mant->digits, (size_t) newcap * sizeof(uint32_t));
         if (NULL == mem) {
-            JANET_OUT_OF_MEMORY;
+            BENDER_OUT_OF_MEMORY;
         }
         mant->cap = newcap;
         mant->digits = mem;
@@ -249,7 +249,7 @@ static double convert(
 
 /* Scan a real (double) from a string. If the string cannot be converted into
  * and integer, return 0. */
-int janet_scan_number_base(
+int bender_scan_number_base(
     const uint8_t *str,
     int32_t len,
     int32_t base,
@@ -268,7 +268,7 @@ int janet_scan_number_base(
      * the decimal point, exponent could wrap around and become positive. It's
      * easier to reject ridiculously large inputs than to check for overflows.
      * */
-    if (len > JANET_NUMBER_LENGTH_RIDICULOUS) goto error;
+    if (len > BENDER_NUMBER_LENGTH_RIDICULOUS) goto error;
 
     /* Get sign */
     if (str >= end) goto error;
@@ -384,22 +384,22 @@ int janet_scan_number_base(
         goto error;
 
     *out = convert(neg, &mant, base, ex);
-    janet_free(mant.digits);
+    bender_free(mant.digits);
     return 0;
 
 error:
-    janet_free(mant.digits);
+    bender_free(mant.digits);
     return 1;
 }
 
-int janet_scan_number(
+int bender_scan_number(
     const uint8_t *str,
     int32_t len,
     double *out) {
-    return janet_scan_number_base(str, len, 0, out);
+    return bender_scan_number_base(str, len, 0, out);
 }
 
-#ifdef JANET_INT_TYPES
+#ifdef BENDER_INT_TYPES
 
 static int scan_uint64(
     const uint8_t *str,
@@ -412,7 +412,7 @@ static int scan_uint64(
     *neg = 0;
     *out = 0;
     uint64_t accum = 0;
-    if (len > JANET_NUMBER_LENGTH_RIDICULOUS) return 0;
+    if (len > BENDER_NUMBER_LENGTH_RIDICULOUS) return 0;
     /* Get sign */
     if (str >= end) return 0;
     if (*str == '-') {
@@ -463,7 +463,7 @@ static int scan_uint64(
     return 1;
 }
 
-int janet_scan_int64(const uint8_t *str, int32_t len, int64_t *out) {
+int bender_scan_int64(const uint8_t *str, int32_t len, int64_t *out) {
     int neg;
     uint64_t bi;
     if (scan_uint64(str, len, &bi, &neg)) {
@@ -483,7 +483,7 @@ int janet_scan_int64(const uint8_t *str, int32_t len, int64_t *out) {
     return 0;
 }
 
-int janet_scan_uint64(const uint8_t *str, int32_t len, uint64_t *out) {
+int bender_scan_uint64(const uint8_t *str, int32_t len, uint64_t *out) {
     int neg;
     uint64_t bi;
     if (scan_uint64(str, len, &bi, &neg)) {
@@ -495,45 +495,45 @@ int janet_scan_uint64(const uint8_t *str, int32_t len, uint64_t *out) {
     return 0;
 }
 
-/* Similar to janet_scan_number but allows for
+/* Similar to bender_scan_number but allows for
  * more numeric types with a given suffix. */
-int janet_scan_numeric(
+int bender_scan_numeric(
     const uint8_t *str,
     int32_t len,
-    Janet *out) {
+    Bender *out) {
     int result;
     double num;
     int64_t i64 = 0;
     uint64_t u64 = 0;
     if (len < 2 || str[len - 2] != ':') {
-        result = janet_scan_number_base(str, len, 0, &num);
-        *out = janet_wrap_number(num);
+        result = bender_scan_number_base(str, len, 0, &num);
+        *out = bender_wrap_number(num);
         return result;
     }
     switch (str[len - 1]) {
         default:
             return 1;
         case 'n':
-            result = janet_scan_number_base(str, len - 2, 0, &num);
-            *out = janet_wrap_number(num);
+            result = bender_scan_number_base(str, len - 2, 0, &num);
+            *out = bender_wrap_number(num);
             return result;
-        /* Condition is inverted janet_scan_int64 and janet_scan_uint64 */
+        /* Condition is inverted bender_scan_int64 and bender_scan_uint64 */
         case 's':
-            result = !janet_scan_int64(str, len - 2, &i64);
-            *out = janet_wrap_s64(i64);
+            result = !bender_scan_int64(str, len - 2, &i64);
+            *out = bender_wrap_s64(i64);
             return result;
         case 'u':
-            result = !janet_scan_uint64(str, len - 2, &u64);
-            *out = janet_wrap_u64(u64);
+            result = !bender_scan_uint64(str, len - 2, &u64);
+            *out = bender_wrap_u64(u64);
             return result;
     }
 }
 
 #endif
 
-void janet_buffer_dtostr(JanetBuffer *buffer, double x) {
+void bender_buffer_dtostr(BenderBuffer *buffer, double x) {
 #define BUFSIZE 32
-    janet_buffer_extra(buffer, BUFSIZE);
+    bender_buffer_extra(buffer, BUFSIZE);
     int count = snprintf((char *) buffer->data + buffer->count, BUFSIZE, "%.17g", x);
 #undef BUFSIZE
     /* fix locale issues with commas */

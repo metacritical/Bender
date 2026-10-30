@@ -1,14 +1,14 @@
 #!/bin/sh
 # Run from repository root after make. All outputs stay in a unique scratch root.
 set -eu
-: "${JANET_AOT_TEST_ROOT:?set a private scratch root}"
+: "${BENDER_AOT_TEST_ROOT:?set a private scratch root}"
 : "${XDG_CACHE_HOME:?set a private cache root}"
-root=$(mktemp -d "$JANET_AOT_TEST_ROOT/native-executor-XXXXXXXX")
-export JANET_NO_PROFILE=1
+root=$(mktemp -d "$BENDER_AOT_TEST_ROOT/native-executor-XXXXXXXX")
+export BENDER_NO_PROFILE=1
 echo "native executor evidence: $root"
 python3 test/native-executor-allowlist.py
-JANET_NATIVE_EXECUTORS=1 ./build/bender tools/callgraph.janet test/fixtures/native-executor.janet --emit-native-lib "$root/generated" > "$root/emitter.log" 2>&1
-./build/bender test/native-executor-opcodes.janet "$root/generated/native.c"
+BENDER_NATIVE_EXECUTORS=1 ./build/bender tools/callgraph.ben test/fixtures/native-executor.ben --emit-native-lib "$root/generated" > "$root/emitter.log" 2>&1
+./build/bender test/native-executor-opcodes.ben "$root/generated/native.c"
 test ! -s "$root/generated/native-names.txt"
 grep 'numeric-sum' "$root/generated/native-executors.txt"
 grep 'numeric-nested' "$root/generated/native-executors.txt"
@@ -18,26 +18,26 @@ grep 'boundary' "$root/generated/native-executors.txt"
 grep 'unsupported-loop' "$root/generated/native-executors.txt"
 if grep 'unsupported-bit' "$root/generated/native-executors.txt"; then exit 1; fi
 # Fast-path calls must be emitted, not just the generic VM boundaries.
-grep -q 'janet_native_array_put_fast' "$root/generated/native.c"
-grep -q 'janet_native_buffer_put_fast' "$root/generated/native.c"
-grep -q 'janet_native_table_get_fast' "$root/generated/native.c"
-grep -q 'janet_native_container_call_fast' "$root/generated/native.c"
-grep -q 'janet_native_table_put_fast' "$root/generated/native.c"
-grep -q 'janet_native_buffer_push_string_ready' "$root/generated/native.c"
-grep -q 'janet_native_core_predicate' "$root/generated/native.c"
-grep -q 'janet_native_register_predicates' "$root/generated/native.c"
+grep -q 'bender_native_array_put_fast' "$root/generated/native.c"
+grep -q 'bender_native_buffer_put_fast' "$root/generated/native.c"
+grep -q 'bender_native_table_get_fast' "$root/generated/native.c"
+grep -q 'bender_native_container_call_fast' "$root/generated/native.c"
+grep -q 'bender_native_table_put_fast' "$root/generated/native.c"
+grep -q 'bender_native_buffer_push_string_ready' "$root/generated/native.c"
+grep -q 'bender_native_core_predicate' "$root/generated/native.c"
+grep -q 'bender_native_register_predicates' "$root/generated/native.c"
 # Continuation emission is profile-narrowed: with no profile, NOT ONE
 # continuation attempt may be emitted, which is exactly the pre-feature
 # shape (a plain NX_EXIT to the VM at every non-terminal call PC). An
 # always-on attempt cost +0.6-1.0% geomean for no measurable benefit.
-if grep -q 'janet_native_call_enter' "$root/generated/native.c"; then
+if grep -q 'bender_native_call_enter' "$root/generated/native.c"; then
     echo "profile-free build emitted a continuation attempt" >&2; exit 1
 fi
-if grep -q 'return JANET_NATIVE_FRAME' "$root/generated/native.c"; then
+if grep -q 'return BENDER_NATIVE_FRAME' "$root/generated/native.c"; then
     echo "profile-free build emitted a continuation step" >&2; exit 1
 fi
 test ! -s "$root/generated/native-continuations.txt"
-JANET_NATIVE_EXECUTORS=1 ./build/bender --aot test/fixtures/native-executor.janet --native --no-auto-pgo -o "$root/image" > "$root/image-build.log" 2>&1
+BENDER_NATIVE_EXECUTORS=1 ./build/bender --aot test/fixtures/native-executor.ben --native --no-auto-pgo -o "$root/image" > "$root/image-build.log" 2>&1
 "$root/image" > "$root/image.log" 2>&1
 grep 'image-executor' "$root/image.log"
 # Stage 2's guarded geti/next/string equality, scratch tuple and FFI alias
@@ -52,11 +52,11 @@ case "$(uname -s)" in
 esac
 ${CC:-cc} -O2 -fPIC "$ops_link" test/fixtures/native-executor-ops-lib.c \
     -o "$root/native-ops.$ops_ext"
-export JANET_NATIVE_OPS_LIB="$root/native-ops.$ops_ext"
-./build/bender --aot test/fixtures/native-executor-ops-main.janet --native \
+export BENDER_NATIVE_OPS_LIB="$root/native-ops.$ops_ext"
+./build/bender --aot test/fixtures/native-executor-ops-main.ben --native \
     --no-auto-pgo -o "$root/ops-boxed" > "$root/ops-boxed-build.log" 2>&1
-JANET_NATIVE_EXECUTORS=1 ./build/bender --aot \
-    test/fixtures/native-executor-ops-main.janet --native --no-auto-pgo \
+BENDER_NATIVE_EXECUTORS=1 ./build/bender --aot \
+    test/fixtures/native-executor-ops-main.ben --native --no-auto-pgo \
     -o "$root/ops-native" > "$root/ops-native-build.log" 2>&1
 grep 'indexed-loop' "$root/ops-native-native/native-executors.txt"
 grep 'scratch-loop' "$root/ops-native-native/native-executors.txt"
@@ -65,9 +65,9 @@ grep 'buffer-loop' "$root/ops-native-native/native-executors.txt"
 grep 'buffer-guard-loop' "$root/ops-native-native/native-executors.txt"
 # The same generated primitive struct writer must accept the scratch array
 # fast path and an immutable tuple, with other indexables still going through
-# the ordinary janet_getindexed fallback.
-grep -q 'if (janet_checktype(v, JANET_ARRAY))' "$root/ops-native-native/native.c"
-grep -q 'else if (janet_checktype(v, JANET_TUPLE))' "$root/ops-native-native/native.c"
+# the ordinary bender_getindexed fallback.
+grep -q 'if (bender_checktype(v, BENDER_ARRAY))' "$root/ops-native-native/native.c"
+grep -q 'else if (bender_checktype(v, BENDER_TUPLE))' "$root/ops-native-native/native.c"
 "$root/ops-boxed" > "$root/ops-boxed.out" 2> "$root/ops-boxed.err"
 NATIVE_OPS_STATS=1 "$root/ops-native" > "$root/ops-native.out" 2> "$root/ops-native.err"
 cmp "$root/ops-boxed.out" "$root/ops-native.out"
@@ -81,26 +81,26 @@ echo "native geti/next/scratch/alias/GC image parity passed"
 # Two runs of the SAME binary, with the continuation path enabled and
 # disabled. Every assertion inside the image must hold both times -- that is
 # the differential -- and the counter identity
-#   chained call edges + interpreted Janet JOP_CALLs
+#   chained call edges + interpreted Bender JOP_CALLs
 # must come out to the same total, which is what catches a call executed
 # twice or skipped when the callee is pure enough for output to agree.
 # The emission is narrowed by :calledges evidence and gated by
-# JANET_EXECUTOR_EDGE_MIN_CALLS, so this leg needs a real profile: --pgo
+# BENDER_EXECUTOR_EDGE_MIN_CALLS, so this leg needs a real profile: --pgo
 # collects one, gates the binary against the interpreter, and installs only
 # on byte parity.
-JANET_NATIVE_EXECUTORS=1 JANET_EXECUTOR_EDGE_MIN_CALLS=5 \
-    JANET_EXECUTOR_LEAF_MIN_CALLS=5 ./build/bender --aot \
-    test/fixtures/native-continuation.janet \
+BENDER_NATIVE_EXECUTORS=1 BENDER_EXECUTOR_EDGE_MIN_CALLS=5 \
+    BENDER_EXECUTOR_LEAF_MIN_CALLS=5 ./build/bender --aot \
+    test/fixtures/native-continuation.ben \
     --native --pgo '' -o "$root/cont" > "$root/cont-build.log" 2>&1
 # Every selected edge is reported, and the emitted C carries exactly one
 # attempt per selected PC -- no more, no fewer.
 test -s "$root/cont-native/native-continuations.txt"
 sel=$(wc -l < "$root/cont-native/native-continuations.txt" | tr -d ' ')
-emitted=$(grep -c 'janet_native_call_enter' "$root/cont-native/native.c")
+emitted=$(grep -c 'bender_native_call_enter' "$root/cont-native/native.c")
 echo "continuation emission: selected=$sel emitted=$emitted"
 test "$sel" = "$emitted"
 "$root/cont" > "$root/cont-on.log" 2>&1
-JANET_NATIVE_NO_CONTINUATION=1 "$root/cont" > "$root/cont-off.log" 2>&1
+BENDER_NATIVE_NO_CONTINUATION=1 "$root/cont" > "$root/cont-off.log" 2>&1
 grep 'native-continuation image passed' "$root/cont-on.log"
 grep 'native-continuation image passed' "$root/cont-off.log"
 cont_total() { sed -n 's/.*cont-identity total=\([0-9]*\) .*/\1/p' "$1"; }
@@ -118,26 +118,26 @@ echo "native continuation chain and counter identity passed"
 build_case() {
     name=$1
     shift
-    cc -O1 -g -ffp-contract=off -Isrc/include -Isrc/conf "$@" -c build/c/janet.c -o "$root/$name.o" > "$root/$name-build.log" 2>&1
+    cc -O1 -g -ffp-contract=off -Isrc/include -Isrc/conf "$@" -c build/c/bender.c -o "$root/$name.o" > "$root/$name-build.log" 2>&1
     cc -O1 -g -ffp-contract=off -Isrc/include -Isrc/conf -Isrc/core "$@" \
        "-DNATIVE_EXECUTOR_C=\"$root/generated/native.c\"" test/native-executor.c "$root/$name.o" \
        -lm -lpthread -ldl -o "$root/$name" >> "$root/$name-build.log" 2>&1
-    "$root/$name" test/fixtures/native-executor.janet > "$root/$name.log" 2>&1
+    "$root/$name" test/fixtures/native-executor.ben > "$root/$name.log" 2>&1
     cat "$root/$name.log"
     cc -O1 -g -ffp-contract=off -Isrc/include -Isrc/conf -Isrc/core "$@" \
        "-DNATIVE_EXECUTOR_C=\"$root/generated/native.c\"" test/native-executor-mixed.c "$root/$name.o" \
        -lm -lpthread -ldl -o "$root/$name-mixed" >> "$root/$name-build.log" 2>&1
-    "$root/$name-mixed" test/fixtures/native-executor.janet > "$root/$name-mixed.log" 2>&1
+    "$root/$name-mixed" test/fixtures/native-executor.ben > "$root/$name-mixed.log" 2>&1
     cat "$root/$name-mixed.log"
 }
-build_case budget1 -DJANET_NATIVE_EXECUTORS -DJANET_QUANTUM_BUDGET=1
-build_case budget2 -DJANET_NATIVE_EXECUTORS -DJANET_QUANTUM_BUDGET=2
-build_case portable -DJANET_NATIVE_EXECUTORS -DJANET_QUANTUM_BUDGET=2 -DJANET_NO_COMPUTED_GOTOS
-build_case nointerrupt -DJANET_NATIVE_EXECUTORS -DJANET_NO_INTERPRETER_INTERRUPT
+build_case budget1 -DBENDER_NATIVE_EXECUTORS -DBENDER_QUANTUM_BUDGET=1
+build_case budget2 -DBENDER_NATIVE_EXECUTORS -DBENDER_QUANTUM_BUDGET=2
+build_case portable -DBENDER_NATIVE_EXECUTORS -DBENDER_QUANTUM_BUDGET=2 -DBENDER_NO_COMPUTED_GOTOS
+build_case nointerrupt -DBENDER_NATIVE_EXECUTORS -DBENDER_NO_INTERPRETER_INTERRUPT
 # Opt-in per-PC retirement census: counts only general emitter branches and
 # explicitly reports partial coverage with no gate, so the fused numeric-sum
 # region stays uncounted here.
-build_case census -DJANET_NATIVE_EXECUTORS -DJANET_QUANTUM_BUDGET=2 -DJANET_NATIVE_RETIRE_CENSUS
+build_case census -DBENDER_NATIVE_EXECUTORS -DBENDER_QUANTUM_BUDGET=2 -DBENDER_NATIVE_RETIRE_CENSUS
 build_case disabled -DTEST_NATIVE_DISABLED
-build_case sanitized -DJANET_NATIVE_EXECUTORS -DJANET_QUANTUM_BUDGET=2 -fsanitize=address,undefined -fno-omit-frame-pointer
+build_case sanitized -DBENDER_NATIVE_EXECUTORS -DBENDER_QUANTUM_BUDGET=2 -fsanitize=address,undefined -fno-omit-frame-pointer
 echo "native executor matrix passed: $root"

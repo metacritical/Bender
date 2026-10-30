@@ -36,9 +36,9 @@ INFO: RLGL: Render batch vertex buffers loaded successfully in VRAM (GPU)
 INFO: RLGL: Default OpenGL state initialized successfully
 INFO: TEXTURE: [ID 2] Texture loaded successfully (128x128 | GRAY_ALPHA | 1 mipmaps)
 INFO: FONT: Default font loaded successfully (224 glyphs)
-INFO: SYSTEM: Working Directory: /Users/pankajdoharey/Development/Projects/janet/build/current-game-aot-pgo-66192cee/game-source
+INFO: SYSTEM: Working Directory: /Users/pankajdoharey/Development/Projects/bender/build/current-game-aot-pgo-66192cee/game-source
 INFO: TIMER: Target time per frame: 0.000 milliseconds
-startup artwork: :script "/Users/pankajdoharey/Development/Projects/janet/build/current-game-aot-pgo-66192cee/game-source/assets"
+startup artwork: :script "/Users/pankajdoharey/Development/Projects/bender/build/current-game-aot-pgo-66192cee/game-source/assets"
 scenic: finite map chunks [-1 -1 6 6]  spawn chunk (2,2)  sea 28  snow 170  tree 150  band 4..252
 worldgen: 25 spawn chunks in 72 ms (tile cache)
 INFO: TEXTURE: [ID 3] Texture loaded successfully (64x64 | R8G8B8A8 | 1 mipmaps)

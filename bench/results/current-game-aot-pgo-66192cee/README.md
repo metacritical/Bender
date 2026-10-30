@@ -37,7 +37,7 @@ These are observations from **one successful matched pair**, not statistical thr
 - World slot: `15f2268da8ec2a4105ef2deaf6ae0b19`, Terrain Diffusion 12345. Saved-world manifest paths are relative to that slot directory.
 - Scene in each arm: radius 16, loaded 64, drawn 64, wanted 64, streamed in/out 0/0; frustum culling enabled; edits 0.
 - Same `--frames 6000 --uncapped --world-slot ... --world-root ...` arguments. The frozen bounded test mode rotates yaw/pitch deterministically by frame index. No fixed-camera flag was added because it would change the reference workload.
-- Inherited `JANET_*`/`BENDER_*` keys scrubbed; `JANET_NO_PROFILE=1`, `JANET_LANES=0`; distinct initially empty per-arm XDG cache roots.
+- Inherited `BENDER_*`/`BENDER_*` keys scrubbed; `BENDER_NO_PROFILE=1`, `BENDER_LANES=0`; distinct initially empty per-arm XDG cache roots.
 - Complete stdout/stderr bytes, byte counts, SHA256 digests, commands, binary hashes, exits, timestamps, resource reports and pre/post workload validation are committed in `interp-6000/` and `plain-aot-6000/`. Unlike the earlier interpreter comparison, these raw logs do not depend on a temporary directory.
 - Both arms recorded the same capture utility SHA256 `ac1b5ff70cebe9c839db151074bd994e458d00c66ac3a9ff3fa3a2c84bc8bbe2`, matching committed `95ea9846`. Subsequent tooling edits are not the implementation used for this pair.
 - Frozen game/world archive: `frozen-game-source-66192cee.tar.gz`; source archive and recovery/roundtrip verification are also committed. Build outputs remain under ignored `build/current-game-aot-pgo-66192cee/`; generated C/manifests and output hashes are retained in the build evidence directories.

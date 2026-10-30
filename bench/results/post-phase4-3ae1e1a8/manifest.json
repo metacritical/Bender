@@ -1,9 +1,9 @@
 {
   "baseline_commit": "3ae1e1a858da358a9687a6d604b5832b0fb7fff8",
-  "baseline_worktree": "/tmp/janet-next-baseline-3ae1e1a8",
-  "candidate_worktree": "/tmp/janet-next-candidate-3ae1e1a8",
+  "baseline_worktree": "/tmp/bender-next-baseline-3ae1e1a8",
+  "candidate_worktree": "/tmp/bender-next-candidate-3ae1e1a8",
   "candidate_branch": "post-phase4-candidate-3ae1e1a8",
-  "raw_evidence_directory": "/tmp/janet-next-evidence-3ae1e1a8",
+  "raw_evidence_directory": "/tmp/bender-next-evidence-3ae1e1a8",
   "native_executors": true,
   "compiler": "Apple clang version 21.0.0 (clang-2100.3.34.2)",
   "target": "arm64-apple-darwin25.6.0",

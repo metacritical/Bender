@@ -1,7 +1,7 @@
 /* Runnable contract for the opt-in fast-PUT commit hook. This is deliberately
  * not a whole native-PC census: alias callbacks and continuation GC exits
  * remain unresolved and cannot authorize a numeric-opportunity stop gate. */
-#include <janet.h>
+#include <bender.h>
 #include <assert.h>
 #include <setjmp.h>
 
@@ -14,8 +14,8 @@ static void commit_then_unwind(void *opaque) {
 }
 #include <stdio.h>
 
-#ifndef JANET_NATIVE_COMMIT_PROBE
-#error Build this fixture with JANET_NATIVE_COMMIT_PROBE=1
+#ifndef BENDER_NATIVE_COMMIT_PROBE
+#error Build this fixture with BENDER_NATIVE_COMMIT_PROBE=1
 #endif
 
 static void committed(void *opaque) {
@@ -25,54 +25,54 @@ static void committed(void *opaque) {
 
 int main(void) {
     unsigned count = 0;
-    Janet key = janet_wrap_integer(0);
-    Janet value = janet_wrap_integer(17);
-    janet_init();
+    Bender key = bender_wrap_integer(0);
+    Bender value = bender_wrap_integer(17);
+    bender_init();
 
-    JanetArray *array = janet_array(1);
-    janet_array_push(array, janet_wrap_nil());
-    Janet a = janet_wrap_array(array);
-    assert(!janet_native_array_put_fast_probe(a, janet_wrap_integer(1), value, committed, &count));
+    BenderArray *array = bender_array(1);
+    bender_array_push(array, bender_wrap_nil());
+    Bender a = bender_wrap_array(array);
+    assert(!bender_native_array_put_fast_probe(a, bender_wrap_integer(1), value, committed, &count));
     assert(count == 0);
-    assert(janet_native_array_put_fast_probe(a, key, value, committed, &count));
-    assert(count == 1 && janet_equals(array->data[0], value));
+    assert(bender_native_array_put_fast_probe(a, key, value, committed, &count));
+    assert(count == 1 && bender_equals(array->data[0], value));
 
-    JanetBuffer *buffer = janet_buffer(1);
-    janet_buffer_push_u8(buffer, 0);
-    Janet b = janet_wrap_buffer(buffer);
-    assert(!janet_native_buffer_put_fast_probe(b, key, janet_wrap_nil(), committed, &count));
+    BenderBuffer *buffer = bender_buffer(1);
+    bender_buffer_push_u8(buffer, 0);
+    Bender b = bender_wrap_buffer(buffer);
+    assert(!bender_native_buffer_put_fast_probe(b, key, bender_wrap_nil(), committed, &count));
     assert(count == 1);
-    assert(janet_native_buffer_put_fast_probe(b, key, value, committed, &count));
+    assert(bender_native_buffer_put_fast_probe(b, key, value, committed, &count));
     assert(count == 2 && buffer->data[0] == 17);
 
-    JanetTable *table = janet_table(0);
-    Janet t = janet_wrap_table(table);
-    Janet tk = janet_wrap_integer(2);
-    assert(!janet_native_table_put_fast_probe(t, tk, value, committed, &count));
+    BenderTable *table = bender_table(0);
+    Bender t = bender_wrap_table(table);
+    Bender tk = bender_wrap_integer(2);
+    assert(!bender_native_table_put_fast_probe(t, tk, value, committed, &count));
     assert(count == 2);
-    janet_table_put(table, tk, janet_wrap_integer(1));
-    assert(janet_native_table_put_fast_probe(t, tk, value, committed, &count));
-    assert(count == 3 && janet_equals(janet_table_get(table, tk), value));
+    bender_table_put(table, tk, bender_wrap_integer(1));
+    assert(bender_native_table_put_fast_probe(t, tk, value, committed, &count));
+    assert(count == 3 && bender_equals(bender_table_get(table, tk), value));
     /* Successful no-op keys are still completed bytecode operations. */
-    assert(janet_native_table_put_fast_probe(t, janet_wrap_nil(), value, committed, &count));
+    assert(bender_native_table_put_fast_probe(t, bender_wrap_nil(), value, committed, &count));
     assert(count == 4);
     /* Forced unwind from the commit hook demonstrates that the mutation
      * precedes a nonlocal exit (a barrier panic would run after the hook). */
     if (!setjmp(after_commit)) {
-        janet_native_array_put_fast_probe(a, key, janet_wrap_integer(19),
+        bender_native_array_put_fast_probe(a, key, bender_wrap_integer(19),
                                     commit_then_unwind, &count);
         assert(0 && "commit hook did not unwind");
     }
     assert(unwind_count == 1 && count == 5);
-    assert(janet_equals(array->data[0], janet_wrap_integer(19)));
+    assert(bender_equals(array->data[0], bender_wrap_integer(19)));
     if (!setjmp(after_commit)) {
-        janet_native_table_put_fast_probe(t, tk, janet_wrap_integer(23),
+        bender_native_table_put_fast_probe(t, tk, bender_wrap_integer(23),
                                     commit_then_unwind, &count);
         assert(0 && "table commit hook did not unwind");
     }
     assert(unwind_count == 2 && count == 6);
-    assert(janet_equals(janet_table_get(table, tk), janet_wrap_integer(23)));
+    assert(bender_equals(bender_table_get(table, tk), bender_wrap_integer(23)));
     puts("native fast-PUT commit contract: passed");
-    janet_deinit();
+    bender_deinit();
     return 0;
 }

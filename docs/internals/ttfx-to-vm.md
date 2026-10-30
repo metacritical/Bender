@@ -3,7 +3,7 @@
 Every optimization that worked on the ttfx port maps to a general
 compiler/VM feature. This note is the bridge: each lesson, the
 universal mechanism, where it lands, and the gate. Goal: after
-compilation, Janet programs approach Rust throughput without giving
+compilation, Bender programs approach Rust throughput without giving
 up dynamism. Measured anchor points (46x190 decrypt, M2 Pro): stock
 174 fps -> port shaping 547 fps (3.15x) -> Rust 470k fps. The
 remaining ~1000x is per-cell boxing + dispatch on the stepping path.
@@ -13,7 +13,7 @@ below can.
 ## L1. Typed unboxed arrays (from: SoA grid, 1.37x)
 
 Lesson: replacing a hash table with dense parallel arrays was the
-single biggest structural win per line of code. Today Janet makes you
+single biggest structural win per line of code. Today Bender makes you
 hand-roll parallel `@[]` columns, and kernels see them as opaque
 `:array` (boxed slots).
 
@@ -37,8 +37,8 @@ The backend unboxes when the ELEMENT TYPE is known, from either:
 - Kernel side: proven-numeric arrays lower to raw pointers; get/put
   become one indexed load/store. Rust's `Vec<f64>` shape, discovered
   not declared.
-- Files: `tools/infer.janet` (element-type lattice), `src/core/gc.c`
-  (unboxed block flavor), `tools/callgraph.janet` (emission).
+- Files: `tools/infer.ben` (element-type lattice), `src/core/gc.c`
+  (unboxed block flavor), `tools/callgraph.ben` (emission).
 - Gate: same bench discipline — unboxing must show up as kernel
   param/emit lines + fps, or it stays off (flag-gated until proven).
 
@@ -49,13 +49,13 @@ compiled into the thunk were invisible, so PGO had no candidates.
 
 Mechanism: the preimport pass already knows every file it loaded.
 Thread those paths into analysis + registration automatically
-(`janet-aot.sh --include-imports`, or always-on with an opt-out).
+(`bender-aot.sh --include-imports`, or always-on with an opt-out).
 Then PGO seeding + widening apply to *all* program code, not just the
 entry file.
 
-- Files: `tools/callgraph.janet` (register per-file defs from
-  preimport record), `tools/mkimage.janet` (strip native names in
-  imported files too), `tools/janet-aot.sh` (flag).
+- Files: `tools/callgraph.ben` (register per-file defs from
+  preimport record), `tools/mkimage.ben` (strip native names in
+  imported files too), `tools/bender-aot.sh` (flag).
 - Gate: ttfx rebuild emits easing/anim kernels without source
   reshaping.
 
@@ -100,7 +100,7 @@ of the work — L3 adds field-name ergonomics and per-record layout).
 ## Order and gates
 
 0. Auto-PGO pipeline (from: every lesson needed manual steps) — one
-   command closes the loop: `bender --aot app.janet --native --pgo "workload args"` runs the
+   command closes the loop: `bender --aot app.ben --native --pgo "workload args"` runs the
    program under the collector, dumps the profile, recompiles with
    seeding + L2 visibility, re-verifies byte parity, and only then
    replaces the binary. Detection, not annotation: hot patterns

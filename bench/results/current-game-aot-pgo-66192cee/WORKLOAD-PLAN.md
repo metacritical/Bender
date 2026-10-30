@@ -12,7 +12,7 @@ unrelated work.
   freeze is the only reproducibility mechanism.
 - Reference commit: `66192cee`, evidence dir
   `bench/results/current-game-6a4f008b-c07042a7`.
-- Frozen bytes live at `/tmp/janet-current-game-ab-evidence/game-source`,
+- Frozen bytes live at `/tmp/bender-current-game-ab-evidence/game-source`,
   pinned by three committed manifests: `SOURCE-MANIFEST.txt` (`dfc64b0e`),
   `runtime-source-manifest.json` (`8d3fc0c3`), `saved-world-manifest.json`
   (`2bb4e82a`).
@@ -39,7 +39,7 @@ unrelated work.
 - No game run, no build, no benchmark.
 - Do not interrupt other agents' processes.
 - Preserve unrelated work: `M Makefile`, `?? grammar/`,
-  `?? tools/linguist_grammar.janet`, and other agents' in-flight files.
+  `?? tools/linguist_grammar.ben`, and other agents' in-flight files.
 - `build/` is gitignored: the copy is local durability, the tarball is the
   committed durability.
 

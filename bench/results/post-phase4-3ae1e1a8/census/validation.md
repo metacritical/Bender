@@ -1,8 +1,8 @@
 # Pinned baseline executor/census fixture validation
 
-Source3ae1e1a8, isolated `/tmp/janet-next-baseline-3ae1e1a8`; no tracked source changed.
+Source3ae1e1a8, isolated `/tmp/bender-next-baseline-3ae1e1a8`; no tracked source changed.
 
-`make NATIVE_EXECUTORS=1 test-executors` initial exit2: AOT compile could not locate janetconf.h. Earlier mode-refresh and forced-quantum sections had passed, but the whole initial command is a failure, not green. The exact same suite rerun with the worktree src/conf in CPATH exited0. Exact argv/environment/stdout/stderr/status retained; SDK selection/provenance in command records. No semantic patch was made to turn a failure green.
+`make NATIVE_EXECUTORS=1 test-executors` initial exit2: AOT compile could not locate benderconf.h. Earlier mode-refresh and forced-quantum sections had passed, but the whole initial command is a failure, not green. The exact same suite rerun with the worktree src/conf in CPATH exited0. Exact argv/environment/stdout/stderr/status retained; SDK selection/provenance in command records. No semantic patch was made to turn a failure green.
 
 Successful retry includes plain/native/plain registration-mode checks, fixed-seed forced-quantum replay, numeric/nested and boundaries, native image parity, continuation on/off identity, opt-in partial per-PC census, budget1/2, portable/census/disabled/sanitized executor matrix and boundary GC/resume/marshal checks. Output explicitly reports fused numeric-sum original-PC2..6 coverage=partial gate=unavailable. Synthetic parity is not actual TrineXraft/ttfx forced-interrupt proof.
 

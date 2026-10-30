@@ -3,38 +3,38 @@
  * registration + caller-side await); proc mailboxes reuse it so all
  * channel traffic keeps one funnel (Step 4.1 lane pin included). */
 
-#ifndef JANET_EV_H
-#define JANET_EV_H
+#ifndef BENDER_EV_H
+#define BENDER_EV_H
 
-#ifndef JANET_AMALG
+#ifndef BENDER_AMALG
 #include "features.h"
-#include <janet.h>
+#include <bender.h>
 #endif
 
 /* Blocking give (mode 0), try-give (mode 3), supervisor push (mode 2).
- * Nonzero = caller must janet_await (value pends); zero = done. */
-int janet_channel_push(JanetChannel *channel, Janet x, int mode);
+ * Nonzero = caller must bender_await (value pends); zero = done. */
+int bender_channel_push(BenderChannel *channel, Bender x, int mode);
 /* proc/kill support: cancel a recv-parked reader with an error. */
-int janet_channel_cancel_reader(JanetChannel *channel, JanetFiber *fiber, Janet reason);
+int bender_channel_cancel_reader(BenderChannel *channel, BenderFiber *fiber, Bender reason);
 /* Blocking take (mode 0), choice variants, supervisor drain (mode 2).
  * Nonzero = item obtained now (caller schedules root fiber with it);
- * zero = caller must janet_await. */
-int janet_channel_pop(JanetChannel *channel, Janet *item, int is_choice);
+ * zero = caller must bender_await. */
+int bender_channel_pop(BenderChannel *channel, Bender *item, int is_choice);
 /* Channel-pending registration lifecycle (unlink-on-free): entries
  * still queued when a fiber is freed are flagged dead in their
  * registration node, so every consumer path reclaims them without
  * ever dereferencing the freed fiber (replaces the unsound GC
- * probe-on-read and the never-wired janet_channel_purge_fiber). */
-void janet_ev_chanpends_deinit(JanetFiber *fiber);
+ * probe-on-read and the never-wired bender_channel_purge_fiber). */
+void bender_ev_chanpends_deinit(BenderFiber *fiber);
 /* GC mark hook: fibers pin the channels they are parked behind. */
-void janet_ev_chanpends_mark(JanetFiber *fiber);
-void janet_channel_set_proc_alive(JanetChannel *channel, int alive);
+void bender_ev_chanpends_mark(BenderFiber *fiber);
+void bender_channel_set_proc_alive(BenderChannel *channel, int alive);
 /* P-lanes: the ev/thread worker subroutine, reused by proc/lanes-start to
  * launch resident lane VMs (same share-nothing thread body). */
-JanetEVGenericMessage janet_go_thread_subr(JanetEVGenericMessage args);
+BenderEVGenericMessage bender_go_thread_subr(BenderEVGenericMessage args);
 /* P-lanes: C-level threaded channel constructor (the struct is
  * private to ev.c). */
-JanetChannel *janet_channel_make_threaded_c(int32_t limit);
-int janet_channel_proc_alive(JanetChannel *channel);
+BenderChannel *bender_channel_make_threaded_c(int32_t limit);
+int bender_channel_proc_alive(BenderChannel *channel);
 
 #endif

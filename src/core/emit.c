@@ -20,9 +20,9 @@
 * IN THE SOFTWARE.
 */
 
-#ifndef JANET_AMALG
+#ifndef BENDER_AMALG
 #include "features.h"
-#include <janet.h>
+#include <bender.h>
 #include "emit.h"
 #include "vector.h"
 #include "regalloc.h"
@@ -30,69 +30,69 @@
 #endif
 
 /* Get a register */
-int32_t janetc_allocfar(JanetCompiler *c) {
-    int32_t reg = janetc_regalloc_1(&c->scope->ra);
+int32_t benderc_allocfar(BenderCompiler *c) {
+    int32_t reg = benderc_regalloc_1(&c->scope->ra);
     if (reg > 0xFFFF) {
-        janetc_cerror(c, "ran out of internal registers");
+        benderc_cerror(c, "ran out of internal registers");
     }
     return reg;
 }
 
 /* Get a register less than 256 for temporary use. */
-int32_t janetc_allocnear(JanetCompiler *c, JanetcRegisterTemp tag) {
-    return janetc_regalloc_temp(&c->scope->ra, tag);
+int32_t benderc_allocnear(BenderCompiler *c, BendercRegisterTemp tag) {
+    return benderc_regalloc_temp(&c->scope->ra, tag);
 }
 
 /* Emit a raw instruction with source mapping. */
-void janetc_emit(JanetCompiler *c, uint32_t instr) {
-    janet_v_push(c->buffer, instr);
-    janet_v_push(c->mapbuffer, c->current_mapping);
+void benderc_emit(BenderCompiler *c, uint32_t instr) {
+    bender_v_push(c->buffer, instr);
+    bender_v_push(c->mapbuffer, c->current_mapping);
 }
 
 /* Add a constant to the current scope. Return the index of the constant. */
-static int32_t janetc_const(JanetCompiler *c, Janet x) {
-    JanetScope *scope = c->scope;
+static int32_t benderc_const(BenderCompiler *c, Bender x) {
+    BenderScope *scope = c->scope;
     int32_t i, len;
     /* Get the topmost function scope */
     while (scope) {
-        if (scope->flags & JANET_SCOPE_FUNCTION)
+        if (scope->flags & BENDER_SCOPE_FUNCTION)
             break;
         scope = scope->parent;
     }
     /* Check if already added */
-    len = janet_v_count(scope->consts);
+    len = bender_v_count(scope->consts);
     for (i = 0; i < len; i++) {
-        if (janet_equals(x, scope->consts[i]))
+        if (bender_equals(x, scope->consts[i]))
             return i;
     }
     /* Ensure not too many constants. */
     if (len >= 0xFFFF) {
-        janetc_cerror(c, "too many constants");
+        benderc_cerror(c, "too many constants");
         return 0;
     }
-    janet_v_push(scope->consts, x);
+    bender_v_push(scope->consts, x);
     return len;
 }
 
 /* Load a constant into a local register */
-static void janetc_loadconst(JanetCompiler *c, Janet k, int32_t reg) {
-    switch (janet_type(k)) {
-        case JANET_NIL:
-            janetc_emit(c, ((uint32_t) reg << 8) | JOP_LOAD_NIL);
+static void benderc_loadconst(BenderCompiler *c, Bender k, int32_t reg) {
+    switch (bender_type(k)) {
+        case BENDER_NIL:
+            benderc_emit(c, ((uint32_t) reg << 8) | JOP_LOAD_NIL);
             break;
-        case JANET_BOOLEAN:
-            janetc_emit(c, ((uint32_t) reg << 8) |
-                        (janet_unwrap_boolean(k) ? JOP_LOAD_TRUE : JOP_LOAD_FALSE));
+        case BENDER_BOOLEAN:
+            benderc_emit(c, ((uint32_t) reg << 8) |
+                        (bender_unwrap_boolean(k) ? JOP_LOAD_TRUE : JOP_LOAD_FALSE));
             break;
-        case JANET_NUMBER: {
-            double dval = janet_unwrap_number(k);
+        case BENDER_NUMBER: {
+            double dval = bender_unwrap_number(k);
             if (dval < INT16_MIN || dval > INT16_MAX)
                 goto do_constant;
             int32_t i = (int32_t) dval;
             if (dval != i)
                 goto do_constant;
             uint32_t iu = (uint32_t)i;
-            janetc_emit(c,
+            benderc_emit(c,
                         ((uint32_t) iu << 16) |
                         ((uint32_t) reg << 8) |
                         JOP_LOAD_INTEGER);
@@ -100,8 +100,8 @@ static void janetc_loadconst(JanetCompiler *c, Janet k, int32_t reg) {
         }
         default:
         do_constant: {
-                int32_t cindex = janetc_const(c, k);
-                janetc_emit(c,
+                int32_t cindex = benderc_const(c, k);
+                benderc_emit(c,
                             ((uint32_t) cindex << 16) |
                             ((uint32_t) reg << 8) |
                             JOP_LOAD_CONSTANT);
@@ -111,36 +111,36 @@ static void janetc_loadconst(JanetCompiler *c, Janet k, int32_t reg) {
 }
 
 /* Move a slot to a near register */
-static void janetc_movenear(JanetCompiler *c,
+static void benderc_movenear(BenderCompiler *c,
                             int32_t dest,
-                            JanetSlot src) {
-    janet_assert(dest <= 255, "dest slot index must be <= 255");
-    if (src.flags & (JANET_SLOT_CONSTANT | JANET_SLOT_REF)) {
-        janetc_loadconst(c, src.constant, dest);
+                            BenderSlot src) {
+    bender_assert(dest <= 255, "dest slot index must be <= 255");
+    if (src.flags & (BENDER_SLOT_CONSTANT | BENDER_SLOT_REF)) {
+        benderc_loadconst(c, src.constant, dest);
         /* If we also are a reference, deref the one element array */
-        if (src.flags & JANET_SLOT_REF) {
-            janetc_emit(c,
+        if (src.flags & BENDER_SLOT_REF) {
+            benderc_emit(c,
                         ((uint32_t) dest << 16) |
                         ((uint32_t) dest << 8) |
                         JOP_GET_INDEX);
         }
     } else if (src.envindex >= 0) {
         if (src.index > 0xFF) {
-            janetc_cerror(c, "captured upvalue slot exceeds bytecode limit 255");
+            benderc_cerror(c, "captured upvalue slot exceeds bytecode limit 255");
             return;
         }
         if (src.envindex > 0xFF) {
-            janetc_cerror(c, "upvalue environment index exceeds bytecode limit 255");
+            benderc_cerror(c, "upvalue environment index exceeds bytecode limit 255");
             return;
         }
-        janetc_emit(c,
+        benderc_emit(c,
                     ((uint32_t)(src.index) << 24) |
                     ((uint32_t)(src.envindex) << 16) |
                     ((uint32_t)(dest) << 8) |
                     JOP_LOAD_UPVALUE);
     } else if (src.index != dest) {
-        janet_assert(src.index >= 0, "bad slot");
-        janetc_emit(c,
+        bender_assert(src.index >= 0, "bad slot");
+        benderc_emit(c,
                     ((uint32_t)(src.index) << 16) |
                     ((uint32_t)(dest) << 8) |
                     JOP_MOVE_NEAR);
@@ -148,46 +148,46 @@ static void janetc_movenear(JanetCompiler *c,
 }
 
 /* Move a near or far register to a Slot. */
-static void janetc_moveback(JanetCompiler *c,
-                            JanetSlot dest,
+static void benderc_moveback(BenderCompiler *c,
+                            BenderSlot dest,
                             int32_t src) {
-    if (dest.flags & JANET_SLOT_REF) {
-        int32_t refreg = janetc_regalloc_temp(&c->scope->ra, JANETC_REGTEMP_5);
-        janetc_loadconst(c, dest.constant, refreg);
-        janetc_emit(c,
+    if (dest.flags & BENDER_SLOT_REF) {
+        int32_t refreg = benderc_regalloc_temp(&c->scope->ra, BENDERC_REGTEMP_5);
+        benderc_loadconst(c, dest.constant, refreg);
+        benderc_emit(c,
                     ((uint32_t) src << 16) |
                     ((uint32_t) refreg << 8) |
                     JOP_PUT_INDEX);
-        janetc_regalloc_freetemp(&c->scope->ra, refreg, JANETC_REGTEMP_5);
+        benderc_regalloc_freetemp(&c->scope->ra, refreg, BENDERC_REGTEMP_5);
     } else if (dest.envindex >= 0) {
         if (dest.index > 0xFF) {
-            janetc_cerror(c, "captured upvalue slot exceeds bytecode limit 255");
+            benderc_cerror(c, "captured upvalue slot exceeds bytecode limit 255");
             return;
         }
         if (dest.envindex > 0xFF) {
-            janetc_cerror(c, "upvalue environment index exceeds bytecode limit 255");
+            benderc_cerror(c, "upvalue environment index exceeds bytecode limit 255");
             return;
         }
         /* Convert src to near reg */
         if (src > 255) {
-            int32_t newsrc = JANETC_REGTEMP_5 + 0xF0;
-            janetc_emit(c, JOP_MOVE_NEAR | ((uint32_t)(src) << 16) | ((uint32_t) newsrc << 8));
+            int32_t newsrc = BENDERC_REGTEMP_5 + 0xF0;
+            benderc_emit(c, JOP_MOVE_NEAR | ((uint32_t)(src) << 16) | ((uint32_t) newsrc << 8));
             src = newsrc;
         }
-        janetc_emit(c,
+        benderc_emit(c,
                     ((uint32_t)(dest.index) << 24) |
                     ((uint32_t)(dest.envindex) << 16) |
                     ((uint32_t)(src) << 8) |
                     JOP_SET_UPVALUE);
     } else if (dest.index != src) {
-        janet_assert(dest.index >= 0, "bad slot");
+        bender_assert(dest.index >= 0, "bad slot");
         /* Convert src to near reg */
         if (src > 255) {
-            int32_t newsrc = JANETC_REGTEMP_5 + 0xF0;
-            janetc_emit(c, JOP_MOVE_NEAR | ((uint32_t)(src) << 16) | ((uint32_t)newsrc << 8));
+            int32_t newsrc = BENDERC_REGTEMP_5 + 0xF0;
+            benderc_emit(c, JOP_MOVE_NEAR | ((uint32_t)(src) << 16) | ((uint32_t)newsrc << 8));
             src = newsrc;
         }
-        janetc_emit(c,
+        benderc_emit(c,
                     ((uint32_t)(dest.index) << 16) |
                     ((uint32_t)(src) << 8) |
                     JOP_MOVE_FAR);
@@ -195,54 +195,54 @@ static void janetc_moveback(JanetCompiler *c,
 }
 
 /* Call this to release a register after emitting the instruction. */
-static void janetc_free_regnear(JanetCompiler *c, JanetSlot s, int32_t reg, JanetcRegisterTemp tag) {
+static void benderc_free_regnear(BenderCompiler *c, BenderSlot s, int32_t reg, BendercRegisterTemp tag) {
     if (reg != s.index ||
             s.envindex >= 0 ||
-            s.flags & (JANET_SLOT_CONSTANT | JANET_SLOT_REF)) {
+            s.flags & (BENDER_SLOT_CONSTANT | BENDER_SLOT_REF)) {
         /* We need to free the temporary slot */
-        janetc_regalloc_freetemp(&c->scope->ra, reg, tag);
+        benderc_regalloc_freetemp(&c->scope->ra, reg, tag);
     }
 }
 
 /* Convert a slot to a two byte register */
-static int32_t janetc_regfar(JanetCompiler *c, JanetSlot s, JanetcRegisterTemp tag) {
+static int32_t benderc_regfar(BenderCompiler *c, BenderSlot s, BendercRegisterTemp tag) {
     /* check if already near register */
     if (s.envindex < 0 && s.index >= 0) {
         return s.index;
     }
     int32_t reg;
-    int32_t nearreg = janetc_regalloc_temp(&c->scope->ra, tag);
-    janetc_movenear(c, nearreg, s);
+    int32_t nearreg = benderc_regalloc_temp(&c->scope->ra, tag);
+    benderc_movenear(c, nearreg, s);
     if (nearreg >= 0xF0) {
-        reg = janetc_allocfar(c);
-        janetc_emit(c, JOP_MOVE_FAR | ((uint32_t) nearreg << 8) | ((uint32_t) reg << 16));
-        janetc_regalloc_freetemp(&c->scope->ra, nearreg, tag);
+        reg = benderc_allocfar(c);
+        benderc_emit(c, JOP_MOVE_FAR | ((uint32_t) nearreg << 8) | ((uint32_t) reg << 16));
+        benderc_regalloc_freetemp(&c->scope->ra, nearreg, tag);
     } else {
         reg = nearreg;
-        janetc_regalloc_freetemp(&c->scope->ra, nearreg, tag);
-        janetc_regalloc_touch(&c->scope->ra, reg);
+        benderc_regalloc_freetemp(&c->scope->ra, nearreg, tag);
+        benderc_regalloc_touch(&c->scope->ra, reg);
     }
     return reg;
 }
 
 /* Convert a slot to a temporary 1 byte register */
-static int32_t janetc_regnear(JanetCompiler *c, JanetSlot s, JanetcRegisterTemp tag) {
+static int32_t benderc_regnear(BenderCompiler *c, BenderSlot s, BendercRegisterTemp tag) {
     /* check if already near register */
     if (s.envindex < 0 && s.index >= 0 && s.index <= 0xFF) {
         return s.index;
     }
-    int32_t reg = janetc_regalloc_temp(&c->scope->ra, tag);
-    janetc_movenear(c, reg, s);
+    int32_t reg = benderc_regalloc_temp(&c->scope->ra, tag);
+    benderc_movenear(c, reg, s);
     return reg;
 }
 
 /* Check if two slots are equal */
-int janetc_sequal(JanetSlot lhs, JanetSlot rhs) {
-    if ((lhs.flags & ~JANET_SLOTTYPE_ANY) == (rhs.flags & ~JANET_SLOTTYPE_ANY) &&
+int benderc_sequal(BenderSlot lhs, BenderSlot rhs) {
+    if ((lhs.flags & ~BENDER_SLOTTYPE_ANY) == (rhs.flags & ~BENDER_SLOTTYPE_ANY) &&
             lhs.index == rhs.index &&
             lhs.envindex == rhs.envindex) {
-        if (lhs.flags & (JANET_SLOT_REF | JANET_SLOT_CONSTANT)) {
-            return janet_equals(lhs.constant, rhs.constant);
+        if (lhs.flags & (BENDER_SLOT_REF | BENDER_SLOT_CONSTANT)) {
+            return bender_equals(lhs.constant, rhs.constant);
         } else {
             return 1;
         }
@@ -252,118 +252,118 @@ int janetc_sequal(JanetSlot lhs, JanetSlot rhs) {
 
 /* Move values from one slot to another. The destination must
  * be writeable (not a literal). */
-void janetc_copy(
-    JanetCompiler *c,
-    JanetSlot dest,
-    JanetSlot src) {
-    if (dest.flags & JANET_SLOT_CONSTANT) {
-        janetc_cerror(c, "cannot write to constant");
+void benderc_copy(
+    BenderCompiler *c,
+    BenderSlot dest,
+    BenderSlot src) {
+    if (dest.flags & BENDER_SLOT_CONSTANT) {
+        benderc_cerror(c, "cannot write to constant");
         return;
     }
-    if (janetc_sequal(dest, src)) return;
+    if (benderc_sequal(dest, src)) return;
     /* If dest is a near register */
     if (dest.envindex < 0 && dest.index >= 0 && dest.index <= 0xFF) {
-        janetc_movenear(c, dest.index, src);
+        benderc_movenear(c, dest.index, src);
         return;
     }
     /* If src is a near register */
     if (src.envindex < 0 && src.index >= 0 && src.index <= 0xFF) {
-        janetc_moveback(c, dest, src.index);
+        benderc_moveback(c, dest, src.index);
         return;
     }
     /* Process: src -> near -> dest */
-    int32_t nearreg = janetc_allocnear(c, JANETC_REGTEMP_3);
-    janetc_movenear(c, nearreg, src);
-    janetc_moveback(c, dest, nearreg);
+    int32_t nearreg = benderc_allocnear(c, BENDERC_REGTEMP_3);
+    benderc_movenear(c, nearreg, src);
+    benderc_moveback(c, dest, nearreg);
     /* Cleanup */
-    janetc_regalloc_freetemp(&c->scope->ra, nearreg, JANETC_REGTEMP_3);
+    benderc_regalloc_freetemp(&c->scope->ra, nearreg, BENDERC_REGTEMP_3);
 }
 
 /* Instruction templated emitters */
 
-static int32_t emit1s(JanetCompiler *c, uint8_t op, JanetSlot s, int32_t rest, int wr) {
-    int32_t reg = janetc_regnear(c, s, JANETC_REGTEMP_0);
-    int32_t label = janet_v_count(c->buffer);
-    janetc_emit(c, op | ((uint32_t) reg << 8) | ((uint32_t) rest << 16));
+static int32_t emit1s(BenderCompiler *c, uint8_t op, BenderSlot s, int32_t rest, int wr) {
+    int32_t reg = benderc_regnear(c, s, BENDERC_REGTEMP_0);
+    int32_t label = bender_v_count(c->buffer);
+    benderc_emit(c, op | ((uint32_t) reg << 8) | ((uint32_t) rest << 16));
     if (wr)
-        janetc_moveback(c, s, reg);
-    janetc_free_regnear(c, s, reg, JANETC_REGTEMP_0);
+        benderc_moveback(c, s, reg);
+    benderc_free_regnear(c, s, reg, BENDERC_REGTEMP_0);
     return label;
 }
 
-int32_t janetc_emit_s(JanetCompiler *c, uint8_t op, JanetSlot s, int wr) {
-    int32_t reg = janetc_regfar(c, s, JANETC_REGTEMP_0);
-    int32_t label = janet_v_count(c->buffer);
-    janetc_emit(c, op | ((uint32_t) reg << 8));
+int32_t benderc_emit_s(BenderCompiler *c, uint8_t op, BenderSlot s, int wr) {
+    int32_t reg = benderc_regfar(c, s, BENDERC_REGTEMP_0);
+    int32_t label = bender_v_count(c->buffer);
+    benderc_emit(c, op | ((uint32_t) reg << 8));
     if (wr)
-        janetc_moveback(c, s, reg);
-    janetc_free_regnear(c, s, reg, JANETC_REGTEMP_0);
+        benderc_moveback(c, s, reg);
+    benderc_free_regnear(c, s, reg, BENDERC_REGTEMP_0);
     return label;
 }
 
-int32_t janetc_emit_sl(JanetCompiler *c, uint8_t op, JanetSlot s, int32_t label) {
-    int32_t current = janet_v_count(c->buffer) - 1;
+int32_t benderc_emit_sl(BenderCompiler *c, uint8_t op, BenderSlot s, int32_t label) {
+    int32_t current = bender_v_count(c->buffer) - 1;
     int32_t jump = label - current;
     if (jump < INT16_MIN || jump > INT16_MAX) {
-        janetc_cerror(c, "jump is too far");
+        benderc_cerror(c, "jump is too far");
     }
     return emit1s(c, op, s, jump, 0);
 }
 
-int32_t janetc_emit_st(JanetCompiler *c, uint8_t op, JanetSlot s, int32_t tflags) {
+int32_t benderc_emit_st(BenderCompiler *c, uint8_t op, BenderSlot s, int32_t tflags) {
     return emit1s(c, op, s, tflags, 0);
 }
 
-int32_t janetc_emit_si(JanetCompiler *c, uint8_t op, JanetSlot s, int16_t immediate, int wr) {
+int32_t benderc_emit_si(BenderCompiler *c, uint8_t op, BenderSlot s, int16_t immediate, int wr) {
     return emit1s(c, op, s, immediate, wr);
 }
 
-int32_t janetc_emit_su(JanetCompiler *c, uint8_t op, JanetSlot s, uint16_t immediate, int wr) {
+int32_t benderc_emit_su(BenderCompiler *c, uint8_t op, BenderSlot s, uint16_t immediate, int wr) {
     return emit1s(c, op, s, (int32_t) immediate, wr);
 }
 
-static int32_t emit2s(JanetCompiler *c, uint8_t op, JanetSlot s1, JanetSlot s2, int32_t rest, int wr) {
-    int32_t reg1 = janetc_regnear(c, s1, JANETC_REGTEMP_0);
-    int32_t reg2 = janetc_regnear(c, s2, JANETC_REGTEMP_1);
-    int32_t label = janet_v_count(c->buffer);
-    janetc_emit(c, op | ((uint32_t) reg1 << 8) | ((uint32_t) reg2 << 16) | ((uint32_t)rest << 24));
-    janetc_free_regnear(c, s2, reg2, JANETC_REGTEMP_1);
+static int32_t emit2s(BenderCompiler *c, uint8_t op, BenderSlot s1, BenderSlot s2, int32_t rest, int wr) {
+    int32_t reg1 = benderc_regnear(c, s1, BENDERC_REGTEMP_0);
+    int32_t reg2 = benderc_regnear(c, s2, BENDERC_REGTEMP_1);
+    int32_t label = bender_v_count(c->buffer);
+    benderc_emit(c, op | ((uint32_t) reg1 << 8) | ((uint32_t) reg2 << 16) | ((uint32_t)rest << 24));
+    benderc_free_regnear(c, s2, reg2, BENDERC_REGTEMP_1);
     if (wr)
-        janetc_moveback(c, s1, reg1);
-    janetc_free_regnear(c, s1, reg1, JANETC_REGTEMP_0);
+        benderc_moveback(c, s1, reg1);
+    benderc_free_regnear(c, s1, reg1, BENDERC_REGTEMP_0);
     return label;
 }
 
-int32_t janetc_emit_ss(JanetCompiler *c, uint8_t op, JanetSlot s1, JanetSlot s2, int wr) {
-    int32_t reg1 = janetc_regnear(c, s1, JANETC_REGTEMP_0);
-    int32_t reg2 = janetc_regfar(c, s2, JANETC_REGTEMP_1);
-    int32_t label = janet_v_count(c->buffer);
-    janetc_emit(c, op | ((uint32_t) reg1 << 8) | ((uint32_t) reg2 << 16));
-    janetc_free_regnear(c, s2, reg2, JANETC_REGTEMP_1);
+int32_t benderc_emit_ss(BenderCompiler *c, uint8_t op, BenderSlot s1, BenderSlot s2, int wr) {
+    int32_t reg1 = benderc_regnear(c, s1, BENDERC_REGTEMP_0);
+    int32_t reg2 = benderc_regfar(c, s2, BENDERC_REGTEMP_1);
+    int32_t label = bender_v_count(c->buffer);
+    benderc_emit(c, op | ((uint32_t) reg1 << 8) | ((uint32_t) reg2 << 16));
+    benderc_free_regnear(c, s2, reg2, BENDERC_REGTEMP_1);
     if (wr)
-        janetc_moveback(c, s1, reg1);
-    janetc_free_regnear(c, s1, reg1, JANETC_REGTEMP_0);
+        benderc_moveback(c, s1, reg1);
+    benderc_free_regnear(c, s1, reg1, BENDERC_REGTEMP_0);
     return label;
 }
 
-int32_t janetc_emit_ssi(JanetCompiler *c, uint8_t op, JanetSlot s1, JanetSlot s2, int8_t immediate, int wr) {
+int32_t benderc_emit_ssi(BenderCompiler *c, uint8_t op, BenderSlot s1, BenderSlot s2, int8_t immediate, int wr) {
     return emit2s(c, op, s1, s2, immediate, wr);
 }
 
-int32_t janetc_emit_ssu(JanetCompiler *c, uint8_t op, JanetSlot s1, JanetSlot s2, uint8_t immediate, int wr) {
+int32_t benderc_emit_ssu(BenderCompiler *c, uint8_t op, BenderSlot s1, BenderSlot s2, uint8_t immediate, int wr) {
     return emit2s(c, op, s1, s2, (int32_t) immediate, wr);
 }
 
-int32_t janetc_emit_sss(JanetCompiler *c, uint8_t op, JanetSlot s1, JanetSlot s2, JanetSlot s3, int wr) {
-    int32_t reg1 = janetc_regnear(c, s1, JANETC_REGTEMP_0);
-    int32_t reg2 = janetc_regnear(c, s2, JANETC_REGTEMP_1);
-    int32_t reg3 = janetc_regnear(c, s3, JANETC_REGTEMP_2);
-    int32_t label = janet_v_count(c->buffer);
-    janetc_emit(c, op | ((uint32_t) reg1 << 8) | ((uint32_t) reg2 << 16) | ((uint32_t) reg3 << 24));
-    janetc_free_regnear(c, s2, reg2, JANETC_REGTEMP_1);
-    janetc_free_regnear(c, s3, reg3, JANETC_REGTEMP_2);
+int32_t benderc_emit_sss(BenderCompiler *c, uint8_t op, BenderSlot s1, BenderSlot s2, BenderSlot s3, int wr) {
+    int32_t reg1 = benderc_regnear(c, s1, BENDERC_REGTEMP_0);
+    int32_t reg2 = benderc_regnear(c, s2, BENDERC_REGTEMP_1);
+    int32_t reg3 = benderc_regnear(c, s3, BENDERC_REGTEMP_2);
+    int32_t label = bender_v_count(c->buffer);
+    benderc_emit(c, op | ((uint32_t) reg1 << 8) | ((uint32_t) reg2 << 16) | ((uint32_t) reg3 << 24));
+    benderc_free_regnear(c, s2, reg2, BENDERC_REGTEMP_1);
+    benderc_free_regnear(c, s3, reg3, BENDERC_REGTEMP_2);
     if (wr)
-        janetc_moveback(c, s1, reg1);
-    janetc_free_regnear(c, s1, reg1, JANETC_REGTEMP_0);
+        benderc_moveback(c, s1, reg1);
+    benderc_free_regnear(c, s1, reg1, BENDERC_REGTEMP_0);
     return label;
 }

@@ -2,13 +2,13 @@
 
 Date: 2026-10-23
 Status: audit only — **no tracked file in either repo was modified or committed.**
-Scope: `tools/callgraph.janet`, `tools/infer.janet`, `tools/loop-executor.janet`,
-`src/boot/boot.janet`, `src/core/{vm,gc,ffi}.c`, `src/include/janet.h`, and the
-ttfx port at `/Users/pankajdoharey/Development/Projects/ML/ttfx/janet-port/`.
+Scope: `tools/callgraph.ben`, `tools/infer.ben`, `tools/loop-executor.ben`,
+`src/boot/boot.ben`, `src/core/{vm,gc,ffi}.c`, `src/include/bender.h`, and the
+ttfx port at `/Users/pankajdoharey/Development/Projects/ML/ttfx/bender-port/`.
 
 Every claim below is backed by `file:line` **and** a reproducible experiment.
 Experiments live in `/tmp/q1x`, `/tmp/pilot`, `/tmp/ttfxb`, `/tmp/q3*`.
-Toolchain used: `/Users/pankajdoharey/Development/Projects/janet/build/bender`.
+Toolchain used: `/Users/pankajdoharey/Development/Projects/bender/build/bender`.
 
 ## Verdicts at a glance
 
@@ -29,13 +29,13 @@ Toolchain used: `/Users/pankajdoharey/Development/Projects/janet/build/bender`.
 ### (a) Syntax and parsing
 
 A hint is a Clojure-style metadata dict on `defn`, documented at
-`tools/callgraph.janet:198-204`:
+`tools/callgraph.ben:198-204`:
 
-```janet
+```bender
 (defn f {:hint {:params [:double :long] :returns :long}} [x y] ...)
 ```
 
-Parsing/extraction: `extract-hints` at `tools/callgraph.janet:663-773`
+Parsing/extraction: `extract-hints` at `tools/callgraph.ben:663-773`
 (dict-modifier branch at `:683-684`). A **bare `^type` param form** is also
 accepted — `(defn f [x ^double y] ...)` — handled at `:685-739`; `^` return
 hints at `:709-726`. Validation is `check-hints` at `:775-809`, which emits
@@ -44,11 +44,11 @@ hints at `:709-726`. Validation is `check-hints` at `:775-809`, which emits
 so hints are visible to inference.
 
 The working template cited by the owner is confirmed:
-`janet-port/src/rng-kernels.janet:13`.
+`bender-port/src/rng-kernels.ben:13`.
 
 ### (b) Type vocabulary — closed, no user types
 
-`valid-hints` at `tools/callgraph.janet:205-214`:
+`valid-hints` at `tools/callgraph.ben:205-214`:
 
 - integers: `:long :i32 :i16 :i8 :u64 :u32 :u16 :u8`
 - floats: `:double :float` (`:float` is true float32); `:number` stays boxed-width
@@ -61,7 +61,7 @@ C mapping: `emit-c-type-map` at `:252-294`. `:value` (`:289-294`) is a
 representation leaf — **never a user hint**.
 
 **User-defined types such as `:ctx` are rejected.** Experiment
-(`/tmp/q1x/voc.janet`):
+(`/tmp/q1x/voc.ben`):
 
 ```
 hint-bad 1 bad-param-hint      # {:params [:ctx] ...}
@@ -78,17 +78,17 @@ This is the question that determines the Phase 5 design, so it is answered in
 three separate dimensions. **None of them admits undefined behavior.**
 
 **1. Caller argument types → CHECKED, panic (not deopt).**
-`wrapper-for` (`tools/callgraph.janet:4168-4284`) emits a per-argument
-`janet_type(argv[i]) != EXPECTED` guard that calls `janet_panicf`
+`wrapper-for` (`tools/callgraph.ben:4168-4284`) emits a per-argument
+`bender_type(argv[i]) != EXPECTED` guard that calls `bender_panicf`
 (`:4194-4195`), plus an arity guard (`:4275-4276`). The comment at
 `:210-211` states it exactly: *"A hint is a contract; the emitted wrapper guards
 it and panics loudly."*
 
-Proven (`/tmp/q1x/guard.janet`) — passing a keyword to a `:double` param:
+Proven (`/tmp/q1x/guard.ben`) — passing a keyword to a `:double` param:
 
 ```
 ok: 8
-error: native blend argument 1 has wrong Janet type
+error: native blend argument 1 has wrong Bender type
   in native/blend
 native-telemetry id=00000001 name=blend calls=1 arity-guard-failures=0 type-guard-failures=1
 exit 1
@@ -102,7 +102,7 @@ Inside the kernel the hinted C types are used directly (`double blend(double p0,
 …)`), with no per-operation type checks.
 
 **3. Hint vs. inferred body type → CROSS-CHECKED; contradiction refuses emission.**
-A hint does not silently override the body. From `/tmp/q1x/voc.janet`:
+A hint does not silently override the body. From `/tmp/q1x/voc.ben`:
 
 ```
 native-skip 3 c2 ret slot is double not i16
@@ -112,7 +112,7 @@ The `:i16` return hint was *accepted as a hint* yet the function was **refused
 native emission** because the body's inferred type disagreed. Fail-closed again.
 
 **Relationship to PGO (the genuine EVIDENCE channel).**
-Hints are contracts, *not* evidence: `tools/callgraph.janet:1750-1752` —
+Hints are contracts, *not* evidence: `tools/callgraph.ben:1750-1752` —
 *"hints are direct contracts (used as-is for unboxing, never weakened);
 call-site widening + fixpoint prove the unhinted rest."* Measured: the hinted
 build converged in `rounds 1` vs `rounds 3` unhinted.
@@ -130,7 +130,7 @@ registered (`:4778-4779`); tier rationale at `:5277-5283`.
 ### (d) Scope — Tier-A kernels only
 
 Hints feed Tier-A scalar-kernel candidacy (`pts`/`rts` consumed by the gate at
-`tools/callgraph.janet:5225-5275`). `tools/loop-executor.janet` — the Tier-B
+`tools/callgraph.ben:5225-5275`). `tools/loop-executor.ben` — the Tier-B
 whole-function VM-frame executors — contains **zero** occurrences of `hint`
 (verified by grep over all 560 lines). Its header (`:1-6`) confirms it is
 bytecode/VM-frame driven: *"No dependency on scalar wrapper inference."*
@@ -141,15 +141,15 @@ bytecode/VM-frame driven: *"No dependency on scalar wrapper inference."*
 
 Both owner-cited limits reproduce, and hints do not bypass either.
 
-- **Constructor poison.** `tools/callgraph.janet:2201-2202` sets `mkbuf`/`mkstr`/
+- **Constructor poison.** `tools/callgraph.ben:2201-2202` sets `mkbuf`/`mkstr`/
   `mkstu`/`mktab` destinations to `:unknown`. This is a *flow-slot* type; hints
   only set params/returns, so they cannot reach it.
-- **Backward-jump veto.** `tools/callgraph.janet:5258-5262` flags any `jmp` with
+- **Backward-jump veto.** `tools/callgraph.ben:5258-5262` flags any `jmp` with
   a non-positive offset or any conditional jump with offset ≤ 0, including
   self-edges; `:5271-5273` converts that into the skip
   `"loop requires resumable VM quantum polls"`. Unconditional — no hint input.
 
-Experiment (`/tmp/q1x/lim.janet`) — three *validly hinted* functions
+Experiment (`/tmp/q1x/lim.ben`) — three *validly hinted* functions
 (`hints 3 0`, i.e. all accepted, none bad):
 
 ```
@@ -159,16 +159,16 @@ native-skip 3 hstr  len of non-array                           # mkstr poison
 native-lib 0 kernels
 ```
 
-A further structural limit worth recording: `tools/callgraph.janet:5230`
+A further structural limit worth recording: `tools/callgraph.ben:5230`
 (`(> (length pt) 0)`) means **zero-argument and vararg functions can never be
 Tier-A kernels**, hinted or not.
 
 ### Q1 EXPERIMENT — generated-C diff and timings
 
 Generated C is retained next to the output as `<out>-native/native.c`
-(dump flags: `--emit-native` / `--emit-native-lib`, `tools/callgraph.janet:70-73`).
+(dump flags: `--emit-native` / `--emit-native-lib`, `tools/callgraph.ben:70-73`).
 
-**Experiment 1 — function inference already proves (`/tmp/q1x/{unhinted,hinted}.janet`).**
+**Experiment 1 — function inference already proves (`/tmp/q1x/{unhinted,hinted}.ben`).**
 A loop-free numeric chain called with literal doubles. Unhinted, inference
 *already* proved it (`ptypes double double double long`, `native-lib 1 kernels`).
 The hint changed only the width of the one param inference had widened to `long`:
@@ -176,11 +176,11 @@ The hint changed only the width of the one param inference had widened to `long`
 ```diff
 -double blend(double p0, double p1, double p2, int64_t p3) {
 +double blend(double p0, double p1, double p2, double p3) {
--    …, janet_unwrap_integer(argv[3])));
-+    …, janet_unwrap_number(argv[3])));
+-    …, bender_unwrap_integer(argv[3])));
++    …, bender_unwrap_number(argv[3])));
 ```
 
-Note the **type guard is byte-identical** (`JANET_NUMBER`) either way — the hint
+Note the **type guard is byte-identical** (`BENDER_NUMBER`) either way — the hint
 changes *representation*, not the safety level.
 
 Timings (20M calls, 3 runs): unhinted `2.05 / 2.14 / 1.81 s`; hinted
@@ -188,9 +188,9 @@ Timings (20M calls, 3 runs): unhinted `2.05 / 2.14 / 1.81 s`; hinted
 inference already succeeded. Both printed `189687561.688273`.
 
 **Experiment 2 — where hints actually pay: inference cannot prove
-(`/tmp/q1x/dyn-{u,h}.janet`).** Identical function, but reached through a table
+(`/tmp/q1x/dyn-{u,h}.ben`).** Identical function, but reached through a table
 (`(def tbl @{:blend blend})`, then `(get tbl :blend)`) — the exact
-dynamic-dispatch shape `callgraph.janet:5235` calls out for ttfx's easing tables.
+dynamic-dispatch shape `callgraph.ben:5235` calls out for ttfx's easing tables.
 
 | | unhinted | hinted |
 |---|---|---|
@@ -215,15 +215,15 @@ structs stepped in a native loop."
 
 ### Mechanism 1 — `table-flat`: closed-shape local tables → real C struct
 
-Decision rule stated precisely at `tools/infer.janet:167-207`; plumbing and the
-`table-flat` / `table-open` diagnostics at `tools/callgraph.janet:1757-1775`.
+Decision rule stated precisely at `tools/infer.ben:167-207`; plumbing and the
+`table-flat` / `table-open` diagnostics at `tools/callgraph.ben:1757-1775`.
 Field access rides the same `:kernel {:pread/:pwrite [ctype offset]}` contract
-handled by `extract-intrinsics` (`tools/callgraph.janet:402-433`,
+handled by `extract-intrinsics` (`tools/callgraph.ben:402-433`,
 `kernel-intrinsics` at `:385-389`).
 
 **This genuinely compiles to direct loads.** `/tmp/pilot`-style source:
 
-```janet
+```bender
 (defn step {:hint {:params [:double :double] :returns :double}} [x v]
   (def st @{:px 0.5 :vx 0.5})
   (put st :px x) (put st :vx v)
@@ -232,7 +232,7 @@ handled by `extract-intrinsics` (`tools/callgraph.janet:402-433`,
 
 Build: `table-flat 1 step slot 2 px:double,vx:double` → `native-lib 1 kernels`.
 Emitted C (`ofc/app-native/native.c`) — a stack struct, direct member traffic,
-zero boxing, zero `janet_*` calls, zero allocation:
+zero boxing, zero `bender_*` calls, zero allocation:
 
 ```c
 double step(double p0, double p1) {
@@ -263,30 +263,30 @@ double step(double p0, double p1) {
 
 - **No cross-function lifetime.** Returning it (`table-open … → 0 kernels`) or
   passing it to another kernel (`table-open … → 0 kernels`) both open the shape,
-  exactly as `tools/infer.janet:200-204` mandates. Scope is explicit at
+  exactly as `tools/infer.ben:200-204` mandates. Scope is explicit at
   `:205-207`: single function, single construction site, entry block only.
 - **`:long` + `:double` mixing works** (`struct nsh1_2 { int64_t f0; double f1; }`),
   but asymmetrically per rule 3(b): `:long`→`:double` field ✅,
   `:double`→`:long` field opens ❌.
 - **`mkstu` (`{...}` struct literals) unsupported** — `(def st {:px x :vx v})`
   yields no `table-flat` line at all and `slot s4 mixes unanalyzable
-  keyword/unknown`. Only `mktab` (`@{...}`) is dispatched (`infer.janet:468`);
+  keyword/unknown`. Only `mktab` (`@{...}`) is dispatched (`infer.ben:468`);
   the comment at `:207` is accurate.
 - **No field-count cap** — 10 fields emit fine (`k0:double,…,k9:double`).
-  Validator `infer.janet:481-497` checks only
+  Validator `infer.ben:481-497` checks only
   even/≥2/keyword-const/no-dup/`:long`-or-`:double`.
 - **Single construction site, entry block only.** A second `mktab` on the slot —
-  *even a shape-identical one* — opens it sticky (`infer.janet:474-480`).
-- `movn`/`movf` **propagate** the shape and its rules (`infer.janet:499+`), which
+  *even a shape-identical one* — opens it sticky (`infer.ben:474-480`).
+- `movn`/`movf` **propagate** the shape and its rules (`infer.ben:499+`), which
   surfaces as two `table-flat` lines for one logical table.
-- Width mapping (`nshape-ctype`, `callgraph.janet:1784`): `:long`→`int64_t`,
+- Width mapping (`nshape-ctype`, `callgraph.ben:1784`): `:long`→`int64_t`,
   otherwise `double`.
 
 ### Mechanism 2 — `ffi/defstruct` + `:kernel` intrinsics → direct pointer loads
 
 **This is the stronger of the two mechanisms and it is a fork extension.**
 
-`ffi/defstruct` (`src/boot/boot.janet:4792-4866`, **not upstream**) generates a
+`ffi/defstruct` (`src/boot/boot.ben:4792-4866`, **not upstream**) generates a
 whole kit from one declaration: `Name/descriptor` (`:4824`), `Name/size`
 (`:4825`), `Name/offsets` (`:4826`), `Name/new` (`:4829`), `Name/malloc`
 (`:4833-4837`, `unsafe/calloc` + per-field `unsafe/poke`), `Name/free` (`:4839`),
@@ -294,16 +294,16 @@ plus per-field getters (`:4855-4857`) and setters (`:4862-4864`).
 
 The crucial part is the `:kernel` metadata it attaches (`:4848-4851`, `:4858-4861`):
 
-```janet
+```bender
 {:hint {:params [:pointer]    :returns ht} :kernel {:pread  [kt off]}}
 {:hint {:params [:pointer ht] :returns ht} :kernel {:pwrite [kt off]}}
 ```
 
-The emitter consumes that through `kernel-intrinsics` (`tools/callgraph.janet:389`,
+The emitter consumes that through `kernel-intrinsics` (`tools/callgraph.ben:389`,
 populated by `extract-intrinsics` `:402-434`, dispatched at `:3755-3765`) and
 lowers it in `emit-intrinsic-call` (`:2598-2650`). The money line is `:2634`:
 
-```janet
+```bender
 (def mem (string "(*(" cty "*)((char*)(" pexpr ") + " koff "))"))
 ```
 
@@ -329,8 +329,8 @@ Running the real AOT binary: `native-lib 1 kernels`, `calls=5`,
 interpreter. **Values do not re-box at field boundaries, and kernel→kernel
 pointer calls stay native** (`s2 = inner(p0);` beside a direct load).
 
-**FFI is on by default and live inside AOT images.** `src/include/janet.h:198-204`
-makes `JANET_NO_FFI` an opt-*out*, and the fork **removed upstream's x86-64 arch
+**FFI is on by default and live inside AOT images.** `src/include/bender.h:198-204`
+makes `BENDER_NO_FFI` an opt-*out*, and the fork **removed upstream's x86-64 arch
 guard** (commit `398833eb`, "Enable FFI module unconditionally"), which is why
 this works on arm64. `Makefile:165` always compiles `src/core/ffi.c`;
 `meson_options.txt:24-25` default both FFI options to `true`. Confirmed by running
@@ -352,23 +352,23 @@ pointer-buffer, pointer-cfunction`.
 
 - **No pointer arithmetic in the emitter.** `unsafe/ptr-add` is a plain cfunction
   with no entry in any emitter table (zero hits for `ptr-add` in
-  `tools/callgraph.janet`). A stride loop over an array of structs is refused
+  `tools/callgraph.ben`). A stride loop over an array of structs is refused
   outright: `native-skip 5 loopsum call to non-native or type mismatch`.
   **This is the single blocking gap for an animation system over N entities.**
 - **Only `:double`/`:float`/`:int` fields are kernel-mapped** (gate at
-  `src/boot/boot.janet:4783-4789`). `:long`, pointers and nested structs are
+  `src/boot/boot.ben:4783-4789`). `:long`, pointers and nested structs are
   boxed-only and refuse fail-closed.
 - **Hand-written `ffi/read`/`unsafe/poke` are NOT lowered and poison the
   function** — the lowering is strictly whitelist-by-`:kernel`-metadata. A bare
   `(ffi/read :double p 0)` yields `native-skip … slot s2 mixes keyword/u64ok`:
   the `:double` keyword argument poisons the slot and disqualifies the function.
-- **A getter in tail position refuses** (guard at `tools/callgraph.janet:2609`);
+- **A getter in tail position refuses** (guard at `tools/callgraph.ben:2609`);
   worked around by `(+ 0 (M/frame p))`, but it is a live foot-gun.
 
 ### The two mechanisms are exactly dual — by design
 
 This duality is explicit in the source. The emission helpers at
-`tools/callgraph.janet:1776-1784` describe `table-flat` as *"the auto-discovered
+`tools/callgraph.ben:1776-1784` describe `table-flat` as *"the auto-discovered
 sibling of the hand-declared `ffi/defstruct` path -- same field contract
 `:long`/`:double`, same fail-closed guards"* (`:1781-1783`).
 
@@ -420,23 +420,23 @@ cc -O2 -fno-strict-aliasing …  → -4 2 4 6     (correct)
 interpreter ground truth       → -4 2 4 6
 ```
 
-The real AOT path (`src/boot/boot.janet:6472-6476`, plain-image `:6127`) compiles
+The real AOT path (`src/boot/boot.ben:6472-6476`, plain-image `:6127`) compiles
 at `-O3` and **never passes `-fno-strict-aliasing`**. In genuine use the memory
 comes from `unsafe/calloc` (no declared type) and fields occupy distinct offsets,
 so the real `--native` build did not miscompile — but nothing in the emitter
 *enforces* that invariant. One flag fixes it.
 
 **Defect B — the mixed-struct parity oracle is unsound.** The pointer fixtures
-are `double[8]` on both sides (C at `tools/callgraph.janet:4098-4104`, Janet
+are `double[8]` on both sides (C at `tools/callgraph.ben:4098-4104`, Bender
 `mkptr` at `:4131-4134`). Any struct with a non-`:double` field is therefore
 "validated" by reinterpreting double bytes as `int32` — both UB-sensitive per
-Defect A and semantically meaningless. `test/suite-callgraph.janet:883-903`
+Defect A and semantically meaningless. `test/suite-callgraph.ben:883-903`
 exercises only an all-`:double` `Point`, so the shipped suite never covers the
 mixed-type path that `docs/internals/native-memory.md:143-148` advertises.
 
 *Doc accuracy:* `native-memory.md:122-155` is otherwise accurate line by line
 (the `Point/size => 24`, `offsets => {:x 0 :y 8 :n 16}` example matches
-`test/suite-ffi.janet:60-61`). Its "**8× measured on a stepping loop**" claim
+`test/suite-ffi.ben:60-61`). Its "**8× measured on a stepping loop**" claim
 (`:146`) is **unbacked** — no committed benchmark supports that number.
 
 ---
@@ -445,15 +445,15 @@ mixed-type path that `docs/internals/native-memory.md:143-148` advertises.
 
 ### (a) Arena / region allocation — **ABSENT**
 
-- `janet_smalloc` / `janet_srealloc` / `janet_sfree` are declared at
-  `src/include/janet.h:2360-2364` and are **upstream-unchanged** —
+- `bender_smalloc` / `bender_srealloc` / `bender_sfree` are declared at
+  `src/include/bender.h:2360-2364` and are **upstream-unchanged** —
   malloc-per-call plus an O(n) tracking array (`src/core/gc.c:3315-3381`).
-- **No Janet-level binding** for any arena/scratch/region/bump/slab allocator
-  (`JANET_REG` sweep finds none). User code gets plain libc via `unsafe/malloc`.
+- **No Bender-level binding** for any arena/scratch/region/bump/slab allocator
+  (`BENDER_REG` sweep finds none). User code gets plain libc via `unsafe/malloc`.
 - **Emitted code uses no allocator at all**: zero `smalloc`/`sfree`/`malloc`
-  occurrences in `tools/callgraph.janet`, in `tools/loop-executor.janet`, or in
+  occurrences in `tools/callgraph.ben`, in `tools/loop-executor.ben`, or in
   the real 2601-line ttfx `native.c`. Allocation deliberately *exits* the native
-  region to the VM (`tools/loop-executor.janet:4,142,356-360`).
+  region to the VM (`tools/loop-executor.ben:4,142,356-360`).
 - The only bump cursor is the GC's private slab nursery
   (`src/core/gc.c:1358-1420`), not addressable as a region.
 - `docs/internals/phase2b-gc-design.md:70-75` lists bump regions as an
@@ -461,24 +461,24 @@ mixed-type path that `docs/internals/native-memory.md:143-148` advertises.
 
 ### (b) Whole-module emission — **ONE TU, non-static kernels, direct cross-calls EXIST**
 
-- **One TU per build**: `tools/callgraph.janet:5668` writes a single `native.c`.
+- **One TU per build**: `tools/callgraph.ben:5668` writes a single `native.c`.
   The real ttfx artifact is one 72k-line TU with 237 functions.
 - **Kernel bodies are non-`static`** and emitted without prototypes, topologically
-  ordered by a 4-round fixpoint (`tools/callgraph.janet:5361-5375`). Confirmed in
+  ordered by a 4-round fixpoint (`tools/callgraph.ben:5361-5375`). Confirmed in
   the real ttfx `native.c`: all 8 kernels declared as e.g.
   `double round_half_even(double p0) {` — no `static` (and `T` symbols under `nm`).
-- **Registration** is `JanetReg` + `janet_cfuns(env, "native", regs)`; only the
+- **Registration** is `BenderReg` + `bender_cfuns(env, "native", regs)`; only the
   boxed `*_wrapper` is registered, so the raw kernel stays a plain C symbol:
 
 ```c
-void native_init(JanetTable *env) {
-    static const JanetReg regs[] = {
+void native_init(BenderTable *env) {
+    static const BenderReg regs[] = {
     { "step", step_wrapper, NULL },
     { NULL, NULL, NULL } };
-    janet_cfuns(env, "native", regs);
+    bender_cfuns(env, "native", regs);
 ```
 
-- **Direct C cross-calls already work.** `/tmp/q1x/k2k.janet` (two hinted
+- **Direct C cross-calls already work.** `/tmp/q1x/k2k.ben` (two hinted
   kernels, one calling the other) emits a literal C call — no registry, no boxing:
 
 ```c
@@ -490,7 +490,7 @@ double outer(double p0, double p1) {
 }
 ```
 
-  Emission shapes are at `tools/callgraph.janet:3814-3830` (void statement,
+  Emission shapes are at `tools/callgraph.ben:3814-3830` (void statement,
   value assignment, tail call). Verified at the machine level on a 3-deep chain
   `hyp2`→`addsq`→`sq`: `nm -gU` reports `T _sq`, `T _addsq`, `T _hyp2`
   (**external linkage**, confirming non-`static`), and `-O3` collapsed the whole
@@ -507,11 +507,11 @@ double outer(double p0, double p1) {
   from `emitted-names` (`:5382-5386`), so other kernels refuse to call a
   dispatcher natively and stay boxed — conservative by design.
 - **Three tiers with different linkage.** (1) Kernels: external linkage,
-  `JanetReg` + `janet_cfuns(env, "native", regs)`. (2) Loop/leaf executors
+  `BenderReg` + `bender_cfuns(env, "native", regs)`. (2) Loop/leaf executors
   `nx_<id>`: **`static`**, registered structurally via
-  `janet_native_registry_add` (`:5651`) and matched by a shape key, not a name;
-  double opt-in (`JANET_NATIVE_EXECUTORS=1` at emission **and**
-  `-DJANET_NATIVE_EXECUTORS` at build). (3) FFI alias thunks:
+  `bender_native_registry_add` (`:5651`) and matched by a shape key, not a name;
+  double opt-in (`BENDER_NATIVE_EXECUTORS=1` at emission **and**
+  `-DBENDER_NATIVE_EXECUTORS` at build). (3) FFI alias thunks:
   `static void *ffi_alias_ptr_<id>` (`:5086`).
   **Zero executor→kernel calls exist in the real artifact.**
 - **ttfx exercises none of it**: all 8 kernels are non-static in one TU but make
@@ -521,13 +521,13 @@ double outer(double p0, double p1) {
 **Corrections to existing docs** (all first-hand verified):
 
 - `docs/internals/aot-plan.md:996` claims kernels emit as `static int64_t|double
-  f(...)` — **wrong**. Bodies carry no storage class (`callgraph.janet:3855`) and
+  f(...)` — **wrong**. Bodies carry no storage class (`callgraph.ben:3855`) and
   link as `T`. Only wrappers, executors, helpers and atom slots are `static`.
-- `janet-port/src/rng-kernels.janet:8-10` claims kernel-to-kernel calls "refuse
+- `bender-port/src/rng-kernels.ben:8-10` claims kernel-to-kernel calls "refuse
   `:array` returns" — **over-broad/stale**. The quoted error string is real
-  (`callgraph.janet:3840`), but per `ret-ok` clause 3 (`:3796-3802`) an
+  (`callgraph.ben:3840`), but per `ret-ok` clause 3 (`:3796-3802`) an
   `:array`-returning kernel **does** compose when the destination slot is proven
-  `:array`. Verified both ways: `s3 = mk(p0, p1);` with a `JanetArray*` return
+  `:array`. Verified both ways: `s3 = mk(p0, p1);` with a `BenderArray*` return
   succeeds, while adding a `nil` branch to the same slot yields
   `native-skip … slot s2 mixes nil/array`. What actually refuses is a **mixed
   destination slot**. (The file's *conclusion* is still right for ttfx — those
@@ -542,19 +542,19 @@ double outer(double p0, double p1) {
   changelog and is **stale**: the current ttfx artifact has 9 kernels and no
   `bitlen`. By contrast `aot-notes.md:114` and `:262-264` are exactly right.
 - **Systemic line drift** in `native-continuation-design.md`: 3 of 3 checked
-  `callgraph.janet` citations were off by 1–8 lines (e.g. the structural key is
+  `callgraph.ben` citations were off by 1–8 lines (e.g. the structural key is
   at `:5500-5510`, not `:5508-5518`; registry publish at `:5650-5651`, not
   `:5654-5655`). Symbols are correct; re-resolve line numbers rather than trust them.
 
-Note array *elements* still re-box (`janet_unwrap_number(s3->data[…])`).
+Note array *elements* still re-box (`bender_unwrap_number(s3->data[…])`).
 
 ### Compile flags
 
-`src/boot/boot.janet:6472-6478` (and `:6127`):
+`src/boot/boot.ben:6472-6478` (and `:6127`):
 
 ```
-cc -O3 -fwrapv -fno-math-errno -fno-trapping-math -w -DJANET_AOT_NATIVE_INIT \
-   -I <root>/build -I <root>/src/include  app.c native.c libjanet.a [ldflags] -lm -lpthread -o out
+cc -O3 -fwrapv -fno-math-errno -fno-trapping-math -w -DBENDER_AOT_NATIVE_INIT \
+   -I <root>/build -I <root>/src/include  app.c native.c libbender.a [ldflags] -lm -lpthread -o out
 ```
 
 - `-O3` default; `-Oz` with the `-Oz` flag (`:6060`). `CC` is overridable (`:6057`).
@@ -565,10 +565,10 @@ cc -O3 -fwrapv -fno-math-errno -fno-trapping-math -w -DJANET_AOT_NATIVE_INIT \
 - **No LTO, no `-march`/`-mcpu`** — both still unchecked `- [ ]` in
   `docs/internals/extreme-perf.md:113,117`.
 - **Optimization asymmetry worth knowing:** `native.c` compiles at `-O3`, but it
-  links against `libjanet.a` built at **`-O2`** (`Makefile:56`,
+  links against `libbender.a` built at **`-O2`** (`Makefile:56`,
   `CFLAGS?=-O2 -g`), with **no LTO between them**. The runtime the kernels call
   into is therefore a less-optimized TU.
-- `--pgo` / `--pgo-auto` are *Janet-level* profiling, **not** compiler PGO — they
+- `--pgo` / `--pgo-auto` are *Bender-level* profiling, **not** compiler PGO — they
   seed kernel/executor selection via `--profile <file>` (`:6159`, `:6456`); no
   `-fprofile-generate`/`-fprofile-use` is ever passed.
 - `--ldflags "-flto -mcpu=apple-m1"` is an undocumented but **verified working**
@@ -579,7 +579,7 @@ cc -O3 -fwrapv -fno-math-errno -fno-trapping-math -w -DJANET_AOT_NATIVE_INIT \
 
 ### Bonus finding: the loop veto is a *tier* restriction, not a codegen gap
 
-The code generator can already compile loops. `/tmp/q1x/lp.janet`, one hinted
+The code generator can already compile loops. `/tmp/q1x/lp.ben`, one hinted
 function with a `while`:
 
 - deployable `--aot --native` path → `native-skip 1 sumloop loop requires
@@ -587,10 +587,10 @@ function with a `while`:
 - standalone `--emit-native` path → `native 1 fns 4 samples`, and the emitted C
   contains the real loop (`L2:; … if (!s3) goto L9; … goto L2; L9:;`)
 
-`src/boot/boot.janet:6456` shows `--aot` wires only `--emit-native-lib`. So
+`src/boot/boot.ben:6456` shows `--aot` wires only `--emit-native-lib`. So
 loop-capable emission exists and is sample-verified, but is **not reachable from
 the deployable path** — which is precisely what the native-continuation work
-(`callgraph.janet:5253-5256`) is meant to unlock.
+(`callgraph.ben:5253-5256`) is meant to unlock.
 
 ---
 
@@ -599,17 +599,17 @@ the deployable path** — which is precisely what the native-continuation work
 **Verdict: NOT SUPPORTED by committed evidence.** (Archaeology only; no
 benchmarks were run.)
 
-*Repo-topology correction:* `ML/ttfx/janet-port/` is **not** a separate repo —
+*Repo-topology correction:* `ML/ttfx/bender-port/` is **not** a separate repo —
 `git rev-parse --show-toplevel` resolves it to `/Users/pankajdoharey/Development/Projects/ML/ttfx`.
-There are two repos: `janet` and `ttfx` (which contains `janet-port/`).
-`janet-port/docs/` is empty and `janet-port/bench/` holds only `hot-stack.janet`.
+There are two repos: `bender` and `ttfx` (which contains `bender-port/`).
+`bender-port/docs/` is empty and `bender-port/bench/` holds only `hot-stack.ben`.
 
 The scout-cited file is `/Users/pankajdoharey/Development/Projects/ML/ttfx/bench-engines.md`
 (tracked, 576 lines, at the ttfx repo *root* — not under any `docs/`). Two
 corrections: the "Node at 31/37" figure is a **port-coverage count**, not a speed
 number (`:89-92`: Node reports `unknown effect` for 6 effects), and **LuaJIT
 appears zero times in that file**. Its CLI table (`:182-188`) actually shows
-janet-AOT **4–12× behind** Node/Bun and 32–166× behind Rust.
+bender-AOT **4–12× behind** Node/Bun and 32–166× behind Rust.
 
 The only committed LuaJIT comparison is `ttfx/bench/languages.md` (commit
 `dfe223b`), which cleanly separates "Bender VM" (interpreter) from
@@ -632,7 +632,7 @@ raw 245-sample JSON, pinned versions, a 210/210 byte-parity gate.
 
 Two numbers that could be misread as supporting the claim:
 
-- `janet/docs/internals/profile-guided-optimizer-plan.md:12,202` cites
+- `bender/docs/internals/profile-guided-optimizer-plan.md:12,202` cites
   **0.47–0.48× LuaJIT** — that is the **AOT+PGO native release**, not the interpreter.
 - The flattering **0.865× Rust** is **GUI render FPS**, which has a shared OpenGL
   floor; the docs themselves forbid mixing it with throughput.
@@ -640,7 +640,7 @@ Two numbers that could be misread as supporting the claim:
 The fork's own `README.md:94` still lists *"As fast as or faster than Lua"* as an
 **open** checkbox, and `:494-498` describes the interpreter as *"about the same
 speed as other interpreted languages without a JIT… a bit faster than Python"* —
-consistent with `janet-port/README.md:41` (547 fps vs Python TTE ~543 fps).
+consistent with `bender-port/README.md:41` (547 fps vs Python TTE ~543 fps).
 
 Committed caveat text is extensive and honest throughout (±10–30% GUI noise,
 startup included, *"not proof of intrinsic language/runtime speed"*).
@@ -651,13 +651,13 @@ startup included, *"not proof of intrinsic language/runtime speed"*).
 
 ### How much headroom is actually there
 
-The real ttfx CLI build (`bender --aot bin/ttfx-cli.janet --native`) emits
+The real ttfx CLI build (`bender --aot bin/ttfx-cli.ben --native`) emits
 **8 kernels** and refuses **783** definitions. Breakdown of the refusals:
 
 | reason | count | hint-fixable? |
 |---|---|---|
 | `loop requires resumable VM quantum polls` | 169 | **No** — needs native continuations |
-| `types not proven`, zero-param (`params []`) | 115 | **No** — `callgraph.janet:5230` requires ≥1 param |
+| `types not proven`, zero-param (`params []`) | 115 | **No** — `callgraph.ben:5230` requires ≥1 param |
 | `types not proven`, ≥1 unproven param | **338** | **Yes — this is the hint-addressable population** |
 | duplicate registration / mixed slots | rest | No |
 
@@ -666,14 +666,14 @@ and that is an *upper bound*, because a hinted function must still survive
 body-op lowering.
 
 Adoption today is essentially zero: **one** ttfx file uses `:hint`
-(`src/rng-kernels.janet`, 4 hints) and **no** file uses `:kernel`. 4 of the 8
+(`src/rng-kernels.ben`, 4 hints) and **no** file uses `:kernel`. 4 of the 8
 emitted kernels come from that single file; the other 4 were inference-proven.
 Across ~30 effect files, **no effect code is natively compiled at all.**
 
 ### Validated pilot recipe (new files, no edits)
 
 I validated the recommended approach end-to-end on a **real ttfx function**,
-`radial-fraction` (`janet-port/src/color.janet:191-203`), which the real build
+`radial-fraction` (`bender-port/src/color.ben:191-203`), which the real build
 refuses with `types not proven: params [? ? ? ? ? ?] ret double`.
 
 Critically, **adding hints alone was not enough**:
@@ -682,7 +682,7 @@ Critically, **adding hints alone was not enough**:
 typed  → native-skip 1 radial-fraction slot s16 mixes unanalyzable double/unknown/u64ok
 ```
 
-Diagnosis: the type lattice is **per-slot, not SSA**, and Janet's register
+Diagnosis: the type lattice is **per-slot, not SSA**, and Bender's register
 allocator reuses slot 16 for an integer literal, a `math/sqrt` *cfunction
 constant* (`:unknown`), and a double. `math/sqrt`/`math/pow` lower fine on their
 own (`sqrt((double)(p0))`, verified in isolation — 4/4 kernels); the collision is
@@ -696,11 +696,11 @@ Reducing the number of named `def`s (same arithmetic, same result) fixed it:
 | `typed4` — hints + fewer named locals | `native-lib 1 kernels` | **0.34 / 0.33 / 0.36 s** |
 
 **≈3.5× faster, bit-identical output** (`2734599.96095399` both). Files:
-`/tmp/pilot/{base,typed4}.janet`.
+`/tmp/pilot/{base,typed4}.ben`.
 
 **Cheapest pilot shape — strictly additive, no edits to originals:**
 
-1. For each hot effect, add a sibling file (e.g. `src/effects/rain-typed.janet`)
+1. For each hot effect, add a sibling file (e.g. `src/effects/rain-typed.ben`)
    that re-defines only the hot leaf functions with `:hint`, and have the typed
    variant require the original for everything else.
 2. Target leaves matching the *hint-addressable* profile: **≥1 param**,
@@ -726,7 +726,7 @@ miscompile**: a wrong hint either refuses to emit or panics loudly at the bounda
    largest bucket (169 refusals) and every per-frame effect loop. The loop
    *codegen already exists and is parity-tested* in the `--emit-native` tier; what
    is missing is making it reachable from the deployable `--emit-native-lib` path
-   (`callgraph.janet:5253-5262`). Highest leverage by a wide margin.
+   (`callgraph.ben:5253-5262`). Highest leverage by a wide margin.
 2. **SSA / per-pc slot typing instead of per-slot** — the `mixes unanalyzable …`
    family is an artifact of register reuse, not of genuinely untyped code. It
    forced a source rewrite even in my successful 3.5× pilot, and it silently caps
@@ -742,16 +742,16 @@ miscompile**: a wrong hint either refuses to emit or panics loudly at the bounda
    struct) — today it can only ever be a per-call working set. Lower priority
    than #3 because `ffi/defstruct` already covers persistent state.
 4c. **Extend Phase 5 to `mkstu` and to whole-program shape tracking** — the
-   decision-rule comment at `tools/infer.janet:205-207` names this as the
+   decision-rule comment at `tools/infer.ben:205-207` names this as the
    intended next step, and it is the same lever as #4: whole-program tracking is
    precisely what would let a flat struct cross a function boundary.
 4b. **Safety fixes that are nearly free**: add `-fno-strict-aliasing` at both
-   `aot-run-cc` sites (`src/boot/boot.janet:6127`, `:6472`) to close the Defect-A
+   `aot-run-cc` sites (`src/boot/boot.ben:6127`, `:6472`) to close the Defect-A
    UB exposure, and give the parity harness a `char`-backed or per-struct-typed
-   pointer fixture (`tools/callgraph.janet:4098-4134`) plus a mixed-type case in
-   `test/suite-callgraph.janet:883` to close Defect B. These are correctness,
+   pointer fixture (`tools/callgraph.ben:4098-4134`) plus a mixed-type case in
+   `test/suite-callgraph.ben:883` to close Defect B. These are correctness,
    not performance, and should precede any wider rollout of struct kernels.
-5. **Zero-arg/vararg kernel support** (`callgraph.janet:5230`) — 115 refusals, and
+5. **Zero-arg/vararg kernel support** (`callgraph.ben:5230`) — 115 refusals, and
    cheap relative to items 1–4.
 6. **An arena / per-frame region allocator** exposed to both user code and emitted
    kernels — currently fully absent; needed before native loops can allocate
@@ -770,15 +770,15 @@ miscompile**: a wrong hint either refuses to emit or panics loudly at the bounda
 
 | Experiment | Path | Shows |
 |---|---|---|
-| hinted vs unhinted (inference already proves) | `/tmp/q1x/{unhinted,hinted}.janet` | C diff is param width only; no timing delta |
-| hint unlocks dynamic dispatch | `/tmp/q1x/dyn-{u,h}.janet` | 0→1 kernels, 1.56× |
-| boundary guard panics | `/tmp/q1x/guard.janet` | fail-closed, no deopt |
-| hints do not lift Tier-A limits | `/tmp/q1x/lim.janet` | 3 valid hints, 0 kernels |
-| vocabulary / user types | `/tmp/q1x/voc.janet` | `:ctx` rejected; body/hint cross-check |
-| flat struct direct loads | `/tmp/q1x/fc.janet`, ablations `ab-*.janet` | real C struct + preconditions |
-| kernel→kernel direct call | `/tmp/q1x/k2k.janet`, `k2ka.janet` | `inner(p0)`, `mk(p0,p1)` |
-| loop tier split | `/tmp/q1x/lp.janet`, `/tmp/q1x/en/native.c` | veto is tier-level, not codegen |
-| real-function pilot | `/tmp/pilot/{base,typed4}.janet` | 3.5×, bit-identical |
+| hinted vs unhinted (inference already proves) | `/tmp/q1x/{unhinted,hinted}.ben` | C diff is param width only; no timing delta |
+| hint unlocks dynamic dispatch | `/tmp/q1x/dyn-{u,h}.ben` | 0→1 kernels, 1.56× |
+| boundary guard panics | `/tmp/q1x/guard.ben` | fail-closed, no deopt |
+| hints do not lift Tier-A limits | `/tmp/q1x/lim.ben` | 3 valid hints, 0 kernels |
+| vocabulary / user types | `/tmp/q1x/voc.ben` | `:ctx` rejected; body/hint cross-check |
+| flat struct direct loads | `/tmp/q1x/fc.ben`, ablations `ab-*.ben` | real C struct + preconditions |
+| kernel→kernel direct call | `/tmp/q1x/k2k.ben`, `k2ka.ben` | `inner(p0)`, `mk(p0,p1)` |
+| loop tier split | `/tmp/q1x/lp.ben`, `/tmp/q1x/en/native.c` | veto is tier-level, not codegen |
+| real-function pilot | `/tmp/pilot/{base,typed4}.ben` | 3.5×, bit-identical |
 | real ttfx build | `/tmp/ttfxb/ttfx-native/native.c` | 8 kernels, 783 skips, one TU |
 
 ## Limits of this audit

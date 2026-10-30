@@ -19,13 +19,13 @@ for _ in range(SAMPLES - len(pairs)):
     b = rng.uniform(-1, 1) * (10 ** rng.randrange(-308, 309))
     pairs.append((a, b))
 
-with tempfile.TemporaryDirectory(prefix="janet-hypot-") as temp:
+with tempfile.TemporaryDirectory(prefix="bender-hypot-") as temp:
     temp = Path(temp)
-    source = temp / "hypot.janet"
+    source = temp / "hypot.ben"
     source.write_text('(defn h {:hint {:params [:double :double] :returns :double}} '
                       '[x y] (math/hypot x y))\n(defn main [] (h 3.0 4.0))\n')
     out = temp / "native"
-    subprocess.run([str(BENDER), str(ROOT / "tools/callgraph.janet"),
+    subprocess.run([str(BENDER), str(ROOT / "tools/callgraph.ben"),
                     str(source), "--emit-native", str(out)], cwd=ROOT,
                    stdout=subprocess.DEVNULL, check=True)
     emitted = (out / "native.c").read_text()
@@ -40,19 +40,19 @@ with tempfile.TemporaryDirectory(prefix="janet-hypot-") as temp:
     executable = temp / "compare"
     subprocess.run(["cc", "-O2", str(csource), "-lm", "-o", str(executable)],
                    check=True)
-    # Use exact hexadecimal input and output: Janet and C see identical bits.
+    # Use exact hexadecimal input and output: Bender and C see identical bits.
     data = "".join(f"{a.hex()} {b.hex()}\n" for a, b in pairs)
     c_out = subprocess.run([str(executable)], input=data, text=True,
                            capture_output=True, check=True).stdout.splitlines()
-    oracle = temp / "oracle.janet"
-    # Literal numeric constants avoid a decimal parse round-trip. Janet's
+    oracle = temp / "oracle.ben"
+    # Literal numeric constants avoid a decimal parse round-trip. Bender's
     # scan-number accepts C99 hex floats; use the same samples and %a output.
     oracle.write_text(''.join('(print (string/format "%a" (math/hypot '
                               f'{a.hex()} {b.hex()})))\n' for a, b in pairs))
-    janet_out = subprocess.run([str(BENDER), str(oracle)], cwd=ROOT,
+    bender_out = subprocess.run([str(BENDER), str(oracle)], cwd=ROOT,
                                capture_output=True, text=True, check=True).stdout.splitlines()
-    assert len(c_out) == len(janet_out) == SAMPLES
-    for i, (actual, expected) in enumerate(zip(c_out, janet_out)):
+    assert len(c_out) == len(bender_out) == SAMPLES
+    for i, (actual, expected) in enumerate(zip(c_out, bender_out)):
         # Parse hex to bits, allowing insignificant spelling differences.
         def bits(value):
             return struct.pack('>d', float.fromhex(value))

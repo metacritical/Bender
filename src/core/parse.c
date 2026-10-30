@@ -20,14 +20,14 @@
 * IN THE SOFTWARE.
 */
 
-#ifndef JANET_AMALG
+#ifndef BENDER_AMALG
 #include "features.h"
-#include <janet.h>
+#include <bender.h>
 #include "util.h"
 #endif
 
-#define JANET_PARSER_DEAD 0x1
-#define JANET_PARSER_GENERATED_ERROR 0x2
+#define BENDER_PARSER_DEAD 0x1
+#define BENDER_PARSER_GENERATED_ERROR 0x2
 
 /* Check if a character is whitespace */
 static int is_whitespace(uint8_t c) {
@@ -52,14 +52,14 @@ static const uint32_t symchars[8] = {
 
 /* Check if a character is a valid symbol character
  * symbol chars are A-Z, a-z, 0-9, or one of !$&*+-./:<=>@\^_| */
-int janet_is_symbol_char(uint8_t c) {
+int bender_is_symbol_char(uint8_t c) {
     return symchars[c >> 5] & ((uint32_t)1 << (c & 0x1F));
 }
 
 /* Validate some utf8. Useful for identifiers. Only validates
  * the encoding, does not check for valid code points (they
  * are less well defined than the encoding). */
-int janet_valid_utf8(const uint8_t *str, int32_t len) {
+int bender_valid_utf8(const uint8_t *str, int32_t len) {
     int32_t i = 0;
     int32_t j;
     while (i < len) {
@@ -108,15 +108,15 @@ static int to_hex(uint8_t c) {
 
 /* Define a stack on the main parser struct */
 #define DEF_PARSER_STACK(NAME, T, STACK, STACKCOUNT, STACKCAP) \
-static void NAME(JanetParser *p, T x) { \
+static void NAME(BenderParser *p, T x) { \
     size_t oldcount = p->STACKCOUNT; \
     size_t newcount = oldcount + 1; \
     if (newcount > p->STACKCAP) { \
         T *next; \
         size_t newcap = 2 * newcount; \
-        next = janet_realloc(p->STACK, sizeof(T) * newcap); \
+        next = bender_realloc(p->STACK, sizeof(T) * newcap); \
         if (NULL == next) { \
-            JANET_OUT_OF_MEMORY; \
+            BENDER_OUT_OF_MEMORY; \
         } \
         p->STACK = next; \
         p->STACKCAP = newcap; \
@@ -126,8 +126,8 @@ static void NAME(JanetParser *p, T x) { \
 }
 
 DEF_PARSER_STACK(push_buf, uint8_t, buf, bufcount, bufcap)
-DEF_PARSER_STACK(push_arg, Janet, args, argcount, argcap)
-DEF_PARSER_STACK(_pushstate, JanetParseState, states, statecount, statecap)
+DEF_PARSER_STACK(push_arg, Bender, args, argcount, argcap)
+DEF_PARSER_STACK(_pushstate, BenderParseState, states, statecount, statecap)
 
 #undef DEF_PARSER_STACK
 
@@ -143,8 +143,8 @@ DEF_PARSER_STACK(_pushstate, JanetParseState, states, statecount, statecap)
 #define PFLAG_COMMENT 0x20000
 #define PFLAG_TOKEN 0x40000
 
-static void pushstate(JanetParser *p, Consumer consumer, int flags) {
-    JanetParseState s;
+static void pushstate(BenderParser *p, Consumer consumer, int flags) {
+    BenderParseState s;
     s.counter = 0;
     s.argn = 0;
     s.flags = flags;
@@ -154,14 +154,14 @@ static void pushstate(JanetParser *p, Consumer consumer, int flags) {
     _pushstate(p, s);
 }
 
-static void popstate(JanetParser *p, Janet val) {
+static void popstate(BenderParser *p, Bender val) {
     for (;;) {
-        JanetParseState top = p->states[--p->statecount];
-        JanetParseState *newtop = p->states + p->statecount - 1;
+        BenderParseState top = p->states[--p->statecount];
+        BenderParseState *newtop = p->states + p->statecount - 1;
         /* Source mapping info */
-        if (janet_checktype(val, JANET_TUPLE)) {
-            janet_tuple_sm_line(janet_unwrap_tuple(val)) = (int32_t) top.line;
-            janet_tuple_sm_column(janet_unwrap_tuple(val)) = (int32_t) top.column;
+        if (bender_checktype(val, BENDER_TUPLE)) {
+            bender_tuple_sm_line(bender_unwrap_tuple(val)) = (int32_t) top.line;
+            bender_tuple_sm_column(bender_unwrap_tuple(val)) = (int32_t) top.column;
         }
         if (newtop->flags & PFLAG_CONTAINER) {
             newtop->argn++;
@@ -169,15 +169,15 @@ static void popstate(JanetParser *p, Janet val) {
             if (p->statecount == 1) {
                 p->pending++;
                 /* Root items are always wrapped in a tuple for source map info. */
-                const Janet *tup = janet_tuple_n(&val, 1);
-                janet_tuple_sm_line(tup) = (int32_t) top.line;
-                janet_tuple_sm_column(tup) = (int32_t) top.column;
-                val = janet_wrap_tuple(tup);
+                const Bender *tup = bender_tuple_n(&val, 1);
+                bender_tuple_sm_line(tup) = (int32_t) top.line;
+                bender_tuple_sm_column(tup) = (int32_t) top.column;
+                val = bender_wrap_tuple(tup);
             }
             push_arg(p, val);
             return;
         } else if (newtop->flags & PFLAG_READERMAC) {
-            Janet *t = janet_tuple_begin(2);
+            Bender *t = bender_tuple_begin(2);
             int c = newtop->flags & 0xFF;
             const char *which =
                 (c == '\'') ? "quote" :
@@ -185,47 +185,47 @@ static void popstate(JanetParser *p, Janet val) {
                 (c == ';') ? "splice" :
                 (c == '|') ? "short-fn" :
                 (c == '~') ? "quasiquote" : "<unknown>";
-            t[0] = janet_csymbolv(which);
+            t[0] = bender_csymbolv(which);
             t[1] = val;
             /* Quote source mapping info */
-            janet_tuple_sm_line(t) = (int32_t) newtop->line;
-            janet_tuple_sm_column(t) = (int32_t) newtop->column;
-            val = janet_wrap_tuple(janet_tuple_end(t));
+            bender_tuple_sm_line(t) = (int32_t) newtop->line;
+            bender_tuple_sm_column(t) = (int32_t) newtop->column;
+            val = bender_wrap_tuple(bender_tuple_end(t));
         } else {
             return;
         }
     }
 }
 
-static void delim_error(JanetParser *parser, size_t stack_index, char c, const char *msg) {
-    JanetParseState *s = parser->states + stack_index;
-    JanetBuffer *buffer = janet_buffer(40);
+static void delim_error(BenderParser *parser, size_t stack_index, char c, const char *msg) {
+    BenderParseState *s = parser->states + stack_index;
+    BenderBuffer *buffer = bender_buffer(40);
     if (msg) {
-        janet_buffer_push_cstring(buffer, msg);
+        bender_buffer_push_cstring(buffer, msg);
     }
     if (c) {
-        janet_buffer_push_u8(buffer, c);
+        bender_buffer_push_u8(buffer, c);
     }
     if (stack_index > 0) {
-        janet_buffer_push_cstring(buffer, ", ");
+        bender_buffer_push_cstring(buffer, ", ");
         if (s->flags & PFLAG_PARENS) {
-            janet_buffer_push_u8(buffer, '(');
+            bender_buffer_push_u8(buffer, '(');
         } else if (s->flags & PFLAG_SQRBRACKETS) {
-            janet_buffer_push_u8(buffer, '[');
+            bender_buffer_push_u8(buffer, '[');
         } else if (s->flags & PFLAG_CURLYBRACKETS) {
-            janet_buffer_push_u8(buffer, '{');
+            bender_buffer_push_u8(buffer, '{');
         } else if (s->flags & PFLAG_STRING) {
-            janet_buffer_push_u8(buffer, '"');
+            bender_buffer_push_u8(buffer, '"');
         } else if (s->flags & PFLAG_LONGSTRING) {
             int32_t i;
             for (i = 0; i < s->argn; i++) {
-                janet_buffer_push_u8(buffer, '`');
+                bender_buffer_push_u8(buffer, '`');
             }
         }
-        janet_formatb(buffer, " opened at line %d, column %d", (int32_t) s->line, (int32_t) s->column);
+        bender_formatb(buffer, " opened at line %d, column %d", (int32_t) s->line, (int32_t) s->column);
     }
-    parser->error = (const char *) janet_string(buffer->data, buffer->count);
-    parser->flag |= JANET_PARSER_GENERATED_ERROR;
+    parser->error = (const char *) bender_string(buffer->data, buffer->count);
+    parser->flag |= BENDER_PARSER_GENERATED_ERROR;
 }
 
 static int checkescape(uint8_t c) {
@@ -268,9 +268,9 @@ static int checkescape(uint8_t c) {
 }
 
 /* Forward declare */
-static int stringchar(JanetParser *p, JanetParseState *state, uint8_t c);
+static int stringchar(BenderParser *p, BenderParseState *state, uint8_t c);
 
-static void write_codepoint(JanetParser *p, int32_t codepoint) {
+static void write_codepoint(BenderParser *p, int32_t codepoint) {
     if (codepoint <= 0x7F) {
         push_buf(p, (uint8_t) codepoint);
     } else if (codepoint <= 0x7FF) {
@@ -288,7 +288,7 @@ static void write_codepoint(JanetParser *p, int32_t codepoint) {
     }
 }
 
-static int escapeh(JanetParser *p, JanetParseState *state, uint8_t c) {
+static int escapeh(BenderParser *p, BenderParseState *state, uint8_t c) {
     int digit = to_hex(c);
     if (digit < 0) {
         p->error = "invalid hex digit in hex escape";
@@ -304,7 +304,7 @@ static int escapeh(JanetParser *p, JanetParseState *state, uint8_t c) {
     return 1;
 }
 
-static int escapeu(JanetParser *p, JanetParseState *state, uint8_t c) {
+static int escapeu(BenderParser *p, BenderParseState *state, uint8_t c) {
     int digit = to_hex(c);
     if (digit < 0) {
         p->error = "invalid hex digit in unicode escape";
@@ -324,7 +324,7 @@ static int escapeu(JanetParser *p, JanetParseState *state, uint8_t c) {
     return 1;
 }
 
-static int escape1(JanetParser *p, JanetParseState *state, uint8_t c) {
+static int escape1(BenderParser *p, BenderParseState *state, uint8_t c) {
     int e = checkescape(c);
     if (e < 0) {
         p->error = "invalid string escape sequence";
@@ -345,13 +345,13 @@ static int escape1(JanetParser *p, JanetParseState *state, uint8_t c) {
     return 1;
 }
 
-static int stringend(JanetParser *p, JanetParseState *state) {
-    Janet ret;
+static int stringend(BenderParser *p, BenderParseState *state) {
+    Bender ret;
     uint8_t *bufstart = p->buf;
     int32_t buflen = (int32_t) p->bufcount;
     if (state->flags & PFLAG_LONGSTRING) {
         /* Post process to remove leading whitespace */
-        JanetParseState top = p->states[p->statecount - 1];
+        BenderParseState top = p->states[p->statecount - 1];
         int32_t indent_col = (int32_t) top.column - 1;
         uint8_t *r = bufstart, *end = r + buflen;
         /* Unless there are only spaces before EOLs, disable reindenting */
@@ -398,18 +398,18 @@ static int stringend(JanetParser *p, JanetParseState *state) {
         }
     }
     if (state->flags & PFLAG_BUFFER) {
-        JanetBuffer *b = janet_buffer(buflen);
-        janet_buffer_push_bytes(b, bufstart, buflen);
-        ret = janet_wrap_buffer(b);
+        BenderBuffer *b = bender_buffer(buflen);
+        bender_buffer_push_bytes(b, bufstart, buflen);
+        ret = bender_wrap_buffer(b);
     } else {
-        ret = janet_wrap_string(janet_string(bufstart, buflen));
+        ret = bender_wrap_string(bender_string(bufstart, buflen));
     }
     p->bufcount = 0;
     popstate(p, ret);
     return 1;
 }
 
-static int stringchar(JanetParser *p, JanetParseState *state, uint8_t c) {
+static int stringchar(BenderParser *p, BenderParseState *state, uint8_t c) {
     /* Enter escape */
     if (c == '\\') {
         state->consumer = escape1;
@@ -438,11 +438,11 @@ static int check_str_const(const char *cstr, const uint8_t *str, int32_t len) {
     return (cstr[index] == '\0') ? 0 : -1;
 }
 
-static int tokenchar(JanetParser *p, JanetParseState *state, uint8_t c) {
-    Janet ret;
+static int tokenchar(BenderParser *p, BenderParseState *state, uint8_t c) {
+    Bender ret;
     double numval;
     int32_t blen;
-    if (janet_is_symbol_char(c)) {
+    if (bender_is_symbol_char(c)) {
         push_buf(p, (uint8_t) c);
         if (c > 127) state->argn = 1; /* Use to indicate non ascii */
         return 1;
@@ -453,37 +453,37 @@ static int tokenchar(JanetParser *p, JanetParseState *state, uint8_t c) {
     int start_num = start_dig || p->buf[0] == '-' || p->buf[0] == '+' || p->buf[0] == '.';
     if (p->buf[0] == ':') {
         /* Don't do full utf-8 check unless we have seen non ascii characters. */
-        int valid = (!state->argn) || janet_valid_utf8(p->buf + 1, blen - 1);
+        int valid = (!state->argn) || bender_valid_utf8(p->buf + 1, blen - 1);
         if (!valid) {
             p->error = "invalid utf-8 in keyword";
             return 0;
         }
-        ret = janet_keywordv(p->buf + 1, blen - 1);
-#ifdef JANET_INT_TYPES
-    } else if (start_num && !janet_scan_numeric(p->buf, blen, &ret)) {
+        ret = bender_keywordv(p->buf + 1, blen - 1);
+#ifdef BENDER_INT_TYPES
+    } else if (start_num && !bender_scan_numeric(p->buf, blen, &ret)) {
         (void) numval;
 #else
-    } else if (start_num && !janet_scan_number(p->buf, blen, &numval)) {
-        ret = janet_wrap_number(numval);
+    } else if (start_num && !bender_scan_number(p->buf, blen, &numval)) {
+        ret = bender_wrap_number(numval);
 #endif
     } else if (!check_str_const("nil", p->buf, blen)) {
-        ret = janet_wrap_nil();
+        ret = bender_wrap_nil();
     } else if (!check_str_const("false", p->buf, blen)) {
-        ret = janet_wrap_false();
+        ret = bender_wrap_false();
     } else if (!check_str_const("true", p->buf, blen)) {
-        ret = janet_wrap_true();
+        ret = bender_wrap_true();
     } else {
         if (start_dig) {
             p->error = "symbol literal cannot start with a digit";
             return 0;
         } else {
             /* Don't do full utf-8 check unless we have seen non ascii characters. */
-            int valid = (!state->argn) || janet_valid_utf8(p->buf, blen);
+            int valid = (!state->argn) || bender_valid_utf8(p->buf, blen);
             if (!valid) {
                 p->error = "invalid utf-8 in symbol";
                 return 0;
             }
-            ret = janet_symbolv(p->buf, blen);
+            ret = bender_symbolv(p->buf, blen);
         }
     }
     p->bufcount = 0;
@@ -491,7 +491,7 @@ static int tokenchar(JanetParser *p, JanetParseState *state, uint8_t c) {
     return 0;
 }
 
-static int comment(JanetParser *p, JanetParseState *state, uint8_t c) {
+static int comment(BenderParser *p, BenderParseState *state, uint8_t c) {
     (void) state;
     if (c == '\n') {
         p->statecount--;
@@ -502,47 +502,47 @@ static int comment(JanetParser *p, JanetParseState *state, uint8_t c) {
     return 1;
 }
 
-static Janet close_tuple(JanetParser *p, JanetParseState *state, int32_t flag) {
-    Janet *ret = janet_tuple_begin(state->argn);
-    janet_tuple_flag(ret) |= flag;
+static Bender close_tuple(BenderParser *p, BenderParseState *state, int32_t flag) {
+    Bender *ret = bender_tuple_begin(state->argn);
+    bender_tuple_flag(ret) |= flag;
     for (int32_t i = state->argn - 1; i >= 0; i--)
         ret[i] = p->args[--p->argcount];
-    return janet_wrap_tuple(janet_tuple_end(ret));
+    return bender_wrap_tuple(bender_tuple_end(ret));
 }
 
-static Janet close_array(JanetParser *p, JanetParseState *state) {
-    JanetArray *array = janet_array(state->argn);
+static Bender close_array(BenderParser *p, BenderParseState *state) {
+    BenderArray *array = bender_array(state->argn);
     for (int32_t i = state->argn - 1; i >= 0; i--)
         array->data[i] = p->args[--p->argcount];
     array->count = state->argn;
-    return janet_wrap_array(array);
+    return bender_wrap_array(array);
 }
 
-static Janet close_struct(JanetParser *p, JanetParseState *state) {
-    JanetKV *st = janet_struct_begin(state->argn >> 1);
+static Bender close_struct(BenderParser *p, BenderParseState *state) {
+    BenderKV *st = bender_struct_begin(state->argn >> 1);
     for (size_t i = p->argcount - state->argn; i < p->argcount; i += 2) {
-        Janet key = p->args[i];
-        Janet value = p->args[i + 1];
-        janet_struct_put(st, key, value);
+        Bender key = p->args[i];
+        Bender value = p->args[i + 1];
+        bender_struct_put(st, key, value);
     }
     p->argcount -= state->argn;
-    return janet_wrap_struct(janet_struct_end(st));
+    return bender_wrap_struct(bender_struct_end(st));
 }
 
-static Janet close_table(JanetParser *p, JanetParseState *state) {
-    JanetTable *table = janet_table(state->argn >> 1);
+static Bender close_table(BenderParser *p, BenderParseState *state) {
+    BenderTable *table = bender_table(state->argn >> 1);
     for (size_t i = p->argcount - state->argn; i < p->argcount; i += 2) {
-        Janet key = p->args[i];
-        Janet value = p->args[i + 1];
-        janet_table_put(table, key, value);
+        Bender key = p->args[i];
+        Bender value = p->args[i + 1];
+        bender_table_put(table, key, value);
     }
     p->argcount -= state->argn;
-    return janet_wrap_table(table);
+    return bender_wrap_table(table);
 }
 
 #define PFLAG_INSTRING 0x100000
 #define PFLAG_END_CANDIDATE 0x200000
-static int longstring(JanetParser *p, JanetParseState *state, uint8_t c) {
+static int longstring(BenderParser *p, BenderParseState *state, uint8_t c) {
     if (state->flags & PFLAG_INSTRING) {
         /* We are inside the long string */
         if (c == '`') {
@@ -584,9 +584,9 @@ static int longstring(JanetParser *p, JanetParseState *state, uint8_t c) {
     }
 }
 
-static int root(JanetParser *p, JanetParseState *state, uint8_t c);
+static int root(BenderParser *p, BenderParseState *state, uint8_t c);
 
-static int atsign(JanetParser *p, JanetParseState *state, uint8_t c) {
+static int atsign(BenderParser *p, BenderParseState *state, uint8_t c) {
     (void) state;
     p->statecount--;
     switch (c) {
@@ -614,11 +614,11 @@ static int atsign(JanetParser *p, JanetParseState *state, uint8_t c) {
 }
 
 /* The root state of the parser */
-static int root(JanetParser *p, JanetParseState *state, uint8_t c) {
+static int root(BenderParser *p, BenderParseState *state, uint8_t c) {
     switch (c) {
         default:
             if (is_whitespace(c)) return 1;
-            if (!janet_is_symbol_char(c)) {
+            if (!bender_is_symbol_char(c)) {
                 p->error = "unexpected character";
                 return 1;
             }
@@ -646,7 +646,7 @@ static int root(JanetParser *p, JanetParseState *state, uint8_t c) {
         case ')':
         case ']':
         case '}': {
-            Janet ds;
+            Bender ds;
             if (p->statecount == 1) {
                 delim_error(p, 0, c, "unexpected closing delimiter ");
                 return 1;
@@ -656,7 +656,7 @@ static int root(JanetParser *p, JanetParseState *state, uint8_t c) {
                 if (state->flags & PFLAG_ATSYM) {
                     ds = close_array(p, state);
                 } else {
-                    ds = close_tuple(p, state, c == ']' ? JANET_TUPLE_FLAG_BRACKETCTOR : 0);
+                    ds = close_tuple(p, state, c == ']' ? BENDER_TUPLE_FLAG_BRACKETCTOR : 0);
                 }
             } else if (c == '}' && (state->flags & PFLAG_CURLYBRACKETS)) {
                 if (state->argn & 1) {
@@ -687,16 +687,16 @@ static int root(JanetParser *p, JanetParseState *state, uint8_t c) {
     }
 }
 
-static void janet_parser_checkdead(JanetParser *parser) {
-    if (parser->flag) janet_panic("parser is dead, cannot consume");
-    if (parser->error) janet_panic("parser has unchecked error, cannot consume");
+static void bender_parser_checkdead(BenderParser *parser) {
+    if (parser->flag) bender_panic("parser is dead, cannot consume");
+    if (parser->error) bender_panic("parser has unchecked error, cannot consume");
 }
 
 /* Public API */
 
-void janet_parser_consume(JanetParser *parser, uint8_t c) {
+void bender_parser_consume(BenderParser *parser, uint8_t c) {
     int consumed = 0;
-    janet_parser_checkdead(parser);
+    bender_parser_checkdead(parser);
     if (c == '\r') {
         parser->line++;
         parser->column = 0;
@@ -708,56 +708,56 @@ void janet_parser_consume(JanetParser *parser, uint8_t c) {
         parser->column++;
     }
     while (!consumed && !parser->error) {
-        JanetParseState *state = parser->states + parser->statecount - 1;
+        BenderParseState *state = parser->states + parser->statecount - 1;
         consumed = state->consumer(parser, state, c);
     }
     parser->lookback = c;
 }
 
-void janet_parser_eof(JanetParser *parser) {
-    janet_parser_checkdead(parser);
+void bender_parser_eof(BenderParser *parser) {
+    bender_parser_checkdead(parser);
     size_t oldcolumn = parser->column;
     size_t oldline = parser->line;
-    janet_parser_consume(parser, '\n');
+    bender_parser_consume(parser, '\n');
     if (parser->statecount > 1) {
         delim_error(parser, parser->statecount - 1, 0, "unexpected end of source");
     }
     parser->line = oldline;
     parser->column = oldcolumn;
-    parser->flag |= JANET_PARSER_DEAD;
+    parser->flag |= BENDER_PARSER_DEAD;
 }
 
-enum JanetParserStatus janet_parser_status(JanetParser *parser) {
-    if (parser->error) return JANET_PARSE_ERROR;
-    if (parser->flag) return JANET_PARSE_DEAD;
-    if (parser->statecount > 1) return JANET_PARSE_PENDING;
-    return JANET_PARSE_ROOT;
+enum BenderParserStatus bender_parser_status(BenderParser *parser) {
+    if (parser->error) return BENDER_PARSE_ERROR;
+    if (parser->flag) return BENDER_PARSE_DEAD;
+    if (parser->statecount > 1) return BENDER_PARSE_PENDING;
+    return BENDER_PARSE_ROOT;
 }
 
-void janet_parser_flush(JanetParser *parser) {
+void bender_parser_flush(BenderParser *parser) {
     parser->argcount = 0;
     parser->statecount = 1;
     parser->bufcount = 0;
     parser->pending = 0;
 }
 
-const char *janet_parser_error(JanetParser *parser) {
-    enum JanetParserStatus status = janet_parser_status(parser);
-    if (status == JANET_PARSE_ERROR) {
+const char *bender_parser_error(BenderParser *parser) {
+    enum BenderParserStatus status = bender_parser_status(parser);
+    if (status == BENDER_PARSE_ERROR) {
         const char *e = parser->error;
         parser->error = NULL;
-        parser->flag &= ~JANET_PARSER_GENERATED_ERROR;
-        janet_parser_flush(parser);
+        parser->flag &= ~BENDER_PARSER_GENERATED_ERROR;
+        bender_parser_flush(parser);
         return e;
     }
     return NULL;
 }
 
-Janet janet_parser_produce(JanetParser *parser) {
-    Janet ret;
+Bender bender_parser_produce(BenderParser *parser) {
+    Bender ret;
     size_t i;
-    if (parser->pending == 0) return janet_wrap_nil();
-    ret = janet_unwrap_tuple(parser->args[0])[0];
+    if (parser->pending == 0) return bender_wrap_nil();
+    ret = bender_unwrap_tuple(parser->args[0])[0];
     for (i = 1; i < parser->argcount; i++) {
         parser->args[i - 1] = parser->args[i];
     }
@@ -767,10 +767,10 @@ Janet janet_parser_produce(JanetParser *parser) {
     return ret;
 }
 
-Janet janet_parser_produce_wrapped(JanetParser *parser) {
-    Janet ret;
+Bender bender_parser_produce_wrapped(BenderParser *parser) {
+    Bender ret;
     size_t i;
-    if (parser->pending == 0) return janet_wrap_nil();
+    if (parser->pending == 0) return bender_wrap_nil();
     ret = parser->args[0];
     for (i = 1; i < parser->argcount; i++) {
         parser->args[i - 1] = parser->args[i];
@@ -781,7 +781,7 @@ Janet janet_parser_produce_wrapped(JanetParser *parser) {
     return ret;
 }
 
-void janet_parser_init(JanetParser *parser) {
+void bender_parser_init(BenderParser *parser) {
     parser->args = NULL;
     parser->states = NULL;
     parser->buf = NULL;
@@ -801,13 +801,13 @@ void janet_parser_init(JanetParser *parser) {
     pushstate(parser, root, PFLAG_CONTAINER);
 }
 
-void janet_parser_deinit(JanetParser *parser) {
-    janet_free(parser->args);
-    janet_free(parser->buf);
-    janet_free(parser->states);
+void bender_parser_deinit(BenderParser *parser) {
+    bender_free(parser->args);
+    bender_free(parser->buf);
+    bender_free(parser->states);
 }
 
-void janet_parser_clone(const JanetParser *src, JanetParser *dest) {
+void bender_parser_clone(const BenderParser *src, BenderParser *dest) {
     /* Misc fields */
     dest->flag = src->flag;
     dest->pending = src->pending;
@@ -831,28 +831,28 @@ void janet_parser_clone(const JanetParser *src, JanetParser *dest) {
     dest->states = NULL;
     dest->buf = NULL;
     if (dest->bufcap) {
-        dest->buf = janet_malloc(dest->bufcap);
+        dest->buf = bender_malloc(dest->bufcap);
         if (!dest->buf) goto nomem;
         memcpy(dest->buf, src->buf, dest->bufcap);
     }
     if (dest->argcap) {
-        dest->args = janet_malloc(sizeof(Janet) * dest->argcap);
+        dest->args = bender_malloc(sizeof(Bender) * dest->argcap);
         if (!dest->args) goto nomem;
-        memcpy(dest->args, src->args, dest->argcap * sizeof(Janet));
+        memcpy(dest->args, src->args, dest->argcap * sizeof(Bender));
     }
     if (dest->statecap) {
-        dest->states = janet_malloc(sizeof(JanetParseState) * dest->statecap);
+        dest->states = bender_malloc(sizeof(BenderParseState) * dest->statecap);
         if (!dest->states) goto nomem;
-        memcpy(dest->states, src->states, dest->statecap * sizeof(JanetParseState));
+        memcpy(dest->states, src->states, dest->statecap * sizeof(BenderParseState));
     }
 
     return;
 
 nomem:
-    JANET_OUT_OF_MEMORY;
+    BENDER_OUT_OF_MEMORY;
 }
 
-int janet_parser_has_more(JanetParser *parser) {
+int bender_parser_has_more(BenderParser *parser) {
     return !!parser->pending;
 }
 
@@ -860,28 +860,28 @@ int janet_parser_has_more(JanetParser *parser) {
 
 static int parsermark(void *p, size_t size) {
     size_t i;
-    JanetParser *parser = (JanetParser *)p;
+    BenderParser *parser = (BenderParser *)p;
     (void) size;
     for (i = 0; i < parser->argcount; i++) {
-        janet_mark(parser->args[i]);
+        bender_mark(parser->args[i]);
     }
-    if (parser->flag & JANET_PARSER_GENERATED_ERROR) {
-        janet_mark(janet_wrap_string((const uint8_t *) parser->error));
+    if (parser->flag & BENDER_PARSER_GENERATED_ERROR) {
+        bender_mark(bender_wrap_string((const uint8_t *) parser->error));
     }
     return 0;
 }
 
 static int parsergc(void *p, size_t size) {
-    JanetParser *parser = (JanetParser *)p;
+    BenderParser *parser = (BenderParser *)p;
     (void) size;
-    janet_parser_deinit(parser);
+    bender_parser_deinit(parser);
     return 0;
 }
 
-static int parserget(void *p, Janet key, Janet *out);
-static Janet parsernext(void *p, Janet key);
+static int parserget(void *p, Bender key, Bender *out);
+static Bender parsernext(void *p, Bender key);
 
-const JanetAbstractType janet_parser_type = {
+const BenderAbstractType bender_parser_type = {
     "core/parser",
     parsergc,
     parsermark,
@@ -893,69 +893,69 @@ const JanetAbstractType janet_parser_type = {
     NULL, /* compare */
     NULL, /* hash */
     parsernext,
-    JANET_ATEND_NEXT
+    BENDER_ATEND_NEXT
 };
 
 /* C Function parser */
-JANET_CORE_FN(cfun_parse_parser,
+BENDER_CORE_FN(cfun_parse_parser,
               "(parser/new)",
               "Creates and returns a new parser object. Parsers are state machines "
               "that can receive bytes and generate a stream of values.") {
     (void) argv;
-    janet_fixarity(argc, 0);
-    JanetParser *p = janet_abstract(&janet_parser_type, sizeof(JanetParser));
-    janet_parser_init(p);
-    return janet_wrap_abstract(p);
+    bender_fixarity(argc, 0);
+    BenderParser *p = bender_abstract(&bender_parser_type, sizeof(BenderParser));
+    bender_parser_init(p);
+    return bender_wrap_abstract(p);
 }
 
-JANET_CORE_FN(cfun_parse_consume,
+BENDER_CORE_FN(cfun_parse_consume,
               "(parser/consume parser bytes &opt index)",
               "Input bytes into the parser and parse them. Will not throw errors "
               "if there is a parse error. Starts at the byte index given by `index`. Returns "
               "the number of bytes read.") {
-    janet_arity(argc, 2, 3);
-    JanetParser *p = janet_getabstract(argv, 0, &janet_parser_type);
-    JanetByteView view = janet_getbytes(argv, 1);
+    bender_arity(argc, 2, 3);
+    BenderParser *p = bender_getabstract(argv, 0, &bender_parser_type);
+    BenderByteView view = bender_getbytes(argv, 1);
     if (argc == 3) {
-        int32_t offset = janet_getinteger(argv, 2);
+        int32_t offset = bender_getinteger(argv, 2);
         if (offset < 0 || offset > view.len)
-            janet_panicf("invalid offset %d out of range [0,%d]", offset, view.len);
+            bender_panicf("invalid offset %d out of range [0,%d]", offset, view.len);
         view.len -= offset;
         view.bytes += offset;
     }
     int32_t i;
     for (i = 0; i < view.len; i++) {
-        janet_parser_consume(p, view.bytes[i]);
-        switch (janet_parser_status(p)) {
-            case JANET_PARSE_ROOT:
-            case JANET_PARSE_PENDING:
+        bender_parser_consume(p, view.bytes[i]);
+        switch (bender_parser_status(p)) {
+            case BENDER_PARSE_ROOT:
+            case BENDER_PARSE_PENDING:
                 break;
             default:
-                return janet_wrap_integer(i + 1);
+                return bender_wrap_integer(i + 1);
         }
     }
-    return janet_wrap_integer(i);
+    return bender_wrap_integer(i);
 }
 
-JANET_CORE_FN(cfun_parse_eof,
+BENDER_CORE_FN(cfun_parse_eof,
               "(parser/eof parser)",
               "Indicate to the parser that the end of file was reached. This puts the parser in the :dead state.") {
-    janet_fixarity(argc, 1);
-    JanetParser *p = janet_getabstract(argv, 0, &janet_parser_type);
-    janet_parser_eof(p);
+    bender_fixarity(argc, 1);
+    BenderParser *p = bender_getabstract(argv, 0, &bender_parser_type);
+    bender_parser_eof(p);
     return argv[0];
 }
 
-JANET_CORE_FN(cfun_parse_insert,
+BENDER_CORE_FN(cfun_parse_insert,
               "(parser/insert parser value)",
               "Insert a value into the parser. This means that the parser state can be manipulated "
               "in between chunks of bytes. This would allow a user to add extra elements to arrays "
               "and tuples, for example. Returns the parser.") {
-    janet_fixarity(argc, 2);
-    JanetParser *p = janet_getabstract(argv, 0, &janet_parser_type);
-    JanetParseState *s = p->states + p->statecount - 1;
+    bender_fixarity(argc, 2);
+    BenderParser *p = bender_getabstract(argv, 0, &bender_parser_type);
+    BenderParseState *s = p->states + p->statecount - 1;
     if (s->consumer == tokenchar) {
-        janet_parser_consume(p, ' ');
+        bender_parser_consume(p, ' ');
         p->column--;
         s = p->states + p->statecount - 1;
     }
@@ -964,159 +964,159 @@ JANET_CORE_FN(cfun_parse_insert,
         s->argn++;
         if (p->statecount == 1) {
             p->pending++;
-            Janet tup = janet_wrap_tuple(janet_tuple_n(argv + 1, 1));
+            Bender tup = bender_wrap_tuple(bender_tuple_n(argv + 1, 1));
             push_arg(p, tup);
         } else {
             push_arg(p, argv[1]);
         }
     } else if (s->flags & (PFLAG_STRING | PFLAG_LONGSTRING)) {
-        const uint8_t *str = janet_to_string(argv[1]);
-        int32_t slen = janet_string_length(str);
+        const uint8_t *str = bender_to_string(argv[1]);
+        int32_t slen = bender_string_length(str);
         size_t newcount = p->bufcount + slen;
         if (p->bufcap < newcount) {
             size_t newcap = 2 * newcount;
-            p->buf = janet_realloc(p->buf, newcap);
+            p->buf = bender_realloc(p->buf, newcap);
             if (p->buf == NULL) {
-                JANET_OUT_OF_MEMORY;
+                BENDER_OUT_OF_MEMORY;
             }
             p->bufcap = newcap;
         }
         safe_memcpy(p->buf + p->bufcount, str, slen);
         p->bufcount = newcount;
     } else {
-        janet_panic("cannot insert value into parser");
+        bender_panic("cannot insert value into parser");
     }
     return argv[0];
 }
 
-JANET_CORE_FN(cfun_parse_has_more,
+BENDER_CORE_FN(cfun_parse_has_more,
               "(parser/has-more parser)",
               "Check if the parser has more values in the value queue.") {
-    janet_fixarity(argc, 1);
-    JanetParser *p = janet_getabstract(argv, 0, &janet_parser_type);
-    return janet_wrap_boolean(janet_parser_has_more(p));
+    bender_fixarity(argc, 1);
+    BenderParser *p = bender_getabstract(argv, 0, &bender_parser_type);
+    return bender_wrap_boolean(bender_parser_has_more(p));
 }
 
-JANET_CORE_FN(cfun_parse_byte,
+BENDER_CORE_FN(cfun_parse_byte,
               "(parser/byte parser b)",
               "Input a single byte `b` into the parser byte stream. Returns the parser.") {
-    janet_fixarity(argc, 2);
-    JanetParser *p = janet_getabstract(argv, 0, &janet_parser_type);
-    int32_t i = janet_getinteger(argv, 1);
-    janet_parser_consume(p, 0xFF & i);
+    bender_fixarity(argc, 2);
+    BenderParser *p = bender_getabstract(argv, 0, &bender_parser_type);
+    int32_t i = bender_getinteger(argv, 1);
+    bender_parser_consume(p, 0xFF & i);
     return argv[0];
 }
 
-JANET_CORE_FN(cfun_parse_status,
+BENDER_CORE_FN(cfun_parse_status,
               "(parser/status parser)",
               "Gets the current status of the parser state machine. The status will "
               "be one of:\n\n"
               "* :pending - a value is being parsed.\n\n"
               "* :error - a parsing error was encountered.\n\n"
               "* :root - the parser can either read more values or safely terminate.") {
-    janet_fixarity(argc, 1);
-    JanetParser *p = janet_getabstract(argv, 0, &janet_parser_type);
+    bender_fixarity(argc, 1);
+    BenderParser *p = bender_getabstract(argv, 0, &bender_parser_type);
     const char *stat = NULL;
-    switch (janet_parser_status(p)) {
-        case JANET_PARSE_PENDING:
+    switch (bender_parser_status(p)) {
+        case BENDER_PARSE_PENDING:
             stat = "pending";
             break;
-        case JANET_PARSE_ERROR:
+        case BENDER_PARSE_ERROR:
             stat = "error";
             break;
-        case JANET_PARSE_ROOT:
+        case BENDER_PARSE_ROOT:
             stat = "root";
             break;
-        case JANET_PARSE_DEAD:
+        case BENDER_PARSE_DEAD:
             stat = "dead";
             break;
     }
-    return janet_ckeywordv(stat);
+    return bender_ckeywordv(stat);
 }
 
-JANET_CORE_FN(cfun_parse_error,
+BENDER_CORE_FN(cfun_parse_error,
               "(parser/error parser)",
               "If the parser is in the error state, returns the message associated with "
               "that error. Otherwise, returns nil. Also flushes the parser state and parser "
               "queue, so be sure to handle everything in the queue before calling "
               "`parser/error`.") {
-    janet_fixarity(argc, 1);
-    JanetParser *p = janet_getabstract(argv, 0, &janet_parser_type);
-    const char *err = janet_parser_error(p);
+    bender_fixarity(argc, 1);
+    BenderParser *p = bender_getabstract(argv, 0, &bender_parser_type);
+    const char *err = bender_parser_error(p);
     if (err) {
-        return (p->flag & JANET_PARSER_GENERATED_ERROR)
-               ? janet_wrap_string((const uint8_t *) err)
-               : janet_cstringv(err);
+        return (p->flag & BENDER_PARSER_GENERATED_ERROR)
+               ? bender_wrap_string((const uint8_t *) err)
+               : bender_cstringv(err);
     }
-    return janet_wrap_nil();
+    return bender_wrap_nil();
 }
 
-JANET_CORE_FN(cfun_parse_produce,
+BENDER_CORE_FN(cfun_parse_produce,
               "(parser/produce parser &opt wrap)",
               "Dequeue the next value in the parse queue. Will return nil if "
               "no parsed values are in the queue, otherwise will dequeue the "
               "next value. If `wrap` is truthy, will return a 1-element tuple that "
               "wraps the result. This tuple can be used for source-mapping "
               "purposes.") {
-    janet_arity(argc, 1, 2);
-    JanetParser *p = janet_getabstract(argv, 0, &janet_parser_type);
-    if (argc == 2 && janet_truthy(argv[1])) {
-        return janet_parser_produce_wrapped(p);
+    bender_arity(argc, 1, 2);
+    BenderParser *p = bender_getabstract(argv, 0, &bender_parser_type);
+    if (argc == 2 && bender_truthy(argv[1])) {
+        return bender_parser_produce_wrapped(p);
     } else {
-        return janet_parser_produce(p);
+        return bender_parser_produce(p);
     }
 }
 
-JANET_CORE_FN(cfun_parse_flush,
+BENDER_CORE_FN(cfun_parse_flush,
               "(parser/flush parser)",
               "Clears the parser state and parse queue. Can be used to reset the parser "
               "if an error was encountered. Does not reset the line and column counter, so "
               "to begin parsing in a new context, create a new parser.") {
-    janet_fixarity(argc, 1);
-    JanetParser *p = janet_getabstract(argv, 0, &janet_parser_type);
-    janet_parser_flush(p);
+    bender_fixarity(argc, 1);
+    BenderParser *p = bender_getabstract(argv, 0, &bender_parser_type);
+    bender_parser_flush(p);
     return argv[0];
 }
 
-JANET_CORE_FN(cfun_parse_where,
+BENDER_CORE_FN(cfun_parse_where,
               "(parser/where parser &opt line col)",
               "Returns the current line number and column of the parser's internal state. If line is "
               "provided, the current line number of the parser is first set to that value. If column is "
               "also provided, the current column number of the parser is also first set to that value.") {
-    janet_arity(argc, 1, 3);
-    JanetParser *p = janet_getabstract(argv, 0, &janet_parser_type);
+    bender_arity(argc, 1, 3);
+    BenderParser *p = bender_getabstract(argv, 0, &bender_parser_type);
     if (argc > 1) {
-        int32_t line = janet_getinteger(argv, 1);
+        int32_t line = bender_getinteger(argv, 1);
         if (line < 1)
-            janet_panicf("invalid line number %d", line);
+            bender_panicf("invalid line number %d", line);
         p->line = (size_t) line;
     }
     if (argc > 2) {
-        int32_t column = janet_getinteger(argv, 2);
+        int32_t column = bender_getinteger(argv, 2);
         if (column < 0)
-            janet_panicf("invalid column number %d", column);
+            bender_panicf("invalid column number %d", column);
         p->column = (size_t) column;
     }
-    Janet *tup = janet_tuple_begin(2);
-    tup[0] = janet_wrap_integer(p->line);
-    tup[1] = janet_wrap_integer(p->column);
-    return janet_wrap_tuple(janet_tuple_end(tup));
+    Bender *tup = bender_tuple_begin(2);
+    tup[0] = bender_wrap_integer(p->line);
+    tup[1] = bender_wrap_integer(p->column);
+    return bender_wrap_tuple(bender_tuple_end(tup));
 }
 
-static Janet janet_wrap_parse_state(JanetParseState *s, Janet *args,
+static Bender bender_wrap_parse_state(BenderParseState *s, Bender *args,
                                     uint8_t *buff, uint32_t bufcount) {
-    JanetTable *state = janet_table(0);
+    BenderTable *state = bender_table(0);
     const uint8_t *buffer;
     int add_buffer = 0;
     const char *type = NULL;
 
     if (s->flags & PFLAG_CONTAINER) {
-        JanetArray *container_args = janet_array(s->argn);
+        BenderArray *container_args = bender_array(s->argn);
         for (int32_t i = 0; i < s->argn; i++) {
-            janet_array_push(container_args, args[i]);
+            bender_array_push(container_args, args[i]);
         }
-        janet_table_put(state, janet_ckeywordv("args"),
-                        janet_wrap_array(container_args));
+        bender_table_put(state, bender_ckeywordv("args"),
+                        bender_wrap_array(container_args));
     }
 
     if (s->flags & PFLAG_PARENS || s->flags & PFLAG_SQRBRACKETS) {
@@ -1157,33 +1157,33 @@ static Janet janet_wrap_parse_state(JanetParseState *s, Janet *args,
     }
 
     if (type) {
-        janet_table_put(state, janet_ckeywordv("type"),
-                        janet_ckeywordv(type));
+        bender_table_put(state, bender_ckeywordv("type"),
+                        bender_ckeywordv(type));
     }
 
     if (add_buffer) {
-        buffer = janet_string(buff, bufcount);
-        janet_table_put(state, janet_ckeywordv("buffer"), janet_wrap_string(buffer));
+        buffer = bender_string(buff, bufcount);
+        bender_table_put(state, bender_ckeywordv("buffer"), bender_wrap_string(buffer));
     }
 
-    janet_table_put(state, janet_ckeywordv("line"), janet_wrap_integer(s->line));
-    janet_table_put(state, janet_ckeywordv("column"), janet_wrap_integer(s->column));
-    return janet_wrap_table(state);
+    bender_table_put(state, bender_ckeywordv("line"), bender_wrap_integer(s->line));
+    bender_table_put(state, bender_ckeywordv("column"), bender_wrap_integer(s->column));
+    return bender_wrap_table(state);
 }
 
 struct ParserStateGetter {
     const char *name;
-    Janet(*fn)(const JanetParser *p);
+    Bender(*fn)(const BenderParser *p);
 };
 
-static Janet parser_state_delimiters(const JanetParser *_p) {
-    JanetParser *p = (JanetParser *)_p;
+static Bender parser_state_delimiters(const BenderParser *_p) {
+    BenderParser *p = (BenderParser *)_p;
     size_t i;
     const uint8_t *str;
     size_t oldcount;
     oldcount = p->bufcount;
     for (i = 0; i < p->statecount; i++) {
-        JanetParseState *s = p->states + i;
+        BenderParseState *s = p->states + i;
         if (s->flags & PFLAG_PARENS) {
             push_buf(p, '(');
         } else if (s->flags & PFLAG_SQRBRACKETS) {
@@ -1200,27 +1200,27 @@ static Janet parser_state_delimiters(const JanetParser *_p) {
         }
     }
     /* avoid ptr arithmetic on NULL */
-    str = janet_string(oldcount ? p->buf + oldcount : p->buf, (int32_t)(p->bufcount - oldcount));
+    str = bender_string(oldcount ? p->buf + oldcount : p->buf, (int32_t)(p->bufcount - oldcount));
     p->bufcount = oldcount;
-    return janet_wrap_string(str);
+    return bender_wrap_string(str);
 }
 
-static Janet parser_state_frames(const JanetParser *p) {
+static Bender parser_state_frames(const BenderParser *p) {
     int32_t count = (int32_t) p->statecount;
-    JanetArray *states = janet_array(count);
+    BenderArray *states = bender_array(count);
     states->count = count;
     uint8_t *buf = p->buf;
     /* Iterate arg stack backwards */
-    Janet *args = p->argcount ? p->args + p->argcount : p->args; /* avoid ptr arithmetic on NULL */
+    Bender *args = p->argcount ? p->args + p->argcount : p->args; /* avoid ptr arithmetic on NULL */
     for (int32_t i = count - 1; i >= 0; --i) {
-        JanetParseState *s = p->states + i;
+        BenderParseState *s = p->states + i;
         /* avoid ptr arithmetic on args if NULL */
         if ((s->flags & PFLAG_CONTAINER) && s->argn) {
             args -= s->argn;
         }
-        states->data[i] = janet_wrap_parse_state(s, args, buf, (uint32_t) p->bufcount);
+        states->data[i] = bender_wrap_parse_state(s, args, buf, (uint32_t) p->bufcount);
     }
-    return janet_wrap_array(states);
+    return bender_wrap_array(states);
 }
 
 static const struct ParserStateGetter parser_state_getters[] = {
@@ -1229,7 +1229,7 @@ static const struct ParserStateGetter parser_state_getters[] = {
     {NULL, NULL}
 };
 
-JANET_CORE_FN(cfun_parse_state,
+BENDER_CORE_FN(cfun_parse_state,
               "(parser/state parser &opt key)",
               "Returns a representation of the internal state of the parser. If a key is passed, "
               "only that information about the state is returned. Allowed keys are:\n\n"
@@ -1239,46 +1239,46 @@ JANET_CORE_FN(cfun_parse_state,
               "* :frames - Each table in the array represents a 'frame' in the parser state. Frames "
               "contain information about the start of the expression being parsed as well as the "
               "type of that expression and some type-specific information.") {
-    janet_arity(argc, 1, 2);
+    bender_arity(argc, 1, 2);
     const uint8_t *key = NULL;
-    JanetParser *p = janet_getabstract(argv, 0, &janet_parser_type);
+    BenderParser *p = bender_getabstract(argv, 0, &bender_parser_type);
     if (argc == 2) {
-        key = janet_getkeyword(argv, 1);
+        key = bender_getkeyword(argv, 1);
     }
 
     if (key) {
         /* Get one result */
         for (const struct ParserStateGetter *sg = parser_state_getters;
                 sg->name != NULL; sg++) {
-            if (janet_cstrcmp(key, sg->name)) continue;
+            if (bender_cstrcmp(key, sg->name)) continue;
             return sg->fn(p);
         }
-        janet_panicf("unexpected keyword %v", janet_wrap_keyword(key));
-        return janet_wrap_nil();
+        bender_panicf("unexpected keyword %v", bender_wrap_keyword(key));
+        return bender_wrap_nil();
     } else {
         /* Put results in table */
-        JanetTable *tab = janet_table(0);
+        BenderTable *tab = bender_table(0);
         for (const struct ParserStateGetter *sg = parser_state_getters;
                 sg->name != NULL; sg++) {
-            janet_table_put(tab, janet_ckeywordv(sg->name), sg->fn(p));
+            bender_table_put(tab, bender_ckeywordv(sg->name), sg->fn(p));
         }
-        return janet_wrap_table(tab);
+        return bender_wrap_table(tab);
     }
 }
 
-JANET_CORE_FN(cfun_parse_clone,
+BENDER_CORE_FN(cfun_parse_clone,
               "(parser/clone p)",
               "Creates a deep clone of a parser that is identical to the input parser. "
               "This cloned parser can be used to continue parsing from a good checkpoint "
               "if parsing later fails. Returns a new parser.") {
-    janet_fixarity(argc, 1);
-    JanetParser *src = janet_getabstract(argv, 0, &janet_parser_type);
-    JanetParser *dest = janet_abstract(&janet_parser_type, sizeof(JanetParser));
-    janet_parser_clone(src, dest);
-    return janet_wrap_abstract(dest);
+    bender_fixarity(argc, 1);
+    BenderParser *src = bender_getabstract(argv, 0, &bender_parser_type);
+    BenderParser *dest = bender_abstract(&bender_parser_type, sizeof(BenderParser));
+    bender_parser_clone(src, dest);
+    return bender_wrap_abstract(dest);
 }
 
-static const JanetMethod parser_methods[] = {
+static const BenderMethod parser_methods[] = {
     {"byte", cfun_parse_byte},
     {"clone", cfun_parse_clone},
     {"consume", cfun_parse_consume},
@@ -1294,34 +1294,34 @@ static const JanetMethod parser_methods[] = {
     {NULL, NULL}
 };
 
-static int parserget(void *p, Janet key, Janet *out) {
+static int parserget(void *p, Bender key, Bender *out) {
     (void) p;
-    if (!janet_checktype(key, JANET_KEYWORD)) return 0;
-    return janet_getmethod(janet_unwrap_keyword(key), parser_methods, out);
+    if (!bender_checktype(key, BENDER_KEYWORD)) return 0;
+    return bender_getmethod(bender_unwrap_keyword(key), parser_methods, out);
 }
 
-static Janet parsernext(void *p, Janet key) {
+static Bender parsernext(void *p, Bender key) {
     (void) p;
-    return janet_nextmethod(parser_methods, key);
+    return bender_nextmethod(parser_methods, key);
 }
 
 /* Load the library */
-void janet_lib_parse(JanetTable *env) {
-    JanetRegExt parse_cfuns[] = {
-        JANET_CORE_REG("parser/new", cfun_parse_parser),
-        JANET_CORE_REG("parser/clone", cfun_parse_clone),
-        JANET_CORE_REG("parser/has-more", cfun_parse_has_more),
-        JANET_CORE_REG("parser/produce", cfun_parse_produce),
-        JANET_CORE_REG("parser/consume", cfun_parse_consume),
-        JANET_CORE_REG("parser/byte", cfun_parse_byte),
-        JANET_CORE_REG("parser/error", cfun_parse_error),
-        JANET_CORE_REG("parser/status", cfun_parse_status),
-        JANET_CORE_REG("parser/flush", cfun_parse_flush),
-        JANET_CORE_REG("parser/state", cfun_parse_state),
-        JANET_CORE_REG("parser/where", cfun_parse_where),
-        JANET_CORE_REG("parser/eof", cfun_parse_eof),
-        JANET_CORE_REG("parser/insert", cfun_parse_insert),
-        JANET_REG_END
+void bender_lib_parse(BenderTable *env) {
+    BenderRegExt parse_cfuns[] = {
+        BENDER_CORE_REG("parser/new", cfun_parse_parser),
+        BENDER_CORE_REG("parser/clone", cfun_parse_clone),
+        BENDER_CORE_REG("parser/has-more", cfun_parse_has_more),
+        BENDER_CORE_REG("parser/produce", cfun_parse_produce),
+        BENDER_CORE_REG("parser/consume", cfun_parse_consume),
+        BENDER_CORE_REG("parser/byte", cfun_parse_byte),
+        BENDER_CORE_REG("parser/error", cfun_parse_error),
+        BENDER_CORE_REG("parser/status", cfun_parse_status),
+        BENDER_CORE_REG("parser/flush", cfun_parse_flush),
+        BENDER_CORE_REG("parser/state", cfun_parse_state),
+        BENDER_CORE_REG("parser/where", cfun_parse_where),
+        BENDER_CORE_REG("parser/eof", cfun_parse_eof),
+        BENDER_CORE_REG("parser/insert", cfun_parse_insert),
+        BENDER_REG_END
     };
-    janet_core_cfuns_ext(env, NULL, parse_cfuns);
+    bender_core_cfuns_ext(env, NULL, parse_cfuns);
 }

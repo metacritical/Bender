@@ -170,7 +170,7 @@ jobs:
     - name: Enable qemu
       run: docker run --privileged --rm tonistiigi/binfmt --install s390x
     - name: Build and run on emulated architecture
-      run: docker run --rm -v .:/janet --platform linux/s390x alpine sh -c "apk update && apk add --no-interactive git build-base && cd /janet && make -j3 && make test"
+      run: docker run --rm -v .:/bender --platform linux/s390x alpine sh -c "apk update && apk add --no-interactive git build-base && cd /bender && make -j3 && make test"
 
   test-cosmo:
     name: Test build for Cosmo
@@ -188,5 +188,5 @@ jobs:
         run: echo "version=${GITHUB_REF/refs\/tags\//}" >> $GITHUB_ENV
       - name: Set the platform
         run: echo "platform=cosmo" >> $GITHUB_ENV
-      - name: build Janet APE binary
+      - name: build Bender APE binary
         run: bash ./.github/cosmo/build

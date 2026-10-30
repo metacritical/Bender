@@ -20,7 +20,7 @@
 * IN THE SOFTWARE.
 */
 
-#include <janet.h>
+#include <bender.h>
 #include <stdio.h>
 #include <string.h>
 #include <assert.h>
@@ -38,13 +38,13 @@ static void test_valid_str(const char *str) {
     double cnum, jnum;
     jnum = 0.0;
     cnum = atof(str);
-    err = janet_scan_number((const uint8_t *) str, (int32_t) strlen(str), &jnum);
+    err = bender_scan_number((const uint8_t *) str, (int32_t) strlen(str), &jnum);
     assert(!err);
     assert(cnum == jnum);
 }
 
 int number_test() {
-#ifdef JANET_PLAN9
+#ifdef BENDER_PLAN9
     return 0;
 #endif
     test_valid_str("1.0");

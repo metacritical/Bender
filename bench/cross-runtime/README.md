@@ -1,15 +1,15 @@
 # Cross-runtime concurrency benchmarks
 
-Compares Janet against Erlang and Go on the same two questions. Every script
+Compares Bender against Erlang and Go on the same two questions. Every script
 emits one machine-readable line, and `run.sh` turns them into one table.
 
 ```
 ./bench/cross-runtime/run.sh [N]        # default N=1000000
-make bench                              # same, plus Janet's micro-benchmarks
-make bench-janet                        # Janet only, no Erlang/Go needed
+make bench                              # same, plus Bender's micro-benchmarks
+make bench-bender                        # Bender only, no Erlang/Go needed
 ```
 
-## 1. Trampoline wave (`wave.janet`, `wave.erl`, `wave.go`)
+## 1. Trampoline wave (`wave.ben`, `wave.erl`, `wave.go`)
 
 Build a chain of N processes. Process i receives a value, adds 1, forwards it to
 process i+1. The last one reports the final value, which **must equal N**.
@@ -23,18 +23,18 @@ single-VM runs showed quadratic scaling, while routed runs were faster. These
 observations do not establish a GC cause or prove linear scaling to 1M.
 The token is serial, but placement can still change scheduling overhead.
 
-Janet emits deterministic `procs/result` on stdout and phase timings on stderr,
+Bender emits deterministic `procs/result` on stdout and phase timings on stderr,
 so PGO parity compares results rather than nondeterministic clock readings.
 See `pgo-results.md` for the three-training-run release experiment and limits.
 
-### Phase-labelled variant (`wave-phased.janet`)
+### Phase-labelled variant (`wave-phased.ben`)
 
 Same chain, same actor body, same handoffs and the same deterministic
-`procs=N result=N` on stdout as `wave.janet`; it additionally writes six
+`procs=N result=N` on stdout as `wave.ben`; it additionally writes six
 `phase=` markers to stderr (`spawn-start/end`, `wave-start/end`,
 `shutdown-start/end`) with monotonic microsecond timestamps and timings at
 `%.3f` ms instead of `%.0f`. Use it when the split between spawn, wave and
-shutdown matters; `wave.janet` remains the parity reference.
+shutdown matters; `wave.ben` remains the parity reference.
 
 N is a required integer `>= 1` with no upper cap beyond int32; invalid N exits 2
 with nothing on stdout. Malformed input (`5x`, `10abc`, `1e`, `0x`, leading
@@ -88,13 +88,13 @@ per-actor lane identity. `proc/self-pid` returns `[:pid lane serial ctl]`, but
 that lane field is hardcoded to the literal `1` in `src/core/proc.c`
 (`cfun_proc_self_pid`) -- it is a shape marker, not the executing worker --
 `proc/lanes` reports only how many worker VMs exist, and `proc/lanes-stats`
-reports overflow-queue push/pull counts. So `wave-phased.janet` prints
+reports overflow-queue push/pull counts. So `wave-phased.ben` prints
 `placement=unknown` and the configured worker count, and never infers a lane
 from chain index or lane count. Do not read a placement claim into its output.
 Adding real per-actor placement would need a new runtime metric; sampling per
 actor inside the chain would add work to the timed path.
 
-## 2. Live-process memory (`memory.janet`, `memory.erl`)
+## 2. Live-process memory (`memory.ben`, `memory.erl`)
 
 How much memory does one **resident** process cost?
 
@@ -115,7 +115,7 @@ N is dominated by the runtime itself.
 - **A `WRONG` verdict means the chain dropped or duplicated a hop.** That is a
   correctness failure, not a performance one -- investigate before comparing
   times.
-- Janet's `wave.janet` and `memory.janet` use `proc/spawn` / `proc/spawn-local`
+- Bender's `wave.ben` and `memory.ben` use `proc/spawn` / `proc/spawn-local`
   per the note in each file; the memory harness deliberately uses
   `spawn-local` so it measures process cost rather than the cross-lane routing
   path (which has a known ~3x tax, see

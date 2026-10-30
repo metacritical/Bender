@@ -1,6 +1,6 @@
 %% bench/cross-runtime/memory.erl
 %%
-%% How much memory does one LIVE process cost? Counterpart to memory.janet.
+%% How much memory does one LIVE process cost? Counterpart to memory.ben.
 %%
 %% Every process stays alive (blocked in receive) until the whole set is up,
 %% then erlang:memory(total) is reported. Spawning processes that exit

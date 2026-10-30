@@ -1,7 +1,7 @@
-# The shape of concurrent Janet: a visual guide
+# The shape of concurrent Bender: a visual guide
 
 Code hides the structure. This page draws it first, then shows the code that
-produces that structure. The imagined syntax is deliberately not real Janet --
+produces that structure. The imagined syntax is deliberately not real Bender --
 it is a diagram you can read at a glance.
 
 Everything measured here is from `docs/internals/lanes-and-captured-state.md`
@@ -65,7 +65,7 @@ The third row is the point: you get the full core count *and* the unit count.
 
 ## 3. Imagined syntax: a diagram you can read
 
-This is not valid Janet. It is what the code *means*, drawn.
+This is not valid Bender. It is what the code *means*, drawn.
 
 ```
 ╔════════════════════════════════════════════════════════════════════════╗
@@ -172,7 +172,7 @@ yourself today.
 
 Every candidate was compiled as `(defmacro SYM [a b] (+ a b))` and called. This
 is the authoritative list -- "define" and "call" are separate questions because
-Janet resolves some character sequences as reader syntax before symbol lookup.
+Bender resolves some character sequences as reader syntax before symbol lookup.
 
 ### USABLE -- safe to define and call
 
@@ -205,7 +205,7 @@ threading job, so use them as-is rather than shadowing them.
 
 ### The verified set
 
-```janet
+```bender
 (defmacro !   [pid msg]  ~(proc/send ,pid ,msg))
 (defmacro <!  [p]        ~(proc/recv ,p))
 (defmacro =>> [v ch]     ~(ev/give ,ch ,v))
@@ -235,12 +235,12 @@ send and receive look like what they are.
 
 ## 3a-bis. The same arrows, in real Lisp form
 
-The ASCII arrows in 3a are a reading aid. This is the notation as actual Janet
+The ASCII arrows in 3a are a reading aid. This is the notation as actual Bender
 macros -- all four verified working.
 
 ### The macros
 
-```janet
+```bender
 (defmacro =>> [val chan] ~(ev/give ,chan ,val))   ; (1) INTO
 (defmacro <-- [chan]    ~(ev/take ,chan))         ; (2) OUT OF
 (defmacro *>> [f xs]    ~(map ,f ,xs))            ; (3) SPREAD
@@ -277,7 +277,7 @@ parameters"). Put macro comments on their own line or use `#` above it.
 
 Verified end to end; output `@[0 1 4 9 16 25 36 49]`.
 
-```janet
+```bender
 (proc/lanes-start 4)
 
 (defn work [x] (* x x))
@@ -341,7 +341,7 @@ Both cases below were verified:
         (its own heap)                        the lane has its own
 ```
 
-Measured, `JANET_LANES=4`:
+Measured, `BENDER_LANES=4`:
 
 | spawn | placement | what the main VM sees |
 |---|---|---|
@@ -354,7 +354,7 @@ looks like "the work never ran" when it actually ran fine 990 times.
 
 So, for a fan-out that must reach a lane, results have to come back explicitly:
 
-```janet
+```bender
 (def out (ev/thread-chan 4))      ;; crosses lanes
 (defn body []
   (def ch (ev/chan 4096))         ;; local to that VM: correct, never crosses
@@ -392,7 +392,7 @@ sharing, and a channel is mutable state.
 
 ### The fix: send, do not capture
 
-```janet
+```bender
 ;; WORKS inside a function: nothing is captured.
 (defn pmap [f xs]
   (def n (length xs))
@@ -421,7 +421,7 @@ and the proc is free to take a lane.
 
 ### The three-line form, and when it is fast
 
-```janet
+```bender
 (def out (ev/thread-chan 0))                             ; line 1
 (each x items (proc/spawn (fn [] (ev/give out (heavy x))) 8))   ; line 2
 (repeat (length items) (ev/take out))                    ; line 3
@@ -433,7 +433,7 @@ a `defn` and it silently becomes serial. That single fact is the whole trap.
 
 ## 4. The real code, same shape
 
-```janet
+```bender
 (def results (ev/thread-chan 65536))          # OUTBOX — crosses lanes
 
 (defn do-work [id]                            # UNIT
@@ -521,9 +521,9 @@ PROC B  │  its own tenancy of the same data │
    ev/chan  ── does NOT cross.  Loud error if you try.
 ```
 
-If a spawn captures mutable state, Janet places that proc **on the current
+If a spawn captures mutable state, Bender places that proc **on the current
 VM** rather than silently giving it a detached copy — you keep sharing, you
-lose a core, and `JANET_PROC_SHARE_TRACE=1` tells you it happened.
+lose a core, and `BENDER_PROC_SHARE_TRACE=1` tells you it happened.
 
 ---
 

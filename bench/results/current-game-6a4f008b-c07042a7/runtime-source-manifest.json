@@ -36,23 +36,23 @@
     "sha256": "a1128ffd7db3953cb017cbf2526fed9cc4790d311f661b5c09d4db3a9add5a59"
   },
   {
-    "path": "bench/async-worldgen.janet",
+    "path": "bench/async-worldgen.ben",
     "sha256": "0db778275a408eb8c859ac820aa2355a824d4ff9d95839cbcd4ff5d9df5c2162"
   },
   {
-    "path": "bench/kernels.janet",
+    "path": "bench/kernels.ben",
     "sha256": "a0da08c977c3983852d3a74c36a09aab44735e007b35ec5ab9e6e858c39987d0"
   },
   {
-    "path": "data/appearance.janet",
+    "path": "data/appearance.ben",
     "sha256": "246b805d5cf315d668f288aca3ed59a1b8a8c03bb8cda471b233f03712326430"
   },
   {
-    "path": "data/materials.janet",
+    "path": "data/materials.ben",
     "sha256": "62e49883c2ff6d3dba0f23c2fb9d50efd6db338045d16d2773b22a5a131b513b"
   },
   {
-    "path": "dev/repl.janet",
+    "path": "dev/repl.ben",
     "sha256": "ab483e07f027f525765eafb42196ff6c9a0aa08d7fc48cd6c0d58db01d2aa919"
   },
   {
@@ -160,7 +160,7 @@
     "sha256": "303f6260621ca2063804926cae1876409b80a3fcc2b4cd56818a47fe41ed9b55"
   },
   {
-    "path": "main.janet",
+    "path": "main.ben",
     "sha256": "6ecadff8bdc226a0f2c6ae271deec992cb3872ee066e536e5ef8f91f4a5713fa"
   },
   {
@@ -172,7 +172,7 @@
     "sha256": "eab54ef4e64018a4cf96f80c40ffb77e37f7790a9da7a2e4c79f7f3d61188af3"
   },
   {
-    "path": "native/proof/assembler.janet",
+    "path": "native/proof/assembler.ben",
     "sha256": "8df14bb7b419e8f9f29d821b1faa60997a676f6036bd408046043414394a7325"
   },
   {
@@ -216,7 +216,7 @@
     "sha256": "365bd17cf16d22a00dd26b3abe67aef815dde59ba89450c59b1753017b63fa68"
   },
   {
-    "path": "native/proof/fixtures/geometry/golden.janet",
+    "path": "native/proof/fixtures/geometry/golden.ben",
     "sha256": "7bad29436b8e34534b27e2f3f27a1163845ba6adc5f03608dd997c176b2f9bcb"
   },
   {
@@ -236,7 +236,7 @@
     "sha256": "60eb1579e945161c8b1dc85b8c0f8329b6dc2999f5d0b69dee381fea72697fcb"
   },
   {
-    "path": "native/proof/fixtures/resize-aa-addendum.janet",
+    "path": "native/proof/fixtures/resize-aa-addendum.ben",
     "sha256": "c9b3fc088579a9d7a67c9f071cea76ab28a2232074bb8dfedafba298b82a381f"
   },
   {
@@ -244,7 +244,7 @@
     "sha256": "c50543e8a10bbffbe64cf3a6f7c1ffd95bd5474d609be98ff1f62ebda520d15f"
   },
   {
-    "path": "native/proof/fixtures/resize-aa-verify.janet",
+    "path": "native/proof/fixtures/resize-aa-verify.ben",
     "sha256": "696bdc8fcf50fd74b1bbcbc0206e820abd25712839c7243253df98434b404a3b"
   },
   {
@@ -252,7 +252,7 @@
     "sha256": "448511efc015ad5014147f73cff4f6dd96a6042ae8d2e0685a475a305568f797"
   },
   {
-    "path": "native/proof/fixtures/resize-aa.janet",
+    "path": "native/proof/fixtures/resize-aa.ben",
     "sha256": "339b3b11ce16a08b33a94ef0063a915ccbc72e573ac90bf7f1674b831ed1c1ea"
   },
   {
@@ -284,23 +284,23 @@
     "sha256": "7017948e5b77cae7f07b5adf05cf0d938bfd226ee51752672576535f7b05ad95"
   },
   {
-    "path": "native/proof/generate-coarse-latents.janet",
+    "path": "native/proof/generate-coarse-latents.ben",
     "sha256": "d4c0f29ae844507ea7f0b450538e9b300f7e189a442d564497924f4e1e95813a"
   },
   {
-    "path": "native/proof/generate-height-tile.janet",
+    "path": "native/proof/generate-height-tile.ben",
     "sha256": "7a02d45e534f84de1e63f1afb513370f46226061914fd3c70880d7e331078790"
   },
   {
-    "path": "native/proof/generate-query.janet",
+    "path": "native/proof/generate-query.ben",
     "sha256": "75d159a5462cc2f35b11108c9230757bf9bff6d3be80ee7c81edd1f20fee6f65"
   },
   {
-    "path": "native/proof/geometry.janet",
+    "path": "native/proof/geometry.ben",
     "sha256": "a51ff5f4d6516b397e24ecf3d5cadd510e85807297ff93ab135caa50b620e2a6"
   },
   {
-    "path": "native/proof/laplacian.janet",
+    "path": "native/proof/laplacian.ben",
     "sha256": "6cf2149fd166b48b696b50897e59b115df6b03e3bf993af413252d376651ebeb"
   },
   {
@@ -312,11 +312,11 @@
     "sha256": "b9872dfcd46b89acf145df90c1c9584f05a5c2117e339e9824e2452e603e2cd8"
   },
   {
-    "path": "native/proof/pipeline.janet",
+    "path": "native/proof/pipeline.ben",
     "sha256": "e0f0267e0ec8621d1900bdfa91d1c45fec89e329a0f4fce80bb2b19d139c27da"
   },
   {
-    "path": "native/proof/scheduler.janet",
+    "path": "native/proof/scheduler.ben",
     "sha256": "e73bc61e8dbd90909a35bccad809a0acb3a66f6b14c3f64b841f611d064f3268"
   },
   {
@@ -324,7 +324,7 @@
     "sha256": "00f932701260d7cc933d86b219b414b71cf94ab328a2a9da0d160a7d146d7370"
   },
   {
-    "path": "native/proof/terrain-runtime-proof.janet",
+    "path": "native/proof/terrain-runtime-proof.ben",
     "sha256": "d34a34400906b126b35e5eff79b0289387a056d4f1998629a9aa4a1524c8bd8d"
   },
   {
@@ -332,35 +332,35 @@
     "sha256": "428593f4ee2595e92b5dfaa310724546584a68be35728dc1e803f23cf77b00ae"
   },
   {
-    "path": "native/proof/test-conditioning.janet",
+    "path": "native/proof/test-conditioning.ben",
     "sha256": "4dde735e64b3d566cfd9bbdf07ea32d9bfb6f678f7de25275b2c7a42916c7845"
   },
   {
-    "path": "native/proof/test-geometry.janet",
+    "path": "native/proof/test-geometry.ben",
     "sha256": "c0728f4646ae30f8835f4e285b4349e115cd975b9f80e02d089666bb20390b99"
   },
   {
-    "path": "native/proof/test-laplacian.janet",
+    "path": "native/proof/test-laplacian.ben",
     "sha256": "e340fccc5f3d44ed6a11f35c40dd5dba413b8271322eb77159be6b86e2c16fc2"
   },
   {
-    "path": "native/proof/test-resize-aa.janet",
+    "path": "native/proof/test-resize-aa.ben",
     "sha256": "475f68f86186ab15159b0d7e832087c0939814005cec2b47563625b951dd30bc"
   },
   {
-    "path": "native/proof/test-scheduler-tensor.janet",
+    "path": "native/proof/test-scheduler-tensor.ben",
     "sha256": "f1662fa68c4442f0028b5d838a7a0e4ee57536a9b0832eea87650388510019c5"
   },
   {
-    "path": "native/proof/test-scheduler.janet",
+    "path": "native/proof/test-scheduler.ben",
     "sha256": "f07dee6e84524256c6e8da0f1544d2268fbcb764d000f9080eafe3bcc3820ade"
   },
   {
-    "path": "native/proof/test-stage-arithmetic.janet",
+    "path": "native/proof/test-stage-arithmetic.ben",
     "sha256": "edce20b2d5c873b51165507cb0b229ff3636cfe2ac6a4a77d0970240e1c8dcda"
   },
   {
-    "path": "native/proof/test-voxel-ao.janet",
+    "path": "native/proof/test-voxel-ao.ben",
     "sha256": "a8949943f6f15879b7d8923029d5e9881599b41bf2cc2cc39613b157908fea6e"
   },
   {
@@ -372,7 +372,7 @@
     "sha256": "ac1c934f2d4405de60542c68f5c8ef18da5bc40a352470bcd2c489c05490b545"
   },
   {
-    "path": "native/proof/voxel-ao.janet",
+    "path": "native/proof/voxel-ao.ben",
     "sha256": "c5d43ed58a4ca642b6fd4fcd71c57ad2f8a5b4c8efdc218911fb0a5055cc4615"
   },
   {
@@ -384,183 +384,183 @@
     "sha256": "82ca5b50530922d542a28bd26ebdcd7d400758c3e5800928eafa7ac21e02fc3b"
   },
   {
-    "path": "src/appearance-settings.janet",
+    "path": "src/appearance-settings.ben",
     "sha256": "313829a5f6c71bf9093e78055d66de8df8d50288b9fafb6e0f83c33ed4d820e3"
   },
   {
-    "path": "src/asset-paths.janet",
+    "path": "src/asset-paths.ben",
     "sha256": "2a5a03f6f00afc938393ff6d097bf84a96d73a89f6f8e8f390de6efdc3a93b28"
   },
   {
-    "path": "src/async-worldgen.janet",
+    "path": "src/async-worldgen.ben",
     "sha256": "f1736ae9161f32c423ef5bbb7013cc32c17c9ed13e57a9edf5a60c8f088140fb"
   },
   {
-    "path": "src/atlas.janet",
+    "path": "src/atlas.ben",
     "sha256": "c8bc47d8616a02989bf62d9ec48fe4ffbd5a9db03451e9ecba201447c11038a5"
   },
   {
-    "path": "src/biome-surface.janet",
+    "path": "src/biome-surface.ben",
     "sha256": "134c854205a528c5fff4907be6437b5c2295b9cf1408297fb13f0314525c1397"
   },
   {
-    "path": "src/climate-biome.janet",
+    "path": "src/climate-biome.ben",
     "sha256": "fa355c3bbffb3f9ce3646e63ce25f2e42a3cc50efd8484bb547404b760c9a38f"
   },
   {
-    "path": "src/climate-tile.janet",
+    "path": "src/climate-tile.ben",
     "sha256": "8526124967178f21360f458f53360f3e04b2819f565f458150f18e738017cb98"
   },
   {
-    "path": "src/console.janet",
+    "path": "src/console.ben",
     "sha256": "a08def94ef02be64c92992af64f641e0fd2d92e77619eebcb89c34ae873d0e8f"
   },
   {
-    "path": "src/dev-server.janet",
+    "path": "src/dev-server.ben",
     "sha256": "4fcdf133a2d57ba3ac716055a16b26dcb5f15e45d6f65b390527f86338952e40"
   },
   {
-    "path": "src/edit-pick.janet",
+    "path": "src/edit-pick.ben",
     "sha256": "0181644f6c5710694bf52d96fa4ec4209ad2731f0ddec4713c58343b1921ed25"
   },
   {
-    "path": "src/frustum.janet",
+    "path": "src/frustum.ben",
     "sha256": "b85f50a08f4d2ce4f7ce727aedc3a2edc7e2c000927594f0d649768f36f2fc36"
   },
   {
-    "path": "src/generation-job.janet",
+    "path": "src/generation-job.ben",
     "sha256": "743f6bbf22d88330831e538257546d305951915fbad2a5569a76c5255fe3e447"
   },
   {
-    "path": "src/loading-screen.janet",
+    "path": "src/loading-screen.ben",
     "sha256": "18d3819bb54fbb0d7dfb320e3a8e8217d3041e5326a57f98e261b8f53651215d"
   },
   {
-    "path": "src/material-inspector.janet",
+    "path": "src/material-inspector.ben",
     "sha256": "218325824b40e4ccfbffd92fc02f86c6434132c54c79e46c796b093390d4dc1f"
   },
   {
-    "path": "src/material-recipes.janet",
+    "path": "src/material-recipes.ben",
     "sha256": "bacacd5f806f9fd02ecb322112087fdc25a4cd91638f8c570241c5143ba7f5bd"
   },
   {
-    "path": "src/materials.janet",
+    "path": "src/materials.ben",
     "sha256": "909d7113322f4638bd9c72f4014fc0c02a491c5637092e7a56659e0f4b69a9c8"
   },
   {
-    "path": "src/mesher.janet",
+    "path": "src/mesher.ben",
     "sha256": "7029cef0102986022a728572734da09583275fe625b9e32e9ee36b6858d7c0ac"
   },
   {
-    "path": "src/palette.janet",
+    "path": "src/palette.ben",
     "sha256": "a06265a405cf55eec16afc87d0df8568af088e0133bf621484b51ec631ee4c0b"
   },
   {
-    "path": "src/panel.janet",
+    "path": "src/panel.ben",
     "sha256": "b2f29ff4bebba464919738b34e1a11a7a743f01554ac5693db900569ba32c364"
   },
   {
-    "path": "src/pickaxe.janet",
+    "path": "src/pickaxe.ben",
     "sha256": "084fc63731a23d756968230f483619ff4291d87f46781d110f6c584d325eca52"
   },
   {
-    "path": "src/player.janet",
+    "path": "src/player.ben",
     "sha256": "789aa717d3bf3d551c334444cae523a7a452c80c923bd56ca5e7d1ffdb892111"
   },
   {
-    "path": "src/progressive-stream.janet",
+    "path": "src/progressive-stream.ben",
     "sha256": "0e31de947ce3ebd574f60b70befd8039b22292790b46f29cf967472f87237020"
   },
   {
-    "path": "src/raycast.janet",
+    "path": "src/raycast.ben",
     "sha256": "55b565622db4fe0c236e2272c172ae9cedeeeeb2af489b18d8c8ccbdc0cda4cc"
   },
   {
-    "path": "src/region.janet",
+    "path": "src/region.ben",
     "sha256": "73ba86d55f494dbac9b58da8ed40e9932eb116df9efd1e96b2d728a37f044b7e"
   },
   {
-    "path": "src/reload.janet",
+    "path": "src/reload.ben",
     "sha256": "f35f0631becb30e093d7f04fb6996968b42c861f6df92f8183e2d7f4d544d331"
   },
   {
-    "path": "src/rl.janet",
+    "path": "src/rl.ben",
     "sha256": "50524753f10f8e7e3d8200d559b49d05a8e3c1afa49d74aa5f1020fdb9b80e57"
   },
   {
-    "path": "src/scenic-climate.janet",
+    "path": "src/scenic-climate.ben",
     "sha256": "0049f7cfeb448aab01eca8ebd59d0522ae316b841ee9e269d876bc380009c17d"
   },
   {
-    "path": "src/scenic-worldgen.janet",
+    "path": "src/scenic-worldgen.ben",
     "sha256": "9a71acf3fb7ab11670d58327cb38a073e0cea0931269e499ef9ff1a0ed76b3d1"
   },
   {
-    "path": "src/shaders.janet",
+    "path": "src/shaders.ben",
     "sha256": "b3111c66552769863a7ef34ba7f795499c374ba72f5c3df1627f209e787ca681"
   },
   {
-    "path": "src/sky-cycle.janet",
+    "path": "src/sky-cycle.ben",
     "sha256": "f399ccf0c5f7ee3a4587541ae4ec9dc3649270542f5d77985f7be502342cc4ee"
   },
   {
-    "path": "src/sky-render.janet",
+    "path": "src/sky-render.ben",
     "sha256": "47b2b825a9d97c1845923e03ea620c4ecbeb5fac6b157755287554650fae38c6"
   },
   {
-    "path": "src/spawn.janet",
+    "path": "src/spawn.ben",
     "sha256": "e8842817e4ed6ccd38dfb7b5fd95479c6c3e88cde40f1617a127473b8c50415b"
   },
   {
-    "path": "src/static-hydrology.janet",
+    "path": "src/static-hydrology.ben",
     "sha256": "e6aa2a26b3f4c4ba991f6b83fe9aa6441ee32798e189ed35d9bbf3930839405e"
   },
   {
-    "path": "src/stream.janet",
+    "path": "src/stream.ben",
     "sha256": "42dee8451fed05770fda4bdf1067f415322dba732717f58cc9e7af8cd0bce97d"
   },
   {
-    "path": "src/terrain-cache.janet",
+    "path": "src/terrain-cache.ben",
     "sha256": "d6fab93ec8ade7abb6e24eda8218bad6ccb6a8111039e0363c8fa60a600d25dc"
   },
   {
-    "path": "src/terrain-identity.janet",
+    "path": "src/terrain-identity.ben",
     "sha256": "5952becae4800185f02d38ab91493a66ebaa547d3d1e86092160892d6934bbb4"
   },
   {
-    "path": "src/terrain-integrity.janet",
+    "path": "src/terrain-integrity.ben",
     "sha256": "a212a584a62312a043bbefed3d41596cf98cb8665a407dcec75ec645c002305e"
   },
   {
-    "path": "src/terrain-runtime.janet",
+    "path": "src/terrain-runtime.ben",
     "sha256": "964fc6b98ab6401e007386dea8d2f8c6548ea479ffe4cd9b0db7ef8f9164aed8"
   },
   {
-    "path": "src/world-catalog.janet",
+    "path": "src/world-catalog.ben",
     "sha256": "51ca7d0655e306474235d2ea733eade4b93bdf4f080651b30b53a34f4a33ab91"
   },
   {
-    "path": "src/world-menu-view.janet",
+    "path": "src/world-menu-view.ben",
     "sha256": "1d40f05d3be9347d15d18a11e5b9cb5b9a7cf1f7f937274e7facbe8363276b33"
   },
   {
-    "path": "src/world-menu.janet",
+    "path": "src/world-menu.ben",
     "sha256": "98bb2e7869720a8c6ca5c8815ae2a2085b49ea17cd5016b779a7d0945cead5c6"
   },
   {
-    "path": "src/world-provider.janet",
+    "path": "src/world-provider.ben",
     "sha256": "8610d57e30c0daf78a56e5c94067d6a575b44a3f070f6dbe2b9f456ca2b6ec64"
   },
   {
-    "path": "src/world-seed.janet",
+    "path": "src/world-seed.ben",
     "sha256": "279f543a4cae61a33f1faef0830bf4c2f17a02da9c5a9e3918bfa0f02c5e3660"
   },
   {
-    "path": "src/world.janet",
+    "path": "src/world.ben",
     "sha256": "e302f95371dd40aa766acfaf1b1a6a3ecfe527a283b1a5616ef6ee6a27ec0045"
   },
   {
-    "path": "src/worldgen.janet",
+    "path": "src/worldgen.ben",
     "sha256": "8bc18eb7e95e52300f15b713320c3a0f14c8a5a847cdee99d1e3cc6a99a3bc28"
   },
   {
@@ -568,43 +568,43 @@
     "sha256": "eb23491c4efae94ef893257589832083a059d76be5b9679a8acf622dd733af60"
   },
   {
-    "path": "test/appearance-settings-test.janet",
+    "path": "test/appearance-settings-test.ben",
     "sha256": "a3cc5396d31a0ed0fda6e8f204fd16484ca183ae4ee314b229d4b4e95006f647"
   },
   {
-    "path": "test/asset-paths-test.janet",
+    "path": "test/asset-paths-test.ben",
     "sha256": "5a17169af68ca4eb5506f40b825a5f3c8034430fcff2a651567f104f50aa9dff"
   },
   {
-    "path": "test/async-worldgen-test.janet",
+    "path": "test/async-worldgen-test.ben",
     "sha256": "83c92712ef161cc789e8d6b3e1b560c0a46ed21f8b17cd00529f2c14fcbdae5c"
   },
   {
-    "path": "test/atlas-test.janet",
+    "path": "test/atlas-test.ben",
     "sha256": "a919b87e072f832293b6ed1f4acd86db253d13c38472c0d6facc504f7a15b126"
   },
   {
-    "path": "test/biome-surface-test.janet",
+    "path": "test/biome-surface-test.ben",
     "sha256": "5d3db4cc8e1c2213f811be89a4990ebd023c6635493bc7f6c68ad362e4c23cad"
   },
   {
-    "path": "test/climate-biome-test.janet",
+    "path": "test/climate-biome-test.ben",
     "sha256": "6caad2725f5584a409ffd0bd1e4c3b561a47b5bebc759698ffedc35232f38336"
   },
   {
-    "path": "test/climate-tile-test.janet",
+    "path": "test/climate-tile-test.ben",
     "sha256": "528afde9316afc2f4d2bba9f26364c97648216c7634889e68948da5f9c82f9c1"
   },
   {
-    "path": "test/console-test.janet",
+    "path": "test/console-test.ben",
     "sha256": "58e1c5bbbab4de4dcc08a16dc4d9fb8e65e66e4546034040848fe575a9af68ca"
   },
   {
-    "path": "test/dev-server-test.janet",
+    "path": "test/dev-server-test.ben",
     "sha256": "e916e7c04f1727c140690fd84f163b268ef7154d7004a0a82183432074067e64"
   },
   {
-    "path": "test/edit-pick-test.janet",
+    "path": "test/edit-pick-test.ben",
     "sha256": "63ccac58a5a3630c8748bd2bf254adfc260278c78df34e07912c331b03c7e5be"
   },
   {
@@ -620,147 +620,147 @@
     "sha256": "fde11562b43a18ad2f856bc22481bc43a049c492704f4f616c366a87ac3810e8"
   },
   {
-    "path": "test/frustum-test.janet",
+    "path": "test/frustum-test.ben",
     "sha256": "0ec6e44f3542e1e793e992bb6e2c47f20226f94075b34cffc3079a91b1217a49"
   },
   {
-    "path": "test/generation-job-smoke.janet",
+    "path": "test/generation-job-smoke.ben",
     "sha256": "3471a3527fe558e59ae941f5fd6436a5f6f76598d2026166d3c6767aa2df48ee"
   },
   {
-    "path": "test/generation-job-test.janet",
+    "path": "test/generation-job-test.ben",
     "sha256": "f02a2fab7a94f4f9e239341639a46a13c92ed738f9422b7944bec3caf917aa77"
   },
   {
-    "path": "test/generation-loop-test.janet",
+    "path": "test/generation-loop-test.ben",
     "sha256": "33e865c2d3ee5876ee917a803c499369121287dd5a945edd7beaebc351eb6dc9"
   },
   {
-    "path": "test/loading-screen-test.janet",
+    "path": "test/loading-screen-test.ben",
     "sha256": "2238b77e01c7ce6df255822fe3903f7fa11ae8762e6b76b66d7be05f6c58bfd9"
   },
   {
-    "path": "test/material-inspector-test.janet",
+    "path": "test/material-inspector-test.ben",
     "sha256": "a2f6964ab029df16f9828835c66ced89eb3c5111407c98d99131bec3d11b3c1e"
   },
   {
-    "path": "test/material-recipes-test.janet",
+    "path": "test/material-recipes-test.ben",
     "sha256": "f4d01661df76bf0514931280a346b4d274a41b0dd2c13f31a2b0e40db647f72c"
   },
   {
-    "path": "test/materials-test.janet",
+    "path": "test/materials-test.ben",
     "sha256": "235df1c04239fb87cb7ce331e85e42a7416a9f2b9847c50dfb3cb6cab2ba9bd7"
   },
   {
-    "path": "test/mesher-test.janet",
+    "path": "test/mesher-test.ben",
     "sha256": "659455732de76842647110ef0eef102726757d771adbefe318235aa210bda758"
   },
   {
-    "path": "test/palette-test.janet",
+    "path": "test/palette-test.ben",
     "sha256": "a45c57f8b9bc29b9982709e3acf7d3b76d9e22a209d4eb47858ae59a38a0fc8f"
   },
   {
-    "path": "test/panel-test.janet",
+    "path": "test/panel-test.ben",
     "sha256": "f9d5728faf4687e11640943c70f851a9f38d0c3f8835d18869d906f2cf048862"
   },
   {
-    "path": "test/pickaxe-test.janet",
+    "path": "test/pickaxe-test.ben",
     "sha256": "20c08d1d3a17479bd03143899a1502ce9f6cc16029ebe0f2d335fad38509ab3a"
   },
   {
-    "path": "test/player-test.janet",
+    "path": "test/player-test.ben",
     "sha256": "842856cb5d92073aae3f7c35fe29360859fe1e430b64541129a7cd70858cd88b"
   },
   {
-    "path": "test/progressive-stream-test.janet",
+    "path": "test/progressive-stream-test.ben",
     "sha256": "1c745ba81fa2e1d1dbf561e112ccbb8164a0cc1c20f2a9078751742b383b1892"
   },
   {
-    "path": "test/python-generation-integration-test.janet",
+    "path": "test/python-generation-integration-test.ben",
     "sha256": "fc274fd8ab5826e113704fb09ca1ff2b6a8780e145925c77065fe72e9800e9f9"
   },
   {
-    "path": "test/python-generation-path-test.janet",
+    "path": "test/python-generation-path-test.ben",
     "sha256": "4d560bc3d2d43af870274349236837d93694a2ed00350286e057c5c8cfedd1c6"
   },
   {
-    "path": "test/raycast-test.janet",
+    "path": "test/raycast-test.ben",
     "sha256": "17e6492979342b3d298fc3a2051f6b9b30349d1ff7d34d628fc68e47d82be18d"
   },
   {
-    "path": "test/region-test.janet",
+    "path": "test/region-test.ben",
     "sha256": "e167b9abc009ca68f3e0c768d81853844696eefb8901d53625a99b1cac0fc5db"
   },
   {
-    "path": "test/reload-test.janet",
+    "path": "test/reload-test.ben",
     "sha256": "a49d1fa18084e0a5476eeb5ccef277b919b43390d741f865bf0f670fc3507b68"
   },
   {
-    "path": "test/rl-test.janet",
+    "path": "test/rl-test.ben",
     "sha256": "cb49eaf005272bcf981d16049eb4a02639ae73da6b8898442f933a407421498d"
   },
   {
-    "path": "test/scenic-climate-integration-test.janet",
+    "path": "test/scenic-climate-integration-test.ben",
     "sha256": "4b3d4c83bf8064f661b379dfa0e2d1facb0904945b42effcd51116d85d63659e"
   },
   {
-    "path": "test/scenic-climate-test.janet",
+    "path": "test/scenic-climate-test.ben",
     "sha256": "4be7ae55729c15c0e98c33fb223929d7558da5d3b5e0ba069257ae38b983b43b"
   },
   {
-    "path": "test/scenic-main-test.janet",
+    "path": "test/scenic-main-test.ben",
     "sha256": "92a1e39754a36f93336c4d01a5170dc824bbf691c087d871ae354bd3bc981831"
   },
   {
-    "path": "test/scenic-worldgen-test.janet",
+    "path": "test/scenic-worldgen-test.ben",
     "sha256": "d5d257814238ab9f4f1642220a9950af0933c84ed5ef380438e7bc670f496f65"
   },
   {
-    "path": "test/session-exit-save-test.janet",
+    "path": "test/session-exit-save-test.ben",
     "sha256": "5d3a816752edb1662c186c455a17ce74af2b78ccf85de635770ff9df4ee55704"
   },
   {
-    "path": "test/shaders-test.janet",
+    "path": "test/shaders-test.ben",
     "sha256": "6fa033ad2cf303ce606cb41bba62c32c6c9f80cecca2d2eb7d2e0125ea548bd2"
   },
   {
-    "path": "test/sky-cycle-test.janet",
+    "path": "test/sky-cycle-test.ben",
     "sha256": "2760d9a834e451add3b3677d898284dc5c7983b5c2909acc7808ca2153814db8"
   },
   {
-    "path": "test/sky-render-test.janet",
+    "path": "test/sky-render-test.ben",
     "sha256": "d5285c721aa7f8e739f0204cd400afd324cbb47ca7543a3769e01985c28fe618"
   },
   {
-    "path": "test/spawn-test.janet",
+    "path": "test/spawn-test.ben",
     "sha256": "5b35dea6c5bd371d9d7f56277cf0470e6e124e94d53b5975d88d5b16ca03427a"
   },
   {
-    "path": "test/static-hydrology-test.janet",
+    "path": "test/static-hydrology-test.ben",
     "sha256": "ac073415fbbb0eb56a2d25fba0533e0adab0182de6be0cd55df1a9f0e75bcbfe"
   },
   {
-    "path": "test/stream-test.janet",
+    "path": "test/stream-test.ben",
     "sha256": "65d83dd81ca533e003ed22565259562bf089a6f797633ff9affd14e56466c9b7"
   },
   {
-    "path": "test/terrain-cache-test.janet",
+    "path": "test/terrain-cache-test.ben",
     "sha256": "8628569ea000b70b4e6fef8447e062a3a6427b42836d89d1a35240a3c93e16a3"
   },
   {
-    "path": "test/terrain-identity-test.janet",
+    "path": "test/terrain-identity-test.ben",
     "sha256": "7f7fb66b9e80ebf4474f2d5be1eddb9214b9a1730bf5f4fd66ec34fae24e695b"
   },
   {
-    "path": "test/terrain-integrity-test.janet",
+    "path": "test/terrain-integrity-test.ben",
     "sha256": "45b5b38286c813d5d7c290f666622bd45eb0068192686f30bff9008f93a1d1fa"
   },
   {
-    "path": "test/terrain-main-integration-test.janet",
+    "path": "test/terrain-main-integration-test.ben",
     "sha256": "5e30e0c036a9610ece78992e341e6e5e076b2744c204cce0592bcb59386a7886"
   },
   {
-    "path": "test/terrain-runtime-test.janet",
+    "path": "test/terrain-runtime-test.ben",
     "sha256": "1b4ce2dd55d749315d1d1a50eef87fc81abe27c8320706354d5043d69f2ce4ef"
   },
   {
@@ -808,43 +808,43 @@
     "sha256": "d2352dbb774730450b197a89ee23895e6eecfa950e26c8a2030c22500d7c9bb9"
   },
   {
-    "path": "test/world-catalog-test.janet",
+    "path": "test/world-catalog-test.ben",
     "sha256": "0a269fd9fe56838528ae6fc032d84ce04effeeb304d9f9f39530eeb0073b6796"
   },
   {
-    "path": "test/world-menu-test.janet",
+    "path": "test/world-menu-test.ben",
     "sha256": "12ae60cbe79dacc603e05d577c7e21481446ed0b2d5ea22425656b4a2e69e88f"
   },
   {
-    "path": "test/world-menu-view-test.janet",
+    "path": "test/world-menu-view-test.ben",
     "sha256": "0e3597a228010d92e7f80a1126683da50d004a0172d064b34719d028ca188e66"
   },
   {
-    "path": "test/world-provider-test.janet",
+    "path": "test/world-provider-test.ben",
     "sha256": "2279bd43e83d564ca819d30c5b4e1a56879391360d0f52b6a95ab6957835f599"
   },
   {
-    "path": "test/world-seed-probe.janet",
+    "path": "test/world-seed-probe.ben",
     "sha256": "a36ea34514b5c3bbde0a06791da1b282c5112b2ced2ecda0dd6c1b461208a07d"
   },
   {
-    "path": "test/world-seed-test.janet",
+    "path": "test/world-seed-test.ben",
     "sha256": "9aa50f7444e63286931734ca1d5fd1410f0f3e16fe2472b277fa9fbf2fe26633"
   },
   {
-    "path": "test/world-session-test.janet",
+    "path": "test/world-session-test.ben",
     "sha256": "0b0db86837e5979cc62ec459be0e6e4c169f5b46d64405551d0a1ea24639488c"
   },
   {
-    "path": "test/world-test.janet",
+    "path": "test/world-test.ben",
     "sha256": "cbe6574724575df2b5ed1ca37651ac77faa7c3f51c452d2353df3ee1b6c7a6db"
   },
   {
-    "path": "test/worldgen-heights-test.janet",
+    "path": "test/worldgen-heights-test.ben",
     "sha256": "c1342ee8bdf4808a57439d2acd5450d1a691b9b7cbb991df2932d0960ee2f5fa"
   },
   {
-    "path": "test/worldgen-test.janet",
+    "path": "test/worldgen-test.ben",
     "sha256": "791371e6bde2652966bedc0595d32f8d7d442c2855233db43760d5a00427740f"
   },
   {
@@ -868,7 +868,7 @@
     "sha256": "89688883d684de35c6b2173235d8e43868b93232a2b3497a3bb12c9f406e4965"
   },
   {
-    "path": "tools/rewrite-materials.janet",
+    "path": "tools/rewrite-materials.ben",
     "sha256": "f2db02b3ae2dbbdef5b735b1af7eed951f9b8cd2aa7a670d22f3b31d03309c1f"
   },
   {

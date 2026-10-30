@@ -1,6 +1,6 @@
-# Handoff: Janet/bender multi-core, memory, and the native census
+# Handoff: Bender/bender multi-core, memory, and the native census
 
-Repo: `/Users/pankajdoharey/Development/Projects/janet` (branch `ttfx-mixed-regions`).
+Repo: `/Users/pankajdoharey/Development/Projects/bender` (branch `ttfx-mixed-regions`).
 HEAD at handoff: `d605333e`. Tracked tree clean at time of writing.
 
 ---
@@ -16,23 +16,23 @@ fibers only run when the main fiber suspends". The diagnosis was partly wrong;
 the real causes were found by instrumenting, not by reading.
 
 - **Root cause A** — the quantum driver re-queued a throttled fiber with its
-  already-consumed `JANET_SIGNAL_ERROR`, which `janet_continue_signal` had
+  already-consumed `BENDER_SIGNAL_ERROR`, which `bender_continue_signal` had
   smuggled into the fiber's status bits, so the error replayed on *every* later
   resume. One expired `net/accept` re-raised "timeout" forever, thousands of
   instructions later, in unrelated arithmetic. Measured 20 spurious errors → 0.
   Fix: a re-queue is a transparent deferral, so it resumes with OK and no value.
 - **Root cause B** — a completed wait never retired its own deadline.
   `sched_id` only blocks *delivery*; it does not retire. Fix:
-  `janet_drop_deadlines_for` retires a fiber's operation deadlines on resume.
+  `bender_drop_deadlines_for` retires a fiber's operation deadlines on resume.
 - **Root cause C** — no non-blocking pump existed. `(ev/pump)` now samples
   expired timers and ready I/O with a zero deadline and yields once (~35 µs,
   comparable to `ev/sleep 0`). It deliberately does NOT re-enter the scheduler:
-  resuming a task swaps `janet_vm.fiber` and the C stack, which faulted (bus
+  resuming a task swaps `bender_vm.fiber` and the C stack, which faulted (bus
   error) when tried from inside a live CFunction.
-- `ev/pump` also depends on a shared `janet_expire_timeouts()` used by the
+- `ev/pump` also depends on a shared `bender_expire_timeouts()` used by the
   blocking loop, so both entries deliver deadlines identically.
 
-New suite `test/suite-ev-render-loop.janet` (10 tests) fails on the pre-fix
+New suite `test/suite-ev-render-loop.ben` (10 tests) fails on the pre-fix
 runtime and passes after.
 
 ## 1.2 A GC defect: child-fiber completion minor swept captured parent locals
@@ -42,7 +42,7 @@ runtime and passes after.
 Reported as "thread-chan corrupts strings". Reduced to a reproducer with **no
 channel at all**:
 
-```janet
+```bender
 (defn run []
   (def got @[])
   (ev/go (fn [] (for i 0 3 (array/push got (string i)))))
@@ -52,7 +52,7 @@ channel at all**:
 
 Contents were correct on every iteration *inside* the fiber and garbage after
 completion. Cause: the write barrier recorded a cross-owner edge only under the
-**container's** owner bucket, while `janet_xfb_mark_owned` looks up the
+**container's** owner bucket, while `bender_xfb_mark_owned` looks up the
 **sweeping fiber's** owner bucket, so a parent-heap array holding values born on
 a child heap was swept as the child's garbage.
 
@@ -60,13 +60,13 @@ Fix: record the edge under the value's owner as well, making marking symmetric.
 Side effect: `suite-proc` 98/99 → 99/99 (that last failure was the same sweep,
 not the pid collision it appeared to be).
 
-Regression: `test/suite-fiber-capture.janet` fails 5/7 before, passes 7/7 after.
+Regression: `test/suite-fiber-capture.ben` fails 5/7 before, passes 7/7 after.
 
 ## 1.3 Proc-capture marking was transitive per minor (the "quadratic")
 
 `77536ea9`
 
-`janet_procat_mark` called `janet_mark(proc->fiber)` — a full transitive walk.
+`bender_procat_mark` called `bender_mark(proc->fiber)` — a full transitive walk.
 Each proc is its own fiber with its own `gc_owner`, so a chain of "each proc
 captures the next" made one minor walk the entire remaining chain: O(remaining)
 × N minors.
@@ -76,7 +76,7 @@ at n=32000 was **12260.8 ms (proc capture) vs 60.0 ms (channels) — 204×**.
 
 First attempted fix (mark the fiber shallowly) was **unsound**: it dropped a
 parked fiber's in-flight recv value and hung `suite-proc`. Correct fix keeps the
-edge and bounds its *depth* (`JANET_PROC_MARK_CHAIN_DEPTH = 16`), so the walk is
+edge and bounds its *depth* (`BENDER_PROC_MARK_CHAIN_DEPTH = 16`), so the walk is
 independent of chain length; global collections still mark transitively.
 
 n=32000 wave 12260.8 ms → 195.1 ms (63×). n=100000 97458 ms → 1980 ms (49×).
@@ -87,9 +87,9 @@ n=32000 wave 12260.8 ms → 195.1 ms (63×). n=100000 97458 ms → 1980 ms (49×
 
 Instrumenting the slab allocator showed **2.06 pages claimed per process** — i.e.
 ~32 KB of the original 34 KB was slab capacity paid up front regardless of how
-little a process allocated. `JANET_SLAB_PAGE_SIZE` was 16 KB; one OS page (4 KB)
+little a process allocated. `BENDER_SLAB_PAGE_SIZE` was 16 KB; one OS page (4 KB)
 is the smallest safe choice (header + at least one 512-byte slot fit in
-`JANET_SLAB_USABLE`).
+`BENDER_SLAB_USABLE`).
 
 | | per proc | 100k RSS | 1M |
 |---|---|---|---|
@@ -120,12 +120,12 @@ received on a worker lane is detached.
 `f58981b9`
 
 Lanes only activated on an explicit `proc/lanes-start`, so plain `proc/spawn`
-used one core forever. First routed spawn now autostarts when `JANET_LANES=<n>`
-is set. Hooked into the spawn path, **not** `boot.janet` — boot also runs during
-image generation, where starting lanes hangs `janet_boot` (observed stuck in the
+used one core forever. First routed spawn now autostarts when `BENDER_LANES=<n>`
+is set. Hooked into the spawn path, **not** `boot.ben` — boot also runs during
+image generation, where starting lanes hangs `bender_boot` (observed stuck in the
 lane join).
 
-Independent work n=1000: `JANET_LANES=0` 22 ms → `=4` 9 ms → `=11` **8 ms**, all
+Independent work n=1000: `BENDER_LANES=0` 22 ms → `=4` 9 ms → `=11` **8 ms**, all
 with checksum 1999000000.
 
 Deliberately **opt-in**: default-on changes `proc/spawn`'s return type.
@@ -137,13 +137,13 @@ Deliberately **opt-in**: default-on changes `proc/spawn`'s return type.
 - `proc/pid?` accepts **both** a `core/proc` object and a `[:pid lane serial chan]` tuple.
 - `proc/pid` returns a tuple unchanged (idempotent across shapes).
 - `proc/serial` reads slot 2 from a tuple.
-- `janet_getproc` resolves a **node-0** tuple through the lane registry, so
+- `bender_getproc` resolves a **node-0** tuple through the lane registry, so
   `monitor`/`kill`/`stash`/`record-exit` accept a handle straight from a spawn.
   A tuple naming **another** lane raises clearly (those operations touch C lists
   and fibers living in that VM).
 - `proc/alive?` answers node-0 tuples from the registry, false for remote.
 
-Also fixed a genuine caller bug: `examples/proc.janet`'s `monitor-chan` used
+Also fixed a genuine caller bug: `examples/proc.ben`'s `monitor-chan` used
 `proc/pid?` as a *local-object* test, which uniformity breaks by design; it now
 discriminates on the node field.
 
@@ -179,7 +179,7 @@ warning (the redesign landed; it measures linear) and the messaging guide's
 | Claim | Reality |
 |---|---|
 | "timed read arms a global timeout on the root fiber" | Partly right, but the crash mechanism was a replayed consumed signal, not timeout attribution |
-| "ev fibers only run when main suspends" | Only true with `JANET_TIMESLICE=0`; quantum preemption already drained the queue |
+| "ev fibers only run when main suspends" | Only true with `BENDER_TIMESLICE=0`; quantum preemption already drained the queue |
 | "spawn is quadratic (spawn queue walked per minor)" | **False.** Instrumented: queue peaks at ~100 entries; walk is O(1). The "quadratic" was swap pressure |
 | "8+ lanes starve the main VM" | **False.** Load average 3.5 on a 12-core box; same commands passed on re-run |
 | "`proc/lanes-start` hangs" | **False.** Test scripts exited without `lanes-stop`, leaving workers to join |
@@ -200,22 +200,22 @@ process/memory number. This is written into the operator doc §6.
 - **Messaging**: ~0.1 µs channel round-trip — competitive.
 - **Parallelism**: real; 3.8× on 4 lanes for independent work, checksums identical.
 - **Memory**: 10 KB/proc vs Erlang 2.7–3.2 KB — **3× behind**, and this is the
-  single thing standing between Janet and comfortable 1M.
+  single thing standing between Bender and comfortable 1M.
 - **Sequential chains**: no framework wins; Erlang and Go both spend ~0.7–1.2 s
   on 12 cores for the trampoline wave. Lanes cannot help and never will.
 - **Capture semantics**: this is the deepest divergence. BEAM has no closure
-  sharing between processes at all — all data moves by copy. Janet *appears* to
+  sharing between processes at all — all data moves by copy. Bender *appears* to
   share until you cross a lane, then silently copies. The guards now make that
   loud, but the model is still "surprising until documented".
 
-Honest position: **Janet is now a credible concurrent runtime for independent
+Honest position: **Bender is now a credible concurrent runtime for independent
 workloads at 100k scale, and is one memory optimisation away from 1M.** It is
 not BEAM-equivalent, and the capture model should be documented as a deliberate
 difference rather than papered over.
 
 ## 2.4 What I would NOT do
 
-- Do not flip `proc/lanes-start`/`JANET_LANES` to default-on yet. Every natural
+- Do not flip `proc/lanes-start`/`BENDER_LANES` to default-on yet. Every natural
   program closes over mutable state; default-on greets the first `proc/spawn`
   with an error. That is a hostile default, not a safety win.
 - Do not chase the trampoline wave with threads. It is a dependency chain.
@@ -232,18 +232,18 @@ Legend: `[x]` done (with commit), `[~]` in progress, `[ ]` pending, `[-]` cancel
 [x] Phase 1: cross-lane channel safety                                (152e75c9, 6d924860)
     [x] Pin plain channels to their home lane; refuse genuine foreign push/pop
     [x] Detached-copy detection on worker-lane unmarshal, with a clear message
-    [x] Contract documented and asserted in test/suite-lane-chan.janet (6→8 tests)
+    [x] Contract documented and asserted in test/suite-lane-chan.ben (6→8 tests)
 
-[x] Phase 2: opt-in lane autostart via JANET_LANES                     (f58981b9)
-    [x] Lazy autostart on first routed spawn (NOT in boot.janet: image gen hangs)
-    [x] Opt-out with JANET_LANES=0, count override with =<n>
+[x] Phase 2: opt-in lane autostart via BENDER_LANES                     (f58981b9)
+    [x] Lazy autostart on first routed spawn (NOT in boot.ben: image gen hangs)
+    [x] Opt-out with BENDER_LANES=0, count override with =<n>
     [x] Measured 22ms -> 8ms on independent work, identical checksums
 
 [x] Phase 2b: uniform proc handles across lanes                        (b80da213)
     [x] proc/pid? accepts both shapes; proc/pid idempotent; proc/serial reads slot 2
-    [x] janet_getproc resolves node-0 tuples; remote lanes raise clearly
+    [x] bender_getproc resolves node-0 tuples; remote lanes raise clearly
     [x] proc/alive? answers node-0 from the registry, false for remote
-    [x] Fix examples/proc.janet monitor-chan local-vs-remote discrimination
+    [x] Fix examples/proc.ben monitor-chan local-vs-remote discrimination
 
 [x] Phase 2c: refuse cross-lane spawn with mutable closure captures    (d605333e)
     [x] Lexical-environment scan for mutable captures
@@ -284,7 +284,7 @@ Legend: `[x]` done (with commit), `[~]` in progress, `[ ]` pending, `[-]` cancel
 
 # 4. WHERE IT STANDS, one paragraph
 
-Janet's concurrency story is now honest and measurably better than at session
+Bender's concurrency story is now honest and measurably better than at session
 start: event-loop deadlines are operation-scoped with a working `ev/pump`, a
 real GC lifetime bug is fixed, the proc-capture quadratic is gone (49–63× faster
 waves), per-process memory is down 3.4× to 10 KB (making 1M feasible at ~9 GB

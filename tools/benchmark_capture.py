@@ -56,7 +56,7 @@ Record
 ::
 
     {
-      "schema": "janet/benchmark-capture/1",
+      "schema": "bender/benchmark-capture/1",
       "label": "tip-aot-loaded",
       "complete": true,
       "evidence_dir": "/abs/path/evidence",
@@ -64,7 +64,7 @@ Record
         "argv": ["..."],
         "cwd": "/abs/path",
         "stdin": "devnull",
-        "env_overrides": {"JANET_PROFILE": "..."},
+        "env_overrides": {"BENDER_PROFILE": "..."},
         "executable": {"path": "...", "sha256": "...", "bytes": 123, "error": null}
       },
       "timing": {"started_at": "...Z", "finished_at": "...Z", "wall_s": 0.123},
@@ -93,8 +93,8 @@ Usage
 ::
 
     tools/benchmark_capture.py --evidence-dir out/run1 --cwd . \\
-        --env JANET_PROFILE=1 --label tip-aot --timeout 180 \\
-        -- ./build/janet run.janet
+        --env BENDER_PROFILE=1 --label tip-aot --timeout 180 \\
+        -- ./build/bender run.ben
 
 ``--timeout`` is a safety deadline, not a measurement. When it fires the child's
 whole process group is killed with SIGKILL and the run is recorded as expired.
@@ -131,7 +131,7 @@ import time
 from datetime import datetime, timezone
 from dataclasses import dataclass, field, replace
 
-SCHEMA = "janet/benchmark-capture/1"
+SCHEMA = "bender/benchmark-capture/1"
 CHUNK_BYTES = 1024 * 1024
 # A killed child is reaped almost immediately; this only bounds a pathological
 # wait so an unreapable child cannot hang the tool forever.
@@ -781,7 +781,7 @@ def main(argv=None) -> int:
     head, child_argv = split_at_separator(raw)
     parser = argparse.ArgumentParser(
         description="Capture one command's stdout/stderr and resource evidence.",
-        epilog="Pass the child command after '--': -- ./build/janet run.janet",
+        epilog="Pass the child command after '--': -- ./build/bender run.ben",
     )
     parser.add_argument("--evidence-dir", required=True, help="new directory for this run")
     parser.add_argument("--cwd", default=None, help="working directory for the child")

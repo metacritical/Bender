@@ -1,0 +1,61 @@
+# Copyright (c) 2026 Calvin Rose & contributors
+#
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to
+# deal in the Software without restriction, including without limitation the
+# rights to use, copy, modify, merge, publish, distribute, sublicense, and/or
+# sell copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in
+# all copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+# FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
+# IN THE SOFTWARE.
+#
+# Same-VM atoms: atom/deref/swap!/reset!/compare-and-set! (boot.ben).
+
+(import ./helper :prefix "" :exit true)
+(start-suite)
+
+(let [a (atom 1)]
+  (assert (atom? a) "atom?")
+  (assert (not (atom? @{})) "non-atom")
+  (assert (= 1 (deref a)) "deref")
+  (assert (= 2 (reset! a 2)) "reset returns new")
+  (assert (= 2 (deref a)) "reset sticks")
+  (assert (= 12 (swap! a + 10)) "swap returns new")
+  (assert (= 12 (deref a)) "swap sticks")
+  (assert (swap! a (fn [x] (* x 2))) "swap fn")
+  (assert (= 24 (deref a)) "swap fn sticks"))
+
+# compare-and-set: true path sets, false path keeps.
+(let [a (atom :x)]
+  (assert (compare-and-set! a :x :y) "cas hits")
+  (assert (= :y (deref a)) "cas set")
+  (assert (not (compare-and-set! a :x :z)) "cas misses")
+  (assert (= :y (deref a)) "cas miss keeps"))
+
+# Validators gate every writer.
+(let [a (atom 0 {:validator pos?})]
+  (reset! a 5)
+  (assert (= 5 (deref a)) "validator accepts")
+  (try (reset! a -1) ([e] (assert (not (nil? (string/find "validator" e))) "reset rejected")))
+  (assert (= 5 (deref a)) "rejection keeps old")
+  (try (swap! a - 10) ([e] (assert (not (nil? (string/find "validator" e))) "swap rejected")))
+  (assert (= 5 (deref a)) "swap rejection keeps old"))
+
+# Independence between atoms.
+(let [a (atom 1) b (atom 2)]
+  (swap! a inc)
+  (assert (= 2 (deref b)) "siblings independent"))
+
+# deref on non-atoms fails loud.
+(try (deref 42) ([e] (assert (not (nil? (string/find "atom" e))) "deref refuses")))
+
+(end-suite)

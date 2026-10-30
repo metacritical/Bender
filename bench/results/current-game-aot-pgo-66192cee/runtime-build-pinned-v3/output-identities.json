@@ -3,15 +3,15 @@
     "sha256": "6e5639fdaf08e49dafeb61a08170e2c9db3a48447465fcb5a49c8b5afe50c436",
     "bytes": 1392776
   },
-  "build/libjanet.a": {
+  "build/libbender.a": {
     "sha256": "e1cb72dcecb3ae15d11210abddf90f93e6f753e70dc127a7356adb7e4a857507",
     "bytes": 4113560
   },
-  "build/libjanet.dylib": {
+  "build/libbender.dylib": {
     "sha256": "b64cac34cc89cafed4d5c91b59d889972b211a80a2e499b123b1c6a61e39cd3b",
     "bytes": 1392720
   },
-  "build/c/janet.c": {
+  "build/c/bender.c": {
     "sha256": "409a9266e35899b3f4d91037417967ab427135323f1be47e812853e5b3295712",
     "bytes": 4805932
   }

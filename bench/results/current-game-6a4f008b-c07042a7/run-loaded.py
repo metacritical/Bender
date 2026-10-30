@@ -1,11 +1,11 @@
 import os, pathlib, subprocess, time, signal, json, hashlib, re
-D=pathlib.Path('/tmp/janet-current-game-ab-evidence'); G=D/'game-source'
-arms=[('baseline','/tmp/janet-current-game-ab-6a4f008b/build/bender'),('tip','/tmp/janet-current-game-ab-c07042a7/build/bender')]
+D=pathlib.Path('/tmp/bender-current-game-ab-evidence'); G=D/'game-source'
+arms=[('baseline','/tmp/bender-current-game-ab-6a4f008b/build/bender'),('tip','/tmp/bender-current-game-ab-c07042a7/build/bender')]
 rows=[]
 for tag,exe in arms:
- env={k:v for k,v in os.environ.items() if not k.startswith(('JANET_','BENDER_'))}
- env.update(JANET_NO_PROFILE='1',JANET_LANES='0',XDG_CACHE_HOME=str(D/('cache-loaded-'+tag)))
- cmd=[exe,str(G/'main.janet'),'--frames','600','--uncapped','--world-slot','15f2268da8ec2a4105ef2deaf6ae0b19','--world-root',str(G/'worlds-v1')]
+ env={k:v for k,v in os.environ.items() if not k.startswith(('BENDER_','BENDER_'))}
+ env.update(BENDER_NO_PROFILE='1',BENDER_LANES='0',XDG_CACHE_HOME=str(D/('cache-loaded-'+tag)))
+ cmd=[exe,str(G/'main.ben'),'--frames','600','--uncapped','--world-slot','15f2268da8ec2a4105ef2deaf6ae0b19','--world-root',str(G/'worlds-v1')]
  start=time.monotonic(); peak=0; reason=None
  with (D/(tag+'-loaded.stdout')).open('w') as o,(D/(tag+'-loaded.stderr')).open('w') as e:
   p=subprocess.Popen(cmd,cwd=G,env=env,stdout=o,stderr=e,start_new_session=True)

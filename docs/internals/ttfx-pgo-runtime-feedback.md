@@ -11,13 +11,13 @@ The compiler has two PGO mechanisms:
    compiled binary's output against the interpreter, and publishes a
    gateable PGO cache record.  A later `--release` build can use that record.
 2. **Auto-PGO**: a non-release AOT binary profiles its first qualifying
-   run into `<cache>/<key>.jdn`; further runs with `JANET_AUTO_PGO=1` write
+   run into `<cache>/<key>.jdn`; further runs with `BENDER_AUTO_PGO=1` write
    unique `.run-...jdn` sidecars.
 
 The final release does **not** self-profile.  This is intentional: the
 release binary is the benchmarking/product binary, and `--release`
-explicitly adds `-DJANET_NO_PGO` and `-DJANET_NATIVE_TELEMETRY=0` in
-`src/boot/boot.janet`.  The training/profiling binary is a separate build.
+explicitly adds `-DBENDER_NO_PGO` and `-DBENDER_NATIVE_TELEMETRY=0` in
+`src/boot/boot.ben`.  The training/profiling binary is a separate build.
 
 **Status 2026-10-23: this gap is now closed** (see "Implemented:
 sidecar provenance and `--pgo-auto`" below).  Auto-PGO profiles carry a
@@ -60,10 +60,10 @@ build, without putting the profiler back into the release binary.
 Commands used with the current packed-path source:
 
 ```sh
-JANET_NATIVE_EXECUTORS=1 bender --aot bin/ttfx-cli.janet --native \
+BENDER_NATIVE_EXECUTORS=1 bender --aot bin/ttfx-cli.ben --native \
   -o build/ttfx-cli-autopgo
 for i in 1 2 3; do
-  XDG_CACHE_HOME=$T/autopgo-check-cache JANET_AUTO_PGO=1 \
+  XDG_CACHE_HOME=$T/autopgo-check-cache BENDER_AUTO_PGO=1 \
     build/ttfx-cli-autopgo decrypt --bench --input-file logo.txt --seed 42
 done
 ```
@@ -71,9 +71,9 @@ done
 Observed cache contents after three runs:
 
 ```text
-<xdg>/janet/pgo/ttfx-cli-autopgo.jdn
-<xdg>/janet/pgo/ttfx-cli-autopgo.jdn.run-61523-0.jdn
-<xdg>/janet/pgo/ttfx-cli-autopgo.jdn.run-61527-0.jdn
+<xdg>/bender/pgo/ttfx-cli-autopgo.jdn
+<xdg>/bender/pgo/ttfx-cli-autopgo.jdn.run-61523-0.jdn
+<xdg>/bender/pgo/ttfx-cli-autopgo.jdn.run-61527-0.jdn
 ```
 
 So the runtime collection is real: one base profile plus sidecars for runs
@@ -124,12 +124,12 @@ Largest remaining ratios:
 A 1 ms `sample` of the AOT release (`--bench`) showed:
 
 - `run_vm` is still the largest single stack
-- `janet_gc_barrier`, `janet_dict_find`, `janet_in`, `janet_equals`
+- `bender_gc_barrier`, `bender_dict_find`, `bender_in`, `bender_equals`
 - executor `ctx-update`
 - executor `ctx-fire-event`
 - executor `ctx-frame-string`
-- `native_structure_matches`, `janet_fiber_funcframe`,
-  `janet_native_poll`
+- `native_structure_matches`, `bender_fiber_funcframe`,
+  `bender_native_poll`
 - executor `ctx-path-step`
 
 The interpreter profile overstates RNG limb helpers; the release already
@@ -140,7 +140,7 @@ release-time attribution oracle.
 
 1. **Partial native coverage.**  The compiler emits C executors only for
    structurally eligible functions (83 loop executors in the original CLI
-   release, 81 in the packed-path candidate).  Most Janet functions still
+   release, 81 in the packed-path candidate).  Most Bender functions still
    run through `run_vm`.
 2. **Executor-to-VM exits.**  Executors are not a whole-program C compiler.
    Calls, collection mutation, allocation, division, and unproven types
@@ -150,7 +150,7 @@ release-time attribution oracle.
 3. **No native-to-native continuation.**  A call from one executor to
    another native function currently exits to `run_vm`; it does not chain
    native frames.  This is the biggest missing compiler feature.
-4. **Boxed state.**  Janet numbers, tables, arrays, and tuples are boxed.
+4. **Boxed state.**  Bender numbers, tables, arrays, and tuples are boxed.
    The `table put/get` and GC-barrier traffic in scene/event/animation
    state is visible in release samples.  Packed scene frames, scene state,
    and path state removed part of this cost.
@@ -172,7 +172,7 @@ release-time attribution oracle.
    feed later runs back into the compiler.
 8. **The generated C is guarded executor C, not Rust-style monomorphic
    structs.**  Rust owns typed `Vec`s/structs and direct call paths; the
-   Janet AOT path still validates/guards and falls back.
+   Bender AOT path still validates/guards and falls back.
 
 ## What was already optimized
 
@@ -209,7 +209,7 @@ verified release build without pretending arbitrary runs are replayable.
    requires each record to reproduce its recorded output.  Sidecars that
    fail parity are quarantined, never used.
 3. **Keep release instrumentation off.**  `--release` should remain
-   `JANET_NO_PGO` for speed; the feedback loop is:
+   `BENDER_NO_PGO` for speed; the feedback loop is:
    profiling/non-release build -> 1–3 runs -> merge -> verified release.
    Optionally a `--pgo-release` wrapper automates the cycle.
 4. **Profile multiple workloads, but gate each separately.**  A merged
@@ -235,42 +235,42 @@ verified release build without pretending arbitrary runs are replayable.
    to accessors and packed arrays is the next large table/GC reduction.
 9. **Native frame/color serializer.**  `ctx-frame-string` remains hot.
    A validated C serializer over packed cell records, with exact ANSI
-   bytes, would remove per-cell Janet string/table work.
+   bytes, would remove per-cell Bender string/table work.
 
 ## Handoff: files and commands
 
 Compiler:
 
-- `tools/callgraph.janet`: profile parsing, kernel/executor selection,
+- `tools/callgraph.ben`: profile parsing, kernel/executor selection,
   native C emission.
-- `tools/loop-executor.janet`: executor bytecode eligibility and emitted
+- `tools/loop-executor.ben`: executor bytecode eligibility and emitted
   C, including call fast paths and VM boundaries.
 - `src/core/vm.c`: native registry, dispatch, auto-PGO collection.
 - `src/core/bytecode.c`: core predicate fast paths.
-- `src/boot/boot.janet`: `--pgo`, auto-PGO cache, `--release` flags and
+- `src/boot/boot.ben`: `--pgo`, auto-PGO cache, `--release` flags and
   parity gate.
-- `tools/mkimage.janet`: auto-PGO launcher/cache sidecars.
+- `tools/mkimage.ben`: auto-PGO launcher/cache sidecars.
 
 ttfx runtime:
 
-- `janet-port/src/scene.janet`: packed frames/scenes/paths, frame
+- `bender-port/src/scene.ben`: packed frames/scenes/paths, frame
   serializer.
-- `janet-port/src/effects/*.janet`: direct animation/path field users.
-- `janet-port/build/ttfx-cli-packed-path-pgo`: current candidate.
-- `janet-port/build/ttfx-cli-container-rel`: prior CLI release.
+- `bender-port/src/effects/*.ben`: direct animation/path field users.
+- `bender-port/build/ttfx-cli-packed-path-pgo`: current candidate.
+- `bender-port/build/ttfx-cli-container-rel`: prior CLI release.
 
 Reproduction:
 
 ```sh
 # explicit PGO + verified release
-JANET_NATIVE_EXECUTORS=1 XDG_CACHE_HOME=$CACHE bender --aot \
-  bin/ttfx-cli.janet --native --pgo "decrypt --bench --input-file logo.txt --seed 42" \
+BENDER_NATIVE_EXECUTORS=1 XDG_CACHE_HOME=$CACHE bender --aot \
+  bin/ttfx-cli.ben --native --pgo "decrypt --bench --input-file logo.txt --seed 42" \
   -o build/ttfx-cli-pgo
-JANET_NATIVE_EXECUTORS=1 XDG_CACHE_HOME=$CACHE bender --aot \
-  bin/ttfx-cli.janet --native --release -o build/ttfx-cli-pgo
+BENDER_NATIVE_EXECUTORS=1 XDG_CACHE_HOME=$CACHE bender --aot \
+  bin/ttfx-cli.ben --native --release -o build/ttfx-cli-pgo
 
 # auto-PGO observation
-XDG_CACHE_HOME=$CACHE JANET_AUTO_PGO=1 build/ttfx-cli-autopgo decrypt --bench ...
+XDG_CACHE_HOME=$CACHE BENDER_AUTO_PGO=1 build/ttfx-cli-autopgo decrypt --bench ...
 
 # all-37 CLI vs Rust -- bench-cli-packed-path-vs-rust.py was never committed
 # and does not exist; the committed replacement lives in ML/ttfx
@@ -281,15 +281,15 @@ python3 bench/validate-bender.py --rust --timing
 
 Proposal items 1 and 2 are implemented.
 
-**Provenance** (`src/core/vm.c`, `src/core/io.c`, `tools/mkimage.janet`).
+**Provenance** (`src/core/vm.c`, `src/core/io.c`, `tools/mkimage.ben`).
 The AOT launcher passes its exact argv to the VM
-(`janet_profile_auto_workload`).  Whenever the VM publishes an auto-PGO
+(`bender_profile_auto_workload`).  Whenever the VM publishes an auto-PGO
 profile it writes a companion `<profile>.workload` JDN record beside it,
 using the same vocabulary as the explicit `--pgo` cache record
 (`:args`, `:argv`, `:has-stdin`, `:stdin-bytes`) plus `:replayable`,
 `:reason`, `:binary`, `:image-bytes`, `:stdout-hash`, `:stdout-bytes`.
 It is a companion file rather than part of the `.jdn` because that payload
-is a bare profile row array consumed by `tools/profile-merge.janet`.
+is a bare profile row array consumed by `tools/profile-merge.ben`.
 
 Replayability is decided, never assumed:
 
@@ -304,7 +304,7 @@ Replayability is decided, never assumed:
 and hashes bytes reaching `stdout`; both are inert unless the launcher
 armed auto-PGO.
 
-**`--pgo-auto`** (`src/boot/boot.janet`).  Requires `--native` and a real
+**`--pgo-auto`** (`src/boot/boot.ben`).  Requires `--native` and a real
 binary build; incompatible with `--pgo`, `--release`, `--no-auto-pgo`,
 `-c/-S/-E`.  It loads `<key>.jdn` plus every sidecar, refuses with a
 per-profile reason anything that lacks a workload record, is malformed, is
@@ -320,11 +320,11 @@ installed.  On success one gateable v3 record per workload is published
 through the `--pgo` publication path, so a later `--release` succeeds.
 
 `--release` is unchanged and still instrumentation-free
-(`-DJANET_NO_PGO -DJANET_NATIVE_TELEMETRY=0`); a release binary writes no
+(`-DBENDER_NO_PGO -DBENDER_NATIVE_TELEMETRY=0`); a release binary writes no
 profile.
 
 Verified end to end against the real ttfx CLI at
-`ML/ttfx/janet-port` (cache `XDG_CACHE_HOME=/tmp/autopgo2-cache`,
+`ML/ttfx/bender-port` (cache `XDG_CACHE_HOME=/tmp/autopgo2-cache`,
 `logo.txt` = `../ruby-port/logo.txt`), using two workloads so the merge,
 the dedupe and the per-workload gate are all exercised:
 
@@ -333,7 +333,7 @@ the dedupe and the per-workload gate are all exercised:
 bender --aot: --pgo-auto merging 5 auto profiles over 2 workloads
 bender --aot: --pgo-auto workload 0 runs=3 argv="decrypt --bench --input-file ../ruby-port/logo.txt --seed 42"
 bender --aot: --pgo-auto workload 1 runs=2 argv="decrypt --dump-frames --max-frames 400 --input-file ../ruby-port/logo.txt --seed 42"
-pgo-divergence: @["src/color.janet" 110 "color-fg"] workload 0 vs 1 params @[@[:array :tuple]] != @[@[:tuple]]
+pgo-divergence: @["src/color.ben" 110 "color-fg"] workload 0 vs 1 params @[@[:array :tuple]] != @[@[:tuple]]
 bender --aot: --pgo-auto published 2 gateable workloads
 bender --aot: pgo parity ok, installed build/ttfx-cli-autopgo2
 # --release from the same cache (same -o: the cache is keyed by output basename)
@@ -378,7 +378,7 @@ best-of):
 | binary | min ms | median ms | min vs candidate |
 |---|---:|---:|---:|
 | `ttfx-cli-packed-path-pgo` (stored candidate) | 215 | 241 | 1.000 |
-| pre-change janet `6cdb7857` + explicit `--pgo` | 240 | 277 | 1.116 |
+| pre-change bender `6cdb7857` + explicit `--pgo` | 240 | 277 | 1.116 |
 | this work + `--pgo-auto` | 234 | 265 | 1.088 |
 
 Since a build from the untouched tree is the *slowest* of the three while
@@ -429,11 +429,11 @@ Two figures from this document are now settled empirically:
 1. **"36/37, only swarm differs" is correct.** Bare invocations, seeds 42 and
    1337, 400 frames, `logo.txt`: Bender-vs-Bender 37/37 exact (74/74 cases);
    Bender-vs-Rust 36/37 with `swarm` the **sole** divergence
-   (seed 42: janet 739,319 B `8327687e…` vs rust 757,416 B `0e69981a…`;
-   seed 1337: janet 676,336 B `2b39cb85…` vs rust 672,992 B `11c0746a…`).
+   (seed 42: bender 739,319 B `8327687e…` vs rust 757,416 B `0e69981a…`;
+   seed 1337: bender 676,336 B `2b39cb85…` vs rust 672,992 B `11c0746a…`).
    Every record in the ttfx tree claiming 37/37 against Rust is wrong about
    swarm.  Under the canonical option sets Bender-vs-Rust drops to 24/37, but
-   57 of those divergences are Janet CLI flags that do not exist (the CLI
+   57 of those divergences are Bender CLI flags that do not exist (the CLI
    ignores unknown flags silently, so the two sides run different workloads);
    only 15 are genuine engine divergences.
 2. **The all-37 A/B that validated the three packing stages is reproducible
@@ -442,17 +442,17 @@ Two figures from this document are now settled empirically:
    `ttfx-cli-packed-path-pgo` over 276 runnable cases.
 
 Two blockers the gate surfaced, both documented in `bench/bender-37-gate.md`:
-`bin/ttfx-cli.janet` `flag-values` panics on any option value shorter than
+`bin/ttfx-cli.ben` `flag-values` panics on any option value shorter than
 two characters, which blocks 159 of 436 canonical option sets (one-line fix,
 verified in a scratch copy, not applied); and the
-`docs/benchmarks/2026-09-21.csv` digests cannot cross-check the Janet port,
-because that protocol needs `--virtual-clock`, which the Janet CLI does not
+`docs/benchmarks/2026-09-21.csv` digests cannot cross-check the Bender port,
+because that protocol needs `--virtual-clock`, which the Bender CLI does not
 implement and silently ignores.
 
 **Executor bindings are not automatically like-for-like.** The gate found the
 candidate binding 79 of 81 loop executors while the baseline binds 81
 (`int-string?` and `to-i` refused — now named, see the `id=` in
-`tools/callgraph.janet`).  The same two refusals appear when ttfx is rebuilt
+`tools/callgraph.ben`).  The same two refusals appear when ttfx is rebuilt
 with the pre-change compiler at `6cdb7857`, so this is a property of
 rebuilding today rather than of the auto-PGO work — but it means the current
 timing geomean (1.0205 candidate/baseline) measures executor inequality as

@@ -4,18 +4,18 @@
 # and a mixed-native-executor build from the same branch. No timing claims.
 set -eu
 T=/private/var/folders/v6/lmp2f1ws4jl76bjbhzm0tcwm0000gn/T/opencode
-JANET=/Users/pankajdoharey/Development/Projects/janet
-APP=/Users/pankajdoharey/Development/Projects/ML/ttfx/janet-port
+BENDER=/Users/pankajdoharey/Development/Projects/bender
+APP=/Users/pankajdoharey/Development/Projects/ML/ttfx/bender-port
 OUT=$T/stage2-omarchy
 CACHE_OFF=$T/stage2-omarchy-cache-off
 CACHE_ON=$T/stage2-omarchy-cache-on
 rm -rf "$OUT" "$CACHE_OFF" "$CACHE_ON"; mkdir -p "$OUT" "$CACHE_OFF" "$CACHE_ON"
-export JANET_NO_PROFILE=1
+export BENDER_NO_PROFILE=1
 
 echo "== reference build (no executors)"
-(cd "$APP" && XDG_CACHE_HOME="$CACHE_OFF" "$JANET/build/bender" --aot bin/ttfx-cli.janet --native --no-auto-pgo -o "$OUT/ttfx-off" > "$OUT/build-off.log" 2>&1)
+(cd "$APP" && XDG_CACHE_HOME="$CACHE_OFF" "$BENDER/build/bender" --aot bin/ttfx-cli.ben --native --no-auto-pgo -o "$OUT/ttfx-off" > "$OUT/build-off.log" 2>&1)
 echo "== mixed executor build"
-(cd "$APP" && XDG_CACHE_HOME="$CACHE_ON" JANET_NATIVE_EXECUTORS=1 "$JANET/build/bender" --aot bin/ttfx-cli.janet --native --no-auto-pgo -o "$OUT/ttfx-on" > "$OUT/build-on.log" 2>&1)
+(cd "$APP" && XDG_CACHE_HOME="$CACHE_ON" BENDER_NATIVE_EXECUTORS=1 "$BENDER/build/bender" --aot bin/ttfx-cli.ben --native --no-auto-pgo -o "$OUT/ttfx-on" > "$OUT/build-on.log" 2>&1)
 
 grep -c . "$OUT"/../stage2-omarchy-on-native/native-executors.txt 2>/dev/null || true
 MANIFEST=$(find "$OUT"-on-native "$OUT" -maxdepth 2 -name native-executors.txt 2>/dev/null | head -1)

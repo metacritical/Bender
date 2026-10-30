@@ -20,9 +20,9 @@
 * IN THE SOFTWARE.
 */
 
-#ifndef JANET_AMALG
+#ifndef BENDER_AMALG
 #include "features.h"
-#include <janet.h>
+#include <bender.h>
 #include "compile.h"
 #include "util.h"
 #include "vector.h"
@@ -35,9 +35,9 @@ static int bad_16bit_jump(int32_t lab1, int32_t lab2) {
     return 0;
 }
 
-static void check_16bit_jump(JanetCompiler *c, int32_t lab1, int32_t lab2) {
+static void check_16bit_jump(BenderCompiler *c, int32_t lab1, int32_t lab2) {
     if (bad_16bit_jump(lab1, lab2)) {
-        janetc_cerror(c, "bad 16-bit jump, too large");
+        benderc_cerror(c, "bad 16-bit jump, too large");
     }
 }
 
@@ -47,117 +47,117 @@ static int bad_24bit_jump(int32_t lab1, int32_t lab2) {
     return 0;
 }
 
-static void check_24bit_jump(JanetCompiler *c, int32_t lab1, int32_t lab2) {
+static void check_24bit_jump(BenderCompiler *c, int32_t lab1, int32_t lab2) {
     if (bad_24bit_jump(lab1, lab2)) {
-        janetc_cerror(c, "bad 24-bit jump, too large");
+        benderc_cerror(c, "bad 24-bit jump, too large");
     }
 }
 
-static JanetSlot janetc_quote(JanetFopts opts, int32_t argn, const Janet *argv) {
+static BenderSlot benderc_quote(BenderFopts opts, int32_t argn, const Bender *argv) {
     if (argn != 1) {
-        janetc_cerror(opts.compiler, "expected 1 argument to quote");
-        return janetc_cslot(janet_wrap_nil());
+        benderc_cerror(opts.compiler, "expected 1 argument to quote");
+        return benderc_cslot(bender_wrap_nil());
     }
-    return janetc_cslot(argv[0]);
+    return benderc_cslot(argv[0]);
 }
 
-static JanetSlot janetc_splice(JanetFopts opts, int32_t argn, const Janet *argv) {
-    JanetSlot ret;
-    if (!(opts.flags & JANET_FOPTS_ACCEPT_SPLICE)) {
-        janetc_cerror(opts.compiler, "splice can only be used in function parameters and data constructors, it has no effect here");
-        return janetc_cslot(janet_wrap_nil());
+static BenderSlot benderc_splice(BenderFopts opts, int32_t argn, const Bender *argv) {
+    BenderSlot ret;
+    if (!(opts.flags & BENDER_FOPTS_ACCEPT_SPLICE)) {
+        benderc_cerror(opts.compiler, "splice can only be used in function parameters and data constructors, it has no effect here");
+        return benderc_cslot(bender_wrap_nil());
     }
     if (argn != 1) {
-        janetc_cerror(opts.compiler, "expected 1 argument to splice");
-        return janetc_cslot(janet_wrap_nil());
+        benderc_cerror(opts.compiler, "expected 1 argument to splice");
+        return benderc_cslot(bender_wrap_nil());
     }
-    ret = janetc_value(opts, argv[0]);
-    ret.flags |= JANET_SLOT_SPLICED;
+    ret = benderc_value(opts, argv[0]);
+    ret.flags |= BENDER_SLOT_SPLICED;
     return ret;
 }
 
-static JanetSlot qq_slots(JanetFopts opts, JanetSlot *slots, int makeop) {
-    JanetSlot target = janetc_gettarget(opts);
-    janetc_pushslots(opts.compiler, slots);
-    janetc_freeslots(opts.compiler, slots);
-    janetc_emit_s(opts.compiler, makeop, target, 1);
+static BenderSlot qq_slots(BenderFopts opts, BenderSlot *slots, int makeop) {
+    BenderSlot target = benderc_gettarget(opts);
+    benderc_pushslots(opts.compiler, slots);
+    benderc_freeslots(opts.compiler, slots);
+    benderc_emit_s(opts.compiler, makeop, target, 1);
     return target;
 }
 
-static JanetSlot quasiquote(JanetFopts opts, Janet x, int depth, int level) {
+static BenderSlot quasiquote(BenderFopts opts, Bender x, int depth, int level) {
     if (depth == 0) {
-        janetc_cerror(opts.compiler, "quasiquote too deeply nested");
-        return janetc_cslot(janet_wrap_nil());
+        benderc_cerror(opts.compiler, "quasiquote too deeply nested");
+        return benderc_cslot(bender_wrap_nil());
     }
-    JanetSlot *slots = NULL;
-    JanetFopts subopts = opts;
-    subopts.flags &= ~JANET_FOPTS_HINT;
-    switch (janet_type(x)) {
+    BenderSlot *slots = NULL;
+    BenderFopts subopts = opts;
+    subopts.flags &= ~BENDER_FOPTS_HINT;
+    switch (bender_type(x)) {
         default:
-            return janetc_cslot(x);
-        case JANET_TUPLE: {
+            return benderc_cslot(x);
+        case BENDER_TUPLE: {
             int32_t i, len;
-            const Janet *tup = janet_unwrap_tuple(x);
-            len = janet_tuple_length(tup);
-            if (len > 1 && janet_checktype(tup[0], JANET_SYMBOL)) {
-                const uint8_t *head = janet_unwrap_symbol(tup[0]);
-                if (!janet_cstrcmp(head, "unquote")) {
+            const Bender *tup = bender_unwrap_tuple(x);
+            len = bender_tuple_length(tup);
+            if (len > 1 && bender_checktype(tup[0], BENDER_SYMBOL)) {
+                const uint8_t *head = bender_unwrap_symbol(tup[0]);
+                if (!bender_cstrcmp(head, "unquote")) {
                     if (level == 0) {
-                        JanetFopts subopts = janetc_fopts_default(opts.compiler);
-                        subopts.flags |= JANET_FOPTS_ACCEPT_SPLICE;
-                        return janetc_value(subopts, tup[1]);
+                        BenderFopts subopts = benderc_fopts_default(opts.compiler);
+                        subopts.flags |= BENDER_FOPTS_ACCEPT_SPLICE;
+                        return benderc_value(subopts, tup[1]);
                     } else {
                         level--;
                     }
-                } else if (!janet_cstrcmp(head, "quasiquote")) {
+                } else if (!bender_cstrcmp(head, "quasiquote")) {
                     level++;
                 }
             }
             for (i = 0; i < len; i++)
-                janet_v_push(slots, quasiquote(subopts, tup[i], depth - 1, level));
-            return qq_slots(opts, slots, (janet_tuple_flag(tup) & JANET_TUPLE_FLAG_BRACKETCTOR)
+                bender_v_push(slots, quasiquote(subopts, tup[i], depth - 1, level));
+            return qq_slots(opts, slots, (bender_tuple_flag(tup) & BENDER_TUPLE_FLAG_BRACKETCTOR)
                             ? JOP_MAKE_BRACKET_TUPLE
                             : JOP_MAKE_TUPLE);
         }
-        case JANET_ARRAY: {
+        case BENDER_ARRAY: {
             int32_t i;
-            JanetArray *array = janet_unwrap_array(x);
+            BenderArray *array = bender_unwrap_array(x);
             for (i = 0; i < array->count; i++)
-                janet_v_push(slots, quasiquote(subopts, array->data[i], depth - 1, level));
+                bender_v_push(slots, quasiquote(subopts, array->data[i], depth - 1, level));
             return qq_slots(opts, slots, JOP_MAKE_ARRAY);
         }
-        case JANET_TABLE:
-        case JANET_STRUCT: {
-            const JanetKV *kv = NULL, *kvs = NULL;
+        case BENDER_TABLE:
+        case BENDER_STRUCT: {
+            const BenderKV *kv = NULL, *kvs = NULL;
             int32_t len, cap = 0;
-            janet_dictionary_view(x, &kvs, &len, &cap);
-            while ((kv = janet_dictionary_next(kvs, cap, kv))) {
-                JanetSlot key = quasiquote(subopts, kv->key, depth - 1, level);
-                JanetSlot value =  quasiquote(subopts, kv->value, depth - 1, level);
-                key.flags &= ~JANET_SLOT_SPLICED;
-                value.flags &= ~JANET_SLOT_SPLICED;
-                janet_v_push(slots, key);
-                janet_v_push(slots, value);
+            bender_dictionary_view(x, &kvs, &len, &cap);
+            while ((kv = bender_dictionary_next(kvs, cap, kv))) {
+                BenderSlot key = quasiquote(subopts, kv->key, depth - 1, level);
+                BenderSlot value =  quasiquote(subopts, kv->value, depth - 1, level);
+                key.flags &= ~BENDER_SLOT_SPLICED;
+                value.flags &= ~BENDER_SLOT_SPLICED;
+                bender_v_push(slots, key);
+                bender_v_push(slots, value);
             }
             return qq_slots(opts, slots,
-                            janet_checktype(x, JANET_TABLE) ? JOP_MAKE_TABLE : JOP_MAKE_STRUCT);
+                            bender_checktype(x, BENDER_TABLE) ? JOP_MAKE_TABLE : JOP_MAKE_STRUCT);
         }
     }
 }
 
-static JanetSlot janetc_quasiquote(JanetFopts opts, int32_t argn, const Janet *argv) {
+static BenderSlot benderc_quasiquote(BenderFopts opts, int32_t argn, const Bender *argv) {
     if (argn != 1) {
-        janetc_cerror(opts.compiler, "expected 1 argument to quasiquote");
-        return janetc_cslot(janet_wrap_nil());
+        benderc_cerror(opts.compiler, "expected 1 argument to quasiquote");
+        return benderc_cslot(bender_wrap_nil());
     }
     return quasiquote(opts, argv[0], opts.compiler->recursion_guard, 0);
 }
 
-static JanetSlot janetc_unquote(JanetFopts opts, int32_t argn, const Janet *argv) {
+static BenderSlot benderc_unquote(BenderFopts opts, int32_t argn, const Bender *argv) {
     (void) argn;
     (void) argv;
-    janetc_cerror(opts.compiler, "cannot use unquote here");
-    return janetc_cslot(janet_wrap_nil());
+    benderc_cerror(opts.compiler, "cannot use unquote here");
+    return benderc_cslot(bender_wrap_nil());
 }
 
 /* Perform destructuring. Be careful to
@@ -165,112 +165,112 @@ static JanetSlot janetc_unquote(JanetFopts opts, int32_t argn, const Janet *argv
  * Returns if the slot 'right' can be freed. */
 /* Byte-compare two string-like keys (symbol/keyword/string), so `:or`
  * defaults keyed by symbol `a` match keyword lookups for `:a`. */
-static int destructure_key_bytes_equal(Janet a, Janet b) {
+static int destructure_key_bytes_equal(Bender a, Bender b) {
     const uint8_t *ab = NULL, *bb = NULL;
     int32_t alen = 0, blen = 0;
-    switch (janet_type(a)) {
-        case JANET_SYMBOL:
-            ab = janet_unwrap_symbol(a);
+    switch (bender_type(a)) {
+        case BENDER_SYMBOL:
+            ab = bender_unwrap_symbol(a);
             break;
-        case JANET_KEYWORD:
-            ab = janet_unwrap_keyword(a);
+        case BENDER_KEYWORD:
+            ab = bender_unwrap_keyword(a);
             break;
-        case JANET_STRING:
-            ab = janet_unwrap_string(a);
-            break;
-        default:
-            return 0;
-    }
-    switch (janet_type(b)) {
-        case JANET_SYMBOL:
-            bb = janet_unwrap_symbol(b);
-            break;
-        case JANET_KEYWORD:
-            bb = janet_unwrap_keyword(b);
-            break;
-        case JANET_STRING:
-            bb = janet_unwrap_string(b);
+        case BENDER_STRING:
+            ab = bender_unwrap_string(a);
             break;
         default:
             return 0;
     }
-    alen = janet_string_length(ab);
-    blen = janet_string_length(bb);
+    switch (bender_type(b)) {
+        case BENDER_SYMBOL:
+            bb = bender_unwrap_symbol(b);
+            break;
+        case BENDER_KEYWORD:
+            bb = bender_unwrap_keyword(b);
+            break;
+        case BENDER_STRING:
+            bb = bender_unwrap_string(b);
+            break;
+        default:
+            return 0;
+    }
+    alen = bender_string_length(ab);
+    blen = bender_string_length(bb);
     if (alen != blen) return 0;
     return !memcmp(ab, bb, (size_t) alen);
 }
-static int destructure(JanetCompiler *c,
-                       Janet left,
-                       JanetSlot right,
-                       int (*leaf)(JanetCompiler *c,
+static int destructure(BenderCompiler *c,
+                       Bender left,
+                       BenderSlot right,
+                       int (*leaf)(BenderCompiler *c,
                                    const uint8_t *sym,
-                                   JanetSlot s,
-                                   JanetTable *attr),
-                       JanetTable *attr) {
+                                   BenderSlot s,
+                                   BenderTable *attr),
+                       BenderTable *attr) {
     if (c->recursion_guard <= 0) {
-        janetc_error(c, janet_cstring("C stack recursed too deeply"));
+        benderc_error(c, bender_cstring("C stack recursed too deeply"));
         return 1;
     }
-    switch (janet_type(left)) {
+    switch (bender_type(left)) {
         default:
-            janetc_error(c, janet_formatc("unexpected type in destructuring, got %v", left));
+            benderc_error(c, bender_formatc("unexpected type in destructuring, got %v", left));
             return 1;
-        case JANET_SYMBOL:
+        case BENDER_SYMBOL:
             /* Leaf, assign right to left */
-            return leaf(c, janet_unwrap_symbol(left), right, attr);
-        case JANET_TUPLE:
-        case JANET_ARRAY: {
+            return leaf(c, bender_unwrap_symbol(left), right, attr);
+        case BENDER_TUPLE:
+        case BENDER_ARRAY: {
             int32_t len = 0;
-            const Janet *values = NULL;
-            janet_indexed_view(left, &values, &len);
+            const Bender *values = NULL;
+            bender_indexed_view(left, &values, &len);
             for (int32_t i = 0; i < len; i++) {
-                JanetSlot nextright = janetc_farslot(c);
-                Janet subval = values[i];
+                BenderSlot nextright = benderc_farslot(c);
+                Bender subval = values[i];
 
-                if (janet_checktype(subval, JANET_SYMBOL) && !janet_cstrcmp(janet_unwrap_symbol(subval), "&")) {
+                if (bender_checktype(subval, BENDER_SYMBOL) && !bender_cstrcmp(bender_unwrap_symbol(subval), "&")) {
                     if (i + 1 >= len) {
-                        janetc_cerror(c, "expected symbol following '& in destructuring pattern");
+                        benderc_cerror(c, "expected symbol following '& in destructuring pattern");
                         return 1;
                     }
 
                     if (i + 2 < len) {
                         int32_t num_extra = len - i - 1;
-                        Janet *extra = janet_tuple_begin(num_extra);
-                        janet_tuple_flag(extra) |= JANET_TUPLE_FLAG_BRACKETCTOR;
+                        Bender *extra = bender_tuple_begin(num_extra);
+                        bender_tuple_flag(extra) |= BENDER_TUPLE_FLAG_BRACKETCTOR;
 
                         for (int32_t j = 0; j < num_extra; ++j) {
                             extra[j] = values[j + i + 1];
                         }
 
-                        janetc_error(c, janet_formatc("expected a single symbol follow '& in destructuring pattern, found %q", janet_wrap_tuple(janet_tuple_end(extra))));
+                        benderc_error(c, bender_formatc("expected a single symbol follow '& in destructuring pattern, found %q", bender_wrap_tuple(bender_tuple_end(extra))));
                         return 1;
                     }
 
-                    if (!janet_checktype(values[i + 1], JANET_SYMBOL)) {
-                        janetc_error(c, janet_formatc("expected symbol following '& in destructuring pattern, found %q", values[i + 1]));
+                    if (!bender_checktype(values[i + 1], BENDER_SYMBOL)) {
+                        benderc_error(c, bender_formatc("expected symbol following '& in destructuring pattern, found %q", values[i + 1]));
                         return 1;
                     }
 
-                    JanetSlot argi = janetc_farslot(c);
-                    JanetSlot arg  = janetc_farslot(c);
-                    JanetSlot len  = janetc_farslot(c);
+                    BenderSlot argi = benderc_farslot(c);
+                    BenderSlot arg  = benderc_farslot(c);
+                    BenderSlot len  = benderc_farslot(c);
 
-                    janetc_emit_si(c, JOP_LOAD_INTEGER, argi, i, 0);
-                    janetc_emit_ss(c, JOP_LENGTH, len, right, 0);
+                    benderc_emit_si(c, JOP_LOAD_INTEGER, argi, i, 0);
+                    benderc_emit_ss(c, JOP_LENGTH, len, right, 0);
 
                     /* loop condition - reuse arg slot for the condition result */
-                    int32_t label_loop_start = janetc_emit_sss(c, JOP_LESS_THAN, arg, argi, len, 0);
-                    int32_t label_loop_cond_jump = janetc_emit_si(c, JOP_JUMP_IF_NOT, arg, 0, 0);
+                    int32_t label_loop_start = benderc_emit_sss(c, JOP_LESS_THAN, arg, argi, len, 0);
+                    int32_t label_loop_cond_jump = benderc_emit_si(c, JOP_JUMP_IF_NOT, arg, 0, 0);
 
                     /* loop body */
-                    janetc_emit_sss(c, JOP_GET, arg, right, argi, 0);
-                    janetc_emit_s(c, JOP_PUSH, arg, 0);
-                    janetc_emit_ssi(c, JOP_ADD_IMMEDIATE, argi, argi, 1, 0);
+                    benderc_emit_sss(c, JOP_GET, arg, right, argi, 0);
+                    benderc_emit_s(c, JOP_PUSH, arg, 0);
+                    benderc_emit_ssi(c, JOP_ADD_IMMEDIATE, argi, argi, 1, 0);
 
                     /* loop - jump back to the start of the loop */
-                    int32_t label_loop_loop = janet_v_count(c->buffer);
-                    janetc_emit(c, JOP_JUMP);
-                    int32_t label_loop_exit = janet_v_count(c->buffer);
+                    int32_t label_loop_loop = bender_v_count(c->buffer);
+                    benderc_emit(c, JOP_JUMP);
+                    int32_t label_loop_exit = bender_v_count(c->buffer);
 
                     /* avoid shifting negative numbers */
                     check_16bit_jump(c, label_loop_cond_jump, label_loop_exit);
@@ -278,121 +278,121 @@ static int destructure(JanetCompiler *c,
                     c->buffer[label_loop_cond_jump] |= (uint32_t)(label_loop_exit - label_loop_cond_jump) << 16;
                     c->buffer[label_loop_loop] |= (uint32_t)(label_loop_start - label_loop_loop) << 8;
 
-                    janetc_freeslot(c, argi);
-                    janetc_freeslot(c, arg);
-                    janetc_freeslot(c, len);
+                    benderc_freeslot(c, argi);
+                    benderc_freeslot(c, arg);
+                    benderc_freeslot(c, len);
 
-                    janetc_emit_s(c, JOP_MAKE_TUPLE, nextright, 1);
+                    benderc_emit_s(c, JOP_MAKE_TUPLE, nextright, 1);
 
-                    leaf(c, janet_unwrap_symbol(values[i + 1]), nextright, attr);
-                    janetc_freeslot(c, nextright);
+                    leaf(c, bender_unwrap_symbol(values[i + 1]), nextright, attr);
+                    benderc_freeslot(c, nextright);
                     break;
                 }
 
                 if (i < 0x100) {
-                    janetc_emit_ssu(c, JOP_GET_INDEX, nextright, right, (uint8_t) i, 1);
+                    benderc_emit_ssu(c, JOP_GET_INDEX, nextright, right, (uint8_t) i, 1);
                 } else {
-                    JanetSlot k = janetc_cslot(janet_wrap_integer(i));
-                    janetc_emit_sss(c, JOP_IN, nextright, right, k, 1);
+                    BenderSlot k = benderc_cslot(bender_wrap_integer(i));
+                    benderc_emit_sss(c, JOP_IN, nextright, right, k, 1);
                 }
                 c->recursion_guard--;
                 if (destructure(c, subval, nextright, leaf, attr))
-                    janetc_freeslot(c, nextright);
+                    benderc_freeslot(c, nextright);
                 c->recursion_guard++;
             }
         }
         return 1;
-        case JANET_TABLE:
-        case JANET_STRUCT: {
-            const JanetKV *kvs = NULL;
+        case BENDER_TABLE:
+        case BENDER_STRUCT: {
+            const BenderKV *kvs = NULL;
             int32_t cap = 0, len = 0;
-            janet_dictionary_view(left, &kvs, &len, &cap);
+            bender_dictionary_view(left, &kvs, &len, &cap);
             /* Clojure-style `:or {key default}`: first pass collects
              * the defaults dict (literal values only — patterns are
              * data, so defaults cannot be computed). A non-dict `:or`
              * value falls through to a normal key binding. */
-            const JanetKV *orkvs = NULL;
+            const BenderKV *orkvs = NULL;
             int32_t orlen = 0, orcap = 0;
             {
                 int32_t oi;
                 for (oi = 0; oi < cap; oi++) {
-                    if (janet_checktype(kvs[oi].key, JANET_KEYWORD)) {
+                    if (bender_checktype(kvs[oi].key, BENDER_KEYWORD)) {
                     }
-                    if (janet_checktype(kvs[oi].key, JANET_KEYWORD) &&
-                            !janet_cstrcmp(janet_unwrap_keyword(kvs[oi].key), "or") &&
-                            (janet_checktype(kvs[oi].value, JANET_TABLE) ||
-                             janet_checktype(kvs[oi].value, JANET_STRUCT))) {
+                    if (bender_checktype(kvs[oi].key, BENDER_KEYWORD) &&
+                            !bender_cstrcmp(bender_unwrap_keyword(kvs[oi].key), "or") &&
+                            (bender_checktype(kvs[oi].value, BENDER_TABLE) ||
+                             bender_checktype(kvs[oi].value, BENDER_STRUCT))) {
                         {
-                            Janet vv = kvs[oi].value;
+                            Bender vv = kvs[oi].value;
                         }
-                        janet_dictionary_view(kvs[oi].value, &orkvs, &orlen, &orcap);
+                        bender_dictionary_view(kvs[oi].value, &orkvs, &orlen, &orcap);
                         break;
                     }
                 }
             }
             for (int32_t i = 0; i < cap; i++) {
-                if (janet_checktype(kvs[i].key, JANET_NIL)) continue;
+                if (bender_checktype(kvs[i].key, BENDER_NIL)) continue;
                 /* The `:or` defaults entry was consumed in the first
                  * pass; never bind it as a key. */
                 if (NULL != orkvs &&
-                        janet_checktype(kvs[i].key, JANET_KEYWORD) &&
-                        !janet_cstrcmp(janet_unwrap_keyword(kvs[i].key), "or"))
+                        bender_checktype(kvs[i].key, BENDER_KEYWORD) &&
+                        !bender_cstrcmp(bender_unwrap_keyword(kvs[i].key), "or"))
                     continue;
                 /* `:keys [a b]` shorthand: symbol S binds S from keyword
                  * :S; keyword :K binds its symbol form from :K. A
                  * non-sequential `:keys` value is a normal binding. */
-                if (janet_checktype(kvs[i].key, JANET_KEYWORD) &&
-                        !janet_cstrcmp(janet_unwrap_keyword(kvs[i].key), "keys") &&
-                        (janet_checktype(kvs[i].value, JANET_TUPLE) ||
-                         janet_checktype(kvs[i].value, JANET_ARRAY))) {
-                    const Janet *names = NULL;
+                if (bender_checktype(kvs[i].key, BENDER_KEYWORD) &&
+                        !bender_cstrcmp(bender_unwrap_keyword(kvs[i].key), "keys") &&
+                        (bender_checktype(kvs[i].value, BENDER_TUPLE) ||
+                         bender_checktype(kvs[i].value, BENDER_ARRAY))) {
+                    const Bender *names = NULL;
                     int32_t nlen = 0;
                     int32_t ni;
-                    janet_indexed_view(kvs[i].value, &names, &nlen);
+                    bender_indexed_view(kvs[i].value, &names, &nlen);
                     for (ni = 0; ni < nlen; ni++) {
                         const uint8_t *nb = NULL;
                         const uint8_t *kb = NULL;
-                        Janet key;
-                        if (janet_checktype(names[ni], JANET_SYMBOL)) {
-                            nb = janet_unwrap_symbol(names[ni]);
+                        Bender key;
+                        if (bender_checktype(names[ni], BENDER_SYMBOL)) {
+                            nb = bender_unwrap_symbol(names[ni]);
                             kb = nb;
-                        } else if (janet_checktype(names[ni], JANET_KEYWORD)) {
-                            kb = janet_unwrap_keyword(names[ni]);
+                        } else if (bender_checktype(names[ni], BENDER_KEYWORD)) {
+                            kb = bender_unwrap_keyword(names[ni]);
                             nb = kb;
                         } else {
-                            janetc_error(c, janet_formatc("expected symbol or keyword in :keys vector, got %v", names[ni]));
+                            benderc_error(c, bender_formatc("expected symbol or keyword in :keys vector, got %v", names[ni]));
                             return 1;
                         }
-                        key = janet_keywordv(kb, janet_string_length(kb));
+                        key = bender_keywordv(kb, bender_string_length(kb));
                         {
-                            Janet bindpat = janet_wrap_symbol(janet_symbol(nb, janet_string_length(nb)));
-                            JanetSlot nextright = janetc_farslot(c);
-                            JanetSlot k = janetc_value(janetc_fopts_default(c), key);
-                            Janet dflt = janet_wrap_nil();
+                            Bender bindpat = bender_wrap_symbol(bender_symbol(nb, bender_string_length(nb)));
+                            BenderSlot nextright = benderc_farslot(c);
+                            BenderSlot k = benderc_value(benderc_fopts_default(c), key);
+                            Bender dflt = bender_wrap_nil();
                             int has_dflt = 0;
                             int32_t oj;
                             for (oj = 0; oj < orcap; oj++) {
-                                if (janet_checktype(orkvs[oj].key, JANET_NIL)) continue;
+                                if (bender_checktype(orkvs[oj].key, BENDER_NIL)) continue;
                                 if (destructure_key_bytes_equal(orkvs[oj].key, key)) {
                                     dflt = orkvs[oj].value;
                                     has_dflt = 1;
                                     break;
                                 }
                             }
-                            janetc_emit_sss(c, JOP_IN, nextright, right, k, 1);
+                            benderc_emit_sss(c, JOP_IN, nextright, right, k, 1);
                             if (has_dflt) {
-                                int32_t lab = janetc_emit_si(c, JOP_JUMP_IF_NOT_NIL, nextright, 0, 0);
-                                JanetSlot d = janetc_value(janetc_fopts_default(c), dflt);
-                                janetc_copy(c, nextright, d);
+                                int32_t lab = benderc_emit_si(c, JOP_JUMP_IF_NOT_NIL, nextright, 0, 0);
+                                BenderSlot d = benderc_value(benderc_fopts_default(c), dflt);
+                                benderc_copy(c, nextright, d);
                                 {
-                                    int32_t cur = janet_v_count(c->buffer);
+                                    int32_t cur = bender_v_count(c->buffer);
                                     check_16bit_jump(c, lab, cur);
                                     c->buffer[lab] |= (uint32_t)(cur - lab) << 16;
                                 }
                             }
                             c->recursion_guard--;
                             if (destructure(c, bindpat, nextright, leaf, attr))
-                                janetc_freeslot(c, nextright);
+                                benderc_freeslot(c, nextright);
                             c->recursion_guard++;
                         }
                     }
@@ -406,33 +406,33 @@ static int destructure(JanetCompiler *c,
                  * every such use — caught by suite-array via broken
                  * imports. */
                 {
-                    JanetSlot nextright = janetc_farslot(c);
-                    JanetSlot k = janetc_value(janetc_fopts_default(c), kvs[i].key);
-                    Janet dflt = janet_wrap_nil();
+                    BenderSlot nextright = benderc_farslot(c);
+                    BenderSlot k = benderc_value(benderc_fopts_default(c), kvs[i].key);
+                    Bender dflt = bender_wrap_nil();
                     int has_dflt = 0;
                     int32_t oj;
                     for (oj = 0; oj < orcap; oj++) {
-                        if (janet_checktype(orkvs[oj].key, JANET_NIL)) continue;
+                        if (bender_checktype(orkvs[oj].key, BENDER_NIL)) continue;
                         if (destructure_key_bytes_equal(orkvs[oj].key, kvs[i].key)) {
                             dflt = orkvs[oj].value;
                             has_dflt = 1;
                             break;
                         }
                     }
-                    janetc_emit_sss(c, JOP_IN, nextright, right, k, 1);
+                    benderc_emit_sss(c, JOP_IN, nextright, right, k, 1);
                     if (has_dflt) {
-                        int32_t lab = janetc_emit_si(c, JOP_JUMP_IF_NOT_NIL, nextright, 0, 0);
-                        JanetSlot d = janetc_value(janetc_fopts_default(c), dflt);
-                        janetc_copy(c, nextright, d);
+                        int32_t lab = benderc_emit_si(c, JOP_JUMP_IF_NOT_NIL, nextright, 0, 0);
+                        BenderSlot d = benderc_value(benderc_fopts_default(c), dflt);
+                        benderc_copy(c, nextright, d);
                         {
-                            int32_t cur = janet_v_count(c->buffer);
+                            int32_t cur = bender_v_count(c->buffer);
                             check_16bit_jump(c, lab, cur);
                             c->buffer[lab] |= (uint32_t)(cur - lab) << 16;
                         }
                     }
                     c->recursion_guard--;
                     if (destructure(c, kvs[i].value, nextright, leaf, attr))
-                        janetc_freeslot(c, nextright);
+                        benderc_freeslot(c, nextright);
                     c->recursion_guard++;
                 }
             }
@@ -442,102 +442,102 @@ static int destructure(JanetCompiler *c,
 }
 
 /* Create a source map for definitions. */
-static const Janet *janetc_make_sourcemap(JanetCompiler *c) {
-    Janet *tup = janet_tuple_begin(3);
-    tup[0] = c->source ? janet_wrap_string(c->source) : janet_wrap_nil();
-    tup[1] = janet_wrap_integer(c->current_mapping.line);
-    tup[2] = janet_wrap_integer(c->current_mapping.column);
-    return janet_tuple_end(tup);
+static const Bender *benderc_make_sourcemap(BenderCompiler *c) {
+    Bender *tup = bender_tuple_begin(3);
+    tup[0] = c->source ? bender_wrap_string(c->source) : bender_wrap_nil();
+    tup[1] = bender_wrap_integer(c->current_mapping.line);
+    tup[2] = bender_wrap_integer(c->current_mapping.column);
+    return bender_tuple_end(tup);
 }
 
-static JanetSlot janetc_varset(JanetFopts opts, int32_t argn, const Janet *argv) {
+static BenderSlot benderc_varset(BenderFopts opts, int32_t argn, const Bender *argv) {
     if (argn != 2) {
-        janetc_cerror(opts.compiler, "expected 2 arguments to set");
-        return janetc_cslot(janet_wrap_nil());
+        benderc_cerror(opts.compiler, "expected 2 arguments to set");
+        return benderc_cslot(bender_wrap_nil());
     }
-    JanetFopts subopts = janetc_fopts_default(opts.compiler);
-    if (janet_checktype(argv[0], JANET_SYMBOL)) {
+    BenderFopts subopts = benderc_fopts_default(opts.compiler);
+    if (bender_checktype(argv[0], BENDER_SYMBOL)) {
         /* Normal var - (set a 1) */
-        const uint8_t *sym = janet_unwrap_symbol(argv[0]);
-        JanetSlot dest = janetc_resolve(opts.compiler, sym);
-        if (!(dest.flags & JANET_SLOT_MUTABLE)) {
-            janetc_cerror(opts.compiler, "cannot set constant");
-            return janetc_cslot(janet_wrap_nil());
+        const uint8_t *sym = bender_unwrap_symbol(argv[0]);
+        BenderSlot dest = benderc_resolve(opts.compiler, sym);
+        if (!(dest.flags & BENDER_SLOT_MUTABLE)) {
+            benderc_cerror(opts.compiler, "cannot set constant");
+            return benderc_cslot(bender_wrap_nil());
         }
-        subopts.flags = JANET_FOPTS_HINT;
+        subopts.flags = BENDER_FOPTS_HINT;
         subopts.hint = dest;
-        JanetSlot ret = janetc_value(subopts, argv[1]);
-        janetc_copy(opts.compiler, dest, ret);
+        BenderSlot ret = benderc_value(subopts, argv[1]);
+        benderc_copy(opts.compiler, dest, ret);
         return ret;
-    } else if (janet_checktype(argv[0], JANET_TUPLE)) {
+    } else if (bender_checktype(argv[0], BENDER_TUPLE)) {
         /* Set a field (setf behavior) - (set (tab :key) 2) */
-        const Janet *tup = janet_unwrap_tuple(argv[0]);
+        const Bender *tup = bender_unwrap_tuple(argv[0]);
         /* Tuple must have 2 elements */
-        if (janet_tuple_length(tup) != 2) {
-            janetc_cerror(opts.compiler, "expected 2 element tuple for l-value to set");
-            return janetc_cslot(janet_wrap_nil());
+        if (bender_tuple_length(tup) != 2) {
+            benderc_cerror(opts.compiler, "expected 2 element tuple for l-value to set");
+            return benderc_cslot(bender_wrap_nil());
         }
-        JanetSlot ds = janetc_value(subopts, tup[0]);
-        JanetSlot key = janetc_value(subopts, tup[1]);
+        BenderSlot ds = benderc_value(subopts, tup[0]);
+        BenderSlot key = benderc_value(subopts, tup[1]);
         /* Can't be tail position because we will emit a PUT instruction afterwards */
         /* Also can't drop either */
-        opts.flags &= ~(JANET_FOPTS_TAIL | JANET_FOPTS_DROP);
-        JanetSlot rvalue = janetc_value(opts, argv[1]);
+        opts.flags &= ~(BENDER_FOPTS_TAIL | BENDER_FOPTS_DROP);
+        BenderSlot rvalue = benderc_value(opts, argv[1]);
         /* Emit the PUT instruction */
-        janetc_emit_sss(opts.compiler, JOP_PUT, ds, key, rvalue, 0);
+        benderc_emit_sss(opts.compiler, JOP_PUT, ds, key, rvalue, 0);
         return rvalue;
     } else {
         /* Error */
-        janetc_cerror(opts.compiler, "expected symbol or tuple for l-value to set");
-        return janetc_cslot(janet_wrap_nil());
+        benderc_cerror(opts.compiler, "expected symbol or tuple for l-value to set");
+        return benderc_cslot(bender_wrap_nil());
     }
 }
 
 /* Add attributes to a global def or var table */
-static JanetTable *handleattr(JanetCompiler *c, const char *kind, int32_t argn, const Janet *argv) {
+static BenderTable *handleattr(BenderCompiler *c, const char *kind, int32_t argn, const Bender *argv) {
     int32_t i;
     if (argn < 2) {
-        janetc_error(c, janet_formatc("expected at least 2 arguments to %s", kind));
+        benderc_error(c, bender_formatc("expected at least 2 arguments to %s", kind));
         return NULL;
     }
-    JanetTable *tab = janet_table(2);
+    BenderTable *tab = bender_table(2);
     /* Phase 2a root discipline: this table is held only in C locals across
      * dohead_destructure below, which compiles the bound value (arbitrary
      * code, allocations, collections, and -- since Phase 1.1 -- even
      * suspensions). Pin it for the rest of the compilation. */
-    janetc_pin(c, janet_wrap_table(tab));
-    const char *binding_name = janet_type(argv[0]) == JANET_SYMBOL
-                               ? ((const char *)janet_unwrap_symbol(argv[0]))
+    benderc_pin(c, bender_wrap_table(tab));
+    const char *binding_name = bender_type(argv[0]) == BENDER_SYMBOL
+                               ? ((const char *)bender_unwrap_symbol(argv[0]))
                                : "<multiple bindings>";
     for (i = 1; i < argn - 1; i++) {
-        Janet attr = argv[i];
-        switch (janet_type(attr)) {
-            case JANET_TUPLE:
+        Bender attr = argv[i];
+        switch (bender_type(attr)) {
+            case BENDER_TUPLE:
                 if (argn > 10) {
                     for (int32_t q = 0; q < argn; q++) {
-                        JanetString dstr = janet_description(argv[q]);
-                        janet_eprintf("  argv[%d] type=%d len=%d: ",
-                                      (int) q, (int) janet_type(argv[q]),
-                                      (int) janet_string_length(dstr));
-                        for (int32_t w = 0; w < janet_string_length(dstr) && w < 70; w++) {
-                            janet_eprintf("%c", (char) dstr[w]);
+                        BenderString dstr = bender_description(argv[q]);
+                        bender_eprintf("  argv[%d] type=%d len=%d: ",
+                                      (int) q, (int) bender_type(argv[q]),
+                                      (int) bender_string_length(dstr));
+                        for (int32_t w = 0; w < bender_string_length(dstr) && w < 70; w++) {
+                            bender_eprintf("%c", (char) dstr[w]);
                         }
-                        janet_eprintf("\n");
+                        bender_eprintf("\n");
                     }
                 }
-                janetc_cerror(c, "unexpected form - did you intend to use defn?");
+                benderc_cerror(c, "unexpected form - did you intend to use defn?");
                 break;
             default:
-                janetc_error(c, janet_formatc("cannot add metadata %v to binding %s", attr, binding_name));
+                benderc_error(c, bender_formatc("cannot add metadata %v to binding %s", attr, binding_name));
                 break;
-            case JANET_KEYWORD:
-                janet_table_put(tab, attr, janet_wrap_true());
+            case BENDER_KEYWORD:
+                bender_table_put(tab, attr, bender_wrap_true());
                 break;
-            case JANET_STRING:
-                janet_table_put(tab, janet_ckeywordv("doc"), attr);
+            case BENDER_STRING:
+                bender_table_put(tab, bender_ckeywordv("doc"), attr);
                 break;
-            case JANET_STRUCT:
-                janet_table_merge_struct(tab, janet_unwrap_struct(attr));
+            case BENDER_STRUCT:
+                bender_table_merge_struct(tab, bender_unwrap_struct(attr));
                 break;
         }
     }
@@ -545,43 +545,43 @@ static JanetTable *handleattr(JanetCompiler *c, const char *kind, int32_t argn, 
 }
 
 typedef struct SlotHeadPair {
-    Janet lhs;
-    JanetSlot rhs;
+    Bender lhs;
+    BenderSlot rhs;
 } SlotHeadPair;
 
-SlotHeadPair *dohead_destructure(JanetCompiler *c, SlotHeadPair *into, JanetFopts opts, Janet lhs, Janet rhs) {
+SlotHeadPair *dohead_destructure(BenderCompiler *c, SlotHeadPair *into, BenderFopts opts, Bender lhs, Bender rhs) {
     if (c->recursion_guard <= 0) {
-        janetc_error(c, janet_cstring("C stack recursed too deeply"));
+        benderc_error(c, bender_cstring("C stack recursed too deeply"));
         return NULL;
     }
     /* Detect if we can do an optimization to avoid some allocations */
-    int can_destructure_lhs = janet_checktype(lhs, JANET_TUPLE)
-                              || janet_checktype(lhs, JANET_ARRAY);
-    int rhs_is_indexed = janet_checktype(rhs, JANET_ARRAY)
-                         || (janet_checktype(rhs, JANET_TUPLE) && (janet_tuple_flag(janet_unwrap_tuple(rhs)) & JANET_TUPLE_FLAG_BRACKETCTOR));
-    uint32_t has_drop = opts.flags & JANET_FOPTS_DROP;
+    int can_destructure_lhs = bender_checktype(lhs, BENDER_TUPLE)
+                              || bender_checktype(lhs, BENDER_ARRAY);
+    int rhs_is_indexed = bender_checktype(rhs, BENDER_ARRAY)
+                         || (bender_checktype(rhs, BENDER_TUPLE) && (bender_tuple_flag(bender_unwrap_tuple(rhs)) & BENDER_TUPLE_FLAG_BRACKETCTOR));
+    uint32_t has_drop = opts.flags & BENDER_FOPTS_DROP;
 
-    JanetFopts subopts = janetc_fopts_default(c);
-    subopts.flags = opts.flags & ~(JANET_FOPTS_TAIL | JANET_FOPTS_DROP);
+    BenderFopts subopts = benderc_fopts_default(c);
+    subopts.flags = opts.flags & ~(BENDER_FOPTS_TAIL | BENDER_FOPTS_DROP);
 
     if (has_drop && can_destructure_lhs && rhs_is_indexed) {
         /* Code is of the form (def [a b] [1 2]), avoid the allocation of two tuples */
-        JanetView view_lhs = {0};
-        JanetView view_rhs = {0};
-        janet_indexed_view(lhs, &view_lhs.items, &view_lhs.len);
-        janet_indexed_view(rhs, &view_rhs.items, &view_rhs.len);
+        BenderView view_lhs = {0};
+        BenderView view_rhs = {0};
+        bender_indexed_view(lhs, &view_lhs.items, &view_lhs.len);
+        bender_indexed_view(rhs, &view_rhs.items, &view_rhs.len);
         int found_amp = 0;
         int found_splice = 0;
         /* Check for (def [x y z] [(splice [1 2 3]) 4 5 6]), bail out of optimization */
         for (int32_t i = 0; i < view_rhs.len; i++) {
-            if (!janet_checktype(view_rhs.items[i], JANET_TUPLE)) {
+            if (!bender_checktype(view_rhs.items[i], BENDER_TUPLE)) {
                 continue;
             }
-            JanetTuple tup = janet_unwrap_tuple(view_rhs.items[i]);
-            if (janet_tuple_length(tup) == 0) {
+            BenderTuple tup = bender_unwrap_tuple(view_rhs.items[i]);
+            if (bender_tuple_length(tup) == 0) {
                 continue;
             }
-            if (janet_symeq(tup[0], "splice")) {
+            if (bender_symeq(tup[0], "splice")) {
                 found_splice = 1;
                 /* Good error will be generated later. */
                 break;
@@ -589,7 +589,7 @@ SlotHeadPair *dohead_destructure(JanetCompiler *c, SlotHeadPair *into, JanetFopt
         }
         /* Check for (def [x & more] [1 2 3]), bail out of optimization */
         for (int32_t i = 0; i < view_lhs.len; i++) {
-            if (janet_symeq(view_lhs.items[i], "&")) {
+            if (bender_symeq(view_lhs.items[i], "&")) {
                 found_amp = 1;
                 /* Good error will be generated later. */
                 break;
@@ -597,7 +597,7 @@ SlotHeadPair *dohead_destructure(JanetCompiler *c, SlotHeadPair *into, JanetFopt
         }
         if (!found_amp && !found_splice) {
             for (int32_t i = 0; i < view_lhs.len; i++) {
-                Janet sub_rhs = view_rhs.len <= i ? janet_wrap_nil() : view_rhs.items[i];
+                Bender sub_rhs = view_rhs.len <= i ? bender_wrap_nil() : view_rhs.items[i];
                 c->recursion_guard--;
                 into = dohead_destructure(c, into, subopts, view_lhs.items[i], sub_rhs);
                 c->recursion_guard++;
@@ -608,222 +608,222 @@ SlotHeadPair *dohead_destructure(JanetCompiler *c, SlotHeadPair *into, JanetFopt
 
     /* No optimization, do the simple way */
     subopts.hint = opts.hint;
-    JanetSlot ret = janetc_value(subopts, rhs);
+    BenderSlot ret = benderc_value(subopts, rhs);
     SlotHeadPair shp = {lhs, ret};
-    janet_v_push(into, shp);
+    bender_v_push(into, shp);
     return into;
 }
 
 /* Def or var a symbol in a local scope */
-static int namelocal(JanetCompiler *c, const uint8_t *head, int32_t flags, JanetSlot ret, uint32_t def_flags) {
-    int isUnnamedRegister = !(ret.flags & JANET_SLOT_NAMED) &&
+static int namelocal(BenderCompiler *c, const uint8_t *head, int32_t flags, BenderSlot ret, uint32_t def_flags) {
+    int isUnnamedRegister = !(ret.flags & BENDER_SLOT_NAMED) &&
                             ret.index > 0 &&
                             ret.envindex >= 0;
     /* optimization for `(def x my-def)` - don't emit a movn/movf instruction, we can just alias my-def */
     /* TODO - implement optimization for `(def x my-var)` correctly as well w/ de-aliasing */
-    int canAlias = !(flags & JANET_SLOT_MUTABLE) &&
-                   !(ret.flags & JANET_SLOT_MUTABLE) &&
-                   (ret.flags & JANET_SLOT_NAMED) &&
+    int canAlias = !(flags & BENDER_SLOT_MUTABLE) &&
+                   !(ret.flags & BENDER_SLOT_MUTABLE) &&
+                   (ret.flags & BENDER_SLOT_NAMED) &&
                    (ret.index >= 0) &&
                    (ret.envindex == -1);
     if (canAlias) {
-        ret.flags &= ~JANET_SLOT_MUTABLE;
+        ret.flags &= ~BENDER_SLOT_MUTABLE;
         isUnnamedRegister = 1; /* don't free slot after use - is an alias for another slot */
     } else if (!isUnnamedRegister) {
         /* Slot is not able to be named */
-        JanetSlot localslot = janetc_farslot(c);
-        janetc_copy(c, localslot, ret);
+        BenderSlot localslot = benderc_farslot(c);
+        benderc_copy(c, localslot, ret);
         ret = localslot;
     }
     ret.flags |= flags;
-    if (c->scope->flags & JANET_SCOPE_TOP) {
-        def_flags |= JANET_DEFFLAG_NO_UNUSED;
+    if (c->scope->flags & BENDER_SCOPE_TOP) {
+        def_flags |= BENDER_DEFFLAG_NO_UNUSED;
     }
-    janetc_nameslot(c, head, ret, def_flags);
+    benderc_nameslot(c, head, ret, def_flags);
     return !isUnnamedRegister;
 }
 
 static int varleaf(
-    JanetCompiler *c,
+    BenderCompiler *c,
     const uint8_t *sym,
-    JanetSlot s,
-    JanetTable *reftab) {
-    if (c->scope->flags & JANET_SCOPE_TOP) {
+    BenderSlot s,
+    BenderTable *reftab) {
+    if (c->scope->flags & BENDER_SCOPE_TOP) {
         /* Global var, generate var */
-        JanetSlot refslot;
-        JanetTable *entry = janet_table_clone(reftab);
+        BenderSlot refslot;
+        BenderTable *entry = bender_table_clone(reftab);
 
         int is_redef = c->is_redef;
 
-        JanetArray *ref;
-        JanetBinding old_binding;
-        if (is_redef && (old_binding = janet_resolve_ext(c->env, sym),
-                         old_binding.type == JANET_BINDING_VAR)) {
-            ref = janet_unwrap_array(old_binding.value);
+        BenderArray *ref;
+        BenderBinding old_binding;
+        if (is_redef && (old_binding = bender_resolve_ext(c->env, sym),
+                         old_binding.type == BENDER_BINDING_VAR)) {
+            ref = bender_unwrap_array(old_binding.value);
         } else {
-            ref = janet_array(1);
-            janet_array_push(ref, janet_wrap_nil());
+            ref = bender_array(1);
+            bender_array_push(ref, bender_wrap_nil());
         }
 
-        janet_table_put(entry, janet_ckeywordv("ref"), janet_wrap_array(ref));
-        janet_table_put(entry, janet_ckeywordv("source-map"),
-                        janet_wrap_tuple(janetc_make_sourcemap(c)));
-        janet_table_put(c->env, janet_wrap_symbol(sym), janet_wrap_table(entry));
-        refslot = janetc_cslot(janet_wrap_array(ref));
-        janetc_emit_ssu(c, JOP_PUT_INDEX, refslot, s, 0, 0);
+        bender_table_put(entry, bender_ckeywordv("ref"), bender_wrap_array(ref));
+        bender_table_put(entry, bender_ckeywordv("source-map"),
+                        bender_wrap_tuple(benderc_make_sourcemap(c)));
+        bender_table_put(c->env, bender_wrap_symbol(sym), bender_wrap_table(entry));
+        refslot = benderc_cslot(bender_wrap_array(ref));
+        benderc_emit_ssu(c, JOP_PUT_INDEX, refslot, s, 0, 0);
         return 1;
     } else {
-        int no_unused = reftab && reftab->count && janet_truthy(janet_table_get_keyword(reftab, "unused"));
-        int no_shadow = reftab && reftab->count && janet_truthy(janet_table_get_keyword(reftab, "shadow"));
+        int no_unused = reftab && reftab->count && bender_truthy(bender_table_get_keyword(reftab, "unused"));
+        int no_shadow = reftab && reftab->count && bender_truthy(bender_table_get_keyword(reftab, "shadow"));
         uint32_t def_flags = 0;
-        if (no_unused) def_flags |= JANET_DEFFLAG_NO_UNUSED;
-        if (no_shadow) def_flags |= JANET_DEFFLAG_NO_SHADOWCHECK;
-        return namelocal(c, sym, JANET_SLOT_MUTABLE, s, def_flags);
+        if (no_unused) def_flags |= BENDER_DEFFLAG_NO_UNUSED;
+        if (no_shadow) def_flags |= BENDER_DEFFLAG_NO_SHADOWCHECK;
+        return namelocal(c, sym, BENDER_SLOT_MUTABLE, s, def_flags);
     }
 }
 
-static void check_metadata_lint(JanetCompiler *c, JanetTable *attr_table) {
-    if (!(c->scope->flags & JANET_SCOPE_TOP) && attr_table && attr_table->count) {
+static void check_metadata_lint(BenderCompiler *c, BenderTable *attr_table) {
+    if (!(c->scope->flags & BENDER_SCOPE_TOP) && attr_table && attr_table->count) {
         /* A macro is a normal lint, other metadata is a strict lint */
-        if (janet_truthy(janet_table_get_keyword(attr_table, "macro"))) {
-            janetc_lintf(c, JANET_C_LINT_NORMAL, "macro tag is ignored in inner scopes");
+        if (bender_truthy(bender_table_get_keyword(attr_table, "macro"))) {
+            benderc_lintf(c, BENDER_C_LINT_NORMAL, "macro tag is ignored in inner scopes");
         }
     }
 }
 
-static JanetSlot janetc_var(JanetFopts opts, int32_t argn, const Janet *argv) {
-    JanetCompiler *c = opts.compiler;
-    JanetTable *attr_table = handleattr(c, "var", argn, argv);
-    if (c->result.status == JANET_COMPILE_ERROR) {
-        return janetc_cslot(janet_wrap_nil());
+static BenderSlot benderc_var(BenderFopts opts, int32_t argn, const Bender *argv) {
+    BenderCompiler *c = opts.compiler;
+    BenderTable *attr_table = handleattr(c, "var", argn, argv);
+    if (c->result.status == BENDER_COMPILE_ERROR) {
+        return benderc_cslot(bender_wrap_nil());
     }
     check_metadata_lint(c, attr_table);
     SlotHeadPair *into = NULL;
     into = dohead_destructure(c, into, opts, argv[0], argv[argn - 1]);
-    if (c->result.status == JANET_COMPILE_ERROR) {
-        janet_v_free(into);
-        return janetc_cslot(janet_wrap_nil());
+    if (c->result.status == BENDER_COMPILE_ERROR) {
+        bender_v_free(into);
+        return benderc_cslot(bender_wrap_nil());
     }
-    JanetSlot ret = janetc_cslot(janet_wrap_nil());
-    for (int32_t i = 0; i < janet_v_count(into); i++) {
+    BenderSlot ret = benderc_cslot(bender_wrap_nil());
+    for (int32_t i = 0; i < bender_v_count(into); i++) {
         destructure(c, into[i].lhs, into[i].rhs, varleaf, attr_table);
         ret = into[i].rhs;
     }
-    janet_v_free(into);
+    bender_v_free(into);
     return ret;
 }
 
 static int defleaf(
-    JanetCompiler *c,
+    BenderCompiler *c,
     const uint8_t *sym,
-    JanetSlot s,
-    JanetTable *tab) {
-    JanetTable *entry = NULL;
+    BenderSlot s,
+    BenderTable *tab) {
+    BenderTable *entry = NULL;
     int is_redef = 0;
-    if (c->scope->flags & JANET_SCOPE_TOP) {
-        entry = janet_table_clone(tab);
-        janet_table_put(entry, janet_ckeywordv("source-map"),
-                        janet_wrap_tuple(janetc_make_sourcemap(c)));
+    if (c->scope->flags & BENDER_SCOPE_TOP) {
+        entry = bender_table_clone(tab);
+        bender_table_put(entry, bender_ckeywordv("source-map"),
+                        bender_wrap_tuple(benderc_make_sourcemap(c)));
 
         is_redef = c->is_redef;
-        if (is_redef) janet_table_put(entry, janet_ckeywordv("redef"), janet_wrap_true());
+        if (is_redef) bender_table_put(entry, bender_ckeywordv("redef"), bender_wrap_true());
 
         if (is_redef) {
-            JanetBinding binding = janet_resolve_ext(c->env, sym);
-            JanetArray *ref;
-            if (binding.type == JANET_BINDING_DYNAMIC_DEF || binding.type == JANET_BINDING_DYNAMIC_MACRO) {
-                ref = janet_unwrap_array(binding.value);
+            BenderBinding binding = bender_resolve_ext(c->env, sym);
+            BenderArray *ref;
+            if (binding.type == BENDER_BINDING_DYNAMIC_DEF || binding.type == BENDER_BINDING_DYNAMIC_MACRO) {
+                ref = bender_unwrap_array(binding.value);
             } else {
-                ref = janet_array(1);
-                janet_array_push(ref, janet_wrap_nil());
+                ref = bender_array(1);
+                bender_array_push(ref, bender_wrap_nil());
             }
-            janet_table_put(entry, janet_ckeywordv("ref"), janet_wrap_array(ref));
-            JanetSlot refslot = janetc_cslot(janet_wrap_array(ref));
-            janetc_emit_ssu(c, JOP_PUT_INDEX, refslot, s, 0, 0);
+            bender_table_put(entry, bender_ckeywordv("ref"), bender_wrap_array(ref));
+            BenderSlot refslot = benderc_cslot(bender_wrap_array(ref));
+            benderc_emit_ssu(c, JOP_PUT_INDEX, refslot, s, 0, 0);
         } else {
-            JanetSlot valsym = janetc_cslot(janet_ckeywordv("value"));
-            JanetSlot tabslot = janetc_cslot(janet_wrap_table(entry));
-            janetc_emit_sss(c, JOP_PUT, tabslot, valsym, s, 0);
+            BenderSlot valsym = benderc_cslot(bender_ckeywordv("value"));
+            BenderSlot tabslot = benderc_cslot(bender_wrap_table(entry));
+            benderc_emit_sss(c, JOP_PUT, tabslot, valsym, s, 0);
         }
     }
-    int no_unused = tab && tab->count && janet_truthy(janet_table_get_keyword(tab, "unused"));
-    int no_shadow = is_redef || (tab && tab->count && janet_truthy(janet_table_get_keyword(tab, "shadow")));
+    int no_unused = tab && tab->count && bender_truthy(bender_table_get_keyword(tab, "unused"));
+    int no_shadow = is_redef || (tab && tab->count && bender_truthy(bender_table_get_keyword(tab, "shadow")));
     uint32_t def_flags = 0;
-    if (no_unused) def_flags |= JANET_DEFFLAG_NO_UNUSED;
-    if (no_shadow) def_flags |= JANET_DEFFLAG_NO_SHADOWCHECK;
+    if (no_unused) def_flags |= BENDER_DEFFLAG_NO_UNUSED;
+    if (no_shadow) def_flags |= BENDER_DEFFLAG_NO_SHADOWCHECK;
     int result = namelocal(c, sym, 0, s, def_flags);
     if (entry) {
         /* Add env entry to env AFTER namelocal to avoid the shadowcheck false positive */
-        janet_table_put(c->env, janet_wrap_symbol(sym), janet_wrap_table(entry));
+        bender_table_put(c->env, bender_wrap_symbol(sym), bender_wrap_table(entry));
     }
     return result;
 }
 
-static JanetSlot janetc_def(JanetFopts opts, int32_t argn, const Janet *argv) {
-    JanetCompiler *c = opts.compiler;
-    JanetTable *attr_table = handleattr(c, "def", argn, argv);
-    if (c->result.status == JANET_COMPILE_ERROR) {
-        return janetc_cslot(janet_wrap_nil());
+static BenderSlot benderc_def(BenderFopts opts, int32_t argn, const Bender *argv) {
+    BenderCompiler *c = opts.compiler;
+    BenderTable *attr_table = handleattr(c, "def", argn, argv);
+    if (c->result.status == BENDER_COMPILE_ERROR) {
+        return benderc_cslot(bender_wrap_nil());
     }
     check_metadata_lint(c, attr_table);
     /* The expanded binding metadata is authoritative. Only a direct named
      * function literal has a provable one-to-one child identity. */
-    Janet hint = janet_table_get_keyword(attr_table, "hint");
-    int hinted = janet_checktype(hint, JANET_TABLE) || janet_checktype(hint, JANET_STRUCT);
-    Janet selections = janet_table_get_keyword(c->env, "analysis-retain-profiled-defs");
-    Janet selected_line = janet_wrap_nil();
-    if (c->retain_hinted_exports_for_analysis && janet_checktype(argv[0], JANET_SYMBOL) &&
-        janet_checktype(selections, JANET_TABLE))
-        selected_line = janet_table_get(janet_unwrap_table(selections), argv[0]);
-    int profiled = janet_checkint(selected_line);
+    Bender hint = bender_table_get_keyword(attr_table, "hint");
+    int hinted = bender_checktype(hint, BENDER_TABLE) || bender_checktype(hint, BENDER_STRUCT);
+    Bender selections = bender_table_get_keyword(c->env, "analysis-retain-profiled-defs");
+    Bender selected_line = bender_wrap_nil();
+    if (c->retain_hinted_exports_for_analysis && bender_checktype(argv[0], BENDER_SYMBOL) &&
+        bender_checktype(selections, BENDER_TABLE))
+        selected_line = bender_table_get(bender_unwrap_table(selections), argv[0]);
+    int profiled = bender_checkint(selected_line);
     /* Private hints are checked contracts too; profile selection remains
      * export-only, since private names are not stable module bindings. */
     int retain = c->retain_hinted_exports_for_analysis &&
-                 (hinted || (profiled && !janet_truthy(janet_table_get_keyword(attr_table, "private"))));
-    JanetScope *fn_scope = c->scope;
-    while (fn_scope && !(fn_scope->flags & JANET_SCOPE_FUNCTION)) fn_scope = fn_scope->parent;
-    int32_t defs_before = fn_scope ? janet_v_count(fn_scope->defs) : 0;
-    int32_t code_before = janet_v_count(c->buffer);
-    opts.flags &= ~JANET_FOPTS_HINT;
+                 (hinted || (profiled && !bender_truthy(bender_table_get_keyword(attr_table, "private"))));
+    BenderScope *fn_scope = c->scope;
+    while (fn_scope && !(fn_scope->flags & BENDER_SCOPE_FUNCTION)) fn_scope = fn_scope->parent;
+    int32_t defs_before = fn_scope ? bender_v_count(fn_scope->defs) : 0;
+    int32_t code_before = bender_v_count(c->buffer);
+    opts.flags &= ~BENDER_FOPTS_HINT;
     SlotHeadPair *into = NULL;
     into = dohead_destructure(c, into, opts, argv[0], argv[argn - 1]);
-    if (c->result.status == JANET_COMPILE_ERROR) {
-        janet_v_free(into);
-        return janetc_cslot(janet_wrap_nil());
+    if (c->result.status == BENDER_COMPILE_ERROR) {
+        bender_v_free(into);
+        return benderc_cslot(bender_wrap_nil());
     }
     /* ffi/defbind-alias adds {:ffi-alias true} metadata. Mark the direct
      * named function literal's FuncDef so calls compiled later can
      * recognize it without depending on any runtime registration. */
-    if (janet_truthy(janet_table_get_keyword(attr_table, "ffi-alias")) &&
-            fn_scope && janet_checktype(argv[0], JANET_SYMBOL) &&
-            janet_v_count(into) == 1 &&
-            janet_v_count(fn_scope->defs) == defs_before + 1) {
-        Janet rhs = argv[argn - 1];
-        if (janet_checktype(rhs, JANET_TUPLE)) {
-            JanetTuple form = janet_unwrap_tuple(rhs);
-            if (janet_tuple_length(form) >= 3 && janet_symeq(form[0], "fn") &&
-                    janet_checktype(form[1], JANET_SYMBOL) &&
-                    janet_equals(form[1], argv[0])) {
-                fn_scope->defs[defs_before]->flags |= JANET_FUNCDEF_FLAG_FFI_ALIAS_DECL;
+    if (bender_truthy(bender_table_get_keyword(attr_table, "ffi-alias")) &&
+            fn_scope && bender_checktype(argv[0], BENDER_SYMBOL) &&
+            bender_v_count(into) == 1 &&
+            bender_v_count(fn_scope->defs) == defs_before + 1) {
+        Bender rhs = argv[argn - 1];
+        if (bender_checktype(rhs, BENDER_TUPLE)) {
+            BenderTuple form = bender_unwrap_tuple(rhs);
+            if (bender_tuple_length(form) >= 3 && bender_symeq(form[0], "fn") &&
+                    bender_checktype(form[1], BENDER_SYMBOL) &&
+                    bender_equals(form[1], argv[0])) {
+                fn_scope->defs[defs_before]->flags |= BENDER_FUNCDEF_FLAG_FFI_ALIAS_DECL;
             }
         }
     }
     if (retain) {
         int matched = 0;
-        JanetFuncDef *child = NULL;
-        Janet rhs = argv[argn - 1];
-        if (janet_checktype(argv[0], JANET_SYMBOL) && janet_checktype(rhs, JANET_TUPLE)) {
-            JanetTuple form = janet_unwrap_tuple(rhs);
-            if (janet_tuple_length(form) >= 3 && janet_symeq(form[0], "fn") &&
-                janet_checktype(form[1], JANET_SYMBOL) &&
-                janet_equals(form[1], argv[0]) &&
-                janet_v_count(into) == 1 && fn_scope &&
-                janet_v_count(fn_scope->defs) == defs_before + 1) {
+        BenderFuncDef *child = NULL;
+        Bender rhs = argv[argn - 1];
+        if (bender_checktype(argv[0], BENDER_SYMBOL) && bender_checktype(rhs, BENDER_TUPLE)) {
+            BenderTuple form = bender_unwrap_tuple(rhs);
+            if (bender_tuple_length(form) >= 3 && bender_symeq(form[0], "fn") &&
+                bender_checktype(form[1], BENDER_SYMBOL) &&
+                bender_equals(form[1], argv[0]) &&
+                bender_v_count(into) == 1 && fn_scope &&
+                bender_v_count(fn_scope->defs) == defs_before + 1) {
                 child = fn_scope->defs[defs_before];
-                if (!child->name || !janet_equals(janet_wrap_string(child->name),
-                                                   janet_wrap_string(janet_unwrap_symbol(argv[0]))))
+                if (!child->name || !bender_equals(bender_wrap_string(child->name),
+                                                   bender_wrap_string(bender_unwrap_symbol(argv[0]))))
                     child = NULL;
-                for (int32_t pc = code_before; pc < janet_v_count(c->buffer); pc++) {
+                for (int32_t pc = code_before; pc < bender_v_count(c->buffer); pc++) {
                     uint32_t op = c->buffer[pc];
                     if ((op & 0x7F) == JOP_CLOSURE && (op >> 16) == (uint32_t) defs_before &&
                         ((op >> 8) & 0xFF) == (uint32_t) into[0].rhs.index)
@@ -833,42 +833,42 @@ static JanetSlot janetc_def(JanetFopts opts, int32_t argn, const Janet *argv) {
         }
         if (matched == 1 && child && profiled &&
             (!child->sourcemap || child->bytecode_length == 0 ||
-             child->sourcemap[0].line != janet_unwrap_integer(selected_line))) {
+             child->sourcemap[0].line != bender_unwrap_integer(selected_line))) {
             profiled = 0;
             if (!hinted)
-                janet_eprintf("analysis retention refused for profiled def %v: source line does not match child identity\n", argv[0]);
+                bender_eprintf("analysis retention refused for profiled def %v: source line does not match child identity\n", argv[0]);
         }
         if (matched == 1 && child && (hinted || profiled)) {
-            JanetRetainedDef entry = {fn_scope, NULL, child, hinted ? hint : janet_wrap_nil(), profiled};
-            janet_v_push(c->retained_defs, entry);
+            BenderRetainedDef entry = {fn_scope, NULL, child, hinted ? hint : bender_wrap_nil(), profiled};
+            bender_v_push(c->retained_defs, entry);
         } else if (matched != 1 || !child) {
-            janet_eprintf("analysis retention refused for %s def %v: cannot prove direct closure identity\n",
+            bender_eprintf("analysis retention refused for %s def %v: cannot prove direct closure identity\n",
                           hinted ? "hinted" : "profiled", argv[0]);
         }
     }
-    JanetSlot ret = janetc_cslot(janet_wrap_nil());
-    for (int32_t i = 0; i < janet_v_count(into); i++) {
+    BenderSlot ret = benderc_cslot(bender_wrap_nil());
+    for (int32_t i = 0; i < bender_v_count(into); i++) {
         destructure(c, into[i].lhs, into[i].rhs, defleaf, attr_table);
         ret = into[i].rhs;
     }
-    janet_v_free(into);
+    bender_v_free(into);
     return ret;
 }
 
 /* Check if a form matches the pattern (= nil _) or (not= nil _) */
-static int janetc_check_nil_form(Janet x, Janet *capture, uint32_t fun_tag) {
-    if (!janet_checktype(x, JANET_TUPLE)) return 0;
-    JanetTuple tup = janet_unwrap_tuple(x);
-    if (3 != janet_tuple_length(tup)) return 0;
-    Janet op1 = tup[0];
-    if (!janet_checktype(op1, JANET_FUNCTION)) return 0;
-    JanetFunction *fun = janet_unwrap_function(op1);
-    uint32_t tag = fun->def->flags & JANET_FUNCDEF_FLAG_TAG;
+static int benderc_check_nil_form(Bender x, Bender *capture, uint32_t fun_tag) {
+    if (!bender_checktype(x, BENDER_TUPLE)) return 0;
+    BenderTuple tup = bender_unwrap_tuple(x);
+    if (3 != bender_tuple_length(tup)) return 0;
+    Bender op1 = tup[0];
+    if (!bender_checktype(op1, BENDER_FUNCTION)) return 0;
+    BenderFunction *fun = bender_unwrap_function(op1);
+    uint32_t tag = fun->def->flags & BENDER_FUNCDEF_FLAG_TAG;
     if (tag != fun_tag) return 0;
-    if (janet_checktype(tup[1], JANET_NIL)) {
+    if (bender_checktype(tup[1], BENDER_NIL)) {
         *capture = tup[2];
         return 1;
-    } else if (janet_checktype(tup[2], JANET_NIL)) {
+    } else if (bender_checktype(tup[2], BENDER_NIL)) {
         *capture = tup[1];
         return 1;
     }
@@ -886,97 +886,97 @@ static int janetc_check_nil_form(Janet x, Janet *capture, uint32_t fun_tag) {
  * ...
  * :done
  */
-static JanetSlot janetc_if(JanetFopts opts, int32_t argn, const Janet *argv) {
-    JanetCompiler *c = opts.compiler;
+static BenderSlot benderc_if(BenderFopts opts, int32_t argn, const Bender *argv) {
+    BenderCompiler *c = opts.compiler;
     int32_t labelr, labeljr, labeld, labeljd;
-    JanetFopts condopts, bodyopts;
-    JanetSlot cond, left, right, target;
-    Janet truebody, falsebody;
-    JanetScope condscope, tempscope;
-    const int tail = opts.flags & JANET_FOPTS_TAIL;
-    const int drop = opts.flags & JANET_FOPTS_DROP;
+    BenderFopts condopts, bodyopts;
+    BenderSlot cond, left, right, target;
+    Bender truebody, falsebody;
+    BenderScope condscope, tempscope;
+    const int tail = opts.flags & BENDER_FOPTS_TAIL;
+    const int drop = opts.flags & BENDER_FOPTS_DROP;
     uint8_t ifnjmp = JOP_JUMP_IF_NOT;
 
     if (argn < 2 || argn > 3) {
-        janetc_cerror(c, "expected 2 or 3 arguments to if");
-        return janetc_cslot(janet_wrap_nil());
+        benderc_cerror(c, "expected 2 or 3 arguments to if");
+        return benderc_cslot(bender_wrap_nil());
     }
 
     /* Get the bodies of the if expression */
     truebody = argv[1];
-    falsebody = argn > 2 ? argv[2] : janet_wrap_nil();
+    falsebody = argn > 2 ? argv[2] : bender_wrap_nil();
 
     /* Get options */
-    condopts = janetc_fopts_default(c);
+    condopts = benderc_fopts_default(c);
     bodyopts = opts;
-    bodyopts.flags &= ~JANET_FOPTS_ACCEPT_SPLICE;
+    bodyopts.flags &= ~BENDER_FOPTS_ACCEPT_SPLICE;
 
     /* Set target for compilation */
     target = (drop || tail)
-             ? janetc_cslot(janet_wrap_nil())
-             : janetc_gettarget(opts);
+             ? benderc_cslot(bender_wrap_nil())
+             : benderc_gettarget(opts);
 
     /* Compile condition */
-    janetc_scope(&condscope, c, 0, "if");
+    benderc_scope(&condscope, c, 0, "if");
 
-    Janet condform = argv[0];
-    if (janetc_check_nil_form(condform, &condform, JANET_FUN_EQ)) {
+    Bender condform = argv[0];
+    if (benderc_check_nil_form(condform, &condform, BENDER_FUN_EQ)) {
         ifnjmp = JOP_JUMP_IF_NOT_NIL;
-    } else if (janetc_check_nil_form(condform, &condform, JANET_FUN_NEQ)) {
+    } else if (benderc_check_nil_form(condform, &condform, BENDER_FUN_NEQ)) {
         ifnjmp = JOP_JUMP_IF_NIL;
     }
 
-    cond = janetc_value(condopts, condform);
+    cond = benderc_value(condopts, condform);
 
     /* Check constant condition. */
     /* TODO: Use type info for more short circuits */
-    if (cond.flags & JANET_SLOT_CONSTANT) {
+    if (cond.flags & BENDER_SLOT_CONSTANT) {
         int swap_condition = 0;
-        if (ifnjmp == JOP_JUMP_IF_NOT && !janet_truthy(cond.constant)) swap_condition = 1;
-        if (ifnjmp == JOP_JUMP_IF_NIL && janet_checktype(cond.constant, JANET_NIL)) swap_condition = 1;
-        if (ifnjmp == JOP_JUMP_IF_NOT_NIL && !janet_checktype(cond.constant, JANET_NIL)) swap_condition = 1;
+        if (ifnjmp == JOP_JUMP_IF_NOT && !bender_truthy(cond.constant)) swap_condition = 1;
+        if (ifnjmp == JOP_JUMP_IF_NIL && bender_checktype(cond.constant, BENDER_NIL)) swap_condition = 1;
+        if (ifnjmp == JOP_JUMP_IF_NOT_NIL && !bender_checktype(cond.constant, BENDER_NIL)) swap_condition = 1;
         if (swap_condition) {
             /* Swap the true and false bodies */
-            Janet temp = falsebody;
+            Bender temp = falsebody;
             falsebody = truebody;
             truebody = temp;
         }
-        janetc_scope(&tempscope, c, 0, "if-true");
-        right = janetc_value(bodyopts, truebody);
-        if (!drop && !tail) janetc_copy(c, target, right);
-        janetc_popscope(c);
-        if (!janet_checktype(falsebody, JANET_NIL)) {
-            janetc_throwaway(bodyopts, falsebody);
+        benderc_scope(&tempscope, c, 0, "if-true");
+        right = benderc_value(bodyopts, truebody);
+        if (!drop && !tail) benderc_copy(c, target, right);
+        benderc_popscope(c);
+        if (!bender_checktype(falsebody, BENDER_NIL)) {
+            benderc_throwaway(bodyopts, falsebody);
         }
-        janetc_popscope(c);
+        benderc_popscope(c);
         return target;
     }
 
     /* Compile jump to right */
-    labeljr = janetc_emit_si(c, ifnjmp, cond, 0, 0);
+    labeljr = benderc_emit_si(c, ifnjmp, cond, 0, 0);
 
     /* Condition left body */
-    janetc_scope(&tempscope, c, 0, "if-true");
-    left = janetc_value(bodyopts, truebody);
-    if (!drop && !tail) janetc_copy(c, target, left);
-    janetc_popscope(c);
+    benderc_scope(&tempscope, c, 0, "if-true");
+    left = benderc_value(bodyopts, truebody);
+    if (!drop && !tail) benderc_copy(c, target, left);
+    benderc_popscope(c);
 
     /* Compile jump to done */
-    labeljd = janet_v_count(c->buffer);
-    if (!tail && !(drop && janet_checktype(falsebody, JANET_NIL))) janetc_emit(c, JOP_JUMP);
+    labeljd = bender_v_count(c->buffer);
+    if (!tail && !(drop && bender_checktype(falsebody, BENDER_NIL))) benderc_emit(c, JOP_JUMP);
 
     /* Compile right body */
-    labelr = janet_v_count(c->buffer);
-    janetc_scope(&tempscope, c, 0, "if-false");
-    right = janetc_value(bodyopts, falsebody);
-    if (!drop && !tail) janetc_copy(c, target, right);
-    janetc_popscope(c);
+    labelr = bender_v_count(c->buffer);
+    benderc_scope(&tempscope, c, 0, "if-false");
+    right = benderc_value(bodyopts, falsebody);
+    if (!drop && !tail) benderc_copy(c, target, right);
+    benderc_popscope(c);
 
     /* Pop main scope */
-    janetc_popscope(c);
+    benderc_popscope(c);
 
     /* Write jumps - only add jump lengths if jump actually emitted */
-    labeld = janet_v_count(c->buffer);
+    labeld = bender_v_count(c->buffer);
     if (labeljr < labeld) {
         check_16bit_jump(c, labeljr, labelr);
         c->buffer[labeljr] |= (uint32_t)(labelr - labeljr) << 16;
@@ -986,68 +986,68 @@ static JanetSlot janetc_if(JanetFopts opts, int32_t argn, const Janet *argv) {
         }
     }
 
-    if (tail) target.flags |= JANET_SLOT_RETURNED;
+    if (tail) target.flags |= BENDER_SLOT_RETURNED;
     return target;
 }
 
 /* Compile a do form. Do forms execute their body sequentially and
  * evaluate to the last expression in the body. */
-static JanetSlot janetc_do(JanetFopts opts, int32_t argn, const Janet *argv) {
+static BenderSlot benderc_do(BenderFopts opts, int32_t argn, const Bender *argv) {
     int32_t i;
-    JanetSlot ret = janetc_cslot(janet_wrap_nil());
-    JanetCompiler *c = opts.compiler;
-    JanetFopts subopts = janetc_fopts_default(c);
-    JanetScope tempscope;
-    janetc_scope(&tempscope, c, 0, "do");
+    BenderSlot ret = benderc_cslot(bender_wrap_nil());
+    BenderCompiler *c = opts.compiler;
+    BenderFopts subopts = benderc_fopts_default(c);
+    BenderScope tempscope;
+    benderc_scope(&tempscope, c, 0, "do");
     for (i = 0; i < argn; i++) {
         if (i != argn - 1) {
-            subopts.flags = JANET_FOPTS_DROP;
+            subopts.flags = BENDER_FOPTS_DROP;
         } else {
             subopts = opts;
-            subopts.flags &= ~JANET_FOPTS_ACCEPT_SPLICE;
+            subopts.flags &= ~BENDER_FOPTS_ACCEPT_SPLICE;
         }
-        ret = janetc_value(subopts, argv[i]);
+        ret = benderc_value(subopts, argv[i]);
         if (i != argn - 1) {
-            janetc_freeslot(c, ret);
+            benderc_freeslot(c, ret);
         }
     }
-    janetc_popscope_keepslot(c, ret);
+    benderc_popscope_keepslot(c, ret);
     return ret;
 }
 
 /* Compile an upscope form. Upscope forms execute their body sequentially and
  * evaluate to the last expression in the body, but without lexical scope. */
-static JanetSlot janetc_upscope(JanetFopts opts, int32_t argn, const Janet *argv) {
+static BenderSlot benderc_upscope(BenderFopts opts, int32_t argn, const Bender *argv) {
     int32_t i;
-    JanetSlot ret = janetc_cslot(janet_wrap_nil());
-    JanetCompiler *c = opts.compiler;
-    JanetFopts subopts = janetc_fopts_default(c);
+    BenderSlot ret = benderc_cslot(bender_wrap_nil());
+    BenderCompiler *c = opts.compiler;
+    BenderFopts subopts = benderc_fopts_default(c);
     for (i = 0; i < argn; i++) {
         if (i != argn - 1) {
-            subopts.flags = JANET_FOPTS_DROP;
+            subopts.flags = BENDER_FOPTS_DROP;
         } else {
             subopts = opts;
-            subopts.flags &= ~JANET_FOPTS_ACCEPT_SPLICE;
+            subopts.flags &= ~BENDER_FOPTS_ACCEPT_SPLICE;
         }
-        ret = janetc_value(subopts, argv[i]);
+        ret = benderc_value(subopts, argv[i]);
         if (i != argn - 1) {
-            janetc_freeslot(c, ret);
+            benderc_freeslot(c, ret);
         }
     }
     return ret;
 }
 
 /* Add a funcdef to the top most function scope */
-static int32_t janetc_addfuncdef(JanetCompiler *c, JanetFuncDef *def) {
-    JanetScope *scope = c->scope;
+static int32_t benderc_addfuncdef(BenderCompiler *c, BenderFuncDef *def) {
+    BenderScope *scope = c->scope;
     while (scope) {
-        if (scope->flags & JANET_SCOPE_FUNCTION)
+        if (scope->flags & BENDER_SCOPE_FUNCTION)
             break;
         scope = scope->parent;
     }
-    janet_assert(scope, "could not add funcdef");
-    janet_v_push(scope->defs, def);
-    return janet_v_count(scope->defs) - 1;
+    bender_assert(scope, "could not add funcdef");
+    bender_v_push(scope->defs, def);
+    return bender_v_count(scope->defs) - 1;
 }
 
 /*
@@ -1055,50 +1055,50 @@ static int32_t janetc_addfuncdef(JanetCompiler *c, JanetFuncDef *def) {
  *
  * jump :end or retn if in function
  */
-static JanetSlot janetc_break(JanetFopts opts, int32_t argn, const Janet *argv) {
-    JanetCompiler *c = opts.compiler;
-    JanetScope *scope = c->scope;
+static BenderSlot benderc_break(BenderFopts opts, int32_t argn, const Bender *argv) {
+    BenderCompiler *c = opts.compiler;
+    BenderScope *scope = c->scope;
     if (argn > 1) {
-        janetc_cerror(c, "expected at most 1 argument");
-        return janetc_cslot(janet_wrap_nil());
+        benderc_cerror(c, "expected at most 1 argument");
+        return benderc_cslot(bender_wrap_nil());
     }
 
     /* Find scope to break from */
     while (scope) {
-        if (scope->flags & (JANET_SCOPE_FUNCTION | JANET_SCOPE_WHILE))
+        if (scope->flags & (BENDER_SCOPE_FUNCTION | BENDER_SCOPE_WHILE))
             break;
         scope = scope->parent;
     }
     if (NULL == scope) {
-        janetc_cerror(c, "break must occur in while loop or closure");
-        return janetc_cslot(janet_wrap_nil());
+        benderc_cerror(c, "break must occur in while loop or closure");
+        return benderc_cslot(bender_wrap_nil());
     }
 
     /* Emit code to break from that scope */
-    JanetFopts subopts = janetc_fopts_default(c);
-    if (scope->flags & JANET_SCOPE_FUNCTION) {
-        if (!(scope->flags & JANET_SCOPE_WHILE) && argn) {
+    BenderFopts subopts = benderc_fopts_default(c);
+    if (scope->flags & BENDER_SCOPE_FUNCTION) {
+        if (!(scope->flags & BENDER_SCOPE_WHILE) && argn) {
             /* Closure body with return argument */
-            subopts.flags |= JANET_FOPTS_TAIL;
-            janetc_value(subopts, argv[0]);
-            return janetc_cslot(janet_wrap_nil());
+            subopts.flags |= BENDER_FOPTS_TAIL;
+            benderc_value(subopts, argv[0]);
+            return benderc_cslot(bender_wrap_nil());
         } else {
             /* while loop IIFE or no argument */
             if (argn) {
-                subopts.flags |= JANET_FOPTS_DROP;
-                janetc_value(subopts, argv[0]);
+                subopts.flags |= BENDER_FOPTS_DROP;
+                benderc_value(subopts, argv[0]);
             }
-            janetc_emit(c, JOP_RETURN_NIL);
-            return janetc_cslot(janet_wrap_nil());
+            benderc_emit(c, JOP_RETURN_NIL);
+            return benderc_cslot(bender_wrap_nil());
         }
     } else {
         if (argn) {
-            subopts.flags |= JANET_FOPTS_DROP;
-            janetc_value(subopts, argv[0]);
+            subopts.flags |= BENDER_FOPTS_DROP;
+            benderc_value(subopts, argv[0]);
         }
         /* Tag the instruction so the while special can turn it into a proper jump */
-        janetc_emit(c, 0x80 | JOP_JUMP);
-        return janetc_cslot(janet_wrap_nil());
+        benderc_emit(c, 0x80 | JOP_JUMP);
+        return benderc_cslot(bender_wrap_nil());
     }
 }
 
@@ -1111,11 +1111,11 @@ static JanetSlot janetc_break(JanetFopts opts, int32_t argn, const Janet *argv) 
  * jump :whiletop
  * :done
  */
-static JanetSlot janetc_while(JanetFopts opts, int32_t argn, const Janet *argv) {
-    JanetCompiler *c = opts.compiler;
-    JanetSlot cond;
-    JanetFopts subopts = janetc_fopts_default(c);
-    JanetScope tempscope;
+static BenderSlot benderc_while(BenderFopts opts, int32_t argn, const Bender *argv) {
+    BenderCompiler *c = opts.compiler;
+    BenderSlot cond;
+    BenderFopts subopts = benderc_fopts_default(c);
+    BenderScope tempscope;
     int32_t labelwt, labeld, labeljt, labelc, i;
     int infinite = 0;
     int is_nil_form = 0;
@@ -1124,43 +1124,43 @@ static JanetSlot janetc_while(JanetFopts opts, int32_t argn, const Janet *argv) 
     uint8_t ifnjmp = JOP_JUMP_IF_NOT;
 
     if (argn < 1) {
-        janetc_cerror(c, "expected at least 1 argument to while");
-        return janetc_cslot(janet_wrap_nil());
+        benderc_cerror(c, "expected at least 1 argument to while");
+        return benderc_cslot(bender_wrap_nil());
     }
 
-    labelwt = janet_v_count(c->buffer);
+    labelwt = bender_v_count(c->buffer);
 
-    janetc_scope(&tempscope, c, JANET_SCOPE_WHILE, "while");
+    benderc_scope(&tempscope, c, BENDER_SCOPE_WHILE, "while");
 
     /* Check for `(= nil _)` or `(not= nil _)` in condition, and if so, use the
      * jmpnl or jmpnn instructions. This let's us implement `(each ...)`
      * more efficiently. */
-    Janet condform = argv[0];
-    if (janetc_check_nil_form(condform, &condform, JANET_FUN_EQ)) {
+    Bender condform = argv[0];
+    if (benderc_check_nil_form(condform, &condform, BENDER_FUN_EQ)) {
         is_nil_form = 1;
         ifjmp = JOP_JUMP_IF_NIL;
         ifnjmp = JOP_JUMP_IF_NOT_NIL;
     }
-    if (janetc_check_nil_form(condform, &condform, JANET_FUN_NEQ)) {
+    if (benderc_check_nil_form(condform, &condform, BENDER_FUN_NEQ)) {
         is_notnil_form = 1;
         ifjmp = JOP_JUMP_IF_NOT_NIL;
         ifnjmp = JOP_JUMP_IF_NIL;
     }
 
     /* Compile condition */
-    cond = janetc_value(subopts, condform);
+    cond = benderc_value(subopts, condform);
 
     /* Check for constant condition */
-    if (cond.flags & JANET_SLOT_CONSTANT) {
+    if (cond.flags & BENDER_SLOT_CONSTANT) {
         /* Loop never executes */
         int never_executes = is_nil_form
-                             ? !janet_checktype(cond.constant, JANET_NIL)
+                             ? !bender_checktype(cond.constant, BENDER_NIL)
                              : is_notnil_form
-                             ? janet_checktype(cond.constant, JANET_NIL)
-                             : !janet_truthy(cond.constant);
+                             ? bender_checktype(cond.constant, BENDER_NIL)
+                             : !bender_truthy(cond.constant);
         if (never_executes) {
-            janetc_popscope(c);
-            return janetc_cslot(janet_wrap_nil());
+            benderc_popscope(c);
+            return benderc_cslot(bender_wrap_nil());
         }
         /* Infinite loop */
         infinite = 1;
@@ -1169,64 +1169,64 @@ static JanetSlot janetc_while(JanetFopts opts, int32_t argn, const Janet *argv) 
     /* Infinite loop does not need to check condition */
     labelc = infinite
              ? 0
-             : janetc_emit_si(c, ifnjmp, cond, 0, 0);
+             : benderc_emit_si(c, ifnjmp, cond, 0, 0);
 
     /* Compile body */
     for (i = 1; i < argn; i++) {
-        subopts.flags = JANET_FOPTS_DROP;
-        janetc_freeslot(c, janetc_value(subopts, argv[i]));
+        subopts.flags = BENDER_FOPTS_DROP;
+        benderc_freeslot(c, benderc_value(subopts, argv[i]));
     }
 
     /* Check if closure created in while scope. If so,
      * recompile in a function scope. */
-    if (tempscope.flags & JANET_SCOPE_CLOSURE) {
-        subopts = janetc_fopts_default(c);
-        tempscope.flags |= JANET_SCOPE_UNUSED;
-        janetc_popscope(c);
-        if (c->buffer) janet_v__cnt(c->buffer) = labelwt;
-        if (c->mapbuffer) janet_v__cnt(c->mapbuffer) = labelwt;
+    if (tempscope.flags & BENDER_SCOPE_CLOSURE) {
+        subopts = benderc_fopts_default(c);
+        tempscope.flags |= BENDER_SCOPE_UNUSED;
+        benderc_popscope(c);
+        if (c->buffer) bender_v__cnt(c->buffer) = labelwt;
+        if (c->mapbuffer) bender_v__cnt(c->mapbuffer) = labelwt;
 
-        janetc_scope(&tempscope, c, JANET_SCOPE_FUNCTION, "while-iife");
+        benderc_scope(&tempscope, c, BENDER_SCOPE_FUNCTION, "while-iife");
 
         /* Recompile in the function scope */
-        cond = janetc_value(subopts, condform);
-        if (!(cond.flags & JANET_SLOT_CONSTANT)) {
+        cond = benderc_value(subopts, condform);
+        if (!(cond.flags & BENDER_SLOT_CONSTANT)) {
             /* If not an infinite loop, return nil when condition false */
-            janetc_emit_si(c, ifjmp, cond, 2, 0);
-            janetc_emit(c, JOP_RETURN_NIL);
+            benderc_emit_si(c, ifjmp, cond, 2, 0);
+            benderc_emit(c, JOP_RETURN_NIL);
         }
         for (i = 1; i < argn; i++) {
-            subopts.flags = JANET_FOPTS_DROP;
-            janetc_freeslot(c, janetc_value(subopts, argv[i]));
+            subopts.flags = BENDER_FOPTS_DROP;
+            benderc_freeslot(c, benderc_value(subopts, argv[i]));
         }
         /* But now add tail recursion */
-        int32_t tempself = janetc_regalloc_temp(&tempscope.ra, JANETC_REGTEMP_0);
-        janetc_emit(c, JOP_LOAD_SELF | ((uint32_t) tempself << 8));
-        janetc_emit(c, JOP_TAILCALL | ((uint32_t) tempself << 8));
-        janetc_regalloc_freetemp(&c->scope->ra, tempself, JANETC_REGTEMP_0);
+        int32_t tempself = benderc_regalloc_temp(&tempscope.ra, BENDERC_REGTEMP_0);
+        benderc_emit(c, JOP_LOAD_SELF | ((uint32_t) tempself << 8));
+        benderc_emit(c, JOP_TAILCALL | ((uint32_t) tempself << 8));
+        benderc_regalloc_freetemp(&c->scope->ra, tempself, BENDERC_REGTEMP_0);
         /* Compile function */
-        JanetFuncDef *def = janetc_pop_funcdef(c, janet_cstring("while"));
-        janet_def_addflags(def);
-        int32_t defindex = janetc_addfuncdef(c, def);
+        BenderFuncDef *def = benderc_pop_funcdef(c, bender_cstring("while"));
+        bender_def_addflags(def);
+        int32_t defindex = benderc_addfuncdef(c, def);
         /* Do basic optimization */
-        if (!(c->scope->flags & JANET_SCOPE_UNUSED)) {
-            janetc_optimize_funcdef(c, def);
+        if (!(c->scope->flags & BENDER_SCOPE_UNUSED)) {
+            benderc_optimize_funcdef(c, def);
         }
         /* And then load the closure and call it. */
-        int32_t cloreg = janetc_regalloc_temp(&c->scope->ra, JANETC_REGTEMP_0);
-        janetc_emit(c, JOP_CLOSURE | ((uint32_t) cloreg << 8) | ((uint32_t) defindex << 16));
-        janetc_emit(c, JOP_CALL | ((uint32_t) cloreg << 8) | ((uint32_t) cloreg << 16));
-        janetc_regalloc_freetemp(&c->scope->ra, cloreg, JANETC_REGTEMP_0);
-        c->scope->flags |= JANET_SCOPE_CLOSURE;
-        return janetc_cslot(janet_wrap_nil());
+        int32_t cloreg = benderc_regalloc_temp(&c->scope->ra, BENDERC_REGTEMP_0);
+        benderc_emit(c, JOP_CLOSURE | ((uint32_t) cloreg << 8) | ((uint32_t) defindex << 16));
+        benderc_emit(c, JOP_CALL | ((uint32_t) cloreg << 8) | ((uint32_t) cloreg << 16));
+        benderc_regalloc_freetemp(&c->scope->ra, cloreg, BENDERC_REGTEMP_0);
+        c->scope->flags |= BENDER_SCOPE_CLOSURE;
+        return benderc_cslot(bender_wrap_nil());
     }
 
     /* Compile jump to :whiletop */
-    labeljt = janet_v_count(c->buffer);
-    janetc_emit(c, JOP_JUMP);
+    labeljt = bender_v_count(c->buffer);
+    benderc_emit(c, JOP_JUMP);
 
     /* Calculate jumps */
-    labeld = janet_v_count(c->buffer);
+    labeld = bender_v_count(c->buffer);
     if (!infinite) {
         check_16bit_jump(c, labelc, labeld);
         c->buffer[labelc] |= (uint32_t)(labeld - labelc) << 16;
@@ -1244,20 +1244,20 @@ static JanetSlot janetc_while(JanetFopts opts, int32_t argn, const Janet *argv) 
     }
 
     /* Pop scope and return nil slot */
-    janetc_popscope(c);
+    benderc_popscope(c);
 
-    return janetc_cslot(janet_wrap_nil());
+    return benderc_cslot(bender_wrap_nil());
 }
 
-static JanetSlot janetc_fn(JanetFopts opts, int32_t argn, const Janet *argv) {
-    JanetCompiler *c = opts.compiler;
-    JanetFuncDef *def;
-    JanetSlot ret;
-    Janet head;
-    JanetScope fnscope;
+static BenderSlot benderc_fn(BenderFopts opts, int32_t argn, const Bender *argv) {
+    BenderCompiler *c = opts.compiler;
+    BenderFuncDef *def;
+    BenderSlot ret;
+    Bender head;
+    BenderScope fnscope;
     int32_t paramcount, argi, parami, arity, min_arity = 0, max_arity, defindex, i;
-    JanetFopts subopts = janetc_fopts_default(c);
-    const Janet *params;
+    BenderFopts subopts = benderc_fopts_default(c);
+    const Bender *params;
     const char *errmsg = NULL;
 
     /* Function flags */
@@ -1271,8 +1271,8 @@ static JanetSlot janetc_fn(JanetFopts opts, int32_t argn, const Janet *argv) {
     int namedargs = 0;
 
     /* Begin function */
-    c->scope->flags |= JANET_SCOPE_CLOSURE;
-    janetc_scope(&fnscope, c, JANET_SCOPE_FUNCTION, "function");
+    c->scope->flags |= BENDER_SCOPE_CLOSURE;
+    benderc_scope(&fnscope, c, BENDER_SCOPE_FUNCTION, "function");
 
     if (argn == 0) {
         errmsg = "expected at least 1 argument to function literal";
@@ -1282,43 +1282,43 @@ static JanetSlot janetc_fn(JanetFopts opts, int32_t argn, const Janet *argv) {
     /* Read function parameters */
     parami = 0;
     head = argv[0];
-    if (janet_checktype(head, JANET_SYMBOL)) {
+    if (bender_checktype(head, BENDER_SYMBOL)) {
         selfref = 1;
         hasname = 1;
         parami = 1;
-    } else if (janet_checktype(head, JANET_KEYWORD)) {
+    } else if (bender_checktype(head, BENDER_KEYWORD)) {
         hasname = 1;
         parami = 1;
     }
-    if (parami >= argn || !janet_checktype(argv[parami], JANET_TUPLE)) {
+    if (parami >= argn || !bender_checktype(argv[parami], BENDER_TUPLE)) {
         errmsg = "expected function parameters";
         goto error;
     }
 
     /* Keep track of destructured parameters */
-    JanetSlot *destructed_params = NULL;
-    JanetSlot *named_params = NULL;
-    JanetTable *named_table = NULL;
-    JanetSlot named_slot;
+    BenderSlot *destructed_params = NULL;
+    BenderSlot *named_params = NULL;
+    BenderTable *named_table = NULL;
+    BenderSlot named_slot;
 
     /* Compile function parameters */
-    params = janet_unwrap_tuple(argv[parami]);
-    paramcount = janet_tuple_length(params);
+    params = bender_unwrap_tuple(argv[parami]);
+    paramcount = bender_tuple_length(params);
     arity = paramcount;
     for (i = 0; i < paramcount; i++) {
-        Janet param = params[i];
+        Bender param = params[i];
         if (namedargs) {
             arity--;
-            if (!janet_checktype(param, JANET_SYMBOL)) {
+            if (!bender_checktype(param, BENDER_SYMBOL)) {
                 errmsg = "only named arguments can follow &named";
                 goto error;
             }
-            Janet key = janet_wrap_keyword(janet_unwrap_symbol(param));
-            janet_table_put(named_table, key, param);
-            janet_v_push(named_params, janetc_farslot(c));
-        } else if (janet_checktype(param, JANET_SYMBOL)) {
+            Bender key = bender_wrap_keyword(bender_unwrap_symbol(param));
+            bender_table_put(named_table, key, param);
+            bender_v_push(named_params, benderc_farslot(c));
+        } else if (bender_checktype(param, BENDER_SYMBOL)) {
             /* Check for varargs and unfixed arity */
-            const uint8_t *sym = janet_unwrap_symbol(param);
+            const uint8_t *sym = bender_unwrap_symbol(param);
             if (sym[0] == '^') {
                 /* Type hints belong on defn (^type before a parameter),
                  * which strips them before the fn special ever sees the
@@ -1328,7 +1328,7 @@ static JanetSlot janetc_fn(JanetFopts opts, int32_t argn, const Janet *argv) {
                 goto error;
             }
             if (sym[0] == '&') {
-                if (!janet_cstrcmp(sym, "&")) {
+                if (!bender_cstrcmp(sym, "&")) {
                     if (seenamp) {
                         errmsg = "& in unexpected location";
                         goto error;
@@ -1343,7 +1343,7 @@ static JanetSlot janetc_fn(JanetFopts opts, int32_t argn, const Janet *argv) {
                         goto error;
                     }
                     seenamp = 1;
-                } else if (!janet_cstrcmp(sym, "&opt")) {
+                } else if (!bender_cstrcmp(sym, "&opt")) {
                     if (seenopt) {
                         errmsg = "only one &opt allowed";
                         goto error;
@@ -1354,7 +1354,7 @@ static JanetSlot janetc_fn(JanetFopts opts, int32_t argn, const Janet *argv) {
                     min_arity = i;
                     arity--;
                     seenopt = 1;
-                } else if (!janet_cstrcmp(sym, "&keys")) {
+                } else if (!bender_cstrcmp(sym, "&keys")) {
                     if (seenamp) {
                         errmsg = "&keys in unexpected location";
                         goto error;
@@ -1367,7 +1367,7 @@ static JanetSlot janetc_fn(JanetFopts opts, int32_t argn, const Janet *argv) {
                         goto error;
                     }
                     seenamp = 1;
-                } else if (!janet_cstrcmp(sym, "&named")) {
+                } else if (!bender_cstrcmp(sym, "&named")) {
                     if (seenamp) {
                         errmsg = "&named in unexpected location";
                         goto error;
@@ -1377,39 +1377,39 @@ static JanetSlot janetc_fn(JanetFopts opts, int32_t argn, const Janet *argv) {
                     arity--;
                     seenamp = 1;
                     namedargs = 1;
-                    named_table = janet_table(10);
-                    named_slot = janetc_farslot(c);
+                    named_table = bender_table(10);
+                    named_slot = benderc_farslot(c);
                 } else {
-                    janetc_nameslot(c, sym, janetc_farslot(c), 0);
+                    benderc_nameslot(c, sym, benderc_farslot(c), 0);
                 }
             } else {
-                janetc_nameslot(c, sym, janetc_farslot(c), 0);
+                benderc_nameslot(c, sym, benderc_farslot(c), 0);
             }
         } else {
-            janet_v_push(destructed_params, janetc_farslot(c));
+            bender_v_push(destructed_params, benderc_farslot(c));
         }
     }
 
     /* Compile named arguments */
     if (namedargs) {
-        Janet param = janet_wrap_table(named_table);
+        Bender param = bender_wrap_table(named_table);
         destructure(c, param, named_slot, defleaf, NULL);
-        janetc_freeslot(c, named_slot);
-        janet_v_free(named_params);
+        benderc_freeslot(c, named_slot);
+        bender_v_free(named_params);
     }
 
     /* Compile destructed params */
     int32_t j = 0;
     for (i = 0; i < paramcount; i++) {
-        Janet param = params[i];
-        if (!janet_checktype(param, JANET_SYMBOL)) {
-            janet_assert(janet_v_count(destructed_params) > j, "out of bounds");
-            JanetSlot reg = destructed_params[j++];
+        Bender param = params[i];
+        if (!bender_checktype(param, BENDER_SYMBOL)) {
+            bender_assert(bender_v_count(destructed_params) > j, "out of bounds");
+            BenderSlot reg = destructed_params[j++];
             destructure(c, param, reg, defleaf, NULL);
-            janetc_freeslot(c, reg);
+            benderc_freeslot(c, reg);
         }
     }
-    janet_v_free(destructed_params);
+    bender_v_free(destructed_params);
 
     max_arity = (vararg || allow_extra) ? INT32_MAX : arity;
     if (!seenopt) min_arity = arity;
@@ -1420,8 +1420,8 @@ static JanetSlot janetc_fn(JanetFopts opts, int32_t argn, const Janet *argv) {
          * emit JOP_LOAD_SELF and add a binding since that most users
          * seem to expect that function parameters take precedence over the
          * function name */
-        const uint8_t *sym = janet_unwrap_symbol(head);
-        int32_t len = janet_v_count(c->scope->syms);
+        const uint8_t *sym = bender_unwrap_symbol(head);
+        int32_t len = bender_v_count(c->scope->syms);
         int found = 0;
         for (int32_t i = 0; i < len; i++) {
             if (c->scope->syms[i].sym == sym) {
@@ -1429,85 +1429,85 @@ static JanetSlot janetc_fn(JanetFopts opts, int32_t argn, const Janet *argv) {
             }
         }
         if (!found) {
-            JanetSlot slot = janetc_farslot(c);
-            slot.flags = JANET_SLOT_NAMED | JANET_FUNCTION;
-            janetc_emit_s(c, JOP_LOAD_SELF, slot, 1);
+            BenderSlot slot = benderc_farslot(c);
+            slot.flags = BENDER_SLOT_NAMED | BENDER_FUNCTION;
+            benderc_emit_s(c, JOP_LOAD_SELF, slot, 1);
             /* We should figure out a better way to avoid `(def x 1) (def x :shadow (fn x [...] ...))` triggering a
              * shadow lint for the last x */
-            janetc_nameslot(c, sym, slot, JANET_DEFFLAG_NO_UNUSED | JANET_DEFFLAG_NO_SHADOWCHECK);
+            benderc_nameslot(c, sym, slot, BENDER_DEFFLAG_NO_UNUSED | BENDER_DEFFLAG_NO_SHADOWCHECK);
         }
     }
 
     /* Compile function body */
     if (parami + 1 == argn) {
-        janetc_emit(c, JOP_RETURN_NIL);
+        benderc_emit(c, JOP_RETURN_NIL);
     } else {
         for (argi = parami + 1; argi < argn; argi++) {
-            subopts.flags = (argi == (argn - 1)) ? JANET_FOPTS_TAIL : JANET_FOPTS_DROP;
-            janetc_value(subopts, argv[argi]);
-            if (c->result.status == JANET_COMPILE_ERROR)
+            subopts.flags = (argi == (argn - 1)) ? BENDER_FOPTS_TAIL : BENDER_FOPTS_DROP;
+            benderc_value(subopts, argv[argi]);
+            if (c->result.status == BENDER_COMPILE_ERROR)
                 goto error2;
         }
     }
 
     /* Build function */
-    JanetString name = hasname ? janet_unwrap_symbol(head) : NULL;
-    def = janetc_pop_funcdef(c, name);
+    BenderString name = hasname ? bender_unwrap_symbol(head) : NULL;
+    def = benderc_pop_funcdef(c, name);
     def->arity = arity;
     def->min_arity = min_arity;
     def->max_arity = max_arity;
     if (named_table != NULL) {
         def->named_args_count = named_table->count;
     }
-    if (vararg) def->flags |= JANET_FUNCDEF_FLAG_VARARG;
-    if (structarg) def->flags |= JANET_FUNCDEF_FLAG_STRUCTARG;
-    if (namedargs) def->flags |= JANET_FUNCDEF_FLAG_NAMEDARGS;
+    if (vararg) def->flags |= BENDER_FUNCDEF_FLAG_VARARG;
+    if (structarg) def->flags |= BENDER_FUNCDEF_FLAG_STRUCTARG;
+    if (namedargs) def->flags |= BENDER_FUNCDEF_FLAG_NAMEDARGS;
 
-    janet_def_addflags(def);
-    defindex = janetc_addfuncdef(c, def);
+    bender_def_addflags(def);
+    defindex = benderc_addfuncdef(c, def);
 
     /* Ensure enough slots for vararg function. */
     if (arity + vararg > def->slotcount) def->slotcount = arity + vararg;
 
     /* Do basic optimization */
-    if (!(fnscope.flags & JANET_SCOPE_UNUSED)) {
-        janetc_optimize_funcdef(c, def);
+    if (!(fnscope.flags & BENDER_SCOPE_UNUSED)) {
+        benderc_optimize_funcdef(c, def);
     }
 
     /* Instantiate closure */
-    ret = janetc_gettarget(opts);
-    janetc_emit_su(c, JOP_CLOSURE, ret, defindex, 1);
+    ret = benderc_gettarget(opts);
+    benderc_emit_su(c, JOP_CLOSURE, ret, defindex, 1);
     return ret;
 
 error:
-    janetc_cerror(c, errmsg);
+    benderc_cerror(c, errmsg);
 error2:
-    janetc_popscope(c);
-    return janetc_cslot(janet_wrap_nil());
+    benderc_popscope(c);
+    return benderc_cslot(bender_wrap_nil());
 }
 
 /* Keep in lexicographic order */
-static const JanetSpecial janetc_specials[] = {
-    {"break", janetc_break},
-    {"def", janetc_def},
-    {"do", janetc_do},
-    {"fn", janetc_fn},
-    {"if", janetc_if},
-    {"quasiquote", janetc_quasiquote},
-    {"quote", janetc_quote},
-    {"set", janetc_varset},
-    {"splice", janetc_splice},
-    {"unquote", janetc_unquote},
-    {"upscope", janetc_upscope},
-    {"var", janetc_var},
-    {"while", janetc_while}
+static const BenderSpecial benderc_specials[] = {
+    {"break", benderc_break},
+    {"def", benderc_def},
+    {"do", benderc_do},
+    {"fn", benderc_fn},
+    {"if", benderc_if},
+    {"quasiquote", benderc_quasiquote},
+    {"quote", benderc_quote},
+    {"set", benderc_varset},
+    {"splice", benderc_splice},
+    {"unquote", benderc_unquote},
+    {"upscope", benderc_upscope},
+    {"var", benderc_var},
+    {"while", benderc_while}
 };
 
 /* Find a special */
-const JanetSpecial *janetc_special(const uint8_t *name) {
-    return janet_strbinsearch(
-               &janetc_specials,
-               sizeof(janetc_specials) / sizeof(JanetSpecial),
-               sizeof(JanetSpecial),
+const BenderSpecial *benderc_special(const uint8_t *name) {
+    return bender_strbinsearch(
+               &benderc_specials,
+               sizeof(benderc_specials) / sizeof(BenderSpecial),
+               sizeof(BenderSpecial),
                name);
 }

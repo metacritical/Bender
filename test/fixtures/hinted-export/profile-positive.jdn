@@ -1,4 +1,4 @@
-@[@[@["test/fixtures/hinted-export/profile-module.janet" 1 "hot"] @{:calls 12}]
-  @[@["test/fixtures/hinted-export/profile-module.janet" 2 "cold"] @{:calls 0}]
-  @[@["test/fixtures/hinted-export/profile-module.janet" 3 "secret"] @{:calls 9}]
-  @[@["test/fixtures/hinted-export/profile-duplicate.janet" 1 "hot"] @{:calls 0}]]
+@[@[@["test/fixtures/hinted-export/profile-module.ben" 1 "hot"] @{:calls 12}]
+  @[@["test/fixtures/hinted-export/profile-module.ben" 2 "cold"] @{:calls 0}]
+  @[@["test/fixtures/hinted-export/profile-module.ben" 3 "secret"] @{:calls 9}]
+  @[@["test/fixtures/hinted-export/profile-duplicate.ben" 1 "hot"] @{:calls 0}]]

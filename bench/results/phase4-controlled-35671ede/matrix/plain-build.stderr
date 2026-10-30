@@ -1,6 +1,6 @@
-In file included from /tmp/janet-wave-evidence-35671ede/plain.c:3:
-/tmp/janet-wave-controlled-35671ede/src/include/janet.h:23:10: fatal error: 'janetconf.h' file not found
-   23 | #include "janetconf.h"
+In file included from /tmp/bender-wave-evidence-35671ede/plain.c:3:
+/tmp/bender-wave-controlled-35671ede/src/include/bender.h:23:10: fatal error: 'benderconf.h' file not found
+   23 | #include "benderconf.h"
       |          ^~~~~~~~~~~~~
 1 error generated.
 bender --aot: cc failed with exit 1

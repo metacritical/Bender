@@ -1,24 +1,24 @@
 /*
  * A full event self-pipe must fail promptly rather than block VM shutdown.
- * Compile after `make build/libjanet.a`:
+ * Compile after `make build/libbender.a`:
  *   cc -Isrc/include -Isrc/conf -Isrc/core \
- *      test/c/test-ev-selfpipe-saturation.c build/libjanet.a \
- *      -lm -lpthread -ldl -o /tmp/janet-test-selfpipe-saturation
+ *      test/c/test-ev-selfpipe-saturation.c build/libbender.a \
+ *      -lm -lpthread -ldl -o /tmp/bender-test-selfpipe-saturation
  * This probes the existing bounded-failure policy, not successful delivery:
  * exhaustion currently asserts. Keep it in a child so the test runner lives.
  */
-#include "janet.h"
+#include "bender.h"
 #include "state.h"
 #include <stdio.h>
 
-#if !defined(JANET_WINDOWS)
+#if !defined(BENDER_WINDOWS)
 #include <errno.h>
 #include <fcntl.h>
 #include <signal.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
-static void unused_callback(JanetEVGenericMessage msg) { (void) msg; }
+static void unused_callback(BenderEVGenericMessage msg) { (void) msg; }
 
 int main(void) {
     pid_t child = fork();
@@ -26,8 +26,8 @@ int main(void) {
     if (child == 0) {
         /* An alarm distinguishes bounded failure from a blocking write. */
         alarm(3);
-        if (janet_init()) _exit(2);
-        int fd = janet_vm.selfpipe[1];
+        if (bender_init()) _exit(2);
+        int fd = bender_vm.selfpipe[1];
         if (!(fcntl(fd, F_GETFL) & O_NONBLOCK)) _exit(3);
         char bytes[256] = {0};
         for (;;) {
@@ -37,8 +37,8 @@ int main(void) {
             if (n < 0 && errno == EAGAIN) break;
             _exit(4);
         }
-        JanetEVGenericMessage msg = {0};
-        janet_ev_post_event(&janet_vm, unused_callback, msg);
+        BenderEVGenericMessage msg = {0};
+        bender_ev_post_event(&bender_vm, unused_callback, msg);
         _exit(5); /* Full-pipe posting must never silently report success. */
     }
     int status = 0;

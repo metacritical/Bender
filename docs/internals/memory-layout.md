@@ -15,7 +15,7 @@ Every lookup step costs nanoseconds; frames do millions of them.
 
 Today, a scene is a boxed table:
 
-```janet
+```bender
 (def sc {:head 0 :queue [0 1 2] :estep 0})
 (sc :head)  # => 0
 ```
@@ -30,7 +30,7 @@ of frame time — so the layout story *is* the performance story.
 
 ## Level 1 — scalar unboxing in kernels (SHIPPED)
 
-```janet
+```bender
 (defn rng-next {:hint {:params [:long] :returns :long}} [s]
   (band (+ (* s 6364136223846793005) 1442695040888963407) 0xFFFFFFFF))
 ```
@@ -45,7 +45,7 @@ strings changes: they never enter a kernel.
 Instead of an array of tables (array-of-structs), parallel arrays of
 numbers (struct-of-arrays). Our GUI frame cells already fit:
 
-```janet
+```bender
 # boxed today: [{:r 1 :c 1 :cp 9608 :pack 4278190335} ...]
 # SoA shape:  rows[] cols[] cps[] packs[]  -- four :array params
 (defn draw-cells {:hint {:params [:array :array :array :array :long]
@@ -64,7 +64,7 @@ hot loop can be reshaped to columns.
 The missing piece: a *declared* composite the compiler lays out like
 C. Sketch of the surface (not implemented):
 
-```janet
+```bender
 (defcell scene {:shape {:head :long :estep :long :layer :long}})
 (def sc (scene 0 0 1))        # 24 bytes, contiguous, no tags
 (sc :head)                    # compiles to *(base + 0) -- one load
@@ -72,7 +72,7 @@ C. Sketch of the surface (not implemented):
 
 What would change in our system, concretely:
 
-- `tools/callgraph.janet`: a shape registry (name → field offsets,
+- `tools/callgraph.ben`: a shape registry (name → field offsets,
   from the existing width system); field access on a shaped value
   proves to a constant offset instead of a hash probe.
 - Emission: shaped locals become C struct locals; shaped arrays
@@ -96,13 +96,13 @@ strings never escape the frame: build, print, drop. Escape analysis
 proves "this table/buffer dies in this function" and puts it in C
 locals or a reused frame buffer — zero GC pressure, zero malloc:
 
-```janet
+```bender
 # today:  fresh strings every frame (GC sees all of it)
 # with EA: one reused output buffer, rewritten per frame
 ```
 
 Cheaper cousin that needs no compiler work: hand-reuse a persistent
-buffer in `ctx-frame-string` (plain Janet shaping). Do that first;
+buffer in `ctx-frame-string` (plain Bender shaping). Do that first;
 build EA only if allocation still dominates after.
 
 ## Level 5 — inline caches (FUTURE, boxed tier)

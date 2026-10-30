@@ -18,7 +18,7 @@ All notable changes to this project will be documented in this file.
 
 ## 1.42.0 - 2026-08-31
 - Add `:locale` option to `sandbox` to mask calling `os/setlocale`.
-- JANET_PATH will now be searched strictly left-to-right for modules.
+- BENDER_PATH will now be searched strictly left-to-right for modules.
 - Add `-t` (`--tool`) flag for using installed libraries as command line tools
 - Numerous documentation improvements and fixes
 - Add support for GNU/Hurd
@@ -42,7 +42,7 @@ All notable changes to this project will be documented in this file.
 - Allow importing modules with a path extension to do what one would expect.
 - Add `find-all` argument to `module/find`
 - Add :threads, :unmarshal, :compiler, and :asm sandbox flags.
-- Add support for persistent REPL history with the environment variable `JANET_HISTFILE`
+- Add support for persistent REPL history with the environment variable `BENDER_HISTFILE`
 - Fix a number of fuzzer-found compiler bugs
 - Fix windows processes launching bug with empty environment table that caused process-launch failures.
 - Add `:I`, `:V`, and `:N` flags to `os/open` for more control when creating streams.
@@ -52,7 +52,7 @@ All notable changes to this project will be documented in this file.
 - Disallow certain degenerate uses of fibers with the ev/ module.
 - Add linting for unused bindings.
 - Add linting for extra or wrong parameters to &named functions.
-- Add `janet_optuinteger` and `janet_optuinteger64` to the C API.
+- Add `bender_optuinteger` and `bender_optuinteger64` to the C API.
 - Add `cms` combinator to PEGs.
 - Add `thaw-keep-keys` as a variant of thaw
 - The `repl` function now respects the `*repl-prompt*` dynamic binding by default.
@@ -61,7 +61,7 @@ All notable changes to this project will be documented in this file.
 - Allow specifying `:flycheck` for individual defines to annotate that they are safe to evaluate for flychecking.
 
 ## 1.40.1 - 2025-11-16
-- Fix `JANET_REDUCED_OS` build regression caused by `os/posix-chroot`.
+- Fix `BENDER_REDUCED_OS` build regression caused by `os/posix-chroot`.
 - Code formatting
 
 ## 1.40.0 - 2025-11-15
@@ -70,7 +70,7 @@ All notable changes to this project will be documented in this file.
 - Improve `flycheck` by allowing functions and macros to define their own flycheck behavior via the metadata `:flycheck`.
 - Add `*flychecking*` dynamic binding to check if inside flycheck evalutation
 - Add `gcperthread` callback for abstract types. This lets threaded abstracts have a finalizer that is called per thread, as well as a global finalizer.
-- Add `JANET_DO_ERROR_*` flags to describe the return value of `janet_dobytes` and `janet_dostring`.
+- Add `BENDER_DO_ERROR_*` flags to describe the return value of `bender_dobytes` and `bender_dostring`.
 
 ## 1.39.1 - 2025-08-30
 - Add support for chdir in os/spawn on older macOS versions
@@ -81,7 +81,7 @@ All notable changes to this project will be documented in this file.
 - Add `net/socket`
 - Add support for illumos OS
 - Raise helpful errors for incorrect arguments to `import`.
-- Allow configuring `JANET_THREAD_LOCAL` during builds to allow multi-threading on unknown compilers.
+- Allow configuring `BENDER_THREAD_LOCAL` during builds to allow multi-threading on unknown compilers.
 - Make `ffi/write` append to a buffer instead of insert at 0 by default.
 - Add `os/getpid` to get the current process id.
 - Add `:out` option to `os/spawn` to be able to redirect stderr to stdout with pipes.
@@ -105,13 +105,13 @@ All notable changes to this project will be documented in this file.
 ## 1.37.1 - 2024-12-05
 - Fix meson cross compilation
 - Update timeout documentation for networking APIs: timeouts raise errors and do not return nil.
-- Add `janet_addtimeout_nil(double sec);` to the C API.
+- Add `bender_addtimeout_nil(double sec);` to the C API.
 - Change string hashing.
 - Fix string equality bug.
 - Add `assertf`
-- Change how JANET_PROFILE is loaded to allow more easily customizing the environment.
+- Change how BENDER_PROFILE is loaded to allow more easily customizing the environment.
 - Add `*repl-prompt*` dynamic binding to allow customizing the built in repl.
-- Add multiple path support in the `JANET_PATH` environment variables. This lets
+- Add multiple path support in the `BENDER_PATH` environment variables. This lets
   user more easily import modules from many directories.
 - Add `nth` and `only-tags` PEG specials to select from sub-captures while
   dropping the rest.
@@ -130,7 +130,7 @@ All notable changes to this project will be documented in this file.
 - Add `bundle/add-bin` to make installing scripts easier. This also establishes a packaging convention for it.
 - Fix marshalling weak tables and weak arrays.
 - Fix bug in `ev/` module that could accidentally close sockets on accident.
-- Expose C functions for constructing weak tables in janet.h
+- Expose C functions for constructing weak tables in bender.h
 - Let range take non-integer values.
 
 ## 1.35.2 - 2024-06-16
@@ -142,7 +142,7 @@ All notable changes to this project will be documented in this file.
 - Add extra optional `env` argument to `eval` and `eval-string`.
 - Allow naming function literals with a keyword. This allows better stacktraces for macros without
   accidentally adding new bindings.
-- Add `bundle/` module for managing packages within Janet. This should replace the jpm packaging
+- Add `bundle/` module for managing packages within Bender. This should replace the jpm packaging
   format eventually and is much simpler and amenable to more complicated builds.
 - Add macros `ev/with-lock`, `ev/with-rlock`, and `ev/with-wlock` for using mutexes and rwlocks.
 - Add `with-env`
@@ -167,16 +167,16 @@ All notable changes to this project will be documented in this file.
 
 ## 1.33.0 - 2024-01-07
 - Add more + and * keywords to default-peg-grammar by @sogaiu.
-- Use libc strlen in janet_buffer_push_cstring by @williewillus.
+- Use libc strlen in bender_buffer_push_cstring by @williewillus.
 - Be a bit safer with reference counting.
-- Add support for atomic loads in Janet's atomic abstraction.
+- Add support for atomic loads in Bender's atomic abstraction.
 - Fix poll event loop CPU usage issue.
 - Add ipv6, shared, and cryptorand options to meson.
 - Add more ipv6 feature detection.
 - Fix loop for forever loop.
-- Cleaned up unused NetStateConnect, fixed janet_async_end() ev refcount by @zevv.
+- Cleaned up unused NetStateConnect, fixed bender_async_end() ev refcount by @zevv.
 - Fix warnings w/ MSVC and format.
-- Fix marshal_one_env w/ JANET_MARSHAL_UNSAFE.
+- Fix marshal_one_env w/ BENDER_MARSHAL_UNSAFE.
 - Fix `(default)`.
 - Fix cannot marshal fiber with c stackframe, in a dynamic way that is fairly conservative.
 - Fix typo for SIGALARM in os/proc-kill.
@@ -189,10 +189,10 @@ All notable changes to this project will be documented in this file.
 - Fix macex raising on ().
 
 ## 1.32.1 - 2023-10-15
-- Fix return value from C function `janet_dobytes` when called on Janet functions that yield to event loop.
-- Change C API for event loop interaction - get rid of JanetListener and instead use `janet_async_start` and `janet_async_end`.
+- Fix return value from C function `bender_dobytes` when called on Bender functions that yield to event loop.
+- Change C API for event loop interaction - get rid of BenderListener and instead use `bender_async_start` and `bender_async_end`.
 - Rework event loop to make fewer system calls on kqueue and epoll.
-- Expose atomic refcount abstraction in janet.h
+- Expose atomic refcount abstraction in bender.h
 - Add `array/weak` for weak references in arrays
 - Add support for weak tables via `table/weak`, `table/weak-keys`, and `table/weak-values`.
 - Fix compiler bug with using the result of `(break x)` expression in some contexts.
@@ -200,7 +200,7 @@ All notable changes to this project will be documented in this file.
 - Update meson build to work better on windows
 
 ## 1.31.0 - 2023-09-17
-- Report line and column when using `janet_dobytes`
+- Report line and column when using `bender_dobytes`
 - Add `:unless` loop modifier
 - Allow calling `reverse` on generators.
 - Improve performance of a number of core functions including `partition`, `mean`, `keys`, `values`, `pairs`, `interleave`.
@@ -233,7 +233,7 @@ All notable changes to this project will be documented in this file.
 - Reorganize test suite to be sorted by module rather than pseudo-randomly.
 - Add `*task-id*`
 - Add `env` argument to `fiber/new`.
-- Add `JANET_NO_AMALG` flag to Makefile to properly incremental builds
+- Add `BENDER_NO_AMALG` flag to Makefile to properly incremental builds
 - Optimize bytecode compiler to generate fewer instructions and improve loops.
 - Fix bug with `ev/gather` and hung fibers.
 - Add `os/isatty`
@@ -263,7 +263,7 @@ All notable changes to this project will be documented in this file.
   allows easier manipulation of FFI memory, memory mapped files, and buffer memory shared between threads.
 - Calling `ev/cancel` on a fiber waiting on `ev/gather` will correctly
   cancel the child fibers.
-- Add `(sandbox ...)` function to core for permission based security. Also add `janet_sandbox` to C API.
+- Add `(sandbox ...)` function to core for permission based security. Also add `bender_sandbox` to C API.
   The sandbox allows limiting access to the file system, network, ffi, and OS resources at runtime.
 - Add `(.locals)` function to debugger to see currently bound local symbols.
 - Track symbol -> slot mapping so debugger can get symbolic information. This exposes local bindings
@@ -322,7 +322,7 @@ All notable changes to this project will be documented in this file.
   variant of `&keys` that isn't as redundant, more self documenting, and allows extension to
   things like default arguments.
 - Add `delay` macro for lazy evaluate-and-save thunks.
-- Remove pthread.h from janet.h for easier includes.
+- Remove pthread.h from bender.h for easier includes.
 - Add `debugger` - an easy to use debugger function that just takes a fiber.
 - `dofile` will now start a debugger on errors if the environment it is passed has `:debug` set.
 - Add `debugger-on-status` function, which can be passed to `run-context` to start a debugger on
@@ -340,11 +340,11 @@ All notable changes to this project will be documented in this file.
 - Fix printing issue in `doc` macro.
 - Numerous updates to function docstrings
 - Add `defdyn` aliases for various dynamic bindings used in core.
-- Install `janet.h` symlink to make Janet native libraries and applications
+- Install `bender.h` symlink to make Bender native libraries and applications
   easier to build without `jpm`.
 
 ## 1.21.2 - 2022-04-01
-- C functions `janet_dobytes` and `janet_dostring` will now enter the event loop if it is enabled.
+- C functions `bender_dobytes` and `bender_dostring` will now enter the event loop if it is enabled.
 - Fix hashing regression - hash of negative 0 must be the same as positive 0 since they are equal.
 - The `flycheck` function no longer pollutes the module/cache
 - Fix quasiquote bug in compiler
@@ -393,13 +393,13 @@ All notable changes to this project will be documented in this file.
 - Allow `ev/cancel` to work on already scheduled fibers.
 - Fix bugs with ev/ module.
 - Add optional `base` argument to scan-number
-- Add `-i` flag to janet binary to make it easier to run image files from the command line
+- Add `-i` flag to bender binary to make it easier to run image files from the command line
 - Remove `thread/` module.
-- Add `(number ...)` pattern to peg for more efficient number parsing using Janet's
+- Add `(number ...)` pattern to peg for more efficient number parsing using Bender's
   scan-number function without immediate string creation.
 
 ## 1.17.2 - 2021-09-18
-- Remove include of windows.h from janet.h. This caused issues on certain projects.
+- Remove include of windows.h from bender.h. This caused issues on certain projects.
 - Fix formatting in doc-format to better handle special characters in signatures.
 - Fix some marshalling bugs.
 - Add optional Makefile target to install jpm as well.
@@ -420,14 +420,14 @@ All notable changes to this project will be documented in this file.
 - Channels can now be marshalled.
 - Add the ability to close channels with `ev/chan-close` (or `:close`).
 - Add threaded channels with `ev/thread-chan`.
-- Add `JANET_FN` and `JANET_REG` macros to more easily define C functions that export their source mapping information.
-- Add `janet_interpreter_interrupt` and `janet_loop1_interrupt` to interrupt the interpreter while running.
+- Add `BENDER_FN` and `BENDER_REG` macros to more easily define C functions that export their source mapping information.
+- Add `bender_interpreter_interrupt` and `bender_loop1_interrupt` to interrupt the interpreter while running.
 - Add `table/clear`
 - Add build option to disable the threading library without disabling all threads.
-- Remove JPM from the main Janet distribution. Instead, JPM must be installed
+- Remove JPM from the main Bender distribution. Instead, JPM must be installed
   separately like any other package.
 - Fix issue with `ev/go` when called with an initial value and supervisor.
-- Add the C API functions `janet_vm_save` and `janet_vm_load` to allow
+- Add the C API functions `bender_vm_save` and `bender_vm_load` to allow
 saving and restoring the entire VM state.
 
 ## 1.16.1 - 2021-06-09
@@ -435,7 +435,7 @@ saving and restoring the entire VM state.
 - Print source code of offending line on compiler warnings and errors.
 - Fix some issues with linting and re-add missing `make docs`.
 - Allow controlling linting with dynamic bindings `:lint-warn`, `:lint-error`, and `:lint-levels`.
-- Add `-w` and `-x` command line flags to the `janet` binary to set linting thresholds.
+- Add `-w` and `-x` command line flags to the `bender` binary to set linting thresholds.
   linting thresholds are as follows:
     - :none - will never be trigger.
     - :relaxed - will only trigger on `:relaxed` lints.
@@ -448,7 +448,7 @@ saving and restoring the entire VM state.
 - Remove simpler HTML docs from distribution - use website or built-in documentation instead.
 - Add compiler warnings and deprecation levels.
 - Add `as-macro` to make using macros within quasiquote easier to do hygienically.
-- Expose `JANET_OUT_OF_MEMORY` as part of the Janet API.
+- Expose `BENDER_OUT_OF_MEMORY` as part of the Bender API.
 - Add `native-deps` option to `declare-native` in `jpm`. This lets native libraries link to other
   native libraries when building with jpm.
 - Remove the `tarray` module. The functionality of typed arrays will be moved to an external module
@@ -468,7 +468,7 @@ saving and restoring the entire VM state.
 - Update code for printing the debug repl
 
 ## 1.15.4 - 2021-03-16
-- Increase default nesting depth of pretty printing to `JANET_RECURSION_GUARD`
+- Increase default nesting depth of pretty printing to `BENDER_RECURSION_GUARD`
 - Update meson.build
 - Add option to automatically add shebang line in installed scripts with `jpm`.
 - Add `partition-by` and `group-by` to the core.
@@ -495,7 +495,7 @@ saving and restoring the entire VM state.
   are considered to have width 1 (instead of 8).
 
 ## 1.14.2 - 2021-01-23
-- Allow `JANET_PROFILE` env variable to load a profile before loading the repl.
+- Allow `BENDER_PROFILE` env variable to load a profile before loading the repl.
 - Update `tracev` macro to allow `def` and `var` inside to work as expected.
 - Use `(dyn :peg-grammar)` for passing a default grammar to `peg/compile` instead of loading
   `default-peg-grammar` directly from the root environment.
@@ -547,13 +547,13 @@ saving and restoring the entire VM state.
 - Add `(line)` and `(column)` combinators to PEGs to capture source line and column.
   This should make error reporting a bit easier.
 - Add `merge-module` to core.
-- During installation and release, merge janetconf.h into janet.h for easier install.
+- During installation and release, merge benderconf.h into bender.h for easier install.
 - Add `upscope` special form.
 - `os/execute` and `os/spawn` can take streams for redirecting IO.
 - Add `:parser` and `:read` parameters to `run-context`.
 - Add `os/open` if ev is enabled.
 - Add `os/pipe` if ev is enabled.
-- Add `janet_thread_current(void)` to C API
+- Add `bender_thread_current(void)` to C API
 - Add integer parsing forms to pegs. This makes parsing many binary protocols easier.
 - Lots of updates to networking code - now can use epoll (or poll) on linux and IOCP on windows.
 - Add `ev/` module. This exposes a fiber scheduler, queues, timeouts, and other functionality to users
@@ -563,18 +563,18 @@ saving and restoring the entire VM state.
 - Various small bug fixes.
 
 ## 1.12.2 - 2020-09-20
-- Add janet\_try and janet\_restore to C API.
+- Add bender\_try and bender\_restore to C API.
 - Fix `os/execute` regression on windows.
 - Add :pipe option to `os/spawn`.
 - Fix docstring typos.
 
 ## 1.12.1 - 2020-09-07
 - Make `zero?`, `one?`, `pos?`, and `neg?` polymorphic.
-- Add C++ support to jpm and improve C++ interop in janet.h.
+- Add C++ support to jpm and improve C++ interop in bender.h.
 - Add `%t` formatter to `printf`, `string/format`, and other formatter functions.
-- Expose `janet_cfuns_prefix` in C API.
+- Expose `bender_cfuns_prefix` in C API.
 - Add `os/proc-wait` and `os/proc-kill` for interacting with processes.
-- Add `janet_getjfile` to C API.
+- Add `bender_getjfile` to C API.
 - Allow redirection of stdin, stdout, and stderr by passing keywords in the env table in `os/spawn` and `os/execute`.
 - Add `os/spawn` to get a core/process back instead of an exit code as in `os/execute`.
   When called like this, `os/execute` returns immediately.
@@ -587,7 +587,7 @@ saving and restoring the entire VM state.
 - Allow multi-line paste into built in repl.
 - Add `(curenv)`.
 - Change `net/read`, `net/chunk`, and `net/write` to raise errors in the case of failures.
-- Add `janet_continue_signal` to C API. This indirectly enables C functions that yield to the event loop
+- Add `bender_continue_signal` to C API. This indirectly enables C functions that yield to the event loop
   to raise errors or other signals.
 - Update meson build script to fix bug on Debian's version of meson
 - Add `xprint`, `xprin`, `xprintf`, and `xprinf`.
@@ -595,9 +595,9 @@ saving and restoring the entire VM state.
 - Fix issue with SIGPIPE on macOS and BSDs.
 
 ## 1.11.3 - 2020-08-03
-- Add `JANET_HASHSEED` environment variable when `JANET_PRF` is enabled.
-- Expose `janet_cryptorand` in C API.
-- Properly initialize PRF in default janet program
+- Add `BENDER_HASHSEED` environment variable when `BENDER_PRF` is enabled.
+- Expose `bender_cryptorand` in C API.
+- Properly initialize PRF in default bender program
 - Add `index-of` to core library.
 - Add `-fPIC` back to core CFLAGS (non-optional when compiling default client with Makefile)
 - Fix defaults on Windows for ARM
@@ -618,7 +618,7 @@ saving and restoring the entire VM state.
 - Add `jpm list-installed` subcommand to see which packages are installed.
 - Add `math/int-min`, `math/int-max`, `math/int32-min`, and `math/int32-max` for getting integer limits.
 - The gc interval is now autotuned, to prevent very bad gc behavior.
-- Improvements to the bytecode compiler, Janet will now generate more efficient bytecode.
+- Improvements to the bytecode compiler, Bender will now generate more efficient bytecode.
 - Add `peg/find`, `peg/find-all`, `peg/replace`, and `peg/replace-all`
 - Add `math/nan`
 - Add `forv` macro
@@ -627,7 +627,7 @@ saving and restoring the entire VM state.
 - Allow cross compilation with Makefile.
 - Change `compare-primitive` to `cmp` and make it more efficient.
 - Add `reverse!` for reversing an array or buffer in place.
-- `janet_dobytes` and `janet_dostring` return parse errors in \*out
+- `bender_dobytes` and `bender_dostring` return parse errors in \*out
 - Add `repeat` macro for iterating something n times.
 - Add `eachy` (each yield) macro for iterating a fiber.
 - Fix `:generate` verb in loop macro to accept non symbols as bindings.
@@ -635,8 +635,8 @@ saving and restoring the entire VM state.
 - Fix `%j` formatter to print numbers precisely (using the `%.17g` format string to printf).
 
 ## 1.10.1 - 2020-06-18
-- Expose `janet_table_clear` in API.
-- Respect `JANET_NO_PROCESSES` define when building
+- Expose `bender_table_clear` in API.
+- Respect `BENDER_NO_PROCESSES` define when building
 - Fix `jpm` rules having multiple copies of the same dependency.
 - Fix `jpm` install in some cases.
 - Add `array/trim` and `buffer/trim` to shrink the backing capacity of these types
@@ -656,7 +656,7 @@ saving and restoring the entire VM state.
 - Make `os/realpath` work on windows.
 - Add polymorphic `compare` functions for comparing numbers.
 - Add `to` and `thru` peg combinators.
-- Add `JANET_GIT` environment variable to jpm to use a specific git binary (useful mainly on windows).
+- Add `BENDER_GIT` environment variable to jpm to use a specific git binary (useful mainly on windows).
 - `asm` and `disasm` functions now use keywords instead of macros for keys. Also
   some slight changes to the way constants are encoded (remove wrapping `quote` in some cases).
 - Expose current macro form inside macros as (dyn :macro-form)
@@ -669,7 +669,7 @@ saving and restoring the entire VM state.
 ## 1.9.1 - 2020-05-12
 - Add :prefix option to declare-source
 - Re-enable minimal builds with the debugger.
-- Add several flags for configuring Janet on different platforms.
+- Add several flags for configuring Bender on different platforms.
 - Fix broken meson build from 1.9.0 and add meson to CI.
 - Fix compilation issue when nanboxing is disabled.
 
@@ -686,8 +686,8 @@ saving and restoring the entire VM state.
 - Add `--offline` flag to jpm to force use of the cache.
 - Allow sending pointers and C functions across threads via `thread/send`.
 - Fix bug in `getline`.
-- Add `sh-rule` and `sh-phony` to jpm's dialect of Janet.
-- Change C api's `janet_formatb` -> `janet_formatbv`, and add new function `janet_formatb` to C api.
+- Add `sh-rule` and `sh-phony` to jpm's dialect of Bender.
+- Change C api's `bender_formatb` -> `bender_formatbv`, and add new function `bender_formatb` to C api.
 - Add `edefer` macro to core.
 - A struct/table literal/constructor with duplicate keys will use the last value given.
   Previously, this was inconsistent between tables and structs, literals and constructor functions.
@@ -703,7 +703,7 @@ saving and restoring the entire VM state.
 - Add os/perm-int
 - Add os/perm-string
 - Add :int-permissions option for os/stat.
-- Add `jpm repl` subcommand, as well as `post-deps` macro in project.janet files.
+- Add `jpm repl` subcommand, as well as `post-deps` macro in project.ben files.
 - Various bug fixes.
 
 ## 1.8.1 - 2020-03-31
@@ -721,7 +721,7 @@ saving and restoring the entire VM state.
 - Add `:range-to` and `:down-to` verbs in the `loop` macro.
 - Fix `and` and `or` macros returning nil instead of false in some cases.
 - Allow matching successfully against nil values in the `match` macro.
-- Improve `janet_formatc` and `janet_panicf` formatters to be more like `string/format`.
+- Improve `bender_formatc` and `bender_panicf` formatters to be more like `string/format`.
   This makes it easier to make nice error messages from C.
 - Add `signal`
 - Add `fiber/can-resume?`
@@ -748,7 +748,7 @@ saving and restoring the entire VM state.
 - Add `file/temp`
 - Add `mod` function to core.
 - Small bug fixes
-- Allow signaling from C functions (yielding) via janet\_signalv. This
+- Allow signaling from C functions (yielding) via bender\_signalv. This
   makes it easy to write C functions that work with event loops, such as
   in libuv or embedded in a game.
 - Add '%j' formatting option to the format family of functions.
@@ -768,12 +768,12 @@ saving and restoring the entire VM state.
 ## 1.6.0 - 2019-12-22
 - Add `thread/` module to the core.
 - Allow seeding RNGs with any sequence of bytes. This provides
-  a wider key space for the RNG. Exposed in C as `janet_rng_longseed`.
+  a wider key space for the RNG. Exposed in C as `bender_rng_longseed`.
 - Fix issue in `resume` and similar functions that could cause breakpoints to be skipped.
 - Add a number of new math functions.
-- Improve debugger experience and capabilities. See examples/debugger.janet
+- Improve debugger experience and capabilities. See examples/debugger.ben
   for what an interactive debugger could look like.
-- Add `debug/step` (janet\_step in the C API) for single stepping Janet bytecode.
+- Add `debug/step` (bender\_step in the C API) for single stepping Bender bytecode.
 - The built in repl now can enter the debugger on any signal (errors, yields,
   user signals, and debug signals). To enable this, type (setdyn :debug true)
   in the repl environment.
@@ -788,7 +788,7 @@ saving and restoring the entire VM state.
 - Add `prinf` and `eprinf` to be have like `printf` and `eprintf`. The latter two functions
   now including a trailing newline, like the other print functions.
 - Add nan?
-- Add `janet_in` to C API.
+- Add `bender_in` to C API.
 - Add `truthy?`
 - Add `os/environ`
 - Add `buffer/fill` and `array/fill`
@@ -818,14 +818,14 @@ saving and restoring the entire VM state.
   now not throw errors on bad keys.
 - Indexed types and byte sequences will now error when indexed out of range or
   with bad keys.
-- Add rng functions to Janet. This also replaces the RNG behind `math/random`
+- Add rng functions to Bender. This also replaces the RNG behind `math/random`
   and `math/seedrandom` with a consistent, platform independent RNG.
 - Add `with-vars` macro.
 - Add the `quickbin` command to jpm.
 - Create shell.c when making the amalgamated source. This can be compiled with
-  janet.c to make the janet interpreter.
-- Add `cli-main` function to the core, which invokes Janet's CLI interface.
-  This basically moves what was init.janet into boot.janet.
+  bender.c to make the bender interpreter.
+- Add `cli-main` function to the core, which invokes Bender's CLI interface.
+  This basically moves what was init.ben into boot.ben.
 - Improve flychecking, and fix flychecking bugs introduced in 1.4.0.
 - Add `prin`, `eprint`, `eprintf` and `eprin` functions. The
   functions prefix with e print to `(dyn :err stderr)`
@@ -839,7 +839,7 @@ saving and restoring the entire VM state.
 - Add `quit` function to exit from a repl, but not always exit the entire
   application.
 - Add `update-pkgs` to jpm.
-- Integrate jpm with https://github.com/janet-lang/pkgs.git. jpm can now
+- Integrate jpm with https://github.com/bender-lang/pkgs.git. jpm can now
   install packages based on their short names in the package listing, which
   can be customized via an env variable.
 - Add `varfn` macro
@@ -868,7 +868,7 @@ saving and restoring the entire VM state.
 ## 1.3.0 - 2019-09-05
 - Add `get-in`, `put-in`, `update-in`, and `freeze` to core.
 - Add `jpm run rule` and `jpm rules` to jpm to improve utility and discoverability of jpm.
-- Remove `cook` module and move `path` module to https://github.com/janet-lang/path.git.
+- Remove `cook` module and move `path` module to https://github.com/bender-lang/path.git.
   The functionality in `cook` is now bundled directly in the `jpm` script.
 - Add `buffer/format` and `string/format` format flags `Q` and `q` to print colored and
   non-colored single-line values, similar to `P` and `p`.
@@ -879,7 +879,7 @@ saving and restoring the entire VM state.
 - Change default fiber stack limit to the maximum value of a 32 bit signed integer.
 - Some bug fixes with `jpm`
 - Fix bugs with pegs.
-- Add `os/arch` to get ISA that janet was compiled for
+- Add `os/arch` to get ISA that bender was compiled for
 - Add color to stacktraces via `(dyn :err-color)`
 
 ## 1.2.0 - 2019-08-08
@@ -898,7 +898,7 @@ saving and restoring the entire VM state.
 - Fix bug with Nanbox implementation allowing users to created
   custom values of any type with typed array and marshal modules, which
   was unsafe.
-- Add `janet_wrap_number_safe` to API, for converting numbers to Janets
+- Add `bender_wrap_number_safe` to API, for converting numbers to Benders
   where the number could be any 64 bit, user provided bit pattern. Certain
   NaN values (which a machine will never generate as a result of a floating
   point operation) are guarded against and converted to a default NaN value.
@@ -914,7 +914,7 @@ saving and restoring the entire VM state.
 - Add `with` macro for resource handling.
 - Add `propagate` function so we can "rethrow" signals after they are
   intercepted. This makes signals even more flexible.
-- Add `JANET_NO_DOCSTRINGS` and `JANET_NO_SOURCEMAPS` defines in janetconf.h
+- Add `BENDER_NO_DOCSTRINGS` and `BENDER_NO_SOURCEMAPS` defines in benderconf.h
   for shrinking binary size.
   This seems to save about 50kB in most builds, so it's not usually worth it.
 - Update module system to allow relative imports. The `:cur:` pattern
@@ -953,7 +953,7 @@ saving and restoring the entire VM state.
 - Add `module/loaders` for custom loading functions.
 - Add external unification to `match` macro.
 - Add static library to main build.
-- Add `janet/*headerpath*` and change location of installed headers.
+- Add `bender/*headerpath*` and change location of installed headers.
 - Let `partition` take strings.
 - Haiku OS support
 - Add `string/trim`, `string/trimr`, and `string/triml`.
@@ -1001,17 +1001,17 @@ saving and restoring the entire VM state.
   operations. Instead, use the `splice` special to extend tuples.
 - Add `-m` flag to main client to allow specifying where to load
   system modules from.
-- Add `-c` flag to main client to allow compiling Janet modules to images.
+- Add `-c` flag to main client to allow compiling Bender modules to images.
 - Add `string/format` and `buffer/format`.
 - Remove `string/pretty` and `string/number`.
-- `make-image` function creates pre compiled images for janet. These images
+- `make-image` function creates pre compiled images for bender. These images
   link to the core library. They can be loaded via require or manually via
   `load-image`.
 - Add bracketed tuples as tuple constructor.
 - Add partition function to core library.
 - Pre-compile core library into an image for faster startup.
 - Add methods to parser values that mirror the api.
-- Add janet\_getmethod to CAPI for easier use of method like syntax.
+- Add bender\_getmethod to CAPI for easier use of method like syntax.
 - Add get/set to abstract types to allow them to behave more
   like objects with methods.
 - Add parser/insert to modify parser state programmatically
@@ -1023,7 +1023,7 @@ saving and restoring the entire VM state.
 - Update module resolution paths and format
 
 ## 0.3.0 - 2019-01-26
-- Add amalgamated build to janet for easier embedding.
+- Add amalgamated build to bender for easier embedding.
 - Add os/date function
 - Add slurp and spit to core library.
 - Added this changelog.

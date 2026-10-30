@@ -1,5 +1,5 @@
-*.janet linguist-language=Janet
-*.janet text eol=lf
+*.ben linguist-language=Bender
+*.ben text eol=lf
 *.c text eol=lf
 *.h text eol=lf
 *.md text eol=lf

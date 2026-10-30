@@ -24,7 +24,7 @@
 #define _POSIX_C_SOURCE 200112L
 #endif
 
-#include <janet.h>
+#include <bender.h>
 #include <errno.h>
 #include <assert.h>
 
@@ -39,48 +39,48 @@
 #endif
 #endif
 
-void janet_line_init();
-void janet_line_deinit();
+void bender_line_init();
+void bender_line_deinit();
 
-void janet_line_get(const char *p, JanetBuffer *buffer);
-Janet janet_line_getter(int32_t argc, Janet *argv);
+void bender_line_get(const char *p, BenderBuffer *buffer);
+Bender bender_line_getter(int32_t argc, Bender *argv);
 
-static JANET_THREAD_LOCAL int gbl_cancel_current_repl_form = 0;
+static BENDER_THREAD_LOCAL int gbl_cancel_current_repl_form = 0;
 
 /*
  * Line Editing
  */
 
-static JANET_THREAD_LOCAL JanetTable *gbl_complete_env;
+static BENDER_THREAD_LOCAL BenderTable *gbl_complete_env;
 
 /* Common */
-Janet janet_line_getter(int32_t argc, Janet *argv) {
-    janet_arity(argc, 0, 3);
-    const char *str = (argc >= 1) ? (const char *) janet_getstring(argv, 0) : "";
-    JanetBuffer *buf = (argc >= 2) ? janet_getbuffer(argv, 1) : janet_buffer(10);
-    gbl_complete_env = (argc >= 3) ? janet_gettable(argv, 2) : NULL;
-    janet_line_get(str, buf);
+Bender bender_line_getter(int32_t argc, Bender *argv) {
+    bender_arity(argc, 0, 3);
+    const char *str = (argc >= 1) ? (const char *) bender_getstring(argv, 0) : "";
+    BenderBuffer *buf = (argc >= 2) ? bender_getbuffer(argv, 1) : bender_buffer(10);
+    gbl_complete_env = (argc >= 3) ? bender_gettable(argv, 2) : NULL;
+    bender_line_get(str, buf);
     gbl_complete_env = NULL;
 
-    Janet result;
+    Bender result;
     if (gbl_cancel_current_repl_form) {
         gbl_cancel_current_repl_form = 0;
 
         /* Signal that the user bailed out of the current form */
-        result = janet_ckeywordv("cancel");
+        result = bender_ckeywordv("cancel");
     } else {
-        result = janet_wrap_buffer(buf);
+        result = bender_wrap_buffer(buf);
     }
     return result;
 }
 
-static void simpleline(JanetBuffer *buffer) {
-    FILE *in = janet_dynfile("in", stdin);
+static void simpleline(BenderBuffer *buffer) {
+    FILE *in = bender_dynfile("in", stdin);
     buffer->count = 0;
     int c;
     for (;;) {
         c = fgetc(in);
-#ifndef JANET_PLAN9
+#ifndef BENDER_PLAN9
         if (c < 0 && !feof(in) && errno == EINTR) {
             continue;
         }
@@ -88,48 +88,48 @@ static void simpleline(JanetBuffer *buffer) {
         if (feof(in) || c < 0) {
             break;
         }
-        janet_buffer_push_u8(buffer, (uint8_t) c);
+        bender_buffer_push_u8(buffer, (uint8_t) c);
         if (c == '\n') break;
     }
 }
 
 /* State */
 
-#ifndef JANET_SIMPLE_GETLINE
+#ifndef BENDER_SIMPLE_GETLINE
 /* static state */
-#define JANET_LINE_MAX 1024
-#define JANET_MATCH_MAX 256
-#define JANET_HISTORY_MAX 100
-static JANET_THREAD_LOCAL int gbl_israwmode = 0;
-static JANET_THREAD_LOCAL const char *gbl_prompt = "> ";
-static JANET_THREAD_LOCAL int gbl_plen = 2;
-static JANET_THREAD_LOCAL char gbl_buf[JANET_LINE_MAX];
-static JANET_THREAD_LOCAL int gbl_len = 0;
-static JANET_THREAD_LOCAL int gbl_pos = 0;
-static JANET_THREAD_LOCAL int gbl_cols = 80;
-static JANET_THREAD_LOCAL char *gbl_history[JANET_HISTORY_MAX];
-static JANET_THREAD_LOCAL int gbl_history_count = 0;
-static JANET_THREAD_LOCAL int gbl_historyi = 0;
-static JANET_THREAD_LOCAL JanetByteView gbl_matches[JANET_MATCH_MAX];
-static JANET_THREAD_LOCAL int gbl_match_count = 0;
-static JANET_THREAD_LOCAL int gbl_lines_below = 0;
-static JANET_THREAD_LOCAL int gbl_history_loaded = 0;
-static JANET_THREAD_LOCAL char *gbl_history_file = NULL;
+#define BENDER_LINE_MAX 1024
+#define BENDER_MATCH_MAX 256
+#define BENDER_HISTORY_MAX 100
+static BENDER_THREAD_LOCAL int gbl_israwmode = 0;
+static BENDER_THREAD_LOCAL const char *gbl_prompt = "> ";
+static BENDER_THREAD_LOCAL int gbl_plen = 2;
+static BENDER_THREAD_LOCAL char gbl_buf[BENDER_LINE_MAX];
+static BENDER_THREAD_LOCAL int gbl_len = 0;
+static BENDER_THREAD_LOCAL int gbl_pos = 0;
+static BENDER_THREAD_LOCAL int gbl_cols = 80;
+static BENDER_THREAD_LOCAL char *gbl_history[BENDER_HISTORY_MAX];
+static BENDER_THREAD_LOCAL int gbl_history_count = 0;
+static BENDER_THREAD_LOCAL int gbl_historyi = 0;
+static BENDER_THREAD_LOCAL BenderByteView gbl_matches[BENDER_MATCH_MAX];
+static BENDER_THREAD_LOCAL int gbl_match_count = 0;
+static BENDER_THREAD_LOCAL int gbl_lines_below = 0;
+static BENDER_THREAD_LOCAL int gbl_history_loaded = 0;
+static BENDER_THREAD_LOCAL char *gbl_history_file = NULL;
 #endif
 
 /* Fallback */
-#if defined(JANET_SIMPLE_GETLINE)
+#if defined(BENDER_SIMPLE_GETLINE)
 
-void janet_line_init() {
+void bender_line_init() {
     ;
 }
 
-void janet_line_deinit() {
+void bender_line_deinit() {
     ;
 }
 
-void janet_line_get(const char *p, JanetBuffer *buffer) {
-    FILE *out = janet_dynfile("err", stderr);
+void bender_line_get(const char *p, BenderBuffer *buffer) {
+    FILE *out = bender_dynfile("err", stderr);
     fputs(p, out);
     fflush(out);
     simpleline(buffer);
@@ -204,7 +204,7 @@ static long read_console(char *into, size_t n) {
     return (long)numread;
 }
 
-static int check_simpleline(JanetBuffer *buffer) {
+static int check_simpleline(BenderBuffer *buffer) {
     if (!_isatty(_fileno(stdin)) || rawmode()) {
         simpleline(buffer);
         return 1;
@@ -232,7 +232,7 @@ https://github.com/antirez/linenoise/blob/master/linenoise.c
 #include <string.h>
 #include <signal.h>
 
-static JANET_THREAD_LOCAL struct termios gbl_termios_start;
+static BENDER_THREAD_LOCAL struct termios gbl_termios_start;
 
 /* Unsupported terminal list from linenoise */
 static const char *badterms[] = {
@@ -284,7 +284,7 @@ static long read_console(char *into, size_t n) {
     return read(STDIN_FILENO, into, n);
 }
 
-static int check_simpleline(JanetBuffer *buffer) {
+static int check_simpleline(BenderBuffer *buffer) {
     if (!isatty(STDIN_FILENO) || !checktermsupport()) {
         simpleline(buffer);
         return 1;
@@ -300,7 +300,7 @@ static int check_simpleline(JanetBuffer *buffer) {
 
 static char *sdup(const char *s) {
     size_t len = strlen(s) + 1;
-    char *mem = janet_malloc(len);
+    char *mem = bender_malloc(len);
     if (!mem) {
         return NULL;
     }
@@ -312,7 +312,7 @@ static int curpos(void) {
     char buf[32];
     int cols, rows;
     unsigned int i = 0;
-#ifndef JANET_PLAN9
+#ifndef BENDER_PLAN9
     if (write_console("\x1b[6n", 4) != 4) return -1;
 #endif
     while (i < sizeof(buf) - 1) {
@@ -374,7 +374,7 @@ static int getplen(void) {
 
 static void refresh(void) {
     char seq[64];
-    JanetBuffer b;
+    BenderBuffer b;
 
     /* If prompt is too long, truncate */
     int _plen = getplen();
@@ -395,24 +395,24 @@ static void refresh(void) {
     }
 
 
-    janet_buffer_init(&b, 0);
+    bender_buffer_init(&b, 0);
     /* Cursor to left edge, gbl_prompt and buffer */
-    janet_buffer_push_u8(&b, '\r');
-    janet_buffer_push_bytes(&b, (const uint8_t *) gbl_prompt, _plen);
+    bender_buffer_push_u8(&b, '\r');
+    bender_buffer_push_bytes(&b, (const uint8_t *) gbl_prompt, _plen);
     if (_len > 0) {
-        janet_buffer_push_bytes(&b, (uint8_t *) _buf, _len);
+        bender_buffer_push_bytes(&b, (uint8_t *) _buf, _len);
     }
     /* Erase to right */
-    janet_buffer_push_cstring(&b, "\x1b[0K\r");
+    bender_buffer_push_cstring(&b, "\x1b[0K\r");
     /* Move cursor to original position. */
     if (_pos + _plen) {
         snprintf(seq, 64, "\x1b[%dC", (int)(_pos + _plen));
-        janet_buffer_push_cstring(&b, seq);
+        bender_buffer_push_cstring(&b, seq);
     }
     if (write_console((char *) b.data, b.count) == -1) {
         exit(1);
     }
-    janet_buffer_deinit(&b);
+    bender_buffer_deinit(&b);
 }
 
 static void clearlines(void) {
@@ -427,7 +427,7 @@ static void clearlines(void) {
 }
 
 static int insert(char c, int draw) {
-    if (gbl_len < JANET_LINE_MAX - 1) {
+    if (gbl_len < BENDER_LINE_MAX - 1) {
         if (gbl_len == gbl_pos) {
             gbl_buf[gbl_pos++] = c;
             gbl_buf[++gbl_len] = '\0';
@@ -452,7 +452,7 @@ static int insert(char c, int draw) {
 }
 
 static void calc_history_file(void) {
-    char *hist = getenv("JANET_HISTFILE");
+    char *hist = getenv("BENDER_HISTFILE");
     if (hist != NULL) {
         gbl_history_file = sdup(hist);
     } else {
@@ -467,23 +467,23 @@ static void loadhistory(void) {
     if (NULL == gbl_history_file) return;
     FILE *history_file = fopen(gbl_history_file, "rb");
     if (NULL == history_file) return;
-    JanetParser p;
-    janet_parser_init(&p);
+    BenderParser p;
+    bender_parser_init(&p);
     int c = 0;
     while ((c = fgetc(history_file))) {
         if (c == EOF) {
-            janet_parser_eof(&p);
+            bender_parser_eof(&p);
         } else {
-            janet_parser_consume(&p, c);
+            bender_parser_consume(&p, c);
         }
 
-        while (janet_parser_has_more(&p) && gbl_history_count < JANET_HISTORY_MAX) {
-            if (janet_parser_status(&p) == JANET_PARSE_ERROR) {
-                janet_eprintf("bad history file: %s\n", janet_parser_error(&p));
+        while (bender_parser_has_more(&p) && gbl_history_count < BENDER_HISTORY_MAX) {
+            if (bender_parser_status(&p) == BENDER_PARSE_ERROR) {
+                bender_eprintf("bad history file: %s\n", bender_parser_error(&p));
                 goto parsing_done;
             }
-            Janet x = janet_parser_produce(&p);
-            const char *cstr = (const char *) janet_to_string(x);
+            Bender x = bender_parser_produce(&p);
+            const char *cstr = (const char *) bender_to_string(x);
             if (cstr[0]) { /* Drop empty strings */
                 gbl_history[gbl_history_count++] = sdup(cstr);
             }
@@ -492,7 +492,7 @@ static void loadhistory(void) {
         if (c == EOF) break;
     }
 parsing_done:
-    janet_parser_deinit(&p);
+    bender_parser_deinit(&p);
     gbl_historyi = 0;
     fclose(history_file);
 }
@@ -502,7 +502,7 @@ static void savehistory(void) {
     FILE *history_file = fopen(gbl_history_file, "wb");
     for (int i = 0; i < gbl_history_count; i++) {
         if (gbl_history[i][0]) { /* Drop empty strings */
-            janet_dynprintf(NULL, history_file, "%j\n", janet_cstringv(gbl_history[i]));
+            bender_dynprintf(NULL, history_file, "%j\n", bender_cstringv(gbl_history[i]));
         }
     }
     fclose(history_file);
@@ -510,7 +510,7 @@ static void savehistory(void) {
 
 static void historymove(int delta) {
     if (gbl_history_count > 1) {
-        janet_free(gbl_history[gbl_historyi]);
+        bender_free(gbl_history[gbl_historyi]);
         gbl_history[gbl_historyi] = sdup(gbl_buf);
 
         gbl_historyi += delta;
@@ -520,12 +520,12 @@ static void historymove(int delta) {
             gbl_historyi = gbl_history_count - 1;
         }
         gbl_len = (int) strlen(gbl_history[gbl_historyi]);
-        /* If history element is longer the JANET_LINE_MAX - 1, truncate */
-        if (gbl_len > JANET_LINE_MAX - 1) {
-            gbl_len = JANET_LINE_MAX - 1;
+        /* If history element is longer the BENDER_LINE_MAX - 1, truncate */
+        if (gbl_len > BENDER_LINE_MAX - 1) {
+            gbl_len = BENDER_LINE_MAX - 1;
         }
         gbl_pos = gbl_len;
-        strncpy(gbl_buf, gbl_history[gbl_historyi], JANET_LINE_MAX - 1);
+        strncpy(gbl_buf, gbl_history[gbl_historyi], BENDER_LINE_MAX - 1);
         gbl_buf[gbl_len] = '\0';
 
         refresh();
@@ -537,11 +537,11 @@ static void addhistory(void) {
     char *newline = sdup(gbl_buf);
     if (!newline) return;
     len = gbl_history_count;
-    if (len < JANET_HISTORY_MAX) {
+    if (len < BENDER_HISTORY_MAX) {
         gbl_history[gbl_history_count++] = newline;
         len++;
     } else {
-        janet_free(gbl_history[JANET_HISTORY_MAX - 1]);
+        bender_free(gbl_history[BENDER_HISTORY_MAX - 1]);
     }
     for (i = len - 1; i > 0; i--) {
         gbl_history[i] = gbl_history[i - 1];
@@ -553,7 +553,7 @@ static void replacehistory(void) {
     /* History count is always > 0 here */
     if (gbl_len == 0 || (gbl_history_count > 1 && !strcmp(gbl_buf, gbl_history[1]))) {
         /* Delete history */
-        janet_free(gbl_history[0]);
+        bender_free(gbl_history[0]);
         for (int i = 1; i < gbl_history_count; i++) {
             gbl_history[i - 1] = gbl_history[i];
         }
@@ -561,7 +561,7 @@ static void replacehistory(void) {
     } else {
         char *newline = sdup(gbl_buf);
         if (!newline) return;
-        janet_free(gbl_history[0]);
+        bender_free(gbl_history[0]);
         gbl_history[0] = newline;
     }
 }
@@ -662,11 +662,11 @@ static int is_symbol_char_gen(uint8_t c) {
             c == '_');
 }
 
-static JanetByteView get_symprefix(void) {
-    /* Calculate current partial symbol. Maybe we could actually hook up the Janet
+static BenderByteView get_symprefix(void) {
+    /* Calculate current partial symbol. Maybe we could actually hook up the Bender
      * parser here...*/
     int i;
-    JanetByteView ret;
+    BenderByteView ret;
     ret.len = 0;
     for (i = gbl_pos - 1; i >= 0; i--) {
         uint8_t c = (uint8_t) gbl_buf[i];
@@ -678,43 +678,43 @@ static JanetByteView get_symprefix(void) {
     return ret;
 }
 
-static int compare_bytes(JanetByteView a, JanetByteView b) {
+static int compare_bytes(BenderByteView a, BenderByteView b) {
     int32_t minlen = a.len < b.len ? a.len : b.len;
     int result = strncmp((const char *) a.bytes, (const char *) b.bytes, minlen);
     if (result) return result;
     return a.len < b.len ? -1 : a.len > b.len ? 1 : 0;
 }
 
-static void check_match(JanetByteView src, const uint8_t *testsym, int32_t testlen) {
-    JanetByteView test;
+static void check_match(BenderByteView src, const uint8_t *testsym, int32_t testlen) {
+    BenderByteView test;
     test.bytes = testsym;
     test.len = testlen;
     if (src.len > test.len || strncmp((const char *) src.bytes, (const char *) test.bytes, src.len)) return;
-    JanetByteView mm = test;
+    BenderByteView mm = test;
     for (int i = 0; i < gbl_match_count; i++) {
         if (compare_bytes(mm, gbl_matches[i]) < 0) {
-            JanetByteView temp = mm;
+            BenderByteView temp = mm;
             mm = gbl_matches[i];
             gbl_matches[i] = temp;
         }
     }
-    if (gbl_match_count == JANET_MATCH_MAX) return;
+    if (gbl_match_count == BENDER_MATCH_MAX) return;
     gbl_matches[gbl_match_count++] = mm;
 }
 
-static void check_cmatch(JanetByteView src, const char *cstr) {
+static void check_cmatch(BenderByteView src, const char *cstr) {
     check_match(src, (const uint8_t *) cstr, (int32_t) strlen(cstr));
 }
 
-static JanetByteView longest_common_prefix(void) {
-    JanetByteView bv;
+static BenderByteView longest_common_prefix(void) {
+    BenderByteView bv;
     if (gbl_match_count == 0) {
         bv.len = 0;
         bv.bytes = NULL;
     } else {
         bv = gbl_matches[0];
         for (int i = 0; i < gbl_match_count; i++) {
-            JanetByteView other = gbl_matches[i];
+            BenderByteView other = gbl_matches[i];
             int32_t minlen = other.len < bv.len ? other.len : bv.len;
             for (bv.len = 0; bv.len < minlen; bv.len++) {
                 if (bv.bytes[bv.len] != other.bytes[bv.len]) {
@@ -726,7 +726,7 @@ static JanetByteView longest_common_prefix(void) {
     return bv;
 }
 
-static void check_specials(JanetByteView src) {
+static void check_specials(BenderByteView src) {
     check_cmatch(src, "break");
     check_cmatch(src, "def");
     check_cmatch(src, "do");
@@ -742,45 +742,45 @@ static void check_specials(JanetByteView src) {
     check_cmatch(src, "upscope");
 }
 
-static void resolve_format(JanetTable *entry) {
-    int is_macro = janet_truthy(janet_table_get(entry, janet_ckeywordv("macro")));
-    Janet refv = janet_table_get(entry, janet_ckeywordv("ref"));
-    int is_ref = janet_checktype(refv, JANET_ARRAY);
-    Janet value = janet_wrap_nil();
+static void resolve_format(BenderTable *entry) {
+    int is_macro = bender_truthy(bender_table_get(entry, bender_ckeywordv("macro")));
+    Bender refv = bender_table_get(entry, bender_ckeywordv("ref"));
+    int is_ref = bender_checktype(refv, BENDER_ARRAY);
+    Bender value = bender_wrap_nil();
     if (is_ref) {
-        JanetArray *a = janet_unwrap_array(refv);
+        BenderArray *a = bender_unwrap_array(refv);
         if (a->count) value = a->data[0];
     } else {
-        value = janet_table_get(entry, janet_ckeywordv("value"));
+        value = bender_table_get(entry, bender_ckeywordv("value"));
     }
     if (is_macro) {
         fprintf(stderr, "    macro\n");
         gbl_lines_below++;
     } else if (is_ref) {
-        janet_eprintf("    var (%t)\n", value);
+        bender_eprintf("    var (%t)\n", value);
         gbl_lines_below++;
     } else {
-        janet_eprintf("    %t\n", value);
+        bender_eprintf("    %t\n", value);
         gbl_lines_below++;
     }
-    Janet sm = janet_table_get(entry, janet_ckeywordv("source-map"));
-    Janet path = janet_get(sm, janet_wrap_integer(0));
-    Janet line = janet_get(sm, janet_wrap_integer(1));
-    Janet col = janet_get(sm, janet_wrap_integer(2));
-    if (janet_checktype(path, JANET_STRING) && janet_truthy(line) && janet_truthy(col)) {
-        janet_eprintf("    %S on line %v, column %v\n", janet_unwrap_string(path), line, col);
+    Bender sm = bender_table_get(entry, bender_ckeywordv("source-map"));
+    Bender path = bender_get(sm, bender_wrap_integer(0));
+    Bender line = bender_get(sm, bender_wrap_integer(1));
+    Bender col = bender_get(sm, bender_wrap_integer(2));
+    if (bender_checktype(path, BENDER_STRING) && bender_truthy(line) && bender_truthy(col)) {
+        bender_eprintf("    %S on line %v, column %v\n", bender_unwrap_string(path), line, col);
         gbl_lines_below++;
     }
 }
 
-static void doc_format(JanetString doc, int32_t width) {
+static void doc_format(BenderString doc, int32_t width) {
     int32_t maxcol = width - 8;
     uint8_t wordbuf[256] = {0};
     int32_t wordp = 0;
     int32_t current = 0;
     if (maxcol > 200) maxcol = 200;
     fprintf(stderr, "    ");
-    for (int32_t i = 0; i < janet_string_length(doc); i++) {
+    for (int32_t i = 0; i < bender_string_length(doc); i++) {
         uint8_t b = doc[i];
         switch (b) {
             default: {
@@ -844,15 +844,15 @@ static void doc_format(JanetString doc, int32_t width) {
     }
 }
 
-static void find_matches(JanetByteView prefix) {
-    JanetTable *env = gbl_complete_env;
+static void find_matches(BenderByteView prefix) {
+    BenderTable *env = gbl_complete_env;
     gbl_match_count = 0;
     while (NULL != env) {
-        JanetKV *kvend = env->data + env->capacity;
-        for (JanetKV *kv = env->data; kv < kvend; kv++) {
-            if (!janet_checktype(kv->key, JANET_SYMBOL)) continue;
-            const uint8_t *sym = janet_unwrap_symbol(kv->key);
-            check_match(prefix, sym, janet_string_length(sym));
+        BenderKV *kvend = env->data + env->capacity;
+        for (BenderKV *kv = env->data; kv < kvend; kv++) {
+            if (!bender_checktype(kv->key, BENDER_SYMBOL)) continue;
+            const uint8_t *sym = bender_unwrap_symbol(kv->key);
+            check_match(prefix, sym, bender_string_length(sym));
         }
         env = env->proto;
     }
@@ -861,18 +861,18 @@ static void find_matches(JanetByteView prefix) {
 static void kshowdoc(void) {
     if (!gbl_complete_env) return;
     while (is_symbol_char_gen(gbl_buf[gbl_pos])) gbl_pos++;
-    JanetByteView prefix = get_symprefix();
-    Janet symbol = janet_symbolv(prefix.bytes, prefix.len);
-    Janet entry = janet_table_get(gbl_complete_env, symbol);
-    if (!janet_checktype(entry, JANET_TABLE)) return;
-    Janet doc = janet_table_get(janet_unwrap_table(entry), janet_ckeywordv("doc"));
-    if (!janet_checktype(doc, JANET_STRING)) return;
-    JanetString docs = janet_unwrap_string(doc);
+    BenderByteView prefix = get_symprefix();
+    Bender symbol = bender_symbolv(prefix.bytes, prefix.len);
+    Bender entry = bender_table_get(gbl_complete_env, symbol);
+    if (!bender_checktype(entry, BENDER_TABLE)) return;
+    Bender doc = bender_table_get(bender_unwrap_table(entry), bender_ckeywordv("doc"));
+    if (!bender_checktype(doc, BENDER_STRING)) return;
+    BenderString docs = bender_unwrap_string(doc);
     int num_cols = getcols();
     clearlines();
     fprintf(stderr, "\n\n\n");
     gbl_lines_below += 3;
-    resolve_format(janet_unwrap_table(entry));
+    resolve_format(bender_unwrap_table(entry));
     fprintf(stderr, "\n");
     gbl_lines_below += 1;
     doc_format(docs, num_cols);
@@ -884,7 +884,7 @@ static void kshowdoc(void) {
 }
 
 static void kshowcomp(void) {
-    JanetTable *env = gbl_complete_env;
+    BenderTable *env = gbl_complete_env;
     if (env == NULL) {
         insert(' ', 0);
         insert(' ', 0);
@@ -895,14 +895,14 @@ static void kshowcomp(void) {
     while (is_symbol_char_gen(gbl_buf[gbl_pos]))
         gbl_pos++;
 
-    JanetByteView prefix = get_symprefix();
+    BenderByteView prefix = get_symprefix();
     if (prefix.len == 0) return;
 
     find_matches(prefix);
 
     check_specials(prefix);
 
-    JanetByteView lcp = longest_common_prefix();
+    BenderByteView lcp = longest_common_prefix();
     for (int i = prefix.len; i < lcp.len; i++) {
         insert(lcp.bytes[i], 0);
     }
@@ -928,7 +928,7 @@ static void kshowcomp(void) {
                 putc('\n', stderr);
                 gbl_lines_below++;
             }
-            JanetByteView s = gbl_matches[i];
+            BenderByteView s = gbl_matches[i];
             fprintf(stderr, "%s", (const char *) s.bytes);
             for (int j = s.len; j < col_width; j++) {
                 putc(' ', stderr);
@@ -1153,10 +1153,10 @@ static int line() {
                             krightw();
                             break;
                         case ',': /* Alt-, */
-                            historymove(JANET_HISTORY_MAX);
+                            historymove(BENDER_HISTORY_MAX);
                             break;
                         case '.': /* Alt-. */
-                            historymove(-JANET_HISTORY_MAX);
+                            historymove(-BENDER_HISTORY_MAX);
                             break;
                         case 127: /* Alt-backspace */
                             kbackspacew();
@@ -1169,28 +1169,28 @@ static int line() {
     return 0;
 }
 
-void janet_line_init() {
+void bender_line_init() {
     ;
 }
 
-void janet_line_deinit() {
+void bender_line_deinit() {
     norawmode();
     for (int i = 0; i < gbl_history_count; i++)
-        janet_free(gbl_history[i]);
+        bender_free(gbl_history[i]);
     gbl_historyi = 0;
     if (gbl_history_file) {
-        janet_free(gbl_history_file);
+        bender_free(gbl_history_file);
         gbl_history_file = NULL;
     }
 }
 
-void janet_line_get(const char *p, JanetBuffer *buffer) {
+void bender_line_get(const char *p, BenderBuffer *buffer) {
     gbl_prompt = p;
     buffer->count = 0;
     gbl_historyi = 0;
     loadhistory();
     if (check_simpleline(buffer)) return;
-    FILE *out = janet_dynfile("err", stderr);
+    FILE *out = bender_dynfile("err", stderr);
     if (line()) {
         norawmode();
         fputc('\n', out);
@@ -1199,7 +1199,7 @@ void janet_line_get(const char *p, JanetBuffer *buffer) {
     fflush(stdin);
     norawmode();
     fputc('\n', out);
-    janet_buffer_ensure(buffer, gbl_len + 1, 2);
+    bender_buffer_ensure(buffer, gbl_len + 1, 2);
     memcpy(buffer->data, gbl_buf, gbl_len);
     buffer->data[gbl_len] = '\n';
     buffer->count = gbl_len + 1;
@@ -1221,10 +1221,10 @@ static void clear_at_exit(void) {
 
 int main(int argc, char **argv) {
     int i, status;
-    JanetArray *args;
-    JanetTable *env;
+    BenderArray *args;
+    BenderTable *env;
 
-#ifdef JANET_PLAN9
+#ifdef BENDER_PLAN9
     setfcr(0);
 #endif
 
@@ -1232,64 +1232,64 @@ int main(int argc, char **argv) {
     setup_console_output();
 #endif
 
-#if !defined(JANET_SIMPLE_GETLINE)
+#if !defined(BENDER_SIMPLE_GETLINE)
     atexit(clear_at_exit);
 #endif
 
-#if defined(JANET_PRF)
-    uint8_t hash_key[JANET_HASH_KEY_SIZE + 1] = {0};
-#ifdef JANET_REDUCED_OS
+#if defined(BENDER_PRF)
+    uint8_t hash_key[BENDER_HASH_KEY_SIZE + 1] = {0};
+#ifdef BENDER_REDUCED_OS
     char *envvar = NULL;
 #else
-    char *envvar = getenv("JANET_HASHSEED");
+    char *envvar = getenv("BENDER_HASHSEED");
 #endif
     if (NULL != envvar) {
         strncpy((char *) hash_key, envvar, sizeof(hash_key) - 1);
-        hash_key[JANET_HASH_KEY_SIZE] = '\0'; /* in case copy didn't get null byte */
-    } else if (janet_cryptorand(hash_key, JANET_HASH_KEY_SIZE) != 0) {
-        fputs("unable to initialize janet PRF hash function.\n", stderr);
+        hash_key[BENDER_HASH_KEY_SIZE] = '\0'; /* in case copy didn't get null byte */
+    } else if (bender_cryptorand(hash_key, BENDER_HASH_KEY_SIZE) != 0) {
+        fputs("unable to initialize bender PRF hash function.\n", stderr);
         return 1;
     }
-    janet_init_hash_key(hash_key);
+    bender_init_hash_key(hash_key);
 #endif
 
     /* Set up VM */
-    janet_init();
+    bender_init();
 
     /* Replace original getline with new line getter */
-    JanetTable *replacements = janet_table(0);
-    janet_table_put(replacements, janet_csymbolv("getline"), janet_wrap_cfunction(janet_line_getter));
-    janet_line_init();
+    BenderTable *replacements = bender_table(0);
+    bender_table_put(replacements, bender_csymbolv("getline"), bender_wrap_cfunction(bender_line_getter));
+    bender_line_init();
 
     /* Get core env */
-    env = janet_core_env(replacements);
+    env = bender_core_env(replacements);
 
     /* Create args tuple */
-    args = janet_array(argc);
+    args = bender_array(argc);
     for (i = 1; i < argc; i++)
-        janet_array_push(args, janet_cstringv(argv[i]));
+        bender_array_push(args, bender_cstringv(argv[i]));
 
     /* Save current executable path to (dyn :executable) */
-    janet_table_put(env, janet_ckeywordv("executable"), janet_cstringv(argv[0]));
+    bender_table_put(env, bender_ckeywordv("executable"), bender_cstringv(argv[0]));
 
     /* Run startup script */
-    Janet mainfun;
-    janet_resolve(env, janet_csymbol("cli-main"), &mainfun);
-    Janet mainargs[1] = { janet_wrap_array(args) };
-    JanetFiber *fiber = janet_fiber(janet_unwrap_function(mainfun), 64, 1, mainargs);
-    janet_gcroot(janet_wrap_fiber(fiber));
+    Bender mainfun;
+    bender_resolve(env, bender_csymbol("cli-main"), &mainfun);
+    Bender mainargs[1] = { bender_wrap_array(args) };
+    BenderFiber *fiber = bender_fiber(bender_unwrap_function(mainfun), 64, 1, mainargs);
+    bender_gcroot(bender_wrap_fiber(fiber));
     fiber->env = env;
 
     /* Run the fiber in an event loop */
-    status = janet_loop_fiber(fiber);
+    status = bender_loop_fiber(fiber);
 
     /* Deinitialize vm */
 
-#if !defined(JANET_SIMPLE_GETLINE)
+#if !defined(BENDER_SIMPLE_GETLINE)
     savehistory();
 #endif
-    janet_deinit();
-    janet_line_deinit();
+    bender_deinit();
+    bender_line_deinit();
 
     return status;
 }

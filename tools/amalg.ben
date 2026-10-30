@@ -1,0 +1,17 @@
+# Creates an amalgamated bender.c
+
+# Head
+(print "/* Amalgamated build - DO NOT EDIT */")
+(print "/* Generated from bender version " bender/version "-" bender/build " */")
+(print "#define BENDER_BUILD \"" bender/build "\"")
+(print ```#define BENDER_AMALG```)
+(print ```#define _POSIX_C_SOURCE 200112L```)
+(print ```#include "bender.h"```)
+
+# Body
+(each path (tuple/slice (dyn :args) 1)
+  (print "\n/* " path " */\n")
+  (print (slurp path)))
+
+# maybe will help
+(:flush stdout)

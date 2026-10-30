@@ -18,13 +18,13 @@
 # FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
 # IN THE SOFTWARE.
 
-project('janet', 'c',
+project('bender', 'c',
   default_options : ['c_std=c99', 'build.c_std=c99', 'b_lundef=false', 'default_library=both'],
   version : '1.42.1')
 
 # Global settings
-janet_path = join_paths(get_option('prefix'), get_option('libdir'), 'janet')
-header_path = join_paths(get_option('prefix'), get_option('includedir'), 'janet')
+bender_path = join_paths(get_option('prefix'), get_option('libdir'), 'bender')
+header_path = join_paths(get_option('prefix'), get_option('includedir'), 'bender')
 
 # Compilers
 cc = meson.get_compiler('c')
@@ -56,62 +56,62 @@ if get_option('default_library') != 'static' and build_machine.system() != 'wind
     add_project_link_arguments('-rdynamic', language : 'c')
 endif
 
-# Generate custom janetconf.h
+# Generate custom benderconf.h
 conf = configuration_data()
 version_parts = meson.project_version().split('.')
 last_parts = version_parts[2].split('-')
 if last_parts.length() > 1
-  conf.set_quoted('JANET_VERSION_EXTRA', '-' + last_parts[1])
+  conf.set_quoted('BENDER_VERSION_EXTRA', '-' + last_parts[1])
 else
-  conf.set_quoted('JANET_VERSION_EXTRA', '')
+  conf.set_quoted('BENDER_VERSION_EXTRA', '')
 endif
-conf.set('JANET_VERSION_MAJOR', version_parts[0].to_int())
-conf.set('JANET_VERSION_MINOR', version_parts[1].to_int())
-conf.set('JANET_VERSION_PATCH', last_parts[0].to_int())
-conf.set_quoted('JANET_VERSION', meson.project_version())
+conf.set('BENDER_VERSION_MAJOR', version_parts[0].to_int())
+conf.set('BENDER_VERSION_MINOR', version_parts[1].to_int())
+conf.set('BENDER_VERSION_PATCH', last_parts[0].to_int())
+conf.set_quoted('BENDER_VERSION', meson.project_version())
 # Use options
-conf.set_quoted('JANET_BUILD', get_option('git_hash'))
-conf.set('JANET_NO_NANBOX', not get_option('nanbox'))
+conf.set_quoted('BENDER_BUILD', get_option('git_hash'))
+conf.set('BENDER_NO_NANBOX', not get_option('nanbox'))
 if get_option('nanbox_pointer_shift') != -1 # -1 is auto-detect
-  conf.set('JANET_NANBOX_64_POINTER_SHIFT', get_option('nanbox_pointer_shift'))
+  conf.set('BENDER_NANBOX_64_POINTER_SHIFT', get_option('nanbox_pointer_shift'))
 endif
-conf.set('JANET_SINGLE_THREADED', get_option('single_threaded'))
-conf.set('JANET_NO_DYNAMIC_MODULES', not get_option('dynamic_modules'))
-conf.set('JANET_NO_DOCSTRINGS', not get_option('docstrings'))
-conf.set('JANET_NO_SOURCEMAPS', not get_option('sourcemaps'))
-conf.set('JANET_NO_ASSEMBLER', not get_option('assembler'))
-conf.set('JANET_NO_PEG', not get_option('peg'))
-conf.set('JANET_NO_NET', not get_option('net'))
-conf.set('JANET_NO_IPV6', not get_option('ipv6'))
-conf.set('JANET_NO_EV', not get_option('ev') or get_option('single_threaded'))
-conf.set('JANET_REDUCED_OS', get_option('reduced_os'))
-conf.set('JANET_NO_INT_TYPES', not get_option('int_types'))
-conf.set('JANET_PRF', get_option('prf'))
-conf.set('JANET_RECURSION_GUARD', get_option('recursion_guard'))
-conf.set('JANET_MAX_PROTO_DEPTH', get_option('max_proto_depth'))
-conf.set('JANET_MAX_MACRO_EXPAND', get_option('max_macro_expand'))
-conf.set('JANET_STACK_MAX', get_option('stack_max'))
-conf.set('JANET_NO_UMASK', not get_option('umask'))
-conf.set('JANET_NO_REALPATH', not get_option('realpath'))
-conf.set('JANET_NO_PROCESSES', not get_option('processes'))
-conf.set('JANET_SIMPLE_GETLINE', get_option('simple_getline'))
-conf.set('JANET_EV_NO_EPOLL', not get_option('epoll'))
-conf.set('JANET_EV_NO_KQUEUE', not get_option('kqueue'))
-conf.set('JANET_NO_INTERPRETER_INTERRUPT', not get_option('interpreter_interrupt'))
-conf.set('JANET_NO_FFI', not get_option('ffi'))
-conf.set('JANET_NO_FFI_JIT', not get_option('ffi_jit'))
-conf.set('JANET_NO_FILEWATCH', not get_option('filewatch'))
-conf.set('JANET_NO_CRYPTORAND', not get_option('cryptorand'))
+conf.set('BENDER_SINGLE_THREADED', get_option('single_threaded'))
+conf.set('BENDER_NO_DYNAMIC_MODULES', not get_option('dynamic_modules'))
+conf.set('BENDER_NO_DOCSTRINGS', not get_option('docstrings'))
+conf.set('BENDER_NO_SOURCEMAPS', not get_option('sourcemaps'))
+conf.set('BENDER_NO_ASSEMBLER', not get_option('assembler'))
+conf.set('BENDER_NO_PEG', not get_option('peg'))
+conf.set('BENDER_NO_NET', not get_option('net'))
+conf.set('BENDER_NO_IPV6', not get_option('ipv6'))
+conf.set('BENDER_NO_EV', not get_option('ev') or get_option('single_threaded'))
+conf.set('BENDER_REDUCED_OS', get_option('reduced_os'))
+conf.set('BENDER_NO_INT_TYPES', not get_option('int_types'))
+conf.set('BENDER_PRF', get_option('prf'))
+conf.set('BENDER_RECURSION_GUARD', get_option('recursion_guard'))
+conf.set('BENDER_MAX_PROTO_DEPTH', get_option('max_proto_depth'))
+conf.set('BENDER_MAX_MACRO_EXPAND', get_option('max_macro_expand'))
+conf.set('BENDER_STACK_MAX', get_option('stack_max'))
+conf.set('BENDER_NO_UMASK', not get_option('umask'))
+conf.set('BENDER_NO_REALPATH', not get_option('realpath'))
+conf.set('BENDER_NO_PROCESSES', not get_option('processes'))
+conf.set('BENDER_SIMPLE_GETLINE', get_option('simple_getline'))
+conf.set('BENDER_EV_NO_EPOLL', not get_option('epoll'))
+conf.set('BENDER_EV_NO_KQUEUE', not get_option('kqueue'))
+conf.set('BENDER_NO_INTERPRETER_INTERRUPT', not get_option('interpreter_interrupt'))
+conf.set('BENDER_NO_FFI', not get_option('ffi'))
+conf.set('BENDER_NO_FFI_JIT', not get_option('ffi_jit'))
+conf.set('BENDER_NO_FILEWATCH', not get_option('filewatch'))
+conf.set('BENDER_NO_CRYPTORAND', not get_option('cryptorand'))
 if get_option('os_name') != ''
-  conf.set('JANET_OS_NAME', get_option('os_name'))
+  conf.set('BENDER_OS_NAME', get_option('os_name'))
 endif
 if get_option('arch_name') != ''
-  conf.set('JANET_ARCH_NAME', get_option('arch_name'))
+  conf.set('BENDER_ARCH_NAME', get_option('arch_name'))
 endif
 if get_option('thread_local_prefix') != ''
-  conf.set('JANET_THREAD_LOCAL', get_option('thread_local_prefix'))
+  conf.set('BENDER_THREAD_LOCAL', get_option('thread_local_prefix'))
 endif
-jconf = configure_file(output : 'janetconf.h',
+jconf = configure_file(output : 'benderconf.h',
   configuration : conf)
 
 # Include directories
@@ -188,28 +188,28 @@ mainclient_src = [
   'src/mainclient/shell.c'
 ]
 
-janet_dependencies = [m_dep, dl_dep, android_spawn_dep, ws2_dep, psapi_dep, wsock_dep]
-janet_native_dependencies = [native_m_dep, native_dl_dep, native_android_spawn_dep, native_ws2_dep, native_psapi_dep, native_wsock_dep]
+bender_dependencies = [m_dep, dl_dep, android_spawn_dep, ws2_dep, psapi_dep, wsock_dep]
+bender_native_dependencies = [native_m_dep, native_dl_dep, native_android_spawn_dep, native_ws2_dep, native_psapi_dep, native_wsock_dep]
 if not get_option('single_threaded')
-  janet_dependencies += thread_dep
-  janet_native_dependencies += native_thread_dep
+  bender_dependencies += thread_dep
+  bender_native_dependencies += native_thread_dep
 endif
 
 # Build boot binary
-janet_boot = executable('janet-boot', core_src, boot_src,
+bender_boot = executable('bender-boot', core_src, boot_src,
   include_directories : incdir,
-  c_args : '-DJANET_BOOTSTRAP',
-  dependencies : janet_native_dependencies,
+  c_args : '-DBENDER_BOOTSTRAP',
+  dependencies : bender_native_dependencies,
   native : true)
 
-# Build janet.c
-janetc = custom_target('janetc',
-  input : [janet_boot, 'src/boot/boot.janet'],
-  output : 'janet.c',
+# Build bender.c
+benderc = custom_target('benderc',
+  input : [bender_boot, 'src/boot/boot.ben'],
+  output : 'bender.c',
   capture : true,
   command : [
-    janet_boot, meson.current_source_dir(),
-    'JANET_PATH', janet_path
+    bender_boot, meson.current_source_dir(),
+    'BENDER_PATH', bender_path
   ])
 
 # Allow building with no shared library
@@ -219,9 +219,9 @@ else
   lib_cflags = []
 endif
 if get_option('shared')
-  libjanet = library('janet', janetc,
+  libbender = library('bender', benderc,
     include_directories : incdir,
-    dependencies : janet_dependencies,
+    dependencies : bender_dependencies,
     version: meson.project_version(),
     soversion: version_parts[0] + '.' + version_parts[1],
     c_args : lib_cflags,
@@ -229,21 +229,21 @@ if get_option('shared')
 # Extra c flags - adding -fvisibility=hidden matches the Makefile and
 # shaves off about 10k on linux x64, likely similar on other platforms.
   if cc.has_argument('-fvisibility=hidden')
-    extra_cflags = ['-fvisibility=hidden', '-DJANET_DLL_IMPORT']
+    extra_cflags = ['-fvisibility=hidden', '-DBENDER_DLL_IMPORT']
   else
-    extra_cflags = ['-DJANET_DLL_IMPORT']
+    extra_cflags = ['-DBENDER_DLL_IMPORT']
   endif
-  janet_mainclient = executable('bender', mainclient_src,
+  bender_mainclient = executable('bender', mainclient_src,
     include_directories : incdir,
-    dependencies : janet_dependencies,
-    link_with: [libjanet],
+    dependencies : bender_dependencies,
+    link_with: [libbender],
     c_args : extra_cflags,
     install : true)
 else
   # No shared library
-  janet_mainclient = executable('bender', mainclient_src, janetc,
+  bender_mainclient = executable('bender', mainclient_src, benderc,
     include_directories : incdir,
-    dependencies : janet_dependencies,
+    dependencies : bender_dependencies,
     c_args : lib_cflags,
     install : true)
 endif
@@ -255,90 +255,90 @@ if meson.is_cross_build()
   else
     extra_native_cflags = []
   endif
-  janet_nativeclient = executable('janet-native', janetc, mainclient_src,
+  bender_nativeclient = executable('bender-native', benderc, mainclient_src,
     include_directories : incdir,
-    dependencies : janet_native_dependencies,
+    dependencies : bender_native_dependencies,
     c_args : extra_native_cflags,
     native : true)
 else
-  janet_nativeclient = janet_mainclient
+  bender_nativeclient = bender_mainclient
 endif
 
 # Documentation
 docs = custom_target('docs',
-  input : ['tools/gendoc.janet'],
+  input : ['tools/gendoc.ben'],
   output : ['doc.html'],
   capture : true,
-  command : [janet_nativeclient, '@INPUT@'])
+  command : [bender_nativeclient, '@INPUT@'])
 
 # Tests
 test_files = [
-  'test/suite-array.janet',
-  'test/suite-asm.janet',
-  'test/suite-boot.janet',
-  'test/suite-buffer.janet',
-  'test/suite-bundle.janet',
-  'test/suite-capi.janet',
-  'test/suite-cfuns.janet',
-  'test/suite-compile.janet',
-  'test/suite-corelib.janet',
-  'test/suite-debug.janet',
-  'test/suite-ev.janet',
-  'test/suite-ev2.janet',
-  'test/suite-ffi.janet',
-  'test/suite-filewatch.janet',
-  'test/suite-inttypes.janet',
-  'test/suite-io.janet',
-  'test/suite-marsh.janet',
-  'test/suite-math.janet',
-  'test/suite-net.janet',
-  'test/suite-os.janet',
-  'test/suite-parse.janet',
-  'test/suite-peg.janet',
-  'test/suite-pp.janet',
-  'test/suite-specials.janet',
-  'test/suite-string.janet',
-  'test/suite-strtod.janet',
-  'test/suite-struct.janet',
-  'test/suite-symcache.janet',
-  'test/suite-table.janet',
-  'test/suite-tuple.janet',
-  'test/suite-unknown.janet',
-  'test/suite-value.janet',
-  'test/suite-vm.janet'
+  'test/suite-array.ben',
+  'test/suite-asm.ben',
+  'test/suite-boot.ben',
+  'test/suite-buffer.ben',
+  'test/suite-bundle.ben',
+  'test/suite-capi.ben',
+  'test/suite-cfuns.ben',
+  'test/suite-compile.ben',
+  'test/suite-corelib.ben',
+  'test/suite-debug.ben',
+  'test/suite-ev.ben',
+  'test/suite-ev2.ben',
+  'test/suite-ffi.ben',
+  'test/suite-filewatch.ben',
+  'test/suite-inttypes.ben',
+  'test/suite-io.ben',
+  'test/suite-marsh.ben',
+  'test/suite-math.ben',
+  'test/suite-net.ben',
+  'test/suite-os.ben',
+  'test/suite-parse.ben',
+  'test/suite-peg.ben',
+  'test/suite-pp.ben',
+  'test/suite-specials.ben',
+  'test/suite-string.ben',
+  'test/suite-strtod.ben',
+  'test/suite-struct.ben',
+  'test/suite-symcache.ben',
+  'test/suite-table.ben',
+  'test/suite-tuple.ben',
+  'test/suite-unknown.ben',
+  'test/suite-value.ben',
+  'test/suite-vm.ben'
 ]
 foreach t : test_files
-  test(t, janet_nativeclient, args : files([t]), workdir : meson.current_source_dir())
+  test(t, bender_nativeclient, args : files([t]), workdir : meson.current_source_dir())
 endforeach
 
 # Repl
-run_target('repl', command : [janet_nativeclient])
+run_target('repl', command : [bender_nativeclient])
 
 # For use as meson subproject (wrap)
 if get_option('shared')
-  janet_dep = declare_dependency(include_directories : incdir,
-    link_with : libjanet)
+  bender_dep = declare_dependency(include_directories : incdir,
+    link_with : libbender)
 # pkgconfig
   pkg = import('pkgconfig')
-  pkg.generate(libjanet,
-    subdirs: 'janet',
-    description: 'Library for the Janet programming language.')
+  pkg.generate(libbender,
+    subdirs: 'bender',
+    description: 'Library for the Bender programming language.')
 endif
 
 # Installation
-install_man('janet.1')
-install_data(sources : ['tools/.keep'], install_dir : join_paths(get_option('libdir'), 'janet'))
-patched_janet = custom_target('patched-janeth',
-  input : ['tools/patch-header.janet', 'src/include/janet.h', jconf],
+install_man('bender.1')
+install_data(sources : ['tools/.keep'], install_dir : join_paths(get_option('libdir'), 'bender'))
+patched_bender = custom_target('patched-benderh',
+  input : ['tools/patch-header.ben', 'src/include/bender.h', jconf],
   install : true,
-  install_dir : join_paths(get_option('includedir'), 'janet'),
+  install_dir : join_paths(get_option('includedir'), 'bender'),
   build_by_default : true,
-  output : ['janet_' + meson.project_version() + '.h'],
-  command : [janet_nativeclient, '@INPUT@', '@OUTPUT@'])
+  output : ['bender_' + meson.project_version() + '.h'],
+  command : [bender_nativeclient, '@INPUT@', '@OUTPUT@'])
 
-# Create a version of the janet.h header that matches what jpm often expects
+# Create a version of the bender.h header that matches what jpm often expects
 if meson.version().version_compare('>=0.61')
-  install_symlink('janet.h', pointing_to: 'janet/janet_' + meson.project_version() + '.h', install_dir: get_option('includedir'))
-  install_symlink('janet.h', pointing_to: 'janet_' + meson.project_version() + '.h', install_dir: join_paths(get_option('includedir'), 'janet'))
+  install_symlink('bender.h', pointing_to: 'bender/bender_' + meson.project_version() + '.h', install_dir: get_option('includedir'))
+  install_symlink('bender.h', pointing_to: 'bender_' + meson.project_version() + '.h', install_dir: join_paths(get_option('includedir'), 'bender'))
 endif
 

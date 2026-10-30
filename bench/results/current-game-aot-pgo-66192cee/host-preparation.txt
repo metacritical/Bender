@@ -24,8 +24,8 @@ Filesystem      Size    Used   Avail Capacity iused ifree %iused  Mounted on
 14641  26.9  0.4 /System/Library/CoreServices/NotificationCenter.app/Contents/MacOS/NotificationCenter
  1649  21.2  0.1 /Applications/Anton.app/Contents/MacOS/Anton
   629  12.1  0.2 /System/Library/DriverExtensions/com.apple.DriverKit-AppleBCMWLAN.dext/com.apple.DriverKit-AppleBCMWLAN
-21335  10.6  0.4 /Users/pankajdoharey/Development/Projects/ML/trinecraft/../../janet/build/bender
-22447   6.4  0.1 /Users/pankajdoharey/Development/Projects/ML/trinecraft/../../janet/build/bender
+21335  10.6  0.4 /Users/pankajdoharey/Development/Projects/ML/trinecraft/../../bender/build/bender
+22447   6.4  0.1 /Users/pankajdoharey/Development/Projects/ML/trinecraft/../../bender/build/bender
 14580   3.5  0.3 /Applications/Brave Browser.app/Contents/Frameworks/Brave Browser Framework.framework/Versions/155.1.97.56/Helpers/Brave Browser Helper.app/Contents/MacOS/Brave Browser Helper
   394   2.6  0.0 /System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/FSEvents.framework/Versions/A/Support/fseventsd
 77146   2.4  0.2 /System/Applications/Utilities/Activity Monitor.app/Contents/MacOS/Activity Monitor
@@ -43,4 +43,4 @@ a9e757129652cea1715f0a4c4d1f512bf48c168c
  M Makefile
 ?? bench/results/current-game-aot-pgo-66192cee/
 ?? grammar/
-?? tools/linguist_grammar.janet
+?? tools/linguist_grammar.ben

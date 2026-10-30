@@ -1,8 +1,8 @@
 # Target
 dst
 !*/**/dst
-janet
-!*/**/janet
+bender
+!*/**/bender
 /build
 /builddir
 /Build
@@ -10,12 +10,12 @@ janet
 /Debug
 /Emscripten
 /src/include/generated/*.h
-janet-*.tar.gz
+bender-*.tar.gz
 dist
 /tmp
 
 # jpm lockfile
-lockfile.janet
+lockfile.ben
 
 # Kakoune (fzf via fd)
 .fdignore
@@ -34,17 +34,17 @@ lockfile.janet
 local
 
 # Common test files I use.
-temp.janet
+temp.ben
 temp.c
-temp*janet
+temp*bender
 temp*.c
-scratch.janet
+scratch.ben
 scratch.c
 
 # Emscripten
 *.bc
-janet.js
-janet.wasm
+bender.js
+bender.wasm
 
 # Generated files
 *.gen.h

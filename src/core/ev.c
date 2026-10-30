@@ -20,9 +20,9 @@
 * IN THE SOFTWARE.
 */
 
-#ifndef JANET_AMALG
+#ifndef BENDER_AMALG
 #include "features.h"
-#include <janet.h>
+#include <bender.h>
 #include "util.h"
 #include "gc.h"
 #include "state.h"
@@ -30,11 +30,11 @@
 #include "proc.h"
 #endif
 
-#ifdef JANET_EV
+#ifdef BENDER_EV
 
 #include <math.h>
 #include <fcntl.h>
-#ifdef JANET_WINDOWS
+#ifdef BENDER_WINDOWS
 #include <winsock2.h>
 #include <windows.h>
 #include <io.h>
@@ -51,30 +51,30 @@
 #include <netdb.h>
 #include <sys/socket.h>
 #include <sys/wait.h>
-#ifdef JANET_EV_EPOLL
+#ifdef BENDER_EV_EPOLL
 #include <sys/epoll.h>
 #include <sys/timerfd.h>
 #endif
-#ifdef JANET_EV_KQUEUE
+#ifdef BENDER_EV_KQUEUE
 #include <sys/event.h>
 #endif
-#ifdef JANET_EV_POLL
+#ifdef BENDER_EV_POLL
 #include <poll.h>
 #endif
 #endif
 
-typedef struct JanetChanPendReg JanetChanPendReg;
+typedef struct BenderChanPendReg BenderChanPendReg;
 
 typedef struct {
-    JanetVM *thread;
-    JanetFiber *fiber;
+    BenderVM *thread;
+    BenderFiber *fiber;
     uint32_t sched_id;
     enum {
-        JANET_CP_MODE_READ,
-        JANET_CP_MODE_WRITE,
-        JANET_CP_MODE_CHOICE_READ,
-        JANET_CP_MODE_CHOICE_WRITE,
-        JANET_CP_MODE_CLOSE
+        BENDER_CP_MODE_READ,
+        BENDER_CP_MODE_WRITE,
+        BENDER_CP_MODE_CHOICE_READ,
+        BENDER_CP_MODE_CHOICE_WRITE,
+        BENDER_CP_MODE_CLOSE
     } mode;
     /* Back-pointer into the owning fiber's chan_pends registration
      * list. Unlink-on-free discipline: the node is claimed (and
@@ -82,10 +82,10 @@ typedef struct {
      * close revival, channel deinit, or fiber free. Fibers are only
      * ever dereferenced through an entry whose node proves them alive
      * (dead bit clear), replacing the unsound GC probe-on-read. */
-    JanetChanPendReg *reg;
-} JanetChannelPending;
+    BenderChanPendReg *reg;
+} BenderChannelPending;
 
-/* Channel-pending registration (see JanetFiber.chan_pends). Malloc'd,
+/* Channel-pending registration (see BenderFiber.chan_pends). Malloc'd,
  * never a GC object. Bit semantics:
  *   in_queue  — the entry is linked into the channel queue right now
  *   dequeued  — a threaded-channel pop claimed the entry under lock;
@@ -96,23 +96,23 @@ typedef struct {
  * Plain/isolated channels are same-thread by contract (their home
  * lane), so their node mutations need no lock. Threaded channels
  * mutate `dequeued` and `dead` under the channel lock. */
-typedef struct JanetChanPendReg {
-    struct JanetChanPendReg *next;
-    JanetChannel *chan;
+typedef struct BenderChanPendReg {
+    struct BenderChanPendReg *next;
+    BenderChannel *chan;
     uint8_t is_write;
     uint8_t in_queue;
     uint8_t dequeued;
     uint8_t dead;
     uint8_t chan_dead;
-} JanetChanPendReg;
+} BenderChanPendReg;
 
 /* Drop finished registrations from the fiber's list (called on the
  * fiber's own thread at park time). Nodes are freed here exactly when
  * no channel-side reference can reach them anymore. */
-static void janet_chanpends_prune(JanetFiber *f) {
-    JanetChanPendReg **link = (JanetChanPendReg **) &f->chan_pends;
+static void bender_chanpends_prune(BenderFiber *f) {
+    BenderChanPendReg **link = (BenderChanPendReg **) &f->chan_pends;
     while (NULL != *link) {
-        JanetChanPendReg *reg = *link;
+        BenderChanPendReg *reg = *link;
         /* chan_dead nodes are kept even once unqueued: a freed
          * channel's abandoned queue storage may still hold entries
          * that reference the node, and a push into that
@@ -122,7 +122,7 @@ static void janet_chanpends_prune(JanetFiber *f) {
          * records on this broken-ownership path. */
         if (reg->dead || reg->dequeued || (!reg->in_queue && !reg->chan_dead)) {
             *link = reg->next;
-            janet_free(reg);
+            bender_free(reg);
         } else {
             link = &reg->next;
         }
@@ -131,10 +131,10 @@ static void janet_chanpends_prune(JanetFiber *f) {
 
 /* Register a new pending entry: node onto the fiber list, then the
  * caller fills pending.reg and pushes to the channel queue. */
-static JanetChanPendReg *janet_chanpend_register(JanetFiber *f, JanetChannel *chan, int is_write) {
-    janet_chanpends_prune(f);
-    JanetChanPendReg *reg = janet_malloc(sizeof(JanetChanPendReg));
-    reg->next = (JanetChanPendReg *) f->chan_pends;
+static BenderChanPendReg *bender_chanpend_register(BenderFiber *f, BenderChannel *chan, int is_write) {
+    bender_chanpends_prune(f);
+    BenderChanPendReg *reg = bender_malloc(sizeof(BenderChanPendReg));
+    reg->next = (BenderChanPendReg *) f->chan_pends;
     reg->chan = chan;
     reg->is_write = (uint8_t) is_write;
     reg->in_queue = 1;
@@ -147,8 +147,8 @@ static JanetChanPendReg *janet_chanpend_register(JanetFiber *f, JanetChannel *ch
 
 /* Remove a node from the fiber's list and free it. The fiber must be
  * alive and on this thread (same-VM claim path only). */
-static void janet_chanpends_unlink(JanetFiber *f, JanetChanPendReg *reg) {
-    JanetChanPendReg **link = (JanetChanPendReg **) &f->chan_pends;
+static void bender_chanpends_unlink(BenderFiber *f, BenderChanPendReg *reg) {
+    BenderChanPendReg **link = (BenderChanPendReg **) &f->chan_pends;
     while (NULL != *link) {
         if (*link == reg) {
             *link = reg->next;
@@ -156,7 +156,7 @@ static void janet_chanpends_unlink(JanetFiber *f, JanetChanPendReg *reg) {
         }
         link = &(*link)->next;
     }
-    janet_free(reg);
+    bender_free(reg);
 }
 
 /* Consume a same-VM pending entry popped from a plain/isolated
@@ -165,28 +165,28 @@ static void janet_chanpends_unlink(JanetFiber *f, JanetChanPendReg *reg) {
  * just reclaimed. Returns 1 when pending.fiber may be scheduled
  * (alive and sched-consistent), 0 when the entry was consumed as
  * stale. */
-static int janet_chanpend_claim_plain(JanetChannelPending *p) {
-    JanetChanPendReg *reg = p->reg;
+static int bender_chanpend_claim_plain(BenderChannelPending *p) {
+    BenderChanPendReg *reg = p->reg;
     reg->in_queue = 0;
     if (reg->dead) {
-        janet_free(reg);
+        bender_free(reg);
         return 0;
     }
     int live = p->sched_id == p->fiber->sched_id;
-    janet_chanpends_unlink(p->fiber, reg);
+    bender_chanpends_unlink(p->fiber, reg);
     return live;
 }
 
 /* Consume a threaded-channel entry popped under the channel lock:
  * only the node is touched (the fiber may live on another thread).
  * The owner thread reclaims the node at its next park or at free. */
-static void janet_chanpend_claim_threaded(JanetChannelPending *p) {
-    JanetChanPendReg *reg = p->reg;
+static void bender_chanpend_claim_threaded(BenderChannelPending *p) {
+    BenderChanPendReg *reg = p->reg;
     reg->in_queue = 0;
     reg->dequeued = 1;
 }
 
-/* Fiber free hook (called from janet_deinit_block's fiber case).
+/* Fiber free hook (called from bender_deinit_block's fiber case).
  * Entries still queued stay in the queues with `dead` set — channels
  * reclaim them lazily and never dereference the fiber again. No
  * channel locks are taken here: this runs inside the GC sweep, and a
@@ -197,10 +197,10 @@ static void janet_chanpend_claim_threaded(JanetChannelPending *p) {
  * fiber free. Nodes whose channel already died are kept (dead
  * flagged) because abandoned queue storage may still reference them;
  * only dequeued nodes free here. */
-void janet_ev_chanpends_deinit(JanetFiber *f) {
-    JanetChanPendReg *reg = (JanetChanPendReg *) f->chan_pends;
+void bender_ev_chanpends_deinit(BenderFiber *f) {
+    BenderChanPendReg *reg = (BenderChanPendReg *) f->chan_pends;
     while (NULL != reg) {
-        JanetChanPendReg *next = reg->next;
+        BenderChanPendReg *next = reg->next;
         if (!reg->chan_dead && !reg->dequeued) {
             /* Queued on a living channel: flag dead, channel reclaims.
              * (Dequeuing is impossible for a freed fiber.) */
@@ -212,14 +212,14 @@ void janet_ev_chanpends_deinit(JanetFiber *f) {
              * leak bounded records. */
             reg->dead = 1;
         } else {
-            janet_free(reg);
+            bender_free(reg);
         }
         reg = next;
     }
     f->chan_pends = NULL;
 }
 
-/* GC reverse edge (called from janet_mark_fiber): a fiber with
+/* GC reverse edge (called from bender_mark_fiber): a fiber with
  * pending registrations pins its channels, mirroring the channel's
  * own pin on parked fibers (mark_fq). Without this, a scoped or
  * global sweep could free a channel out from under a parked fiber's
@@ -229,20 +229,20 @@ void janet_ev_chanpends_deinit(JanetFiber *f) {
  * list until its next park, but their channel can already be freed.
  * Dead-flagged nodes reference freed fibers (skip), and chan_dead
  * nodes reference freed channels (skip). */
-void janet_ev_chanpends_mark(JanetFiber *f) {
-    JanetChanPendReg *reg = (JanetChanPendReg *) f->chan_pends;
+void bender_ev_chanpends_mark(BenderFiber *f) {
+    BenderChanPendReg *reg = (BenderChanPendReg *) f->chan_pends;
     while (NULL != reg) {
         if (reg->in_queue && !reg->chan_dead && !reg->dead) {
-            janet_mark(janet_wrap_abstract(reg->chan));
+            bender_mark(bender_wrap_abstract(reg->chan));
         }
         reg = reg->next;
     }
 }
 
-struct JanetChannel {
-    JanetQueue items;
-    JanetQueue read_pending;
-    JanetQueue write_pending;
+struct BenderChannel {
+    BenderQueue items;
+    BenderQueue read_pending;
+    BenderQueue write_pending;
     int32_t limit;
     int closed;
     int is_threaded;
@@ -267,8 +267,8 @@ struct JanetChannel {
      * Isolated channels are lock-free, so foreign-thread use would be
      * a silent race; push/pop refuse it loudly instead. Plain and
      * threaded channels leave this NULL (legacy behavior unchanged). */
-    JanetVM *owner;
-#ifdef JANET_WINDOWS
+    BenderVM *owner;
+#ifdef BENDER_WINDOWS
     CRITICAL_SECTION lock;
 #else
     pthread_mutex_t lock;
@@ -276,67 +276,67 @@ struct JanetChannel {
 };
 
 typedef struct {
-    JanetFiber *fiber;
-    Janet value;
-    JanetSignal sig;
+    BenderFiber *fiber;
+    Bender value;
+    BenderSignal sig;
     uint32_t expected_sched_id; /* If the fiber has been rescheduled this loop, don't run first scheduling. */
-} JanetTask;
+} BenderTask;
 
 /* Wrap return value by pairing it with the callback used to handle it
  * in the main thread */
 typedef struct {
-    JanetEVGenericMessage msg;
-    JanetThreadedCallback cb;
-} JanetSelfPipeEvent;
+    BenderEVGenericMessage msg;
+    BenderThreadedCallback cb;
+} BenderSelfPipeEvent;
 
 /* Structure used to initialize threads in the thread pool
  * (same head structure as self pipe event)*/
 typedef struct {
-    JanetEVGenericMessage msg;
-    JanetThreadedCallback cb;
-    JanetThreadedSubroutine subr;
-    JanetHandle write_pipe;
-} JanetEVThreadInit;
+    BenderEVGenericMessage msg;
+    BenderThreadedCallback cb;
+    BenderThreadedSubroutine subr;
+    BenderHandle write_pipe;
+} BenderEVThreadInit;
 
 /* Structure used to initialize threads that run timeouts */
 typedef struct {
     double sec;
-    JanetVM *vm;
-    JanetFiber *fiber;
-#ifdef JANET_WINDOWS
+    BenderVM *vm;
+    BenderFiber *fiber;
+#ifdef BENDER_WINDOWS
     HANDLE cancel_event;
 #endif
-} JanetThreadedTimeout;
+} BenderThreadedTimeout;
 
-#define JANET_MAX_Q_CAPACITY 0x7FFFFFF
+#define BENDER_MAX_Q_CAPACITY 0x7FFFFFF
 
-static void janet_q_init(JanetQueue *q) {
+static void bender_q_init(BenderQueue *q) {
     q->data = NULL;
     q->head = 0;
     q->tail = 0;
     q->capacity = 0;
 }
 
-static void janet_q_deinit(JanetQueue *q) {
-    janet_free(q->data);
+static void bender_q_deinit(BenderQueue *q) {
+    bender_free(q->data);
 }
 
-static int32_t janet_q_count(JanetQueue *q) {
+static int32_t bender_q_count(BenderQueue *q) {
     return (q->head > q->tail)
            ? (q->tail + q->capacity - q->head)
            : (q->tail - q->head);
 }
 
-static int janet_q_maybe_resize(JanetQueue *q, size_t itemsize) {
-    int32_t count = janet_q_count(q);
+static int bender_q_maybe_resize(BenderQueue *q, size_t itemsize) {
+    int32_t count = bender_q_count(q);
     /* Resize if needed */
     if (count + 1 >= q->capacity) {
-        if (count + 1 >= JANET_MAX_Q_CAPACITY) return 1;
+        if (count + 1 >= BENDER_MAX_Q_CAPACITY) return 1;
         int32_t newcap = (count + 2) * 2;
-        if (newcap > JANET_MAX_Q_CAPACITY) newcap = JANET_MAX_Q_CAPACITY;
-        q->data = janet_realloc(q->data, itemsize * newcap);
+        if (newcap > BENDER_MAX_Q_CAPACITY) newcap = BENDER_MAX_Q_CAPACITY;
+        q->data = bender_realloc(q->data, itemsize * newcap);
         if (NULL == q->data) {
-            JANET_OUT_OF_MEMORY;
+            BENDER_OUT_OF_MEMORY;
         }
         if (q->head > q->tail) {
             /* Two segments, fix 2nd seg. */
@@ -354,15 +354,15 @@ static int janet_q_maybe_resize(JanetQueue *q, size_t itemsize) {
     return 0;
 }
 
-static int janet_q_push(JanetQueue *q, void *item, size_t itemsize) {
-    if (janet_q_maybe_resize(q, itemsize)) return 1;
+static int bender_q_push(BenderQueue *q, void *item, size_t itemsize) {
+    if (bender_q_maybe_resize(q, itemsize)) return 1;
     memcpy((char *) q->data + itemsize * q->tail, item, itemsize);
     q->tail = q->tail + 1 < q->capacity ? q->tail + 1 : 0;
     return 0;
 }
 
-static int janet_q_push_head(JanetQueue *q, void *item, size_t itemsize) {
-    if (janet_q_maybe_resize(q, itemsize)) return 1;
+static int bender_q_push_head(BenderQueue *q, void *item, size_t itemsize) {
+    if (bender_q_maybe_resize(q, itemsize)) return 1;
     int32_t newhead = q->head - 1;
     if (newhead < 0) {
         newhead += q->capacity;
@@ -372,7 +372,7 @@ static int janet_q_push_head(JanetQueue *q, void *item, size_t itemsize) {
     return 0;
 }
 
-static int janet_q_pop(JanetQueue *q, void *out, size_t itemsize) {
+static int bender_q_pop(BenderQueue *q, void *out, size_t itemsize) {
     if (q->head == q->tail) return 1;
     memcpy(out, (char *) q->data + itemsize * q->head, itemsize);
     q->head = q->head + 1 < q->capacity ? q->head + 1 : 0;
@@ -380,10 +380,10 @@ static int janet_q_pop(JanetQueue *q, void *out, size_t itemsize) {
 }
 
 /* Get current timestamp (millisecond precision) */
-static JanetTimestamp ts_now(void);
+static BenderTimestamp ts_now(void);
 
 /* Get current timestamp + an interval (millisecond precision) */
-static JanetTimestamp ts_delta(JanetTimestamp ts, double delta) {
+static BenderTimestamp ts_delta(BenderTimestamp ts, double delta) {
     if (isinf(delta)) {
         return delta < 0 ? ts : INT64_MAX;
     }
@@ -392,65 +392,65 @@ static JanetTimestamp ts_delta(JanetTimestamp ts, double delta) {
 }
 
 /* Look at the next timeout value without removing it. */
-static int peek_timeout(JanetTimeout *out) {
-    if (janet_vm.tq_count == 0) return 0;
-    *out = janet_vm.tq[0];
+static int peek_timeout(BenderTimeout *out) {
+    if (bender_vm.tq_count == 0) return 0;
+    *out = bender_vm.tq[0];
     return 1;
 }
 
 /* Remove the next timeout from the priority queue */
 static void pop_timeout(size_t index) {
-    if (janet_vm.tq_count <= index) return;
-    janet_vm.tq[index] = janet_vm.tq[--janet_vm.tq_count];
+    if (bender_vm.tq_count <= index) return;
+    bender_vm.tq[index] = bender_vm.tq[--bender_vm.tq_count];
     for (;;) {
         size_t left = (index << 1) + 1;
         size_t right = left + 1;
         size_t smallest = index;
-        if (left < janet_vm.tq_count &&
-                (janet_vm.tq[left].when < janet_vm.tq[smallest].when))
+        if (left < bender_vm.tq_count &&
+                (bender_vm.tq[left].when < bender_vm.tq[smallest].when))
             smallest = left;
-        if (right < janet_vm.tq_count &&
-                (janet_vm.tq[right].when < janet_vm.tq[smallest].when))
+        if (right < bender_vm.tq_count &&
+                (bender_vm.tq[right].when < bender_vm.tq[smallest].when))
             smallest = right;
         if (smallest == index) return;
-        JanetTimeout temp = janet_vm.tq[index];
-        janet_vm.tq[index] = janet_vm.tq[smallest];
-        janet_vm.tq[smallest] = temp;
+        BenderTimeout temp = bender_vm.tq[index];
+        bender_vm.tq[index] = bender_vm.tq[smallest];
+        bender_vm.tq[smallest] = temp;
         index = smallest;
     }
 }
 
 /* Add a timeout to the timeout min heap */
-static void add_timeout(JanetTimeout to) {
-    size_t oldcount = janet_vm.tq_count;
+static void add_timeout(BenderTimeout to) {
+    size_t oldcount = bender_vm.tq_count;
     size_t newcount = oldcount + 1;
-    if (newcount > janet_vm.tq_capacity) {
+    if (newcount > bender_vm.tq_capacity) {
         size_t newcap = 2 * newcount;
-        JanetTimeout *tq = janet_realloc(janet_vm.tq, newcap * sizeof(JanetTimeout));
+        BenderTimeout *tq = bender_realloc(bender_vm.tq, newcap * sizeof(BenderTimeout));
         if (NULL == tq) {
-            JANET_OUT_OF_MEMORY;
+            BENDER_OUT_OF_MEMORY;
         }
-        janet_vm.tq = tq;
-        janet_vm.tq_capacity = newcap;
+        bender_vm.tq = tq;
+        bender_vm.tq_capacity = newcap;
     }
     /* Append */
-    janet_vm.tq_count = (int32_t) newcount;
-    janet_vm.tq[oldcount] = to;
+    bender_vm.tq_count = (int32_t) newcount;
+    bender_vm.tq[oldcount] = to;
     /* Heapify */
     size_t index = oldcount;
     while (index > 0) {
         size_t parent = (index - 1) >> 1;
-        if (janet_vm.tq[parent].when <= janet_vm.tq[index].when) break;
+        if (bender_vm.tq[parent].when <= bender_vm.tq[index].when) break;
         /* Swap */
-        JanetTimeout tmp = janet_vm.tq[index];
-        janet_vm.tq[index] = janet_vm.tq[parent];
-        janet_vm.tq[parent] = tmp;
+        BenderTimeout tmp = bender_vm.tq[index];
+        bender_vm.tq[index] = bender_vm.tq[parent];
+        bender_vm.tq[parent] = tmp;
         /* Next */
         index = parent;
     }
 }
 
-void janet_async_end(JanetFiber *fiber) {
+void bender_async_end(BenderFiber *fiber) {
     if (fiber->ev_callback) {
         if (fiber->ev_stream->read_fiber == fiber) {
             fiber->ev_stream->read_fiber = NULL;
@@ -458,49 +458,49 @@ void janet_async_end(JanetFiber *fiber) {
         if (fiber->ev_stream->write_fiber == fiber) {
             fiber->ev_stream->write_fiber = NULL;
         }
-        fiber->ev_callback(fiber, JANET_ASYNC_EVENT_DEINIT);
-        janet_gcunroot(janet_wrap_abstract(fiber->ev_stream));
+        fiber->ev_callback(fiber, BENDER_ASYNC_EVENT_DEINIT);
+        bender_gcunroot(bender_wrap_abstract(fiber->ev_stream));
         fiber->ev_callback = NULL;
-        if (!(fiber->flags & JANET_FIBER_EV_FLAG_IN_FLIGHT)) {
+        if (!(fiber->flags & BENDER_FIBER_EV_FLAG_IN_FLIGHT)) {
             if (fiber->ev_state) {
-                janet_free(fiber->ev_state);
+                bender_free(fiber->ev_state);
                 fiber->ev_state = NULL;
             }
-            janet_ev_dec_refcount();
+            bender_ev_dec_refcount();
         }
     }
 }
 
-void janet_async_in_flight(JanetFiber *fiber) {
-#ifdef JANET_WINDOWS
-    fiber->flags |= JANET_FIBER_EV_FLAG_IN_FLIGHT;
+void bender_async_in_flight(BenderFiber *fiber) {
+#ifdef BENDER_WINDOWS
+    fiber->flags |= BENDER_FIBER_EV_FLAG_IN_FLIGHT;
 #else
     (void) fiber;
 #endif
 }
 
-void janet_async_start_fiber(JanetFiber *fiber, JanetStream *stream, JanetAsyncMode mode, JanetEVCallback callback, void *state) {
-    janet_assert(!fiber->ev_callback, "double async on fiber");
-    if (mode & JANET_ASYNC_LISTEN_READ) {
+void bender_async_start_fiber(BenderFiber *fiber, BenderStream *stream, BenderAsyncMode mode, BenderEVCallback callback, void *state) {
+    bender_assert(!fiber->ev_callback, "double async on fiber");
+    if (mode & BENDER_ASYNC_LISTEN_READ) {
         stream->read_fiber = fiber;
     }
-    if (mode & JANET_ASYNC_LISTEN_WRITE) {
+    if (mode & BENDER_ASYNC_LISTEN_WRITE) {
         stream->write_fiber = fiber;
     }
     fiber->ev_callback = callback;
     fiber->ev_stream = stream;
-    janet_ev_inc_refcount();
-    janet_gcroot(janet_wrap_abstract(stream));
+    bender_ev_inc_refcount();
+    bender_gcroot(bender_wrap_abstract(stream));
     fiber->ev_state = state;
-    callback(fiber, JANET_ASYNC_EVENT_INIT);
+    callback(fiber, BENDER_ASYNC_EVENT_INIT);
 }
 
-void janet_async_start(JanetStream *stream, JanetAsyncMode mode, JanetEVCallback callback, void *state) {
-    janet_async_start_fiber(janet_vm.root_fiber, stream, mode, callback, state);
-    janet_await();
+void bender_async_start(BenderStream *stream, BenderAsyncMode mode, BenderEVCallback callback, void *state) {
+    bender_async_start_fiber(bender_vm.root_fiber, stream, mode, callback, state);
+    bender_await();
 }
 
-static void handle_timeout_worker(JanetTimeout to, int cancel);
+static void handle_timeout_worker(BenderTimeout to, int cancel);
 
 /* Remove every operation-scoped deadline owned by `fiber`.
  *
@@ -516,10 +516,10 @@ static void handle_timeout_worker(JanetTimeout to, int cancel);
  * are ev/deadline's explicit user-armed cancellations, not operation waits, and
  * are left alone. The heap holds one entry per concurrently waiting fiber, so
  * this scan is tiny and paid only on resume. */
-static void janet_drop_deadlines_for(JanetFiber *fiber) {
+static void bender_drop_deadlines_for(BenderFiber *fiber) {
     size_t i = 0;
-    while (i < janet_vm.tq_count) {
-        JanetTimeout t = janet_vm.tq[i];
+    while (i < bender_vm.tq_count) {
+        BenderTimeout t = bender_vm.tq[i];
         if (t.curr_fiber == NULL && t.fiber == fiber) {
             pop_timeout(i);
             handle_timeout_worker(t, 1);
@@ -529,35 +529,35 @@ static void janet_drop_deadlines_for(JanetFiber *fiber) {
     }
 }
 
-void janet_fiber_did_resume(JanetFiber *fiber) {
-    janet_async_end(fiber);
-    janet_drop_deadlines_for(fiber);
+void bender_fiber_did_resume(BenderFiber *fiber) {
+    bender_async_end(fiber);
+    bender_drop_deadlines_for(fiber);
 }
 
-static void janet_stream_checktoclose(JanetStream *stream) {
-    if ((stream->flags & JANET_STREAM_TOCLOSE) && !stream->read_fiber && !stream->write_fiber) {
-        janet_stream_close(stream);
+static void bender_stream_checktoclose(BenderStream *stream) {
+    if ((stream->flags & BENDER_STREAM_TOCLOSE) && !stream->read_fiber && !stream->write_fiber) {
+        bender_stream_close(stream);
     }
 }
 
 /* Forward declaration */
-static void janet_register_stream(JanetStream *stream);
-#ifndef JANET_WINDOWS
-static void janet_unregister_stream(JanetStream *stream);
+static void bender_register_stream(BenderStream *stream);
+#ifndef BENDER_WINDOWS
+static void bender_unregister_stream(BenderStream *stream);
 #endif
 
-static const JanetMethod ev_default_stream_methods[] = {
-    {"close", janet_cfun_stream_close},
-    {"read", janet_cfun_stream_read},
-    {"chunk", janet_cfun_stream_chunk},
-    {"write", janet_cfun_stream_write},
+static const BenderMethod ev_default_stream_methods[] = {
+    {"close", bender_cfun_stream_close},
+    {"read", bender_cfun_stream_read},
+    {"chunk", bender_cfun_stream_chunk},
+    {"write", bender_cfun_stream_write},
     {NULL, NULL}
 };
 
 /* Create a stream*/
-JanetStream *janet_stream_ext(JanetHandle handle, uint32_t flags, const JanetMethod *methods, size_t size) {
-    janet_assert(size >= sizeof(JanetStream), "bad size");
-    JanetStream *stream = janet_abstract(&janet_stream_type, size);
+BenderStream *bender_stream_ext(BenderHandle handle, uint32_t flags, const BenderMethod *methods, size_t size) {
+    bender_assert(size >= sizeof(BenderStream), "bad size");
+    BenderStream *stream = bender_abstract(&bender_stream_type, size);
     stream->handle = handle;
     stream->flags = flags;
     stream->read_fiber = NULL;
@@ -565,23 +565,23 @@ JanetStream *janet_stream_ext(JanetHandle handle, uint32_t flags, const JanetMet
     if (methods == NULL) methods = ev_default_stream_methods;
     stream->methods = methods;
     stream->index = 0;
-    janet_register_stream(stream);
+    bender_register_stream(stream);
     return stream;
 }
 
-JanetStream *janet_stream(JanetHandle handle, uint32_t flags, const JanetMethod *methods) {
-    return janet_stream_ext(handle, flags, methods, sizeof(JanetStream));
+BenderStream *bender_stream(BenderHandle handle, uint32_t flags, const BenderMethod *methods) {
+    return bender_stream_ext(handle, flags, methods, sizeof(BenderStream));
 }
 
-static void janet_stream_close_impl(JanetStream *stream) {
-    stream->flags |= JANET_STREAM_CLOSED;
-    int canclose = !(stream->flags & JANET_STREAM_NOT_CLOSEABLE);
+static void bender_stream_close_impl(BenderStream *stream) {
+    stream->flags |= BENDER_STREAM_CLOSED;
+    int canclose = !(stream->flags & BENDER_STREAM_NOT_CLOSEABLE);
     /* If we are positive that the stream is the last instance of the underlying file description (such that "dup" was never called on the file description)
      * then skip unregister to save a syscall */
-#ifdef JANET_WINDOWS
+#ifdef BENDER_WINDOWS
     if (stream->handle != INVALID_HANDLE_VALUE) {
-#ifdef JANET_NET
-        if (stream->flags & JANET_STREAM_SOCKET) {
+#ifdef BENDER_NET
+        if (stream->flags & BENDER_STREAM_SOCKET) {
             if (canclose) closesocket((SOCKET) stream->handle);
         } else
 #endif
@@ -591,75 +591,75 @@ static void janet_stream_close_impl(JanetStream *stream) {
         stream->handle = INVALID_HANDLE_VALUE;
     }
 #else
-    int canunregister = !(stream->flags & JANET_STREAM_UNREGISTERED);
+    int canunregister = !(stream->flags & BENDER_STREAM_UNREGISTERED);
     if (stream->handle != -1) {
-        if (canunregister) janet_unregister_stream(stream);
+        if (canunregister) bender_unregister_stream(stream);
         if (canclose) close(stream->handle);
         stream->handle = -1;
     }
 #endif
 }
 
-void janet_stream_close(JanetStream *stream) {
-    JanetFiber *rf = stream->read_fiber;
-    JanetFiber *wf = stream->write_fiber;
+void bender_stream_close(BenderStream *stream) {
+    BenderFiber *rf = stream->read_fiber;
+    BenderFiber *wf = stream->write_fiber;
     if (rf && rf->ev_callback) {
-        rf->ev_callback(rf, JANET_ASYNC_EVENT_CLOSE);
+        rf->ev_callback(rf, BENDER_ASYNC_EVENT_CLOSE);
         stream->read_fiber = NULL;
     }
     if (wf && wf->ev_callback) {
-        wf->ev_callback(wf, JANET_ASYNC_EVENT_CLOSE);
+        wf->ev_callback(wf, BENDER_ASYNC_EVENT_CLOSE);
         stream->write_fiber = NULL;
     }
-    janet_stream_close_impl(stream);
+    bender_stream_close_impl(stream);
 }
 
 /* Called to clean up a stream */
-static int janet_stream_gc(void *p, size_t s) {
+static int bender_stream_gc(void *p, size_t s) {
     (void) s;
-    JanetStream *stream = (JanetStream *)p;
-    janet_stream_close_impl(stream);
+    BenderStream *stream = (BenderStream *)p;
+    bender_stream_close_impl(stream);
     return 0;
 }
 
 /* Mark a stream for GC */
-static int janet_stream_mark(void *p, size_t s) {
+static int bender_stream_mark(void *p, size_t s) {
     (void) s;
-    JanetStream *stream = (JanetStream *) p;
-    JanetFiber *rf = stream->read_fiber;
-    JanetFiber *wf = stream->write_fiber;
+    BenderStream *stream = (BenderStream *) p;
+    BenderFiber *rf = stream->read_fiber;
+    BenderFiber *wf = stream->write_fiber;
     if (rf) {
-        janet_mark(janet_wrap_fiber(rf));
+        bender_mark(bender_wrap_fiber(rf));
     }
     if (wf) {
-        janet_mark(janet_wrap_fiber(wf));
+        bender_mark(bender_wrap_fiber(wf));
     }
     return 0;
 }
 
-static int janet_stream_getter(void *p, Janet key, Janet *out) {
-    JanetStream *stream = (JanetStream *)p;
-    if (!janet_checktype(key, JANET_KEYWORD)) return 0;
-    const JanetMethod *stream_methods = stream->methods;
-    return janet_getmethod(janet_unwrap_keyword(key), stream_methods, out);
+static int bender_stream_getter(void *p, Bender key, Bender *out) {
+    BenderStream *stream = (BenderStream *)p;
+    if (!bender_checktype(key, BENDER_KEYWORD)) return 0;
+    const BenderMethod *stream_methods = stream->methods;
+    return bender_getmethod(bender_unwrap_keyword(key), stream_methods, out);
 }
 
-static void janet_stream_marshal(void *p, JanetMarshalContext *ctx) {
-    JanetStream *s = p;
-    if (!(janet_marshal_flags(ctx) & JANET_MARSHAL_UNSAFE)) {
-        janet_panic("can only marshal stream with unsafe flag");
+static void bender_stream_marshal(void *p, BenderMarshalContext *ctx) {
+    BenderStream *s = p;
+    if (!(bender_marshal_flags(ctx) & BENDER_MARSHAL_UNSAFE)) {
+        bender_panic("can only marshal stream with unsafe flag");
     }
-    s->flags &= ~JANET_STREAM_NODUPS; /* This stream now might be duplicated, invalidates some EV optimizations */
-    janet_marshal_abstract(ctx, p);
-    janet_marshal_int(ctx, (int32_t) s->flags);
-    janet_marshal_ptr(ctx, s->methods);
-#ifdef JANET_WINDOWS
+    s->flags &= ~BENDER_STREAM_NODUPS; /* This stream now might be duplicated, invalidates some EV optimizations */
+    bender_marshal_abstract(ctx, p);
+    bender_marshal_int(ctx, (int32_t) s->flags);
+    bender_marshal_ptr(ctx, s->methods);
+#ifdef BENDER_WINDOWS
     /* TODO - ref counting to avoid situation where a handle is closed or GCed
      * while in transit, and it's value gets reused. DuplicateHandle does not work
      * for network sockets, and in general for winsock it is better to not duplicate
      * unless there is a need to. */
     HANDLE duph = INVALID_HANDLE_VALUE;
-    if (s->flags & JANET_STREAM_SOCKET) {
+    if (s->flags & BENDER_STREAM_SOCKET) {
         duph = s->handle;
     } else {
         DuplicateHandle(
@@ -671,124 +671,124 @@ static void janet_stream_marshal(void *p, JanetMarshalContext *ctx) {
             FALSE,
             DUPLICATE_SAME_ACCESS);
     }
-    janet_marshal_int64(ctx, (int64_t)(duph));
+    bender_marshal_int64(ctx, (int64_t)(duph));
 #else
     /* Marshal after dup because it is easier than maintaining our own ref counting. */
     int duph = dup(s->handle);
-    if (duph < 0) janet_panicf("failed to duplicate stream handle: %V", janet_ev_lasterr());
-    janet_marshal_int(ctx, (int32_t)(duph));
+    if (duph < 0) bender_panicf("failed to duplicate stream handle: %V", bender_ev_lasterr());
+    bender_marshal_int(ctx, (int32_t)(duph));
 #endif
 }
 
-static void *janet_stream_unmarshal(JanetMarshalContext *ctx) {
-    if (!(janet_unmarshal_flags(ctx) & JANET_MARSHAL_UNSAFE)) {
-        janet_panic("can only unmarshal stream with unsafe flag");
+static void *bender_stream_unmarshal(BenderMarshalContext *ctx) {
+    if (!(bender_unmarshal_flags(ctx) & BENDER_MARSHAL_UNSAFE)) {
+        bender_panic("can only unmarshal stream with unsafe flag");
     }
-    JanetStream *p = janet_unmarshal_abstract(ctx, sizeof(JanetStream));
+    BenderStream *p = bender_unmarshal_abstract(ctx, sizeof(BenderStream));
     /* Can't share listening state and such across threads */
     p->read_fiber = NULL;
     p->write_fiber = NULL;
-    p->flags = (uint32_t) janet_unmarshal_int(ctx);
-    p->methods =  janet_unmarshal_ptr(ctx);
-#ifdef JANET_WINDOWS
-    p->handle = (JanetHandle) janet_unmarshal_int64(ctx);
+    p->flags = (uint32_t) bender_unmarshal_int(ctx);
+    p->methods =  bender_unmarshal_ptr(ctx);
+#ifdef BENDER_WINDOWS
+    p->handle = (BenderHandle) bender_unmarshal_int64(ctx);
 #else
-    p->handle = (JanetHandle) janet_unmarshal_int(ctx);
+    p->handle = (BenderHandle) bender_unmarshal_int(ctx);
 #endif
-#ifdef JANET_EV_POLL
-    janet_register_stream(p);
+#ifdef BENDER_EV_POLL
+    bender_register_stream(p);
 #endif
     return p;
 }
 
-static Janet janet_stream_next(void *p, Janet key) {
-    JanetStream *stream = (JanetStream *)p;
-    return janet_nextmethod(stream->methods, key);
+static Bender bender_stream_next(void *p, Bender key) {
+    BenderStream *stream = (BenderStream *)p;
+    return bender_nextmethod(stream->methods, key);
 }
 
-static void janet_stream_tostring(void *p, JanetBuffer *buffer) {
-    JanetStream *stream = p;
+static void bender_stream_tostring(void *p, BenderBuffer *buffer) {
+    BenderStream *stream = p;
     /* Let user print the file descriptor for debugging */
-    janet_formatb(buffer, "[fd=%d]", stream->handle);
+    bender_formatb(buffer, "[fd=%d]", stream->handle);
 }
 
-const JanetAbstractType janet_stream_type = {
+const BenderAbstractType bender_stream_type = {
     "core/stream",
-    janet_stream_gc,
-    janet_stream_mark,
-    janet_stream_getter,
+    bender_stream_gc,
+    bender_stream_mark,
+    bender_stream_getter,
     NULL,
-    janet_stream_marshal,
-    janet_stream_unmarshal,
-    janet_stream_tostring,
+    bender_stream_marshal,
+    bender_stream_unmarshal,
+    bender_stream_tostring,
     NULL,
     NULL,
-    janet_stream_next,
-    JANET_ATEND_NEXT
+    bender_stream_next,
+    BENDER_ATEND_NEXT
 };
 
 /* Register a fiber to resume with value */
-static void janet_schedule_general(JanetFiber *fiber, Janet value, JanetSignal sig, int soon) {
-    if (fiber->gc.flags & JANET_FIBER_EV_GCFLAG_CANCELED) return;
-    if (!(fiber->gc.flags & JANET_FIBER_EV_GCFLAG_ROOT)) {
-        fiber->gc.flags |= JANET_FIBER_EV_GCFLAG_ROOT;
-        Janet task_element = janet_wrap_fiber(fiber);
-        janet_table_put(&janet_vm.active_tasks, task_element, janet_wrap_true());
+static void bender_schedule_general(BenderFiber *fiber, Bender value, BenderSignal sig, int soon) {
+    if (fiber->gc.flags & BENDER_FIBER_EV_GCFLAG_CANCELED) return;
+    if (!(fiber->gc.flags & BENDER_FIBER_EV_GCFLAG_ROOT)) {
+        fiber->gc.flags |= BENDER_FIBER_EV_GCFLAG_ROOT;
+        Bender task_element = bender_wrap_fiber(fiber);
+        bender_table_put(&bender_vm.active_tasks, task_element, bender_wrap_true());
     }
-    JanetTask t = { fiber, value, sig, ++fiber->sched_id };
-    if (sig == JANET_SIGNAL_ERROR) fiber->gc.flags |= JANET_FIBER_EV_GCFLAG_CANCELED;
+    BenderTask t = { fiber, value, sig, ++fiber->sched_id };
+    if (sig == BENDER_SIGNAL_ERROR) fiber->gc.flags |= BENDER_FIBER_EV_GCFLAG_CANCELED;
     if (soon) {
-        janet_assert(!janet_q_push_head(&janet_vm.spawn, &t, sizeof(t)), "schedule queue overflow");
+        bender_assert(!bender_q_push_head(&bender_vm.spawn, &t, sizeof(t)), "schedule queue overflow");
     } else {
-        janet_assert(!janet_q_push(&janet_vm.spawn, &t, sizeof(t)), "schedule queue overflow");
+        bender_assert(!bender_q_push(&bender_vm.spawn, &t, sizeof(t)), "schedule queue overflow");
     }
 }
 
-void janet_schedule_signal(JanetFiber *fiber, Janet value, JanetSignal sig) {
-    janet_schedule_general(fiber, value, sig, 0);
+void bender_schedule_signal(BenderFiber *fiber, Bender value, BenderSignal sig) {
+    bender_schedule_general(fiber, value, sig, 0);
 }
 
-void janet_schedule_soon(JanetFiber *fiber, Janet value, JanetSignal sig) {
-    janet_schedule_general(fiber, value, sig, 1);
+void bender_schedule_soon(BenderFiber *fiber, Bender value, BenderSignal sig) {
+    bender_schedule_general(fiber, value, sig, 1);
 }
 
-void janet_cancel(JanetFiber *fiber, Janet value) {
-    if (!(fiber->gc.flags & JANET_FIBER_EV_GCFLAG_ROOT)) {
-        janet_panic("cannot cancel non-task fiber");
+void bender_cancel(BenderFiber *fiber, Bender value) {
+    if (!(fiber->gc.flags & BENDER_FIBER_EV_GCFLAG_ROOT)) {
+        bender_panic("cannot cancel non-task fiber");
     }
-    janet_schedule_signal(fiber, value, JANET_SIGNAL_ERROR);
+    bender_schedule_signal(fiber, value, BENDER_SIGNAL_ERROR);
 }
 
-void janet_schedule(JanetFiber *fiber, Janet value) {
-    janet_schedule_signal(fiber, value, JANET_SIGNAL_OK);
+void bender_schedule(BenderFiber *fiber, Bender value) {
+    bender_schedule_signal(fiber, value, BENDER_SIGNAL_OK);
 }
 
 /* Mark all pending tasks */
-void janet_ev_mark(void) {
+void bender_ev_mark(void) {
 
     /* Pending tasks */
-    JanetTask *tasks = janet_vm.spawn.data;
-    if (janet_vm.spawn.head <= janet_vm.spawn.tail) {
-        for (int32_t i = janet_vm.spawn.head; i < janet_vm.spawn.tail; i++) {
-            janet_mark(janet_wrap_fiber(tasks[i].fiber));
-            janet_mark(tasks[i].value);
+    BenderTask *tasks = bender_vm.spawn.data;
+    if (bender_vm.spawn.head <= bender_vm.spawn.tail) {
+        for (int32_t i = bender_vm.spawn.head; i < bender_vm.spawn.tail; i++) {
+            bender_mark(bender_wrap_fiber(tasks[i].fiber));
+            bender_mark(tasks[i].value);
         }
     } else {
-        for (int32_t i = janet_vm.spawn.head; i < janet_vm.spawn.capacity; i++) {
-            janet_mark(janet_wrap_fiber(tasks[i].fiber));
-            janet_mark(tasks[i].value);
+        for (int32_t i = bender_vm.spawn.head; i < bender_vm.spawn.capacity; i++) {
+            bender_mark(bender_wrap_fiber(tasks[i].fiber));
+            bender_mark(tasks[i].value);
         }
-        for (int32_t i = 0; i < janet_vm.spawn.tail; i++) {
-            janet_mark(janet_wrap_fiber(tasks[i].fiber));
-            janet_mark(tasks[i].value);
+        for (int32_t i = 0; i < bender_vm.spawn.tail; i++) {
+            bender_mark(bender_wrap_fiber(tasks[i].fiber));
+            bender_mark(tasks[i].value);
         }
     }
 
     /* Pending timeouts */
-    for (size_t i = 0; i < janet_vm.tq_count; i++) {
-        janet_mark(janet_wrap_fiber(janet_vm.tq[i].fiber));
-        if (janet_vm.tq[i].curr_fiber != NULL) {
-            janet_mark(janet_wrap_fiber(janet_vm.tq[i].curr_fiber));
+    for (size_t i = 0; i < bender_vm.tq_count; i++) {
+        bender_mark(bender_wrap_fiber(bender_vm.tq[i].fiber));
+        if (bender_vm.tq[i].curr_fiber != NULL) {
+            bender_mark(bender_wrap_fiber(bender_vm.tq[i].curr_fiber));
         }
     }
 }
@@ -798,8 +798,8 @@ void janet_ev_mark(void) {
  * fiber's OWN block from being swept if it happens to live on the
  * heap being collected -- NOT to prove that fiber's full reachability
  * (that is whichever collection actually owns and sweeps it). The
- * original janet_ev_mark deep-marks every queued fiber (janet_mark ->
- * janet_mark_fiber, full frame walk), which — confirmed via live lldb
+ * original bender_ev_mark deep-marks every queued fiber (bender_mark ->
+ * bender_mark_fiber, full frame walk), which — confirmed via live lldb
  * backtraces — made every actor's own per-actor minor walk the ENTIRE
  * stack of whatever fiber the event loop has queued (e.g. a driver
  * script parked on ev/sleep mid spawn-burst, with a large live handle
@@ -808,86 +808,86 @@ void janet_ev_mark(void) {
  * frame walk) while still fully marking every queued VALUE (the
  * wakeup payload the original comment's "lost-wakeup" concern is
  * actually about) exactly as before. Use ONLY from a scoped minor
- * (janet_collect_fiber_minor); janet_mark_roots (global minor/major)
- * must keep calling the full janet_ev_mark. */
-void janet_ev_mark_shallow(void) {
+ * (bender_collect_fiber_minor); bender_mark_roots (global minor/major)
+ * must keep calling the full bender_ev_mark. */
+void bender_ev_mark_shallow(void) {
 
     /* Pending tasks */
-    JanetTask *tasks = janet_vm.spawn.data;
-    if (janet_vm.spawn.head <= janet_vm.spawn.tail) {
-        for (int32_t i = janet_vm.spawn.head; i < janet_vm.spawn.tail; i++) {
-            janet_gc_mark_fiber_shallow(tasks[i].fiber);
-            janet_mark(tasks[i].value);
+    BenderTask *tasks = bender_vm.spawn.data;
+    if (bender_vm.spawn.head <= bender_vm.spawn.tail) {
+        for (int32_t i = bender_vm.spawn.head; i < bender_vm.spawn.tail; i++) {
+            bender_gc_mark_fiber_shallow(tasks[i].fiber);
+            bender_mark(tasks[i].value);
         }
     } else {
-        for (int32_t i = janet_vm.spawn.head; i < janet_vm.spawn.capacity; i++) {
-            janet_gc_mark_fiber_shallow(tasks[i].fiber);
-            janet_mark(tasks[i].value);
+        for (int32_t i = bender_vm.spawn.head; i < bender_vm.spawn.capacity; i++) {
+            bender_gc_mark_fiber_shallow(tasks[i].fiber);
+            bender_mark(tasks[i].value);
         }
-        for (int32_t i = 0; i < janet_vm.spawn.tail; i++) {
-            janet_gc_mark_fiber_shallow(tasks[i].fiber);
-            janet_mark(tasks[i].value);
+        for (int32_t i = 0; i < bender_vm.spawn.tail; i++) {
+            bender_gc_mark_fiber_shallow(tasks[i].fiber);
+            bender_mark(tasks[i].value);
         }
     }
 
     /* Pending timeouts */
-    for (size_t i = 0; i < janet_vm.tq_count; i++) {
-        janet_gc_mark_fiber_shallow(janet_vm.tq[i].fiber);
-        if (janet_vm.tq[i].curr_fiber != NULL) {
-            janet_gc_mark_fiber_shallow(janet_vm.tq[i].curr_fiber);
+    for (size_t i = 0; i < bender_vm.tq_count; i++) {
+        bender_gc_mark_fiber_shallow(bender_vm.tq[i].fiber);
+        if (bender_vm.tq[i].curr_fiber != NULL) {
+            bender_gc_mark_fiber_shallow(bender_vm.tq[i].curr_fiber);
         }
     }
 }
 
 /* Push/pop bodies live here; proc.c shares them via ev.h (Step P1). */
-int janet_channel_push(JanetChannel *channel, Janet x, int mode);
-int janet_channel_pop(JanetChannel *channel, Janet *item, int is_choice);
+int bender_channel_push(BenderChannel *channel, Bender x, int mode);
+int bender_channel_pop(BenderChannel *channel, Bender *item, int is_choice);
 /* Phase C: harvest helper defined with the pool code below (used by
  * both thread/new completions and pool worker exits). */
-static int janet_profile_harvest_bytes(uint8_t **out_bytes, size_t *out_len);
+static int bender_profile_harvest_bytes(uint8_t **out_bytes, size_t *out_len);
 /* NOTE(other-stream): forward declaration to unblock the build; the
  * owning change should place this with its own declarations. */
-static int janet_profile_harvest_bytes(uint8_t **out_bytes, size_t *out_len);
+static int bender_profile_harvest_bytes(uint8_t **out_bytes, size_t *out_len);
 
-static Janet make_supervisor_event(const char *name, JanetFiber *fiber, int threaded) {
-    Janet tup[3];
-    tup[0] = janet_ckeywordv(name);
-    tup[1] = threaded ? fiber->last_value : janet_wrap_fiber(fiber) ;
+static Bender make_supervisor_event(const char *name, BenderFiber *fiber, int threaded) {
+    Bender tup[3];
+    tup[0] = bender_ckeywordv(name);
+    tup[1] = threaded ? fiber->last_value : bender_wrap_fiber(fiber) ;
     if (fiber->env != NULL) {
-        tup[2] = janet_table_get(fiber->env, janet_ckeywordv("task-id"));
+        tup[2] = bender_table_get(fiber->env, bender_ckeywordv("task-id"));
     } else {
-        tup[2] = janet_wrap_nil();
+        tup[2] = bender_wrap_nil();
     }
-    return janet_wrap_tuple(janet_tuple_n(tup, 3));
+    return bender_wrap_tuple(bender_tuple_n(tup, 3));
 }
 
 /* Common init code */
-void janet_ev_init_common(void) {
-    janet_q_init(&janet_vm.spawn);
-    janet_vm.tq = NULL;
-    janet_vm.tq_count = 0;
-    janet_vm.tq_capacity = 0;
-    janet_table_init_raw(&janet_vm.threaded_abstracts, 0);
-    janet_table_init_raw(&janet_vm.active_tasks, 0);
-    janet_table_init_raw(&janet_vm.signal_handlers, 0);
-    janet_rng_seed(&janet_vm.ev_rng, 0);
-#ifndef JANET_WINDOWS
-    pthread_attr_init(&janet_vm.new_thread_attr);
-    pthread_attr_setdetachstate(&janet_vm.new_thread_attr, PTHREAD_CREATE_DETACHED);
+void bender_ev_init_common(void) {
+    bender_q_init(&bender_vm.spawn);
+    bender_vm.tq = NULL;
+    bender_vm.tq_count = 0;
+    bender_vm.tq_capacity = 0;
+    bender_table_init_raw(&bender_vm.threaded_abstracts, 0);
+    bender_table_init_raw(&bender_vm.active_tasks, 0);
+    bender_table_init_raw(&bender_vm.signal_handlers, 0);
+    bender_rng_seed(&bender_vm.ev_rng, 0);
+#ifndef BENDER_WINDOWS
+    pthread_attr_init(&bender_vm.new_thread_attr);
+    pthread_attr_setdetachstate(&bender_vm.new_thread_attr, PTHREAD_CREATE_DETACHED);
 #endif
 }
 
-#if JANET_ANDROID
-static void janet_timeout_stop(int sig_num) {
+#if BENDER_ANDROID
+static void bender_timeout_stop(int sig_num) {
     if (sig_num == SIGUSR1) {
         pthread_exit(NULL);
     }
 }
 #endif
 
-static void handle_timeout_worker(JanetTimeout to, int cancel) {
+static void handle_timeout_worker(BenderTimeout to, int cancel) {
     if (!to.has_worker) return;
-#ifdef JANET_WINDOWS
+#ifdef BENDER_WINDOWS
     if (cancel && to.worker_event) {
         SetEvent(to.worker_event);
     }
@@ -897,48 +897,48 @@ static void handle_timeout_worker(JanetTimeout to, int cancel) {
         CloseHandle(to.worker_event);
     }
 #else
-#ifdef JANET_ANDROID
-    if (cancel) janet_assert(!pthread_kill(to.worker, SIGUSR1), "pthread_kill");
+#ifdef BENDER_ANDROID
+    if (cancel) bender_assert(!pthread_kill(to.worker, SIGUSR1), "pthread_kill");
 #else
-    if (cancel) janet_assert(!pthread_cancel(to.worker), "pthread_cancel");
+    if (cancel) bender_assert(!pthread_cancel(to.worker), "pthread_cancel");
 #endif
     void *res = NULL;
-    janet_assert(!pthread_join(to.worker, &res), "pthread_join");
+    bender_assert(!pthread_join(to.worker, &res), "pthread_join");
 #endif
 }
 
 /* Common deinit code */
-void janet_ev_deinit_common(void) {
-    JanetTimeout to;
+void bender_ev_deinit_common(void) {
+    BenderTimeout to;
     while (peek_timeout(&to)) {
         handle_timeout_worker(to, 1);
         pop_timeout(0);
     }
-    janet_q_deinit(&janet_vm.spawn);
-    janet_free(janet_vm.tq);
-    janet_table_deinit(&janet_vm.threaded_abstracts);
-    janet_table_deinit(&janet_vm.active_tasks);
-    janet_table_deinit(&janet_vm.signal_handlers);
-#ifndef JANET_WINDOWS
-    pthread_attr_destroy(&janet_vm.new_thread_attr);
+    bender_q_deinit(&bender_vm.spawn);
+    bender_free(bender_vm.tq);
+    bender_table_deinit(&bender_vm.threaded_abstracts);
+    bender_table_deinit(&bender_vm.active_tasks);
+    bender_table_deinit(&bender_vm.signal_handlers);
+#ifndef BENDER_WINDOWS
+    pthread_attr_destroy(&bender_vm.new_thread_attr);
 #endif
 }
 
 /* Shorthand to yield to event loop */
-void janet_await(void) {
+void bender_await(void) {
     /* Store the fiber in a global table */
-    janet_signalv(JANET_SIGNAL_EVENT, janet_wrap_nil());
+    bender_signalv(BENDER_SIGNAL_EVENT, bender_wrap_nil());
 }
 
 /* Set timeout for the operation that is about to suspend.
  *
  * The task identity is root_fiber: only it carries the scheduler flag that
- * janet_cancel requires, and a deadline to a non-task child fiber can never be
+ * bender_cancel requires, and a deadline to a non-task child fiber can never be
  * delivered. What must be operation-scoped is the lifetime of the entry, not
- * this pointer -- see janet_drop_deadlines_for. */
-void janet_addtimeout(double sec) {
-    JanetFiber *fiber = janet_vm.root_fiber;
-    JanetTimeout to;
+ * this pointer -- see bender_drop_deadlines_for. */
+void bender_addtimeout(double sec) {
+    BenderFiber *fiber = bender_vm.root_fiber;
+    BenderTimeout to;
     to.when = ts_delta(ts_now(), sec);
     to.fiber = fiber;
     to.curr_fiber = NULL;
@@ -949,9 +949,9 @@ void janet_addtimeout(double sec) {
 }
 
 /* Set timeout for the current root fiber but resume with nil instead of raising an error */
-void janet_addtimeout_nil(double sec) {
-    JanetFiber *fiber = janet_vm.root_fiber;
-    JanetTimeout to;
+void bender_addtimeout_nil(double sec) {
+    BenderFiber *fiber = bender_vm.root_fiber;
+    BenderTimeout to;
     to.when = ts_delta(ts_now(), sec);
     to.fiber = fiber;
     to.curr_fiber = NULL;
@@ -961,125 +961,125 @@ void janet_addtimeout_nil(double sec) {
     add_timeout(to);
 }
 
-static void janet_timeout_cb(JanetEVGenericMessage msg) {
+static void bender_timeout_cb(BenderEVGenericMessage msg) {
     (void) msg;
-    janet_interpreter_interrupt_handled(&janet_vm);
+    bender_interpreter_interrupt_handled(&bender_vm);
 }
 
-#ifdef JANET_WINDOWS
-static DWORD WINAPI janet_timeout_body(LPVOID ptr) {
-    JanetThreadedTimeout tto = *(JanetThreadedTimeout *)ptr;
-    janet_free(ptr);
-    JanetTimestamp wait_begin = ts_now();
+#ifdef BENDER_WINDOWS
+static DWORD WINAPI bender_timeout_body(LPVOID ptr) {
+    BenderThreadedTimeout tto = *(BenderThreadedTimeout *)ptr;
+    bender_free(ptr);
+    BenderTimestamp wait_begin = ts_now();
     DWORD duration = (DWORD)round(tto.sec * 1000);
     DWORD res = WAIT_TIMEOUT;
-    JanetTimestamp wait_end = ts_now();
+    BenderTimestamp wait_end = ts_now();
     for (DWORD i = 1; res == WAIT_TIMEOUT && (wait_end - wait_begin) < duration; i++) {
         res = WaitForSingleObject(tto.cancel_event, (duration + i));
         wait_end = ts_now();
     }
     /* only send interrupt message if result is WAIT_TIMEOUT */
     if (res == WAIT_TIMEOUT) {
-        janet_interpreter_interrupt(tto.vm);
-        JanetEVGenericMessage msg = {0};
-        janet_ev_post_event(tto.vm, janet_timeout_cb, msg);
+        bender_interpreter_interrupt(tto.vm);
+        BenderEVGenericMessage msg = {0};
+        bender_ev_post_event(tto.vm, bender_timeout_cb, msg);
     }
     return 0;
 }
 #else
-static void *janet_timeout_body(void *ptr) {
-#ifdef JANET_ANDROID
+static void *bender_timeout_body(void *ptr) {
+#ifdef BENDER_ANDROID
     struct sigaction action;
     memset(&action, 0, sizeof(action));
     sigemptyset(&action.sa_mask);
     action.sa_flags = 0;
-    action.sa_handler = &janet_timeout_stop;
+    action.sa_handler = &bender_timeout_stop;
     sigaction(SIGUSR1, &action, NULL);
 #endif
-    JanetThreadedTimeout tto = *(JanetThreadedTimeout *)ptr;
-    janet_free(ptr);
+    BenderThreadedTimeout tto = *(BenderThreadedTimeout *)ptr;
+    bender_free(ptr);
     struct timespec ts;
     ts.tv_sec = (time_t) tto.sec;
     ts.tv_nsec = (tto.sec <= UINT32_MAX)
                  ? (long)((tto.sec - ((uint32_t)tto.sec)) * 1000000000)
                  : 0;
     nanosleep(&ts, &ts);
-    janet_interpreter_interrupt(tto.vm);
-    JanetEVGenericMessage msg = {0};
-    janet_ev_post_event(tto.vm, janet_timeout_cb, msg);
+    bender_interpreter_interrupt(tto.vm);
+    BenderEVGenericMessage msg = {0};
+    bender_ev_post_event(tto.vm, bender_timeout_cb, msg);
     return NULL;
 }
 #endif
 
 
-void janet_ev_inc_refcount(void) {
-    janet_atomic_inc(&janet_vm.listener_count);
+void bender_ev_inc_refcount(void) {
+    bender_atomic_inc(&bender_vm.listener_count);
 }
 
-void janet_ev_dec_refcount(void) {
-    janet_atomic_dec(&janet_vm.listener_count);
+void bender_ev_dec_refcount(void) {
+    bender_atomic_dec(&bender_vm.listener_count);
 }
 
 /* Channels */
 
-#define JANET_MAX_CHANNEL_CAPACITY 0xFFFFFF
+#define BENDER_MAX_CHANNEL_CAPACITY 0xFFFFFF
 
-static inline int janet_chan_is_threaded(JanetChannel *chan) {
+static inline int bender_chan_is_threaded(BenderChannel *chan) {
     return chan->is_threaded;
 }
 
 /* Step 1.4: values are marshal-copied through isolated channels the
  * same way as threaded ones (same transit ownership); only the lock
  * stays threaded-only (isolated channels are single-VM by contract). */
-static inline int janet_chan_needs_pack(JanetChannel *chan) {
+static inline int bender_chan_needs_pack(BenderChannel *chan) {
     return chan->is_threaded || chan->isolated;
 }
 
-static int janet_chan_pack(JanetChannel *chan, Janet *x) {
-    if (!janet_chan_needs_pack(chan)) return 0;
-    switch (janet_type(*x)) {
+static int bender_chan_pack(BenderChannel *chan, Bender *x) {
+    if (!bender_chan_needs_pack(chan)) return 0;
+    switch (bender_type(*x)) {
         default: {
-            JanetBuffer *buf = janet_malloc(sizeof(JanetBuffer));
+            BenderBuffer *buf = bender_malloc(sizeof(BenderBuffer));
             if (NULL == buf) {
-                JANET_OUT_OF_MEMORY;
+                BENDER_OUT_OF_MEMORY;
             }
-            janet_buffer_init(buf, 10);
-            janet_marshal(buf, *x, NULL, JANET_MARSHAL_UNSAFE);
-            *x = janet_wrap_buffer(buf);
+            bender_buffer_init(buf, 10);
+            bender_marshal(buf, *x, NULL, BENDER_MARSHAL_UNSAFE);
+            *x = bender_wrap_buffer(buf);
             return 0;
         }
-        case JANET_NIL:
-        case JANET_NUMBER:
-        case JANET_POINTER:
-        case JANET_BOOLEAN:
-        case JANET_CFUNCTION:
+        case BENDER_NIL:
+        case BENDER_NUMBER:
+        case BENDER_POINTER:
+        case BENDER_BOOLEAN:
+        case BENDER_CFUNCTION:
             return 0;
     }
 }
 
-static int janet_chan_unpack(JanetChannel *chan, Janet *x, int is_cleanup) {
-    if (!janet_chan_needs_pack(chan)) return 0;
-    switch (janet_type(*x)) {
+static int bender_chan_unpack(BenderChannel *chan, Bender *x, int is_cleanup) {
+    if (!bender_chan_needs_pack(chan)) return 0;
+    switch (bender_type(*x)) {
         default:
             return 1;
-        case JANET_BUFFER: {
-            JanetBuffer *buf = janet_unwrap_buffer(*x);
-            int flags = is_cleanup ? (JANET_MARSHAL_UNSAFE | JANET_MARSHAL_DECREF) : JANET_MARSHAL_UNSAFE;
-            *x = janet_unmarshal(buf->data, buf->count, flags, NULL, NULL);
-            janet_buffer_deinit(buf);
-            janet_free(buf);
+        case BENDER_BUFFER: {
+            BenderBuffer *buf = bender_unwrap_buffer(*x);
+            int flags = is_cleanup ? (BENDER_MARSHAL_UNSAFE | BENDER_MARSHAL_DECREF) : BENDER_MARSHAL_UNSAFE;
+            *x = bender_unmarshal(buf->data, buf->count, flags, NULL, NULL);
+            bender_buffer_deinit(buf);
+            bender_free(buf);
             return 0;
         }
-        case JANET_NIL:
-        case JANET_NUMBER:
-        case JANET_POINTER:
-        case JANET_BOOLEAN:
-        case JANET_CFUNCTION:
+        case BENDER_NIL:
+        case BENDER_NUMBER:
+        case BENDER_POINTER:
+        case BENDER_BOOLEAN:
+        case BENDER_CFUNCTION:
             return 0;
     }
 }
 
-static void janet_chan_init(JanetChannel *chan, int32_t limit, int threaded, int isolated) {
+static void bender_chan_init(BenderChannel *chan, int32_t limit, int threaded, int isolated) {
     chan->limit = limit;
     chan->closed = 0;
     chan->is_threaded = threaded;
@@ -1099,14 +1099,14 @@ static void janet_chan_init(JanetChannel *chan, int32_t limit, int threaded, int
      * loud "use ev/thread-chan" panic isolated channels already give.
      * Threaded channels stay unpinned: they take the lock and copy. */
     chan->detached_copy = 0;
-    chan->owner = (isolated || (!threaded)) ? &janet_vm : NULL;
-    janet_q_init(&chan->items);
-    janet_q_init(&chan->read_pending);
-    janet_q_init(&chan->write_pending);
-    janet_os_mutex_init((JanetOSMutex *) &chan->lock);
+    chan->owner = (isolated || (!threaded)) ? &bender_vm : NULL;
+    bender_q_init(&chan->items);
+    bender_q_init(&chan->read_pending);
+    bender_q_init(&chan->write_pending);
+    bender_os_mutex_init((BenderOSMutex *) &chan->lock);
 }
 
-/* (The old janet_chan_purge_fiber is gone: it was dead code — no
+/* (The old bender_chan_purge_fiber is gone: it was dead code — no
  * death path ever called it, which is how stale pendings survived to
  * crash push walks. The chan_pends registration makes reclamation
  * structural instead: fiber free marks its queued entries dead, and
@@ -1114,29 +1114,29 @@ static void janet_chan_init(JanetChannel *chan, int32_t limit, int threaded, int
  * registration: only threaded pendings root, and every threaded
  * claim/unroot is preserved below.) */
 
-void janet_channel_set_proc_alive(JanetChannel *chan, int alive) {
+void bender_channel_set_proc_alive(BenderChannel *chan, int alive) {
     chan->proc_alive = alive;
 }
 
-int janet_channel_proc_alive(JanetChannel *chan) {
+int bender_channel_proc_alive(BenderChannel *chan) {
     return chan->proc_alive;
 }
 
-static void janet_chan_lock(JanetChannel *chan) {
-    if (!janet_chan_is_threaded(chan)) return;
-    janet_os_mutex_lock((JanetOSMutex *) &chan->lock);
+static void bender_chan_lock(BenderChannel *chan) {
+    if (!bender_chan_is_threaded(chan)) return;
+    bender_os_mutex_lock((BenderOSMutex *) &chan->lock);
 }
 
-static void janet_chan_unlock(JanetChannel *chan) {
-    if (!janet_chan_is_threaded(chan)) return;
-    janet_os_mutex_unlock((JanetOSMutex *) &chan->lock);
+static void bender_chan_unlock(BenderChannel *chan) {
+    if (!bender_chan_is_threaded(chan)) return;
+    bender_os_mutex_unlock((BenderOSMutex *) &chan->lock);
 }
 
 /* Drain one pending queue at channel deinit: entries die with the
  * queue, nodes are released or left to their (living) fibers with
  * chan_dead set. Never dereferences fibers — only nodes. */
-static void flag_chanpend_node(JanetChannelPending *p) {
-    JanetChanPendReg *reg = p->reg;
+static void flag_chanpend_node(BenderChannelPending *p) {
+    BenderChanPendReg *reg = p->reg;
     if (NULL != reg) {
         reg->in_queue = 0;
         reg->chan_dead = 1;
@@ -1146,7 +1146,7 @@ static void flag_chanpend_node(JanetChannelPending *p) {
          * fiber's prune/deinit to double-free. The fiber reclaims it
          * (dequeued ⇒ prune's free branch); a dead fiber's node has
          * no future walker, so it frees here. */
-        if (reg->dead) janet_free(reg);
+        if (reg->dead) bender_free(reg);
     }
 }
 
@@ -1159,8 +1159,8 @@ static void flag_chanpend_node(JanetChannelPending *p) {
  * ordered after all flagging so no walker sees a half-state. Living
  * fibers' regs are never freed here -- in_queue drops to 0 and their
  * own prune reclaims them. Never dereferences fibers -- only nodes. */
-static void janet_chan_deinit_q(JanetQueue *q) {
-    JanetChannelPending *pending = q->data;
+static void bender_chan_deinit_q(BenderQueue *q) {
+    BenderChannelPending *pending = q->data;
     if (NULL != pending) {
         int32_t ranges[2][2];
         int nranges = 0;
@@ -1174,12 +1174,12 @@ static void janet_chan_deinit_q(JanetQueue *q) {
             ranges[nranges++][1] = q->tail;
         }
         /* Pass 1: flag, collect dead regs, null their slots. */
-        JanetChanPendReg *dead[64];
+        BenderChanPendReg *dead[64];
         size_t ndead = 0;
         int overflow = 0;
         for (int r = 0; r < nranges; r++) {
             for (int32_t i = ranges[r][0]; i < ranges[r][1]; i++) {
-                JanetChanPendReg *reg = pending[i].reg;
+                BenderChanPendReg *reg = pending[i].reg;
                 if (NULL == reg) continue;
                 reg->chan_dead = 1;
                 if (reg->dead) {
@@ -1196,55 +1196,55 @@ static void janet_chan_deinit_q(JanetQueue *q) {
         }
         /* Pass 2: free the collected dead regs (no future walker:
          * dead fibers never prune). */
-        for (size_t k = 0; k < ndead; k++) janet_free(dead[k]);
+        for (size_t k = 0; k < ndead; k++) bender_free(dead[k]);
         if (overflow) {
             /* Rare: more than 64 dead regs. Sweep again for the
              * remainder (slots were left intact for this pass). */
             for (int r = 0; r < nranges; r++) {
                 for (int32_t i = ranges[r][0]; i < ranges[r][1]; i++) {
-                    JanetChanPendReg *reg = pending[i].reg;
+                    BenderChanPendReg *reg = pending[i].reg;
                     if (NULL != reg && reg->dead) {
-                        janet_free(reg);
+                        bender_free(reg);
                         pending[i].reg = NULL;
                     }
                 }
             }
         }
     }
-    janet_q_deinit(q);
+    bender_q_deinit(q);
 }
 
-static void janet_chan_deinit(JanetChannel *chan) {
+static void bender_chan_deinit(BenderChannel *chan) {
     /* LOCK the whole deinit: the pending-queue walk reads head/tail
      * bounds and reg nodes that foreign threads mutate concurrently
      * (claim pops, prune frees). Previously only pack channels took
      * the lock here, and the density teardown volume exposed the
      * unlocked walk as a use-after-free (ASAN: flag_chanpend_node
      * reading a node freed by the owning fiber's VM mid-walk). */
-    janet_chan_lock(chan);
-    if (janet_chan_needs_pack(chan)) {
-        Janet item;
-        janet_chan_deinit_q(&chan->read_pending);
-        janet_chan_deinit_q(&chan->write_pending);
-        while (!janet_q_pop(&chan->items, &item, sizeof(item))) {
-            janet_chan_unpack(chan, &item, 1);
+    bender_chan_lock(chan);
+    if (bender_chan_needs_pack(chan)) {
+        Bender item;
+        bender_chan_deinit_q(&chan->read_pending);
+        bender_chan_deinit_q(&chan->write_pending);
+        while (!bender_q_pop(&chan->items, &item, sizeof(item))) {
+            bender_chan_unpack(chan, &item, 1);
         }
-        janet_q_deinit(&chan->items);
+        bender_q_deinit(&chan->items);
     } else {
-        janet_chan_deinit_q(&chan->read_pending);
-        janet_chan_deinit_q(&chan->write_pending);
-        janet_q_deinit(&chan->items);
+        bender_chan_deinit_q(&chan->read_pending);
+        bender_chan_deinit_q(&chan->write_pending);
+        bender_q_deinit(&chan->items);
     }
-    janet_chan_unlock(chan);
-    janet_os_mutex_deinit((JanetOSMutex *) &chan->lock);
+    bender_chan_unlock(chan);
+    bender_os_mutex_deinit((BenderOSMutex *) &chan->lock);
 }
 
 /*
- * Janet Channel abstract type
+ * Bender Channel abstract type
  */
 
-static Janet janet_wrap_channel(JanetChannel *channel) {
-    return janet_wrap_abstract(channel);
+static Bender bender_wrap_channel(BenderChannel *channel) {
+    return bender_wrap_abstract(channel);
 }
 
 /* proc/kill on a recv-parked victim: remove the fiber's read pendings
@@ -1252,27 +1252,27 @@ static Janet janet_wrap_channel(JanetChannel *channel) {
  * so the kill lands immediately instead of at a next resume that may
  * never come. recv is own-mailbox only, so pendings found here belong
  * to the victim on this VM. Returns 1 when a pending was cancelled. */
-int janet_channel_cancel_reader(JanetChannel *channel, JanetFiber *fiber, Janet reason) {
+int bender_channel_cancel_reader(BenderChannel *channel, BenderFiber *fiber, Bender reason) {
     if (NULL == channel || channel->is_threaded) return 0;
-    JanetQueue *fq = &channel->read_pending;
-    int32_t count = janet_q_count(fq);
+    BenderQueue *fq = &channel->read_pending;
+    int32_t count = bender_q_count(fq);
     if (0 == count) return 0;
-    JanetChannelPending *kept =
-        janet_malloc(sizeof(JanetChannelPending) * (size_t) count);
+    BenderChannelPending *kept =
+        bender_malloc(sizeof(BenderChannelPending) * (size_t) count);
     if (NULL == kept) return 0;
     int32_t nkept = 0;
     int cancelled = 0;
     int32_t i = fq->head;
     for (int32_t n = 0; n < count; n++) {
-        JanetChannelPending p;
-        memcpy(&p, (char *) fq->data + i * sizeof(JanetChannelPending),
+        BenderChannelPending p;
+        memcpy(&p, (char *) fq->data + i * sizeof(BenderChannelPending),
                sizeof(p));
         i = i + 1 < fq->capacity ? i + 1 : 0;
-        if (!cancelled && p.thread == &janet_vm && p.fiber == fiber) {
+        if (!cancelled && p.thread == &bender_vm && p.fiber == fiber) {
             /* Claim the node: unlinks the fiber's registration, frees
              * dead regs. Live entries schedule; stale ones drop. */
-            if (janet_chanpend_claim_plain(&p)) {
-                janet_schedule_signal(fiber, reason, JANET_SIGNAL_ERROR);
+            if (bender_chanpend_claim_plain(&p)) {
+                bender_schedule_signal(fiber, reason, BENDER_SIGNAL_ERROR);
                 cancelled = 1;
             }
             continue; /* consumed either way */
@@ -1282,57 +1282,57 @@ int janet_channel_cancel_reader(JanetChannel *channel, JanetFiber *fiber, Janet 
     if (cancelled) {
         int32_t w = fq->head;
         for (int32_t k = 0; k < nkept; k++) {
-            memcpy((char *) fq->data + w * sizeof(JanetChannelPending),
-                   kept + k, sizeof(JanetChannelPending));
+            memcpy((char *) fq->data + w * sizeof(BenderChannelPending),
+                   kept + k, sizeof(BenderChannelPending));
             w = w + 1 < fq->capacity ? w + 1 : 0;
         }
         fq->tail = w;
     }
-    janet_free(kept);
+    bender_free(kept);
     return cancelled;
 }
 
 /* Milestone 2c: current item depth of a channel (the :steal policy's
  * high-water check on lane control channels). */
-JANET_API int32_t janet_channel_count(void *chan) {
-    JanetChannel *channel = chan;
-    return janet_q_count(&channel->items);
+BENDER_API int32_t bender_channel_count(void *chan) {
+    BenderChannel *channel = chan;
+    return bender_q_count(&channel->items);
 }
 
-static int janet_chanat_gc(void *p, size_t s) {
+static int bender_chanat_gc(void *p, size_t s) {
     (void) s;
-    JanetChannel *channel = p;
-    janet_chan_deinit(channel);
+    BenderChannel *channel = p;
+    bender_chan_deinit(channel);
     return 0;
 }
 
-static void janet_chanat_remove_vmref_one(JanetChannelPending *pending) {
-    if (pending->thread == &janet_vm) {
+static void bender_chanat_remove_vmref_one(BenderChannelPending *pending) {
+    if (pending->thread == &bender_vm) {
         pending->thread = NULL;
-        janet_gcunroot(janet_wrap_fiber(pending->fiber));
+        bender_gcunroot(bender_wrap_fiber(pending->fiber));
     }
 }
 
-static void janet_chanat_remove_vmref(JanetQueue *fq) {
-    JanetChannelPending *pending = fq->data;
+static void bender_chanat_remove_vmref(BenderQueue *fq) {
+    BenderChannelPending *pending = fq->data;
     if (fq->head <= fq->tail) {
         for (int32_t i = fq->head; i < fq->tail; i++) {
-            janet_chanat_remove_vmref_one(pending + i);
+            bender_chanat_remove_vmref_one(pending + i);
         }
     } else {
         for (int32_t i = fq->head; i < fq->capacity; i++) {
-            janet_chanat_remove_vmref_one(pending + i);
+            bender_chanat_remove_vmref_one(pending + i);
         }
         for (int32_t i = 0; i < fq->tail; i++) {
-            janet_chanat_remove_vmref_one(pending + i);
+            bender_chanat_remove_vmref_one(pending + i);
         }
     }
 }
 
-static int janet_chanat_gcperthread(void *p, size_t s) {
+static int bender_chanat_gcperthread(void *p, size_t s) {
     (void) s;
-    JanetChannel *chan = p;
-    janet_chan_lock(chan);
+    BenderChannel *chan = p;
+    bender_chan_lock(chan);
     /* Make sure that the internals of the channel no longer reference
      * _this_ thread. Replace those references with NULL. Entries are
      * deliberately NOT dropped here: this finalizer also fires when a
@@ -1343,29 +1343,29 @@ static int janet_chanat_gcperthread(void *p, size_t s) {
      * callback: chan_deinit runs right after it, flags remaining
      * nodes chan_dead, and each fiber's prune/deinit reclaims the
      * node without ever dereferencing the channel again. */
-    janet_chanat_remove_vmref(&chan->read_pending);
-    janet_chanat_remove_vmref(&chan->write_pending);
-    janet_chan_unlock(chan);
+    bender_chanat_remove_vmref(&chan->read_pending);
+    bender_chanat_remove_vmref(&chan->write_pending);
+    bender_chan_unlock(chan);
     return 0;
 }
 
-static void janet_chanat_mark_fq(JanetQueue *fq) {
-    JanetChannelPending *pending = fq->data;
+static void bender_chanat_mark_fq(BenderQueue *fq) {
+    BenderChannelPending *pending = fq->data;
 /* A stale entry (its fiber was resumed some other way, e.g. by another
  * clause of ev/select, so sched_id no longer matches) must not pin the
  * fiber: nothing may ever visit this channel again, so the pin would be
  * permanent (observed: 100/100 leaked fibers). Only skip the mark here —
  * never claim/free the node from inside GC (the queue entry stays valid;
- * a later pop or janet_chan_remove_stale reclaims it under the channel's
+ * a later pop or bender_chan_remove_stale reclaims it under the channel's
  * normal discipline). Reading ->sched_id of a same-VM fiber is safe:
  * plain-channel entries only ever reference this VM's fibers, and only
  * this VM's scheduler mutates sched_id. */
 #define MARK_ONE(idx) do { \
-        JanetChannelPending *p = &pending[idx]; \
+        BenderChannelPending *p = &pending[idx]; \
         if (!(p->reg->dead)) { \
-            if (!(p->thread == &janet_vm && \
+            if (!(p->thread == &bender_vm && \
                     p->fiber->sched_id != (uint32_t) p->sched_id)) { \
-                janet_mark(janet_wrap_fiber(p->fiber)); \
+                bender_mark(bender_wrap_fiber(p->fiber)); \
             } \
         } \
     } while (0)
@@ -1381,10 +1381,10 @@ static void janet_chanat_mark_fq(JanetQueue *fq) {
 #undef MARK_ONE
 }
 
-static int janet_chanat_mark(void *p, size_t s) {
+static int bender_chanat_mark(void *p, size_t s) {
     (void) s;
-    JanetChannel *chan = p;
-    if (janet_chan_is_threaded(chan)) {
+    BenderChannel *chan = p;
+    if (bender_chan_is_threaded(chan)) {
         /* Threaded-channel internals must not be marked from an
          * arbitrary VM's GC. Every mutation of items/read_pending/
          * write_pending (push growth realloc, pop+unpack freeing the
@@ -1400,14 +1400,14 @@ static int janet_chanat_mark(void *p, size_t s) {
          * livelocks under contention (verified by a reverted fix
          * attempt). Marking is also unnecessary here:
          *  - items only ever hold immediates (no mark needed) or
-         *    transit buffers from janet_chan_pack -- raw janet_malloc
+         *    transit buffers from bender_chan_pack -- raw bender_malloc
          *    memory that is NOT a GC object on any VM's heap; its
          *    lifetime is queue ownership (freed only by the popper
          *    or deinit, under the lock), so no collector ever needs
          *    to keep it alive;
          *  - every fiber parked on a threaded channel (both the
-         *    push path and the pop path) is janet_gcroot'd by its
-         *    OWN VM while queued (see the janet_gcroot calls beside
+         *    push path and the pop path) is bender_gcroot'd by its
+         *    OWN VM while queued (see the bender_gcroot calls beside
          *    both pending enqueues), so the pending fibers are kept
          *    alive by their enqueuing VMs, not by this mark.
          * Plain/isolated channels are single-VM by contract: their
@@ -1415,78 +1415,78 @@ static int janet_chanat_mark(void *p, size_t s) {
          * heap-shared, so they keep the full mark below. */
         return 0;
     }
-    janet_chanat_mark_fq(&chan->read_pending);
-    janet_chanat_mark_fq(&chan->write_pending);
-    JanetQueue *items = &chan->items;
-    Janet *data = chan->items.data;
+    bender_chanat_mark_fq(&chan->read_pending);
+    bender_chanat_mark_fq(&chan->write_pending);
+    BenderQueue *items = &chan->items;
+    Bender *data = chan->items.data;
     if (items->head <= items->tail) {
         for (int32_t i = items->head; i < items->tail; i++)
-            janet_mark(data[i]);
+            bender_mark(data[i]);
     } else {
         for (int32_t i = items->head; i < items->capacity; i++)
-            janet_mark(data[i]);
+            bender_mark(data[i]);
         for (int32_t i = 0; i < items->tail; i++)
-            janet_mark(data[i]);
+            bender_mark(data[i]);
     }
     return 0;
 }
 
-static Janet make_write_result(JanetChannel *channel) {
-    Janet *tup = janet_tuple_begin(2);
-    tup[0] = janet_ckeywordv("give");
-    tup[1] = janet_wrap_channel(channel);
-    return janet_wrap_tuple(janet_tuple_end(tup));
+static Bender make_write_result(BenderChannel *channel) {
+    Bender *tup = bender_tuple_begin(2);
+    tup[0] = bender_ckeywordv("give");
+    tup[1] = bender_wrap_channel(channel);
+    return bender_wrap_tuple(bender_tuple_end(tup));
 }
 
-static Janet make_read_result(JanetChannel *channel, Janet x) {
-    Janet *tup = janet_tuple_begin(3);
-    tup[0] = janet_ckeywordv("take");
-    tup[1] = janet_wrap_channel(channel);
+static Bender make_read_result(BenderChannel *channel, Bender x) {
+    Bender *tup = bender_tuple_begin(3);
+    tup[0] = bender_ckeywordv("take");
+    tup[1] = bender_wrap_channel(channel);
     tup[2] = x;
-    return janet_wrap_tuple(janet_tuple_end(tup));
+    return bender_wrap_tuple(bender_tuple_end(tup));
 }
 
-static Janet make_close_result(JanetChannel *channel) {
-    Janet *tup = janet_tuple_begin(2);
-    tup[0] = janet_ckeywordv("close");
-    tup[1] = janet_wrap_channel(channel);
-    return janet_wrap_tuple(janet_tuple_end(tup));
+static Bender make_close_result(BenderChannel *channel) {
+    Bender *tup = bender_tuple_begin(2);
+    tup[0] = bender_ckeywordv("close");
+    tup[1] = bender_wrap_channel(channel);
+    return bender_wrap_tuple(bender_tuple_end(tup));
 }
 
 /* Callback to use for scheduling a fiber from another thread. */
-static void janet_thread_chan_cb(JanetEVGenericMessage msg) {
+static void bender_thread_chan_cb(BenderEVGenericMessage msg) {
     uint32_t sched_id = (uint32_t) msg.argi;
-    JanetFiber *fiber = msg.fiber;
+    BenderFiber *fiber = msg.fiber;
     int mode = msg.tag;
-    JanetChannel *channel = (JanetChannel *) msg.argp;
-    Janet x = msg.argj;
-    janet_chan_lock(channel);
+    BenderChannel *channel = (BenderChannel *) msg.argp;
+    Bender x = msg.argj;
+    bender_chan_lock(channel);
     if (fiber->sched_id == sched_id) {
-        if (mode == JANET_CP_MODE_CHOICE_READ) {
-            janet_assert(!janet_chan_unpack(channel, &x, 0), "packing error");
-            janet_schedule(fiber, make_read_result(channel, x));
-        } else if (mode == JANET_CP_MODE_CHOICE_WRITE) {
-            janet_schedule(fiber, make_write_result(channel));
-        } else if (mode == JANET_CP_MODE_READ) {
-            janet_assert(!janet_chan_unpack(channel, &x, 0), "packing error");
-            janet_schedule(fiber, x);
-        } else if (mode == JANET_CP_MODE_WRITE) {
-            janet_schedule(fiber, janet_wrap_channel(channel));
-        } else { /* (mode == JANET_CP_MODE_CLOSE) */
-            janet_schedule(fiber, janet_wrap_nil());
+        if (mode == BENDER_CP_MODE_CHOICE_READ) {
+            bender_assert(!bender_chan_unpack(channel, &x, 0), "packing error");
+            bender_schedule(fiber, make_read_result(channel, x));
+        } else if (mode == BENDER_CP_MODE_CHOICE_WRITE) {
+            bender_schedule(fiber, make_write_result(channel));
+        } else if (mode == BENDER_CP_MODE_READ) {
+            bender_assert(!bender_chan_unpack(channel, &x, 0), "packing error");
+            bender_schedule(fiber, x);
+        } else if (mode == BENDER_CP_MODE_WRITE) {
+            bender_schedule(fiber, bender_wrap_channel(channel));
+        } else { /* (mode == BENDER_CP_MODE_CLOSE) */
+            bender_schedule(fiber, bender_wrap_nil());
         }
-    } else if (mode != JANET_CP_MODE_CLOSE) {
+    } else if (mode != BENDER_CP_MODE_CLOSE) {
         /* Fiber has already been canceled or resumed. */
         /* Resend event to another waiting thread, depending on mode */
-        int is_read = (mode == JANET_CP_MODE_CHOICE_READ) || (mode == JANET_CP_MODE_READ);
+        int is_read = (mode == BENDER_CP_MODE_CHOICE_READ) || (mode == BENDER_CP_MODE_READ);
         if (is_read) {
-            JanetChannelPending reader;
+            BenderChannelPending reader;
             int sent = 0;
-            while (!janet_q_pop(&channel->read_pending, &reader, sizeof(reader))) {
-                janet_chanpend_claim_threaded(&reader);
-                JanetVM *vm = reader.thread;
+            while (!bender_q_pop(&channel->read_pending, &reader, sizeof(reader))) {
+                bender_chanpend_claim_threaded(&reader);
+                BenderVM *vm = reader.thread;
                 if (!vm) continue;
-                if (vm == &janet_vm) {
+                if (vm == &bender_vm) {
                     /* BUG 1 sibling: same-VM pending on a threaded
                      * channel. Posting through the self-pipe from the
                      * loop's own thread fills the pipe (~8000 writes
@@ -1495,59 +1495,59 @@ static void janet_thread_chan_cb(JanetEVGenericMessage msg) {
                      * inline instead -- we are the loop. */
                     uint32_t sid = (uint32_t) reader.sched_id;
                     if (reader.fiber->sched_id == sid) {
-                        janet_gcunroot(janet_wrap_fiber(reader.fiber));
-                        if (reader.mode == JANET_CP_MODE_CHOICE_READ) {
-                            janet_assert(!janet_chan_unpack(channel, &x, 0),
+                        bender_gcunroot(bender_wrap_fiber(reader.fiber));
+                        if (reader.mode == BENDER_CP_MODE_CHOICE_READ) {
+                            bender_assert(!bender_chan_unpack(channel, &x, 0),
                                     "packing error");
-                            janet_schedule(reader.fiber,
+                            bender_schedule(reader.fiber,
                                     make_read_result(channel, x));
-                        } else if (reader.mode == JANET_CP_MODE_READ) {
-                            janet_assert(!janet_chan_unpack(channel, &x, 0),
+                        } else if (reader.mode == BENDER_CP_MODE_READ) {
+                            bender_assert(!bender_chan_unpack(channel, &x, 0),
                                     "packing error");
-                            janet_schedule(reader.fiber, x);
+                            bender_schedule(reader.fiber, x);
                         } else {
-                            janet_schedule(reader.fiber,
+                            bender_schedule(reader.fiber,
                                     make_write_result(channel));
                         }
                     }
                     sent = 1;
                     break;
                 }
-                JanetEVGenericMessage msg;
+                BenderEVGenericMessage msg;
                 msg.tag = reader.mode;
                 msg.fiber = reader.fiber;
                 msg.argi = (int32_t) reader.sched_id;
                 msg.argp = channel;
                 msg.argj = x;
-                janet_ev_post_event(vm, janet_thread_chan_cb, msg);
+                bender_ev_post_event(vm, bender_thread_chan_cb, msg);
                 sent = 1;
                 break;
             }
             if (!sent) {
-                if (channel->closed || janet_q_push_head(&channel->items, &x, sizeof(Janet))) {
+                if (channel->closed || bender_q_push_head(&channel->items, &x, sizeof(Bender))) {
                     /* channel is closed or full. Otherwise, keep it. */
-                    janet_chan_unpack(channel, &x, 1);
+                    bender_chan_unpack(channel, &x, 1);
                 }
             }
         } else {
-            JanetChannelPending writer;
-            while (!janet_q_pop(&channel->write_pending, &writer, sizeof(writer))) {
-                janet_chanpend_claim_threaded(&writer);
-                JanetVM *vm = writer.thread;
+            BenderChannelPending writer;
+            while (!bender_q_pop(&channel->write_pending, &writer, sizeof(writer))) {
+                bender_chanpend_claim_threaded(&writer);
+                BenderVM *vm = writer.thread;
                 if (!vm) continue;
-                JanetEVGenericMessage msg;
+                BenderEVGenericMessage msg;
                 msg.tag = writer.mode;
                 msg.fiber = writer.fiber;
                 msg.argi = (int32_t) writer.sched_id;
                 msg.argp = channel;
-                msg.argj = janet_wrap_nil();
-                janet_ev_post_event(vm, janet_thread_chan_cb, msg);
+                msg.argj = bender_wrap_nil();
+                bender_ev_post_event(vm, bender_thread_chan_cb, msg);
                 break;
             }
         }
     }
-    janet_chan_unlock(channel);
-    janet_gcunroot(janet_wrap_fiber(fiber));
+    bender_chan_unlock(channel);
+    bender_gcunroot(bender_wrap_fiber(fiber));
 }
 
 /* Remove pending entries of this thread whose fiber has since been resumed some
@@ -1559,22 +1559,22 @@ static void janet_thread_chan_cb(JanetEVGenericMessage msg) {
  * entries to about the number of live ones. Dead-node entries (fiber freed —
  * only possible post-gcperthread, when the root is already gone) are dropped
  * without touching the fiber. */
-static void janet_chan_remove_stale(JanetQueue *fq) {
-    int32_t count = janet_q_count(fq);
+static void bender_chan_remove_stale(BenderQueue *fq) {
+    int32_t count = bender_q_count(fq);
     if (count & (count - 1)) return;
     for (int32_t i = 0; i < count; i++) {
-        JanetChannelPending pending;
-        janet_q_pop(fq, &pending, sizeof(pending));
+        BenderChannelPending pending;
+        bender_q_pop(fq, &pending, sizeof(pending));
         if (pending.reg->dead) {
             /* Fiber gone: no root held (threaded roots keep fibers
              * alive), reclaim the node. */
-            janet_free(pending.reg);
-        } else if (pending.thread == &janet_vm && pending.sched_id != pending.fiber->sched_id) {
-            janet_chanpend_claim_threaded(&pending);
-            janet_gcunroot(janet_wrap_fiber(pending.fiber));
+            bender_free(pending.reg);
+        } else if (pending.thread == &bender_vm && pending.sched_id != pending.fiber->sched_id) {
+            bender_chanpend_claim_threaded(&pending);
+            bender_gcunroot(bender_wrap_fiber(pending.fiber));
         } else {
             /* Live items must be inserted back in the same order */
-            janet_q_push(fq, &pending, sizeof(pending));
+            bender_q_push(fq, &pending, sizeof(pending));
         }
     }
 }
@@ -1592,32 +1592,32 @@ static void janet_chan_remove_stale(JanetQueue *fq) {
  * leaked claim only over-retains. The zero-drop teardown is deferred
  * to the loop: we may still hold the channel lock here, and freeing
  * under it would hand the unlock a freed mutex. */
-extern void janet_abstract_home_teardown_cb(JanetEVGenericMessage msg);
-static void janet_chan_inflight_release(JanetChannel *channel) {
-    if (!janet_chan_is_threaded(channel)) return;
-    if (0 == janet_abstract_decref((void *) channel)) {
-        JanetAbstractHead *head = janet_abstract_head(channel);
-        JanetEVGenericMessage msg;
+extern void bender_abstract_home_teardown_cb(BenderEVGenericMessage msg);
+static void bender_chan_inflight_release(BenderChannel *channel) {
+    if (!bender_chan_is_threaded(channel)) return;
+    if (0 == bender_abstract_decref((void *) channel)) {
+        BenderAbstractHead *head = bender_abstract_head(channel);
+        BenderEVGenericMessage msg;
         memset(&msg, 0, sizeof(msg));
         msg.argp = (void *) channel;
-        janet_ev_post_event((JanetVM *) head->home_vm,
-                janet_abstract_home_teardown_cb, msg);
+        bender_ev_post_event((BenderVM *) head->home_vm,
+                bender_abstract_home_teardown_cb, msg);
     }
 }
-#define JANET_CHAN_INFLIGHT_ACQUIRE(chan) \
-    do { if (janet_chan_is_threaded(chan)) \
-        janet_abstract_incref((void *) (chan)); } while (0)
-#define JANET_CHAN_INFLIGHT_DROP(chan) \
-    do { janet_chan_inflight_release(chan); } while (0)
+#define BENDER_CHAN_INFLIGHT_ACQUIRE(chan) \
+    do { if (bender_chan_is_threaded(chan)) \
+        bender_abstract_incref((void *) (chan)); } while (0)
+#define BENDER_CHAN_INFLIGHT_DROP(chan) \
+    do { bender_chan_inflight_release(chan); } while (0)
 
-static int janet_channel_push_with_lock(JanetChannel *channel, Janet x, int mode) {
-    JanetChannelPending reader;
+static int bender_channel_push_with_lock(BenderChannel *channel, Bender x, int mode) {
+    BenderChannelPending reader;
     int is_empty;
-    JANET_CHAN_INFLIGHT_ACQUIRE(channel);
+    BENDER_CHAN_INFLIGHT_ACQUIRE(channel);
     if (channel->closed) {
-        janet_chan_unlock(channel);
-        JANET_CHAN_INFLIGHT_DROP(channel);
-        janet_panic("cannot write to closed channel");
+        bender_chan_unlock(channel);
+        BENDER_CHAN_INFLIGHT_DROP(channel);
+        bender_panic("cannot write to closed channel");
     }
     /* P3.4: plain (non-packing) channels share by reference, so a
      * strict-heap value pushed here would leak invisibly to per-proc
@@ -1626,115 +1626,115 @@ static int janet_channel_push_with_lock(JanetChannel *channel, Janet x, int mode
      * reachable from the owning proc struct (marked + traversed —
      * no hole). Gated: legacy VMs skip for one branch; immediate and
      * immutable string-heap values exempt (no refs to leak). */
-    if (2 != mode && janet_vm.heap_strict_live && !janet_chan_needs_pack(channel)) {
-        JanetType xt = janet_type(x);
-        if (xt != JANET_NIL && xt != JANET_BOOLEAN && xt != JANET_NUMBER &&
-                xt != JANET_CFUNCTION && xt != JANET_POINTER &&
-                xt != JANET_STRING && xt != JANET_SYMBOL && xt != JANET_KEYWORD) {
+    if (2 != mode && bender_vm.heap_strict_live && !bender_chan_needs_pack(channel)) {
+        BenderType xt = bender_type(x);
+        if (xt != BENDER_NIL && xt != BENDER_BOOLEAN && xt != BENDER_NUMBER &&
+                xt != BENDER_CFUNCTION && xt != BENDER_POINTER &&
+                xt != BENDER_STRING && xt != BENDER_SYMBOL && xt != BENDER_KEYWORD) {
             void *xobj = NULL;
             switch (xt) {
-                case JANET_ARRAY:
-                    xobj = (void *) janet_unwrap_array(x);
+                case BENDER_ARRAY:
+                    xobj = (void *) bender_unwrap_array(x);
                     break;
-                case JANET_TUPLE:
-                    xobj = (void *) janet_tuple_head(janet_unwrap_tuple(x));
+                case BENDER_TUPLE:
+                    xobj = (void *) bender_tuple_head(bender_unwrap_tuple(x));
                     break;
-                case JANET_TABLE:
-                    xobj = (void *) janet_unwrap_table(x);
+                case BENDER_TABLE:
+                    xobj = (void *) bender_unwrap_table(x);
                     break;
-                case JANET_STRUCT:
-                    xobj = (void *) janet_struct_head(janet_unwrap_struct(x));
+                case BENDER_STRUCT:
+                    xobj = (void *) bender_struct_head(bender_unwrap_struct(x));
                     break;
-                case JANET_BUFFER:
-                    xobj = (void *) janet_unwrap_buffer(x);
+                case BENDER_BUFFER:
+                    xobj = (void *) bender_unwrap_buffer(x);
                     break;
-                case JANET_FUNCTION:
-                    xobj = (void *) janet_unwrap_function(x);
+                case BENDER_FUNCTION:
+                    xobj = (void *) bender_unwrap_function(x);
                     break;
-                case JANET_ABSTRACT:
-                    xobj = (void *) janet_abstract_head(janet_unwrap_abstract(x));
+                case BENDER_ABSTRACT:
+                    xobj = (void *) bender_abstract_head(bender_unwrap_abstract(x));
                     break;
-                case JANET_FIBER:
-                    xobj = (void *) janet_unwrap_fiber(x);
+                case BENDER_FIBER:
+                    xobj = (void *) bender_unwrap_fiber(x);
                     break;
                 default:
                     break;
             }
             if (NULL != xobj &&
-                    (janet_gc_header(xobj)->flags & JANET_MEM_ISOLATED)) {
-                janet_chan_unlock(channel);
-                janet_panic("strict proc value escaping through a "
+                    (bender_gc_header(xobj)->flags & BENDER_MEM_ISOLATED)) {
+                bender_chan_unlock(channel);
+                bender_panic("strict proc value escaping through a "
                             "non-copying channel (use ev/ichan or "
                             "ev/thread-chan)");
             }
         }
     }
-    if (janet_chan_pack(channel, &x)) {
-        janet_chan_unlock(channel);
-        janet_panicf("failed to pack value for channel: %v", x);
+    if (bender_chan_pack(channel, &x)) {
+        bender_chan_unlock(channel);
+        bender_panicf("failed to pack value for channel: %v", x);
     }
-    int is_threaded = janet_chan_is_threaded(channel);
+    int is_threaded = bender_chan_is_threaded(channel);
     if (is_threaded) {
         /* don't dereference fiber from another thread */
-        is_empty = janet_q_pop(&channel->read_pending, &reader, sizeof(reader));
-        if (!is_empty) janet_chanpend_claim_threaded(&reader);
+        is_empty = bender_q_pop(&channel->read_pending, &reader, sizeof(reader));
+        if (!is_empty) bender_chanpend_claim_threaded(&reader);
     } else {
         for (;;) {
-            is_empty = janet_q_pop(&channel->read_pending, &reader, sizeof(reader));
+            is_empty = bender_q_pop(&channel->read_pending, &reader, sizeof(reader));
             if (is_empty) break;
                     /* Registration makes this sound without GC probing: dead
              * fibers are reclaimed by node and never dereferenced;
              * stale entries (fiber rescheduled some other way) drop
              * here exactly as in the pre-P3.5c discipline. */
-            if (janet_chanpend_claim_plain(&reader)) break;
+            if (bender_chanpend_claim_plain(&reader)) break;
         }
     }
     if (is_empty) {
         /* No pending reader */
-        if (mode == 3 && janet_q_count(&channel->items) >= channel->limit) {
+        if (mode == 3 && bender_q_count(&channel->items) >= channel->limit) {
             /* Try-mode: report full without buffering (mode 2 keeps the
              * historical buffer-beyond-limit behavior for supervisor
              * pushes, which ignore the return value). Must unpack the
              * packed copy to avoid leaking the threaded marshal buffer. */
-            janet_chan_unpack(channel, &x, 1);
-            janet_chan_unlock(channel);
-            JANET_CHAN_INFLIGHT_DROP(channel);
+            bender_chan_unpack(channel, &x, 1);
+            bender_chan_unlock(channel);
+            BENDER_CHAN_INFLIGHT_DROP(channel);
             return 1;
         }
-        if (janet_q_push(&channel->items, &x, sizeof(Janet))) {
-            janet_chan_unpack(channel, &x, 1);
-            janet_chan_unlock(channel);
-            janet_panicf("channel overflow: %v", x);
-        } else if (janet_q_count(&channel->items) > channel->limit) {
+        if (bender_q_push(&channel->items, &x, sizeof(Bender))) {
+            bender_chan_unpack(channel, &x, 1);
+            bender_chan_unlock(channel);
+            bender_panicf("channel overflow: %v", x);
+        } else if (bender_q_count(&channel->items) > channel->limit) {
             /* No root fiber, we are in completion on a root fiber. Don't block. */
             if (mode == 2) {
-                janet_chan_unlock(channel);
-                JANET_CHAN_INFLIGHT_DROP(channel);
+                bender_chan_unlock(channel);
+                BENDER_CHAN_INFLIGHT_DROP(channel);
                 return 1;
             }
             /* Pushed successfully, but should block. */
-            JanetChannelPending pending;
-            pending.thread = &janet_vm;
-            pending.fiber = janet_vm.root_fiber,
-            pending.sched_id = janet_vm.root_fiber->sched_id,
-            pending.mode = mode ? JANET_CP_MODE_CHOICE_WRITE : JANET_CP_MODE_WRITE;
+            BenderChannelPending pending;
+            pending.thread = &bender_vm;
+            pending.fiber = bender_vm.root_fiber,
+            pending.sched_id = bender_vm.root_fiber->sched_id,
+            pending.mode = mode ? BENDER_CP_MODE_CHOICE_WRITE : BENDER_CP_MODE_WRITE;
             if (is_threaded) {
-                janet_chan_remove_stale(&channel->write_pending);
+                bender_chan_remove_stale(&channel->write_pending);
             }
-            pending.reg = janet_chanpend_register(pending.fiber, channel, 1);
-            janet_q_push(&channel->write_pending, &pending, sizeof(pending));
-            janet_chan_unlock(channel);
+            pending.reg = bender_chanpend_register(pending.fiber, channel, 1);
+            bender_q_push(&channel->write_pending, &pending, sizeof(pending));
+            bender_chan_unlock(channel);
             if (is_threaded) {
-                janet_gcroot(janet_wrap_fiber(pending.fiber));
+                bender_gcroot(bender_wrap_fiber(pending.fiber));
             }
-            JANET_CHAN_INFLIGHT_DROP(channel);
+            BENDER_CHAN_INFLIGHT_DROP(channel);
             return 1;
         }
     } else {
         /* Pending reader */
         if (is_threaded) {
-            JanetVM *vm = reader.thread;
-            if (vm == &janet_vm) {
+            BenderVM *vm = reader.thread;
+            if (vm == &bender_vm) {
                 /* BUG 1 sibling: same-VM reader pending on a threaded
                  * channel (the density/recv park shape). Schedule
                  * inline -- a self-pipe write from the loop's own
@@ -1742,16 +1742,16 @@ static int janet_channel_push_with_lock(JanetChannel *channel, Janet x, int mode
                  * deadlocks inside its own wakeup write. */
                 uint32_t sid = (uint32_t) reader.sched_id;
                 if (reader.fiber->sched_id == sid) {
-                    janet_gcunroot(janet_wrap_fiber(reader.fiber));
-                    if (reader.mode == JANET_CP_MODE_CHOICE_READ) {
-                        janet_assert(!janet_chan_unpack(channel, &x, 0),
+                    bender_gcunroot(bender_wrap_fiber(reader.fiber));
+                    if (reader.mode == BENDER_CP_MODE_CHOICE_READ) {
+                        bender_assert(!bender_chan_unpack(channel, &x, 0),
                                 "bad channel packing");
-                        janet_schedule(reader.fiber,
+                        bender_schedule(reader.fiber,
                                 make_read_result(channel, x));
                     } else {
-                        janet_assert(!janet_chan_unpack(channel, &x, 0),
+                        bender_assert(!bender_chan_unpack(channel, &x, 0),
                                 "bad channel packing");
-                        janet_schedule(reader.fiber, x);
+                        bender_schedule(reader.fiber, x);
                     }
                 } else {
                     /* Stale reader (resumed via another clause, whose
@@ -1760,39 +1760,39 @@ static int janet_channel_push_with_lock(JanetChannel *channel, Janet x, int mode
                      * packed buffer, like the pipe callback's stale
                      * path. */
                     if (channel->closed ||
-                            janet_q_push_head(&channel->items, &x,
-                                sizeof(Janet))) {
-                        janet_chan_unpack(channel, &x, 1);
+                            bender_q_push_head(&channel->items, &x,
+                                sizeof(Bender))) {
+                        bender_chan_unpack(channel, &x, 1);
                     }
                 }
             } else {
-                JanetEVGenericMessage msg;
+                BenderEVGenericMessage msg;
                 msg.tag = reader.mode;
                 msg.fiber = reader.fiber;
                 msg.argi = (int32_t) reader.sched_id;
                 msg.argp = channel;
                 msg.argj = x;
                 if (vm) {
-                    janet_ev_post_event(vm, janet_thread_chan_cb, msg);
+                    bender_ev_post_event(vm, bender_thread_chan_cb, msg);
                 } else {
                     /* If no vm to send to, we must clean up (unpack) the packed payload to avoid leak */
-                    janet_chan_unpack(channel, &x, 1);
+                    bender_chan_unpack(channel, &x, 1);
                 }
             }
         } else {
             /* Same-VM handoff: decode transit values first (no-op for
              * plain channels, which never pack; the threaded path
              * decodes in its completion callback instead). */
-            janet_assert(!janet_chan_unpack(channel, &x, 0), "bad channel packing");
-            if (reader.mode == JANET_CP_MODE_CHOICE_READ) {
-                janet_schedule(reader.fiber, make_read_result(channel, x));
+            bender_assert(!bender_chan_unpack(channel, &x, 0), "bad channel packing");
+            if (reader.mode == BENDER_CP_MODE_CHOICE_READ) {
+                bender_schedule(reader.fiber, make_read_result(channel, x));
             } else {
-                janet_schedule(reader.fiber, x);
+                bender_schedule(reader.fiber, x);
             }
         }
     }
-    janet_chan_unlock(channel);
-    JANET_CHAN_INFLIGHT_DROP(channel);
+    bender_chan_unlock(channel);
+    BENDER_CHAN_INFLIGHT_DROP(channel);
     return 0;
 }
 
@@ -1801,236 +1801,236 @@ static int janet_channel_push_with_lock(JanetChannel *channel, Janet x, int mode
  * merely a lost value, and for a zero-capacity channel it parks a fiber into
  * a pending queue whose owning VM is not polling this thread -- an unkillable
  * silent hang. One predicate so push, try-push and pop agree. */
-static int janet_chan_foreign_lane(JanetChannel *channel) {
+static int bender_chan_foreign_lane(BenderChannel *channel) {
     /* A detached copy of a plain channel is the marshalled echo of a channel
      * that lives in another lane: using it would move values into a queue its
      * real owner never reads, silently. Treat that exactly like a foreign
      * lane, because that is what it is. */
     if (channel->detached_copy && !channel->is_threaded) return 1;
-    return NULL != channel->owner && channel->owner != &janet_vm;
+    return NULL != channel->owner && channel->owner != &bender_vm;
 }
 
-static JANET_NO_RETURN void janet_chan_foreign_lane_panic(JanetChannel *channel) {
-    janet_panic(channel->isolated
+static BENDER_NO_RETURN void bender_chan_foreign_lane_panic(BenderChannel *channel) {
+    bender_panic(channel->isolated
                 ? "isolated channel used from a foreign lane (pinned to its home lane; use ev/thread-chan across lanes)"
                 : (channel->detached_copy
                    ? "plain ev/chan arrived as a MARSHALLED COPY of a channel owned by another lane; writes to it would be lost silently (pass messages to the worker's own mailbox, or use ev/thread-chan across lanes)"
                    : "plain ev/chan used from a foreign lane (it takes no lock and copies nothing, so a blocking write parks forever and a buffered one silently loses the value -- use ev/thread-chan across lanes)"));
 }
 
-int janet_channel_push(JanetChannel *channel, Janet x, int mode) {
+int bender_channel_push(BenderChannel *channel, Bender x, int mode) {
     /* Step 4.1 home-lane pin: isolated channels are lock-free, so a
      * foreign thread would race silently — refuse loudly instead
      * (use ev/thread-chan across threads). One predictable branch on
      * the non-isolated fast path. */
-    if (janet_chan_foreign_lane(channel)) janet_chan_foreign_lane_panic(channel);
-    janet_chan_lock(channel);
-    return janet_channel_push_with_lock(channel, x, mode);
+    if (bender_chan_foreign_lane(channel)) bender_chan_foreign_lane_panic(channel);
+    bender_chan_lock(channel);
+    return bender_channel_push_with_lock(channel, x, mode);
 }
 
 /* Pop from a channel - returns 1 if item was obtained, 0 otherwise. The item
  * is returned by reference. If the pop would block, will add to the read_pending
  * queue in the channel. */
-static int janet_channel_pop_with_lock(JanetChannel *channel, Janet *item, int is_choice) {
-    JanetChannelPending writer;
-    JANET_CHAN_INFLIGHT_ACQUIRE(channel);
+static int bender_channel_pop_with_lock(BenderChannel *channel, Bender *item, int is_choice) {
+    BenderChannelPending writer;
+    BENDER_CHAN_INFLIGHT_ACQUIRE(channel);
     if (channel->closed) {
-        janet_chan_unlock(channel);
-        JANET_CHAN_INFLIGHT_DROP(channel);
-        *item = janet_wrap_nil();
+        bender_chan_unlock(channel);
+        BENDER_CHAN_INFLIGHT_DROP(channel);
+        *item = bender_wrap_nil();
         return 1;
     }
-    int is_threaded = janet_chan_is_threaded(channel);
-    if (janet_q_pop(&channel->items, item, sizeof(Janet))) {
+    int is_threaded = bender_chan_is_threaded(channel);
+    if (bender_q_pop(&channel->items, item, sizeof(Bender))) {
         /* Queue empty */
         if (is_choice == 2) {
             /* Try-mode: report empty without suspending (never leaves
              * the lock held — a leaked mutex would deadlock every
              * later operation on this channel). */
-            janet_chan_unlock(channel);
+            bender_chan_unlock(channel);
             return 0; /* Skip pending read */
         }
-        JanetChannelPending pending;
-        pending.thread = &janet_vm;
-        pending.fiber = janet_vm.root_fiber,
-        pending.sched_id = janet_vm.root_fiber->sched_id;
-        pending.mode = is_choice ? JANET_CP_MODE_CHOICE_READ : JANET_CP_MODE_READ;
+        BenderChannelPending pending;
+        pending.thread = &bender_vm;
+        pending.fiber = bender_vm.root_fiber,
+        pending.sched_id = bender_vm.root_fiber->sched_id;
+        pending.mode = is_choice ? BENDER_CP_MODE_CHOICE_READ : BENDER_CP_MODE_READ;
         if (is_threaded) {
-            janet_chan_remove_stale(&channel->read_pending);
+            bender_chan_remove_stale(&channel->read_pending);
         }
-        pending.reg = janet_chanpend_register(pending.fiber, channel, 0);
-        janet_q_push(&channel->read_pending, &pending, sizeof(pending));
-        janet_chan_unlock(channel);
+        pending.reg = bender_chanpend_register(pending.fiber, channel, 0);
+        bender_q_push(&channel->read_pending, &pending, sizeof(pending));
+        bender_chan_unlock(channel);
         if (is_threaded) {
-            janet_gcroot(janet_wrap_fiber(pending.fiber));
+            bender_gcroot(bender_wrap_fiber(pending.fiber));
         }
-        JANET_CHAN_INFLIGHT_DROP(channel);
+        BENDER_CHAN_INFLIGHT_DROP(channel);
         return 0;
     }
-    janet_assert(!janet_chan_unpack(channel, item, 0), "bad channel packing");
-    if (!janet_q_pop(&channel->write_pending, &writer, sizeof(writer))) {
+    bender_assert(!bender_chan_unpack(channel, item, 0), "bad channel packing");
+    if (!bender_q_pop(&channel->write_pending, &writer, sizeof(writer))) {
         /* Pending writer. Same staleness discipline as the read side:
          * dead fibers are reclaimed by node (never dereferenced);
          * same-VM stale entries drop; threaded entries address foreign
          * VMs and are root-pinned while queued. */
-        if (!is_threaded && janet_chanpend_claim_plain(&writer)) {
-            if (writer.mode == JANET_CP_MODE_CHOICE_WRITE) {
-                janet_schedule(writer.fiber, make_write_result(channel));
+        if (!is_threaded && bender_chanpend_claim_plain(&writer)) {
+            if (writer.mode == BENDER_CP_MODE_CHOICE_WRITE) {
+                bender_schedule(writer.fiber, make_write_result(channel));
             } else {
-                janet_schedule(writer.fiber, janet_wrap_abstract(channel));
+                bender_schedule(writer.fiber, bender_wrap_abstract(channel));
             }
         } else if (is_threaded) {
-            janet_chanpend_claim_threaded(&writer);
-            JanetVM *vm = writer.thread;
-            if (vm == &janet_vm) {
+            bender_chanpend_claim_threaded(&writer);
+            BenderVM *vm = writer.thread;
+            if (vm == &bender_vm) {
                 /* BUG 1 sibling: same-VM writer pending on a threaded
                  * channel -- schedule inline (see the push-side note). */
                 uint32_t sid = (uint32_t) writer.sched_id;
                 if (writer.fiber->sched_id == sid &&
-                        janet_fiber_can_resume(writer.fiber)) {
-                    janet_gcunroot(janet_wrap_fiber(writer.fiber));
-                    if (writer.mode == JANET_CP_MODE_CHOICE_WRITE) {
-                        janet_schedule(writer.fiber,
+                        bender_fiber_can_resume(writer.fiber)) {
+                    bender_gcunroot(bender_wrap_fiber(writer.fiber));
+                    if (writer.mode == BENDER_CP_MODE_CHOICE_WRITE) {
+                        bender_schedule(writer.fiber,
                                 make_write_result(channel));
                     } else {
-                        janet_schedule(writer.fiber,
-                                janet_wrap_channel(channel));
+                        bender_schedule(writer.fiber,
+                                bender_wrap_channel(channel));
                     }
                 }
             } else {
-                JanetEVGenericMessage msg;
+                BenderEVGenericMessage msg;
                 msg.tag = writer.mode;
                 msg.fiber = writer.fiber;
                 msg.argi = (int32_t) writer.sched_id;
                 msg.argp = channel;
-                msg.argj = janet_wrap_nil();
+                msg.argj = bender_wrap_nil();
                 if (vm) {
-                    janet_ev_post_event(vm, janet_thread_chan_cb, msg);
+                    bender_ev_post_event(vm, bender_thread_chan_cb, msg);
                 }
             }
         }
     }
-    janet_chan_unlock(channel);
-    JANET_CHAN_INFLIGHT_DROP(channel);
+    bender_chan_unlock(channel);
+    BENDER_CHAN_INFLIGHT_DROP(channel);
     return 1;
 }
 
-int janet_channel_pop(JanetChannel *channel, Janet *item, int is_choice) {
+int bender_channel_pop(BenderChannel *channel, Bender *item, int is_choice) {
     /* Step 4.1 home-lane pin (see push). */
-    if (janet_chan_foreign_lane(channel)) janet_chan_foreign_lane_panic(channel);
-    janet_chan_lock(channel);
-    return janet_channel_pop_with_lock(channel, item, is_choice);
+    if (bender_chan_foreign_lane(channel)) bender_chan_foreign_lane_panic(channel);
+    bender_chan_lock(channel);
+    return bender_channel_pop_with_lock(channel, item, is_choice);
 }
 
-JanetChannel *janet_channel_unwrap(void *abstract) {
+BenderChannel *bender_channel_unwrap(void *abstract) {
     return abstract;
 }
 
-JanetChannel *janet_getchannel(const Janet *argv, int32_t n) {
-    return janet_channel_unwrap(janet_getabstract(argv, n, &janet_channel_type));
+BenderChannel *bender_getchannel(const Bender *argv, int32_t n) {
+    return bender_channel_unwrap(bender_getabstract(argv, n, &bender_channel_type));
 }
 
-JanetChannel *janet_optchannel(const Janet *argv, int32_t argc, int32_t n, JanetChannel *dflt) {
-    if (argc > n && !janet_checktype(argv[n], JANET_NIL)) {
-        return janet_getchannel(argv, n);
+BenderChannel *bender_optchannel(const Bender *argv, int32_t argc, int32_t n, BenderChannel *dflt) {
+    if (argc > n && !bender_checktype(argv[n], BENDER_NIL)) {
+        return bender_getchannel(argv, n);
     } else {
         return dflt;
     }
 }
 
-int janet_channel_give(JanetChannel *channel, Janet x) {
-    return janet_channel_push(channel, x, 2);
+int bender_channel_give(BenderChannel *channel, Bender x) {
+    return bender_channel_push(channel, x, 2);
 }
 
-int janet_channel_take(JanetChannel *channel, Janet *out) {
-    return janet_channel_pop(channel, out, 2);
+int bender_channel_take(BenderChannel *channel, Bender *out) {
+    return bender_channel_pop(channel, out, 2);
 }
 
-JanetChannel *janet_channel_make(uint32_t limit) {
-    janet_assert(limit <= INT32_MAX, "bad limit");
-    JanetChannel *channel = janet_abstract(&janet_channel_type, sizeof(JanetChannel));
-    janet_chan_init(channel, (int32_t) limit, 0, 0);
+BenderChannel *bender_channel_make(uint32_t limit) {
+    bender_assert(limit <= INT32_MAX, "bad limit");
+    BenderChannel *channel = bender_abstract(&bender_channel_type, sizeof(BenderChannel));
+    bender_chan_init(channel, (int32_t) limit, 0, 0);
     return channel;
 }
 
-JanetChannel *janet_channel_make_threaded(uint32_t limit) {
-    janet_assert(limit <= INT32_MAX, "bad limit");
-    JanetChannel *channel = janet_abstract_threaded(&janet_channel_type, sizeof(JanetChannel));
-    janet_chan_init(channel, (int32_t) limit, 1, 0);
+BenderChannel *bender_channel_make_threaded(uint32_t limit) {
+    bender_assert(limit <= INT32_MAX, "bad limit");
+    BenderChannel *channel = bender_abstract_threaded(&bender_channel_type, sizeof(BenderChannel));
+    bender_chan_init(channel, (int32_t) limit, 1, 0);
     return channel;
 }
 
-JanetChannel *janet_channel_make_isolated(uint32_t limit) {
-    janet_assert(limit <= INT32_MAX, "bad limit");
-    JanetChannel *channel = janet_abstract(&janet_channel_type, sizeof(JanetChannel));
-    janet_chan_init(channel, (int32_t) limit, 0, 1);
+BenderChannel *bender_channel_make_isolated(uint32_t limit) {
+    bender_assert(limit <= INT32_MAX, "bad limit");
+    BenderChannel *channel = bender_abstract(&bender_channel_type, sizeof(BenderChannel));
+    bender_chan_init(channel, (int32_t) limit, 0, 1);
     return channel;
 }
 
 /* Channel Methods */
 
-JANET_CORE_FN(cfun_channel_push,
+BENDER_CORE_FN(cfun_channel_push,
               "(ev/give chan val)",
               "Write `val` to a channel `chan`, suspending the current "
               "fiber if `chan` is full. Returns `chan` on success, nil "
               "otherwise.") {
-    janet_fixarity(argc, 2);
-    JanetChannel *channel = janet_getchannel(argv, 0);
-    if (janet_vm.coerce_error) {
-        janet_panic("cannot give to channel inside janet_call");
+    bender_fixarity(argc, 2);
+    BenderChannel *channel = bender_getchannel(argv, 0);
+    if (bender_vm.coerce_error) {
+        bender_panic("cannot give to channel inside bender_call");
     }
-    if (janet_channel_push(channel, argv[1], 0)) {
-        janet_await();
+    if (bender_channel_push(channel, argv[1], 0)) {
+        bender_await();
     }
     return argv[0];
 }
 
-JANET_CORE_FN(cfun_channel_pop,
+BENDER_CORE_FN(cfun_channel_pop,
               "(ev/take chan)",
               "Read from a channel `chan`, suspending the current fiber if "
               "no value is available.") {
-    janet_fixarity(argc, 1);
-    JanetChannel *channel = janet_getchannel(argv, 0);
-    Janet item;
-    if (janet_vm.coerce_error) {
-        janet_panic("cannot take from channel inside janet_call");
+    bender_fixarity(argc, 1);
+    BenderChannel *channel = bender_getchannel(argv, 0);
+    Bender item;
+    if (bender_vm.coerce_error) {
+        bender_panic("cannot take from channel inside bender_call");
     }
-    if (janet_channel_pop(channel, &item, 0)) {
-        janet_schedule(janet_vm.root_fiber, item);
+    if (bender_channel_pop(channel, &item, 0)) {
+        bender_schedule(bender_vm.root_fiber, item);
     }
-    janet_await();
+    bender_await();
 }
 
-JANET_CORE_FN(cfun_channel_try_push,
+BENDER_CORE_FN(cfun_channel_try_push,
               "(ev/try-give chan val)",
               "Non-blocking channel write. Returns `chan` if the value was "
               "accepted, nil if the channel is full (no suspension). "
               "Panics on a closed channel, like `ev/give`. Safe inside "
-              "`janet_call` (never suspends).") {
-    janet_fixarity(argc, 2);
-    JanetChannel *channel = janet_getchannel(argv, 0);
-    if (janet_channel_push(channel, argv[1], 3)) {
-        return janet_wrap_nil();
+              "`bender_call` (never suspends).") {
+    bender_fixarity(argc, 2);
+    BenderChannel *channel = bender_getchannel(argv, 0);
+    if (bender_channel_push(channel, argv[1], 3)) {
+        return bender_wrap_nil();
     }
     return argv[0];
 }
 
-JANET_CORE_FN(cfun_channel_try_pop,
+BENDER_CORE_FN(cfun_channel_try_pop,
               "(ev/try-take chan)",
               "Non-blocking channel read. Returns the value if one is "
               "immediately available, nil if the channel is empty (no "
               "suspension). A closed channel yields nil, like `ev/take`. "
-              "Safe inside `janet_call` (never suspends).") {
-    janet_fixarity(argc, 1);
-    JanetChannel *channel = janet_getchannel(argv, 0);
-    Janet item = janet_wrap_nil();
-    if (janet_channel_pop(channel, &item, 2)) {
+              "Safe inside `bender_call` (never suspends).") {
+    bender_fixarity(argc, 1);
+    BenderChannel *channel = bender_getchannel(argv, 0);
+    Bender item = bender_wrap_nil();
+    if (bender_channel_pop(channel, &item, 2)) {
         return item;
     }
-    return janet_wrap_nil();
+    return bender_wrap_nil();
 }
 
-JANET_CORE_FN(cfun_channel_choice,
+BENDER_CORE_FN(cfun_channel_choice,
               "(ev/select & clauses)",
               "Block until the first of several channel operations occur. Returns a "
               "tuple of the form [:give chan], [:take chan x], or [:close chan], "
@@ -2042,44 +2042,44 @@ JANET_CORE_FN(cfun_channel_choice,
               "return a [:close chan] tuple, which indicates that the specified "
               "channel was closed while waiting, or that the channel was already "
               "closed.") {
-    janet_arity(argc, 1, -1);
+    bender_arity(argc, 1, -1);
     int32_t len;
-    const Janet *data;
+    const Bender *data;
 
-    if (janet_vm.coerce_error) {
-        janet_panic("cannot select from channel inside janet_call");
+    if (bender_vm.coerce_error) {
+        bender_panic("cannot select from channel inside bender_call");
     }
 
     /* Check channels for immediate reads and writes. Avoid awating to event loop
      * if possible, but should be very similar to async block of code. */
     for (int32_t i = 0; i < argc; i++) {
-        if (janet_indexed_view(argv[i], &data, &len) && len == 2) {
+        if (bender_indexed_view(argv[i], &data, &len) && len == 2) {
             /* Write */
-            JanetChannel *chan = janet_getchannel(data, 0);
-            janet_chan_lock(chan);
+            BenderChannel *chan = bender_getchannel(data, 0);
+            bender_chan_lock(chan);
             if (chan->closed) {
-                janet_chan_unlock(chan);
+                bender_chan_unlock(chan);
                 return make_close_result(chan);
             }
-            if (janet_q_count(&chan->items) < chan->limit) {
-                janet_channel_push_with_lock(chan, data[1], 1);
+            if (bender_q_count(&chan->items) < chan->limit) {
+                bender_channel_push_with_lock(chan, data[1], 1);
                 return make_write_result(chan);
             }
-            janet_chan_unlock(chan);
+            bender_chan_unlock(chan);
         } else {
             /* Read */
-            JanetChannel *chan = janet_getchannel(argv, i);
-            janet_chan_lock(chan);
+            BenderChannel *chan = bender_getchannel(argv, i);
+            bender_chan_lock(chan);
             if (chan->closed) {
-                janet_chan_unlock(chan);
+                bender_chan_unlock(chan);
                 return make_close_result(chan);
             }
             if (chan->items.head != chan->items.tail) {
-                Janet item;
-                janet_channel_pop_with_lock(chan, &item, 1);
+                Bender item;
+                bender_channel_pop_with_lock(chan, &item, 1);
                 return make_read_result(chan, item);
             }
-            janet_chan_unlock(chan);
+            bender_chan_unlock(chan);
         }
     }
 
@@ -2089,224 +2089,224 @@ JANET_CORE_FN(cfun_channel_choice,
 
     /* Wait for all readers or writers */
     for (int32_t i = 0; i < argc; i++) {
-        if (janet_indexed_view(argv[i], &data, &len) && len == 2) {
+        if (bender_indexed_view(argv[i], &data, &len) && len == 2) {
             /* Write */
-            JanetChannel *chan = janet_getchannel(data, 0);
-            janet_chan_lock(chan);
+            BenderChannel *chan = bender_getchannel(data, 0);
+            bender_chan_lock(chan);
             if (chan->closed) {
-                janet_chan_unlock(chan);
-                janet_schedule(janet_vm.root_fiber, make_close_result(chan));
+                bender_chan_unlock(chan);
+                bender_schedule(bender_vm.root_fiber, make_close_result(chan));
                 break;
             }
-            if (!janet_channel_push_with_lock(chan, data[1], 1)) {
-                janet_schedule(janet_vm.root_fiber, make_write_result(chan));
+            if (!bender_channel_push_with_lock(chan, data[1], 1)) {
+                bender_schedule(bender_vm.root_fiber, make_write_result(chan));
                 break;
             }
         } else {
             /* Read */
-            Janet item;
-            JanetChannel *chan = janet_getchannel(argv, i);
-            janet_chan_lock(chan);
+            Bender item;
+            BenderChannel *chan = bender_getchannel(argv, i);
+            bender_chan_lock(chan);
             if (chan->closed) {
-                janet_chan_unlock(chan);
-                janet_schedule(janet_vm.root_fiber, make_close_result(chan));
+                bender_chan_unlock(chan);
+                bender_schedule(bender_vm.root_fiber, make_close_result(chan));
                 break;
             }
-            if (janet_channel_pop_with_lock(chan, &item, 1)) {
-                janet_schedule(janet_vm.root_fiber, make_read_result(chan, item));
+            if (bender_channel_pop_with_lock(chan, &item, 1)) {
+                bender_schedule(bender_vm.root_fiber, make_read_result(chan, item));
                 break;
             }
         }
     }
 
-    janet_await();
+    bender_await();
 }
 
-JANET_CORE_FN(cfun_channel_full,
+BENDER_CORE_FN(cfun_channel_full,
               "(ev/full chan)",
               "Returns true if a channel `chan` is full, false otherwise.") {
-    janet_fixarity(argc, 1);
-    JanetChannel *channel = janet_getchannel(argv, 0);
-    janet_chan_lock(channel);
-    Janet ret = janet_wrap_boolean(janet_q_count(&channel->items) >= channel->limit);
-    janet_chan_unlock(channel);
+    bender_fixarity(argc, 1);
+    BenderChannel *channel = bender_getchannel(argv, 0);
+    bender_chan_lock(channel);
+    Bender ret = bender_wrap_boolean(bender_q_count(&channel->items) >= channel->limit);
+    bender_chan_unlock(channel);
     return ret;
 }
 
-JANET_CORE_FN(cfun_channel_capacity,
+BENDER_CORE_FN(cfun_channel_capacity,
               "(ev/capacity chan)",
               "Get number of items a channel `chan` can store before "
               "blocking writers.") {
-    janet_fixarity(argc, 1);
-    JanetChannel *channel = janet_getchannel(argv, 0);
-    janet_chan_lock(channel);
-    Janet ret = janet_wrap_integer(channel->limit);
-    janet_chan_unlock(channel);
+    bender_fixarity(argc, 1);
+    BenderChannel *channel = bender_getchannel(argv, 0);
+    bender_chan_lock(channel);
+    Bender ret = bender_wrap_integer(channel->limit);
+    bender_chan_unlock(channel);
     return ret;
 }
 
-JANET_CORE_FN(cfun_channel_count,
+BENDER_CORE_FN(cfun_channel_count,
               "(ev/count chan)",
               "Get number of items waiting in a channel `chan`.") {
-    janet_fixarity(argc, 1);
-    JanetChannel *channel = janet_getchannel(argv, 0);
-    janet_chan_lock(channel);
-    Janet ret = janet_wrap_integer(janet_q_count(&channel->items));
-    janet_chan_unlock(channel);
+    bender_fixarity(argc, 1);
+    BenderChannel *channel = bender_getchannel(argv, 0);
+    bender_chan_lock(channel);
+    Bender ret = bender_wrap_integer(bender_q_count(&channel->items));
+    bender_chan_unlock(channel);
     return ret;
 }
 
 /* Fisher yates shuffle of arguments to get fairness */
-static void fisher_yates_args(int32_t argc, Janet *argv) {
+static void fisher_yates_args(int32_t argc, Bender *argv) {
     for (int32_t i = argc; i > 1; i--) {
-        int32_t swap_index = janet_rng_u32(&janet_vm.ev_rng) % i;
-        Janet temp = argv[swap_index];
+        int32_t swap_index = bender_rng_u32(&bender_vm.ev_rng) % i;
+        Bender temp = argv[swap_index];
         argv[swap_index] = argv[i - 1];
         argv[i - 1] = temp;
     }
 }
 
-JANET_CORE_FN(cfun_channel_rchoice,
+BENDER_CORE_FN(cfun_channel_rchoice,
               "(ev/rselect & clauses)",
               "Similar to ev/select, but will try clauses in a random order for fairness.") {
     fisher_yates_args(argc, argv);
     return cfun_channel_choice(argc, argv);
 }
 
-JANET_CORE_FN(cfun_channel_new,
+BENDER_CORE_FN(cfun_channel_new,
               "(ev/chan &opt capacity)",
               "Create a new channel. capacity is the number of values to queue before "
               "blocking writers, defaults to 0 if not provided. Returns a new channel.") {
-    janet_arity(argc, 0, 1);
-    int32_t limit = janet_optnat(argv, argc, 0, 0);
-    JanetChannel *channel = janet_abstract(&janet_channel_type, sizeof(JanetChannel));
-    janet_chan_init(channel, limit, 0, 0);
-    return janet_wrap_abstract(channel);
+    bender_arity(argc, 0, 1);
+    int32_t limit = bender_optnat(argv, argc, 0, 0);
+    BenderChannel *channel = bender_abstract(&bender_channel_type, sizeof(BenderChannel));
+    bender_chan_init(channel, limit, 0, 0);
+    return bender_wrap_abstract(channel);
 }
 
-JanetChannel *janet_channel_make_threaded_c(int32_t limit) {
-    JanetChannel *tchan = janet_abstract_threaded(&janet_channel_type,
-            sizeof(JanetChannel));
-    janet_chan_init(tchan, limit, 1, 0);
+BenderChannel *bender_channel_make_threaded_c(int32_t limit) {
+    BenderChannel *tchan = bender_abstract_threaded(&bender_channel_type,
+            sizeof(BenderChannel));
+    bender_chan_init(tchan, limit, 1, 0);
     return tchan;
 }
 
-JANET_CORE_FN(cfun_channel_new_threaded,
+BENDER_CORE_FN(cfun_channel_new_threaded,
               "(ev/thread-chan &opt limit)",
               "Create a threaded channel. A threaded channel is a channel that can be shared between threads and "
               "used to communicate between any number of operating system threads.") {
-    janet_arity(argc, 0, 1);
-    int32_t limit = janet_optnat(argv, argc, 0, 0);
-    JanetChannel *tchan = janet_abstract_threaded(&janet_channel_type, sizeof(JanetChannel));
-    janet_chan_init(tchan, limit, 1, 0);
-    return janet_wrap_abstract(tchan);
+    bender_arity(argc, 0, 1);
+    int32_t limit = bender_optnat(argv, argc, 0, 0);
+    BenderChannel *tchan = bender_abstract_threaded(&bender_channel_type, sizeof(BenderChannel));
+    bender_chan_init(tchan, limit, 1, 0);
+    return bender_wrap_abstract(tchan);
 }
 
-JANET_CORE_FN(cfun_channel_new_isolated,
+BENDER_CORE_FN(cfun_channel_new_isolated,
               "(ev/ichan &opt limit)",
               "Create an isolated channel. Values sent through it are "
               "marshal-copied like a threaded channel (no shared mutable "
               "references cross), but it takes no lock: single-VM use "
               "only, the tasklet mailbox transport. Cross-thread use is "
               "user error (use ev/thread-chan across threads).") {
-    janet_arity(argc, 0, 1);
-    int32_t limit = janet_optnat(argv, argc, 0, 0);
-    JanetChannel *ichan = janet_abstract(&janet_channel_type, sizeof(JanetChannel));
-    janet_chan_init(ichan, limit, 0, 1);
-    return janet_wrap_abstract(ichan);
+    bender_arity(argc, 0, 1);
+    int32_t limit = bender_optnat(argv, argc, 0, 0);
+    BenderChannel *ichan = bender_abstract(&bender_channel_type, sizeof(BenderChannel));
+    bender_chan_init(ichan, limit, 0, 1);
+    return bender_wrap_abstract(ichan);
 }
 
-JANET_CORE_FN(cfun_channel_close,
+BENDER_CORE_FN(cfun_channel_close,
               "(ev/chan-close chan)",
               "Close a channel `chan`. Once closed, causes all pending "
               "reads and writes to return nil. Returns `chan`.") {
-    janet_fixarity(argc, 1);
-    JanetChannel *channel = janet_getchannel(argv, 0);
-    janet_chan_lock(channel);
+    bender_fixarity(argc, 1);
+    BenderChannel *channel = bender_getchannel(argv, 0);
+    bender_chan_lock(channel);
     if (!channel->closed) {
         channel->closed = 1;
-        JanetChannelPending writer;
-        while (!janet_q_pop(&channel->write_pending, &writer, sizeof(writer))) {
-            if (writer.thread != &janet_vm) {
-                janet_chanpend_claim_threaded(&writer);
-                JanetVM *vm = writer.thread;
-                JanetEVGenericMessage msg;
+        BenderChannelPending writer;
+        while (!bender_q_pop(&channel->write_pending, &writer, sizeof(writer))) {
+            if (writer.thread != &bender_vm) {
+                bender_chanpend_claim_threaded(&writer);
+                BenderVM *vm = writer.thread;
+                BenderEVGenericMessage msg;
                 msg.fiber = writer.fiber;
                 msg.argp = channel;
-                msg.tag = JANET_CP_MODE_CLOSE;
+                msg.tag = BENDER_CP_MODE_CLOSE;
                 msg.argi = (int32_t) writer.sched_id;
-                msg.argj = janet_wrap_nil();
+                msg.argj = bender_wrap_nil();
                 if (vm) {
-                    janet_ev_post_event(vm, janet_thread_chan_cb, msg);
+                    bender_ev_post_event(vm, bender_thread_chan_cb, msg);
                 }
-            } else if (janet_chan_is_threaded(channel)) {
+            } else if (bender_chan_is_threaded(channel)) {
                 /* Same-VM entry riding a threaded channel: root was
                  * held by this queue entry, release it now. */
-                janet_chanpend_claim_threaded(&writer);
-                if (janet_fiber_can_resume(writer.fiber) && writer.sched_id == writer.fiber->sched_id) {
-                    if (writer.mode == JANET_CP_MODE_CHOICE_WRITE) {
-                        janet_schedule(writer.fiber, make_close_result(channel));
+                bender_chanpend_claim_threaded(&writer);
+                if (bender_fiber_can_resume(writer.fiber) && writer.sched_id == writer.fiber->sched_id) {
+                    if (writer.mode == BENDER_CP_MODE_CHOICE_WRITE) {
+                        bender_schedule(writer.fiber, make_close_result(channel));
                     } else {
-                        janet_schedule(writer.fiber, janet_wrap_nil());
+                        bender_schedule(writer.fiber, bender_wrap_nil());
                     }
                 }
-                janet_gcunroot(janet_wrap_fiber(writer.fiber));
+                bender_gcunroot(bender_wrap_fiber(writer.fiber));
             } else {
                 /* Plain/isolated: same-VM, unrooted entries. */
-                int live = janet_chanpend_claim_plain(&writer);
-                if (live && janet_fiber_can_resume(writer.fiber) && writer.sched_id == writer.fiber->sched_id) {
-                    if (writer.mode == JANET_CP_MODE_CHOICE_WRITE) {
-                        janet_schedule(writer.fiber, make_close_result(channel));
+                int live = bender_chanpend_claim_plain(&writer);
+                if (live && bender_fiber_can_resume(writer.fiber) && writer.sched_id == writer.fiber->sched_id) {
+                    if (writer.mode == BENDER_CP_MODE_CHOICE_WRITE) {
+                        bender_schedule(writer.fiber, make_close_result(channel));
                     } else {
-                        janet_schedule(writer.fiber, janet_wrap_nil());
+                        bender_schedule(writer.fiber, bender_wrap_nil());
                     }
                 }
             }
         }
-        JanetChannelPending reader;
-        while (!janet_q_pop(&channel->read_pending, &reader, sizeof(reader))) {
-            if (reader.thread != &janet_vm) {
-                janet_chanpend_claim_threaded(&reader);
-                JanetVM *vm = reader.thread;
-                JanetEVGenericMessage msg;
+        BenderChannelPending reader;
+        while (!bender_q_pop(&channel->read_pending, &reader, sizeof(reader))) {
+            if (reader.thread != &bender_vm) {
+                bender_chanpend_claim_threaded(&reader);
+                BenderVM *vm = reader.thread;
+                BenderEVGenericMessage msg;
                 msg.fiber = reader.fiber;
                 msg.argp = channel;
-                msg.tag = JANET_CP_MODE_CLOSE;
+                msg.tag = BENDER_CP_MODE_CLOSE;
                 msg.argi = (int32_t) reader.sched_id;
-                msg.argj = janet_wrap_nil();
+                msg.argj = bender_wrap_nil();
                 if (vm) {
-                    janet_ev_post_event(vm, janet_thread_chan_cb, msg);
+                    bender_ev_post_event(vm, bender_thread_chan_cb, msg);
                 }
-            } else if (janet_chan_is_threaded(channel)) {
+            } else if (bender_chan_is_threaded(channel)) {
                 /* Same-VM entry riding a threaded channel: root was
                  * held by this queue entry, release it now. */
-                janet_chanpend_claim_threaded(&reader);
-                if (janet_fiber_can_resume(reader.fiber) && reader.sched_id == reader.fiber->sched_id) {
-                    if (reader.mode == JANET_CP_MODE_CHOICE_READ) {
-                        janet_schedule(reader.fiber, make_close_result(channel));
+                bender_chanpend_claim_threaded(&reader);
+                if (bender_fiber_can_resume(reader.fiber) && reader.sched_id == reader.fiber->sched_id) {
+                    if (reader.mode == BENDER_CP_MODE_CHOICE_READ) {
+                        bender_schedule(reader.fiber, make_close_result(channel));
                     } else {
-                        janet_schedule(reader.fiber, janet_wrap_nil());
+                        bender_schedule(reader.fiber, bender_wrap_nil());
                     }
                 }
-                janet_gcunroot(janet_wrap_fiber(reader.fiber));
+                bender_gcunroot(bender_wrap_fiber(reader.fiber));
             } else {
                 /* Plain/isolated: same-VM, unrooted entries. */
-                int live = janet_chanpend_claim_plain(&reader);
-                if (live && janet_fiber_can_resume(reader.fiber) && reader.sched_id == reader.fiber->sched_id) {
-                    if (reader.mode == JANET_CP_MODE_CHOICE_READ) {
-                        janet_schedule(reader.fiber, make_close_result(channel));
+                int live = bender_chanpend_claim_plain(&reader);
+                if (live && bender_fiber_can_resume(reader.fiber) && reader.sched_id == reader.fiber->sched_id) {
+                    if (reader.mode == BENDER_CP_MODE_CHOICE_READ) {
+                        bender_schedule(reader.fiber, make_close_result(channel));
                     } else {
-                        janet_schedule(reader.fiber, janet_wrap_nil());
+                        bender_schedule(reader.fiber, bender_wrap_nil());
                     }
                 }
             }
         }
     }
-    janet_chan_unlock(channel);
+    bender_chan_unlock(channel);
     return argv[0];
 }
 
-static const JanetMethod ev_chanat_methods[] = {
+static const BenderMethod ev_chanat_methods[] = {
     {"select", cfun_channel_choice},
     {"rselect", cfun_channel_rchoice},
     {"count", cfun_channel_count},
@@ -2320,59 +2320,59 @@ static const JanetMethod ev_chanat_methods[] = {
     {NULL, NULL}
 };
 
-static int janet_chanat_get(void *p, Janet key, Janet *out) {
+static int bender_chanat_get(void *p, Bender key, Bender *out) {
     (void) p;
-    if (!janet_checktype(key, JANET_KEYWORD)) return 0;
-    return janet_getmethod(janet_unwrap_keyword(key), ev_chanat_methods, out);
+    if (!bender_checktype(key, BENDER_KEYWORD)) return 0;
+    return bender_getmethod(bender_unwrap_keyword(key), ev_chanat_methods, out);
 }
 
-static Janet janet_chanat_next(void *p, Janet key) {
+static Bender bender_chanat_next(void *p, Bender key) {
     (void) p;
-    return janet_nextmethod(ev_chanat_methods, key);
+    return bender_nextmethod(ev_chanat_methods, key);
 }
 
-static void janet_chanat_marshal(void *p, JanetMarshalContext *ctx) {
-    JanetChannel *channel = (JanetChannel *)p;
+static void bender_chanat_marshal(void *p, BenderMarshalContext *ctx) {
+    BenderChannel *channel = (BenderChannel *)p;
     /* Step 1.4: flags byte (bit0 threaded, bit1 isolated). Old dumps
      * wrote 0/1, which read back identically (bit1 clear). */
     uint8_t flags = (uint8_t)
         ((channel->is_threaded ? 1 : 0) | (channel->isolated ? 2 : 0));
-    janet_marshal_byte(ctx, flags);
-    janet_marshal_abstract(ctx, channel);
-    janet_marshal_byte(ctx, channel->closed);
-    janet_marshal_int(ctx, channel->limit);
-    int32_t count = janet_q_count(&channel->items);
-    janet_marshal_int(ctx, count);
-    JanetQueue *items = &channel->items;
-    Janet *data = channel->items.data;
+    bender_marshal_byte(ctx, flags);
+    bender_marshal_abstract(ctx, channel);
+    bender_marshal_byte(ctx, channel->closed);
+    bender_marshal_int(ctx, channel->limit);
+    int32_t count = bender_q_count(&channel->items);
+    bender_marshal_int(ctx, count);
+    BenderQueue *items = &channel->items;
+    Bender *data = channel->items.data;
     if (items->head <= items->tail) {
         for (int32_t i = items->head; i < items->tail; i++)
-            janet_marshal_janet(ctx, data[i]);
+            bender_marshal_bender(ctx, data[i]);
     } else {
         for (int32_t i = items->head; i < items->capacity; i++)
-            janet_marshal_janet(ctx, data[i]);
+            bender_marshal_bender(ctx, data[i]);
         for (int32_t i = 0; i < items->tail; i++)
-            janet_marshal_janet(ctx, data[i]);
+            bender_marshal_bender(ctx, data[i]);
     }
 }
 
-static void *janet_chanat_unmarshal(JanetMarshalContext *ctx) {
-    uint8_t flags = janet_unmarshal_byte(ctx);
+static void *bender_chanat_unmarshal(BenderMarshalContext *ctx) {
+    uint8_t flags = bender_unmarshal_byte(ctx);
     /* Old dumps carry 0/1 (threaded bit only); bit1 clear preserves them. */
     int is_threaded = (flags & 1) != 0;
     int isolated = (flags & 2) != 0;
-    JanetChannel *abst;
+    BenderChannel *abst;
     if (is_threaded) {
-        abst = janet_unmarshal_abstract_threaded(ctx, sizeof(JanetChannel));
+        abst = bender_unmarshal_abstract_threaded(ctx, sizeof(BenderChannel));
     } else {
-        abst = janet_unmarshal_abstract(ctx, sizeof(JanetChannel));
+        abst = bender_unmarshal_abstract(ctx, sizeof(BenderChannel));
     }
-    uint8_t is_closed = janet_unmarshal_byte(ctx);
-    int32_t limit = janet_unmarshal_int(ctx);
-    int32_t count = janet_unmarshal_int(ctx);
-    if (count < 0) janet_panic("invalid negative channel count");
-    if (count > limit) janet_panic("invalid channel count");
-    janet_chan_init(abst, limit, is_threaded, isolated);
+    uint8_t is_closed = bender_unmarshal_byte(ctx);
+    int32_t limit = bender_unmarshal_int(ctx);
+    int32_t count = bender_unmarshal_int(ctx);
+    if (count < 0) bender_panic("invalid negative channel count");
+    if (count > limit) bender_panic("invalid channel count");
+    bender_chan_init(abst, limit, is_threaded, isolated);
     /* Detached only when this unmarshal happens ON A WORKER LANE. Every
      * proc/spawn onto a lane sends the closure through a threaded control
      * channel, so the worker receives marshal copies of captured values. A
@@ -2382,82 +2382,82 @@ static void *janet_chanat_unmarshal(JanetMarshalContext *ctx) {
      * A same-thread marshal round-trip on the MAIN VM is a supported pattern
      * (suite-ev marshals a channel and drains it), so it must stay legal --
      * hence the is_lane_vm test rather than flagging every unmarshal. */
-    abst->detached_copy = janet_vm.is_lane_vm ? 1 : 0;
+    abst->detached_copy = bender_vm.is_lane_vm ? 1 : 0;
     abst->closed = !!is_closed;
     int needs_pack = (is_threaded || isolated);
     for (int32_t i = 0; i < count; i++) {
-        Janet item = janet_unmarshal_janet(ctx);
-        janet_assert(!janet_q_push(&abst->items, &item, sizeof(item)), "bad unmarshal channel");
+        Bender item = bender_unmarshal_bender(ctx);
+        bender_assert(!bender_q_push(&abst->items, &item, sizeof(item)), "bad unmarshal channel");
         /* Packed queues hold malloc'd transit buffers (see pack), but
          * unmarshal rebuilds them as GC buffers — which unpack would
-         * janet_free (invalid free). Move the bytes into malloc'd
+         * bender_free (invalid free). Move the bytes into malloc'd
          * ownership (encoding untouched); the GC copy becomes garbage.
          * Pack is bypassed deliberately: items are already transit. */
-        if (needs_pack && janet_checktype(item, JANET_BUFFER)) {
-            JanetBuffer *src = janet_unwrap_buffer(item);
-            JanetBuffer *nb = janet_malloc(sizeof(JanetBuffer));
-            if (NULL == nb) JANET_OUT_OF_MEMORY;
-            janet_buffer_init(nb, 0);
+        if (needs_pack && bender_checktype(item, BENDER_BUFFER)) {
+            BenderBuffer *src = bender_unwrap_buffer(item);
+            BenderBuffer *nb = bender_malloc(sizeof(BenderBuffer));
+            if (NULL == nb) BENDER_OUT_OF_MEMORY;
+            bender_buffer_init(nb, 0);
             if (src->count > 0) {
-                janet_buffer_push_bytes(nb, src->data, src->count);
+                bender_buffer_push_bytes(nb, src->data, src->count);
             }
-            JanetQueue *q = &abst->items;
-            Janet *slots = q->data;
+            BenderQueue *q = &abst->items;
+            Bender *slots = q->data;
             int32_t tail = q->tail - 1;
             if (tail < 0) tail += q->capacity;
-            slots[tail] = janet_wrap_buffer(nb);
+            slots[tail] = bender_wrap_buffer(nb);
         }
     }
     return abst;
 }
 
-const JanetAbstractType janet_channel_type = {
+const BenderAbstractType bender_channel_type = {
     "core/channel",
-    janet_chanat_gc,
-    janet_chanat_mark,
-    janet_chanat_get,
+    bender_chanat_gc,
+    bender_chanat_mark,
+    bender_chanat_get,
     NULL, /* put */
-    janet_chanat_marshal,
-    janet_chanat_unmarshal,
+    bender_chanat_marshal,
+    bender_chanat_unmarshal,
     NULL, /* tostring */
     NULL, /* compare */
     NULL, /* hash */
-    janet_chanat_next,
+    bender_chanat_next,
     NULL, /* call */
     NULL, /* length */
     NULL, /* bytes */
-    janet_chanat_gcperthread
+    bender_chanat_gcperthread
 };
 
 /* Main event loop */
 
-void janet_loop1_impl(int has_timeout, JanetTimestamp timeout);
+void bender_loop1_impl(int has_timeout, BenderTimestamp timeout);
 
-int janet_loop_done(void) {
-    return !((janet_vm.spawn.head != janet_vm.spawn.tail) ||
-             janet_vm.tq_count ||
-             janet_atomic_load(&janet_vm.listener_count));
+int bender_loop_done(void) {
+    return !((bender_vm.spawn.head != bender_vm.spawn.tail) ||
+             bender_vm.tq_count ||
+             bender_atomic_load(&bender_vm.listener_count));
 }
 
 /* Service every deadline that has come due. A deadline either cancels the
  * waiting task fiber (operation timeouts, ev/deadline) or wakes it with nil.
  * Shared by the blocking loop and by ev/pump's non-blocking sample so both
  * deliver identical semantics. */
-static void janet_expire_timeouts(void) {
-    JanetTimeout to;
-    JanetTimestamp now = ts_now();
+static void bender_expire_timeouts(void) {
+    BenderTimeout to;
+    BenderTimestamp now = ts_now();
     while (peek_timeout(&to) && to.when <= now) {
         pop_timeout(0);
         if (to.curr_fiber != NULL) {
-            if (janet_fiber_can_resume(to.curr_fiber)) {
-                janet_cancel(to.fiber, janet_cstringv("deadline expired"));
+            if (bender_fiber_can_resume(to.curr_fiber)) {
+                bender_cancel(to.fiber, bender_cstringv("deadline expired"));
             }
         } else if (to.fiber->sched_id == to.sched_id) {
             /* A timeout for a suspended operation, not a whole fiber. */
             if (to.is_error) {
-                janet_cancel(to.fiber, janet_cstringv("timeout"));
+                bender_cancel(to.fiber, bender_cstringv("timeout"));
             } else {
-                janet_schedule(to.fiber, janet_wrap_nil());
+                bender_schedule(to.fiber, bender_wrap_nil());
             }
         }
         handle_timeout_worker(to, 0);
@@ -2468,42 +2468,42 @@ static void janet_expire_timeouts(void) {
  * Used by ev/pump, which must never re-enter the task scheduler from inside a
  * live fiber, and by bulk cross-lane callers (proc/spawn) that must drain the
  * self-pipe while they work. */
-void janet_loop1_poll_now(void);
+void bender_loop1_poll_now(void);
 
-JanetFiber *janet_loop1(void) {
-    janet_expire_timeouts();
+BenderFiber *bender_loop1(void) {
+    bender_expire_timeouts();
 
     /* Run scheduled fibers unless interrupts need to be handled. */
-    while (janet_vm.spawn.head != janet_vm.spawn.tail) {
-        /* Don't run until all interrupts have been marked as handled by calling janet_interpreter_interrupt_handled */
-        if (janet_atomic_load_relaxed(&janet_vm.auto_suspend)) break;
-        JanetTask task = {NULL, janet_wrap_nil(), JANET_SIGNAL_OK, 0};
-        janet_q_pop(&janet_vm.spawn, &task, sizeof(task));
-        if (task.fiber->gc.flags & JANET_FIBER_EV_GCFLAG_SUSPENDED) janet_ev_dec_refcount();
-        task.fiber->gc.flags &= ~(JANET_FIBER_EV_GCFLAG_CANCELED | JANET_FIBER_EV_GCFLAG_SUSPENDED);
+    while (bender_vm.spawn.head != bender_vm.spawn.tail) {
+        /* Don't run until all interrupts have been marked as handled by calling bender_interpreter_interrupt_handled */
+        if (bender_atomic_load_relaxed(&bender_vm.auto_suspend)) break;
+        BenderTask task = {NULL, bender_wrap_nil(), BENDER_SIGNAL_OK, 0};
+        bender_q_pop(&bender_vm.spawn, &task, sizeof(task));
+        if (task.fiber->gc.flags & BENDER_FIBER_EV_GCFLAG_SUSPENDED) bender_ev_dec_refcount();
+        task.fiber->gc.flags &= ~(BENDER_FIBER_EV_GCFLAG_CANCELED | BENDER_FIBER_EV_GCFLAG_SUSPENDED);
         if (task.expected_sched_id != task.fiber->sched_id) continue;
-        Janet res;
+        Bender res;
         /* M4b-2 quantum driver: budget is granted per resume inside
-         * janet_continue_no_check (covers loop-scheduled and direct
+         * bender_continue_no_check (covers loop-scheduled and direct
          * runs alike), so every run below starts full. Off = existing
          * behavior exact. */
-        JanetSignal sig = janet_continue_signal(task.fiber, task.value, &res, task.sig);
+        BenderSignal sig = bender_continue_signal(task.fiber, task.value, &res, task.sig);
         /* M4b quantum yield: the fiber WILL be re-queued below (same
          * signal, budget exhausted). It must bypass the completion
          * cleanup -- the minor frees the fiber's young nursery, and a
          * re-queued fiber would resume onto freed data (the density
          * UAF: status USER9, data poisoned, walked by later marks). */
-        int quantum_yield = (sig == JANET_SIGNAL_INTERRUPT) &&
-            janet_vm.quantum && !janet_atomic_load_relaxed(&janet_vm.auto_suspend);
-        if (!janet_fiber_can_resume(task.fiber) && !quantum_yield) {
-            janet_table_remove(&janet_vm.active_tasks, janet_wrap_fiber(task.fiber));
+        int quantum_yield = (sig == BENDER_SIGNAL_INTERRUPT) &&
+            bender_vm.quantum && !bender_atomic_load_relaxed(&bender_vm.auto_suspend);
+        if (!bender_fiber_can_resume(task.fiber) && !quantum_yield) {
+            bender_table_remove(&bender_vm.active_tasks, bender_wrap_fiber(task.fiber));
             /* P3.5c: a completed proc retires its mailbox (go quiet so
              * later sends drop silently, Erlang parity). Completed
              * fibers hold no self-pendings (recv is own-mailbox only),
              * so no purge is needed — only the flag. All objects are
              * listed-valid here (mid-mutator, pre-sweep). */
             if (NULL != task.fiber->proc && NULL != task.fiber->proc->mbox) {
-                janet_channel_set_proc_alive(task.fiber->proc->mbox, 0);
+                bender_channel_set_proc_alive(task.fiber->proc->mbox, 0);
             }
             /* Phase 1 density: one final own-heap minor at completion.
              * The global minor no longer walks fibers' lists (the 1M
@@ -2511,16 +2511,16 @@ JanetFiber *janet_loop1(void) {
              * O(own), at the completion boundary where the stack is
              * final and consistent. Parked-forever fibers are the only
              * deferred case (bounded by their real working set). */
-            janet_collect_fiber_minor(task.fiber);
+            bender_collect_fiber_minor(task.fiber);
         }
         void *sv = task.fiber->supervisor_channel;
-        int is_suspended = sig == JANET_SIGNAL_EVENT || sig == JANET_SIGNAL_YIELD || sig == JANET_SIGNAL_INTERRUPT;
+        int is_suspended = sig == BENDER_SIGNAL_EVENT || sig == BENDER_SIGNAL_YIELD || sig == BENDER_SIGNAL_INTERRUPT;
         if (is_suspended) {
-            task.fiber->gc.flags |= JANET_FIBER_EV_GCFLAG_SUSPENDED;
-            janet_ev_inc_refcount();
+            task.fiber->gc.flags |= BENDER_FIBER_EV_GCFLAG_SUSPENDED;
+            bender_ev_inc_refcount();
         }
-        if (sig == JANET_SIGNAL_INTERRUPT && janet_vm.quantum &&
-                !janet_atomic_load_relaxed(&janet_vm.auto_suspend)) {
+        if (sig == BENDER_SIGNAL_INTERRUPT && bender_vm.quantum &&
+                !bender_atomic_load_relaxed(&bender_vm.auto_suspend)) {
             /* Budget exhausted (not external quiesce — that leaves
              * auto_suspend set): re-queue at the back with the original
              * wake value/signal (transparent deferral — takes/sleeps
@@ -2531,44 +2531,44 @@ JanetFiber *janet_loop1(void) {
              * completed. Resume value ignored via RESUME_NO_USEVAL. */
             /* Re-queue transparently. The wake signal has ALREADY been
              * consumed by the resume above: re-arming it would replay a
-             * JANET_SIGNAL_ERROR into the fiber's next resume, and once
-             * janet_continue_signal has smuggled that error into the status
+             * BENDER_SIGNAL_ERROR into the fiber's next resume, and once
+             * bender_continue_signal has smuggled that error into the status
              * bits it is re-raised on every later turn. Under quanta that
              * turned one expired deadline into a permanently replaying
              * "timeout" that surfaced in unrelated arithmetic (and, for
-             * JANET_SIGNAL_OK, could overwrite a real wake value). Resume
+             * BENDER_SIGNAL_OK, could overwrite a real wake value). Resume
              * with a plain OK and no value. */
-            janet_schedule_signal(task.fiber, janet_wrap_nil(), JANET_SIGNAL_OK);
+            bender_schedule_signal(task.fiber, bender_wrap_nil(), BENDER_SIGNAL_OK);
             break;
         }
         if (NULL == sv) {
             if (!is_suspended) {
-                janet_stacktrace_ext(task.fiber, res, "");
+                bender_stacktrace_ext(task.fiber, res, "");
             }
-        } else if (sig == JANET_SIGNAL_OK || (task.fiber->flags & (1 << sig))) {
-            JanetChannel *chan = janet_channel_unwrap(sv);
-            janet_channel_push(chan, make_supervisor_event(janet_signal_names[sig],
+        } else if (sig == BENDER_SIGNAL_OK || (task.fiber->flags & (1 << sig))) {
+            BenderChannel *chan = bender_channel_unwrap(sv);
+            bender_channel_push(chan, make_supervisor_event(bender_signal_names[sig],
                     task.fiber, chan->is_threaded), 2);
         } else if (!is_suspended) {
-            janet_stacktrace_ext(task.fiber, res, "");
+            bender_stacktrace_ext(task.fiber, res, "");
         }
-        if (sig == JANET_SIGNAL_INTERRUPT) {
+        if (sig == BENDER_SIGNAL_INTERRUPT) {
             return task.fiber;
         }
     }
 
     /* Poll for events. A non-blocking turn still samples ready I/O, but with
      * a zero deadline so the OS can never delay the caller. */
-    if (janet_vm.tq_count || janet_atomic_load(&janet_vm.listener_count)) {
-        JanetTimeout to;
+    if (bender_vm.tq_count || bender_atomic_load(&bender_vm.listener_count)) {
+        BenderTimeout to;
         memset(&to, 0, sizeof(to));
         int has_timeout;
         /* Drop timeouts that are no longer needed */
         while ((has_timeout = peek_timeout(&to))) {
             if (to.curr_fiber != NULL) {
-                if (!janet_fiber_can_resume(to.curr_fiber)) {
+                if (!bender_fiber_can_resume(to.curr_fiber)) {
                     pop_timeout(0);
-                    janet_table_remove(&janet_vm.active_tasks, janet_wrap_fiber(to.curr_fiber));
+                    bender_table_remove(&bender_vm.active_tasks, bender_wrap_fiber(to.curr_fiber));
                     handle_timeout_worker(to, 1);
                     continue;
                 }
@@ -2586,11 +2586,11 @@ JanetFiber *janet_loop1(void) {
          * Expired timers above were already serviced without blocking,
          * and the loop re-enters spawn immediately. Quantum off, or
          * external quiesce active: identical to before. */
-        if ((janet_vm.tq_count || janet_atomic_load(&janet_vm.listener_count)) &&
-                !(janet_vm.quantum &&
-                  !janet_atomic_load_relaxed(&janet_vm.auto_suspend) &&
-                  janet_vm.spawn.head != janet_vm.spawn.tail)) {
-            janet_loop1_impl(has_timeout, to.when);
+        if ((bender_vm.tq_count || bender_atomic_load(&bender_vm.listener_count)) &&
+                !(bender_vm.quantum &&
+                  !bender_atomic_load_relaxed(&bender_vm.auto_suspend) &&
+                  bender_vm.spawn.head != bender_vm.spawn.tail)) {
+            bender_loop1_impl(has_timeout, to.when);
         }
     }
 
@@ -2600,10 +2600,10 @@ JanetFiber *janet_loop1(void) {
 
 /* Expire due deadlines and sample ready I/O once, with a zero deadline so the
  * OS can never delay the caller. Task fibers are deliberately NOT run: resuming
- * them swaps janet_vm.fiber and the C stack, which is only safe from the top of
+ * them swaps bender_vm.fiber and the C stack, which is only safe from the top of
  * the scheduler loop. */
-void janet_loop1_poll_now(void) {
-    janet_expire_timeouts();
+void bender_loop1_poll_now(void) {
+    bender_expire_timeouts();
     /* Always poll with a zero deadline. The previous gate
      * (tq_count || listener_count) skipped the poller whenever no timer or
      * listener existed -- but a PENDING SELF-PIPE EVENT is exactly such a
@@ -2611,25 +2611,25 @@ void janet_loop1_poll_now(void) {
      * drain, so the count can sit at zero while events still wait, and the
      * pipe then fills and the poster aborts. A zero-deadline poll is one
      * syscall and cannot sleep, so calling it unconditionally is safe. */
-    janet_loop1_impl(1, ts_now());
+    bender_loop1_impl(1, ts_now());
 }
 
-/* Same as janet_interpreter_interrupt, but will also
+/* Same as bender_interpreter_interrupt, but will also
  * break out of the event loop if waiting for an event
  * (say, waiting for ev/sleep to finish). Does this by pushing
  * an empty event to the event loop. */
-void janet_loop1_interrupt(JanetVM *vm) {
-    janet_interpreter_interrupt(vm);
-    JanetEVGenericMessage msg = {0};
-    JanetCallback cb = NULL;
-    janet_ev_post_event(vm, cb, msg);
+void bender_loop1_interrupt(BenderVM *vm) {
+    bender_interpreter_interrupt(vm);
+    BenderEVGenericMessage msg = {0};
+    BenderCallback cb = NULL;
+    bender_ev_post_event(vm, cb, msg);
 }
 
-void janet_loop(void) {
-    while (!janet_loop_done()) {
-        JanetFiber *interrupted_fiber = janet_loop1();
+void bender_loop(void) {
+    while (!bender_loop_done()) {
+        BenderFiber *interrupted_fiber = bender_loop1();
         if (NULL != interrupted_fiber) {
-            janet_schedule(interrupted_fiber, janet_wrap_nil());
+            bender_schedule(interrupted_fiber, bender_wrap_nil());
         }
     }
 }
@@ -2638,25 +2638,25 @@ void janet_loop(void) {
  * Self-pipe handling code.
  */
 
-#ifdef JANET_WINDOWS
+#ifdef BENDER_WINDOWS
 
 /* On windows, use PostQueuedCompletionStatus instead for
  * custom events */
 
 #else
 
-static void janet_ev_setup_selfpipe(void) {
+static void bender_ev_setup_selfpipe(void) {
     /* Both ends must be nonblocking: cross-VM posts hold the home-lifetime
      * lock until the write finishes, and a full pipe must not pin shutdown. */
-    if (janet_make_pipe(janet_vm.selfpipe, 0)) {
-        JANET_EXIT("failed to initialize self pipe in event loop");
+    if (bender_make_pipe(bender_vm.selfpipe, 0)) {
+        BENDER_EXIT("failed to initialize self pipe in event loop");
     }
 #if defined(__linux__) && defined(F_SETPIPE_SZ)
     /* Phase 2b step 4 (backpressure, not a correctness fix): the default
-     * pipe capacity (typically 64KiB) divided by sizeof(JanetSelfPipeEvent)
+     * pipe capacity (typically 64KiB) divided by sizeof(BenderSelfPipeEvent)
      * bounds how many concurrent posts (signal handlers, threaded-call
      * completions, pool/proc exits) can be in flight before
-     * janet_ev_post_event's bounded retry loop aborts via "failed to
+     * bender_ev_post_event's bounded retry loop aborts via "failed to
      * write event to self-pipe". That abort is the deliberate, signal-
      * safe fallback (test-ev-selfpipe-saturation asserts it is bounded,
      * not that it never happens) and must stay exactly as-is: a signal
@@ -2666,61 +2666,61 @@ static void janet_ev_setup_selfpipe(void) {
      * and is a best-effort Linux-only call (unprivileged processes are
      * typically capped around 1MiB by pipe-max-size, so failure here is
      * expected and harmless -- fall back to the kernel default). */
-    fcntl(janet_vm.selfpipe[1], F_SETPIPE_SZ, 1 << 20);
+    fcntl(bender_vm.selfpipe[1], F_SETPIPE_SZ, 1 << 20);
 #endif
 }
 
 /* Handle events from the self pipe inside the event loop */
-static void janet_ev_handle_selfpipe(void) {
-    JanetSelfPipeEvent response;
+static void bender_ev_handle_selfpipe(void) {
+    BenderSelfPipeEvent response;
     int status;
 recur:
     do {
-        status = read(janet_vm.selfpipe[0], &response, sizeof(response));
+        status = read(bender_vm.selfpipe[0], &response, sizeof(response));
     } while (status == -1 && errno == EINTR);
     if (status > 0) {
         if (NULL != response.cb) {
             response.cb(response.msg);
         }
-        janet_ev_dec_refcount();
+        bender_ev_dec_refcount();
         goto recur;
     }
 }
 
-static void janet_ev_cleanup_selfpipe(void) {
-    close(janet_vm.selfpipe[0]);
-    close(janet_vm.selfpipe[1]);
+static void bender_ev_cleanup_selfpipe(void) {
+    close(bender_vm.selfpipe[0]);
+    close(bender_vm.selfpipe[1]);
 }
 
 #endif
 
-#ifdef JANET_WINDOWS
+#ifdef BENDER_WINDOWS
 
-static JanetTimestamp ts_now(void) {
-    return (JanetTimestamp) GetTickCount64();
+static BenderTimestamp ts_now(void) {
+    return (BenderTimestamp) GetTickCount64();
 }
 
-void janet_ev_init(void) {
-    janet_ev_init_common();
-    janet_vm.iocp = CreateIoCompletionPort(INVALID_HANDLE_VALUE, NULL, 0, 0);
-    if (NULL == janet_vm.iocp) janet_panic("could not create io completion port");
+void bender_ev_init(void) {
+    bender_ev_init_common();
+    bender_vm.iocp = CreateIoCompletionPort(INVALID_HANDLE_VALUE, NULL, 0, 0);
+    if (NULL == bender_vm.iocp) bender_panic("could not create io completion port");
 }
 
-void janet_ev_deinit(void) {
-    janet_ev_deinit_common();
-    CloseHandle(janet_vm.iocp);
+void bender_ev_deinit(void) {
+    bender_ev_deinit_common();
+    CloseHandle(bender_vm.iocp);
 }
 
-static void janet_register_stream(JanetStream *stream) {
-    if (NULL == CreateIoCompletionPort(stream->handle, janet_vm.iocp, (ULONG_PTR) stream, 0)) {
-        if (stream->flags & (JANET_STREAM_READABLE | JANET_STREAM_WRITABLE | JANET_STREAM_ACCEPTABLE)) {
-            janet_panicf("failed to listen for events: %V", janet_ev_lasterr());
+static void bender_register_stream(BenderStream *stream) {
+    if (NULL == CreateIoCompletionPort(stream->handle, bender_vm.iocp, (ULONG_PTR) stream, 0)) {
+        if (stream->flags & (BENDER_STREAM_READABLE | BENDER_STREAM_WRITABLE | BENDER_STREAM_ACCEPTABLE)) {
+            bender_panicf("failed to listen for events: %V", bender_ev_lasterr());
         }
-        stream->flags |= JANET_STREAM_UNREGISTERED;
+        stream->flags |= BENDER_STREAM_UNREGISTERED;
     }
 }
 
-void janet_loop1_impl(int has_timeout, JanetTimestamp to) {
+void bender_loop1_impl(int has_timeout, BenderTimestamp to) {
     ULONG_PTR completionKey = 0;
     DWORD num_bytes_transferred = 0;
     LPOVERLAPPED overlapped = NULL;
@@ -2728,7 +2728,7 @@ void janet_loop1_impl(int has_timeout, JanetTimestamp to) {
     /* Calculate how long to wait before timeout */
     uint64_t waittime;
     if (has_timeout) {
-        JanetTimestamp now = ts_now();
+        BenderTimestamp now = ts_now();
         if (now > to) {
             waittime = 0;
         } else {
@@ -2737,207 +2737,207 @@ void janet_loop1_impl(int has_timeout, JanetTimestamp to) {
     } else {
         waittime = INFINITE;
     }
-    BOOL result = GetQueuedCompletionStatus(janet_vm.iocp, &num_bytes_transferred, &completionKey, &overlapped, (DWORD) waittime);
+    BOOL result = GetQueuedCompletionStatus(bender_vm.iocp, &num_bytes_transferred, &completionKey, &overlapped, (DWORD) waittime);
 
     if (result || overlapped) {
         if (0 == completionKey) {
             /* Custom event */
-            JanetSelfPipeEvent *response = (JanetSelfPipeEvent *)(overlapped);
+            BenderSelfPipeEvent *response = (BenderSelfPipeEvent *)(overlapped);
             if (NULL != response->cb) {
                 response->cb(response->msg);
             }
-            janet_ev_dec_refcount();
-            janet_free(response);
+            bender_ev_dec_refcount();
+            bender_free(response);
         } else {
             /* Normal event */
-            JanetOverlapped *jo = (JanetOverlapped *) overlapped;
-            JanetStream *stream = (JanetStream *) completionKey;
-            JanetFiber *fiber = NULL;
+            BenderOverlapped *jo = (BenderOverlapped *) overlapped;
+            BenderStream *stream = (BenderStream *) completionKey;
+            BenderFiber *fiber = NULL;
             if (stream->read_fiber && stream->read_fiber->ev_state == jo) {
                 fiber = stream->read_fiber;
             } else if (stream->write_fiber && stream->write_fiber->ev_state == jo) {
                 fiber = stream->write_fiber;
             }
             if (fiber != NULL) {
-                fiber->flags &= ~JANET_FIBER_EV_FLAG_IN_FLIGHT;
+                fiber->flags &= ~BENDER_FIBER_EV_FLAG_IN_FLIGHT;
                 jo->bytes_transfered = (ULONG_PTR) num_bytes_transferred;
-                fiber->ev_callback(fiber, result ? JANET_ASYNC_EVENT_COMPLETE : JANET_ASYNC_EVENT_FAILED);
+                fiber->ev_callback(fiber, result ? BENDER_ASYNC_EVENT_COMPLETE : BENDER_ASYNC_EVENT_FAILED);
             } else {
-                janet_free((void *) jo);
-                janet_ev_dec_refcount();
+                bender_free((void *) jo);
+                bender_ev_dec_refcount();
             }
-            janet_stream_checktoclose(stream);
+            bender_stream_checktoclose(stream);
         }
     }
 }
 
-void janet_stream_edge_triggered(JanetStream *stream) {
+void bender_stream_edge_triggered(BenderStream *stream) {
     (void) stream;
 }
 
-void janet_stream_level_triggered(JanetStream *stream) {
+void bender_stream_level_triggered(BenderStream *stream) {
     (void) stream;
 }
 
-#elif defined(JANET_EV_EPOLL)
+#elif defined(BENDER_EV_EPOLL)
 
-static JanetTimestamp ts_now(void) {
+static BenderTimestamp ts_now(void) {
     struct timespec now;
-    janet_assert(-1 != janet_gettime(&now, JANET_TIME_MONOTONIC), "failed to get time");
+    bender_assert(-1 != bender_gettime(&now, BENDER_TIME_MONOTONIC), "failed to get time");
     uint64_t res = 1000 * now.tv_sec;
     res += now.tv_nsec / 1000000;
     return res;
 }
 
 /* Wait for the next event */
-static void janet_register_stream_impl(JanetStream *stream, int mod, int edge_trigger) {
+static void bender_register_stream_impl(BenderStream *stream, int mod, int edge_trigger) {
     struct epoll_event ev;
     ev.events = edge_trigger ? EPOLLET : 0;
-    if (stream->flags & (JANET_STREAM_READABLE | JANET_STREAM_ACCEPTABLE)) ev.events |= EPOLLIN;
-    if (stream->flags & JANET_STREAM_WRITABLE) ev.events |= EPOLLOUT;
+    if (stream->flags & (BENDER_STREAM_READABLE | BENDER_STREAM_ACCEPTABLE)) ev.events |= EPOLLIN;
+    if (stream->flags & BENDER_STREAM_WRITABLE) ev.events |= EPOLLOUT;
     ev.data.ptr = stream;
     int status;
     do {
-        status = epoll_ctl(janet_vm.epoll, mod ? EPOLL_CTL_MOD : EPOLL_CTL_ADD, stream->handle, &ev);
+        status = epoll_ctl(bender_vm.epoll, mod ? EPOLL_CTL_MOD : EPOLL_CTL_ADD, stream->handle, &ev);
     } while (status == -1 && errno == EINTR);
     if (status == -1) {
         if (errno == EPERM) {
             /* Couldn't add to event loop, so assume that it completes
              * synchronously. */
-            stream->flags |= JANET_STREAM_UNREGISTERED;
+            stream->flags |= BENDER_STREAM_UNREGISTERED;
         } else {
             /* Unexpected error */
-            janet_panicv(janet_ev_lasterr());
+            bender_panicv(bender_ev_lasterr());
         }
     }
 }
 
-static void janet_register_stream(JanetStream *stream) {
-    janet_register_stream_impl(stream, 0, 1);
+static void bender_register_stream(BenderStream *stream) {
+    bender_register_stream_impl(stream, 0, 1);
 }
 
-void janet_stream_edge_triggered(JanetStream *stream) {
-    janet_register_stream_impl(stream, 1, 1);
+void bender_stream_edge_triggered(BenderStream *stream) {
+    bender_register_stream_impl(stream, 1, 1);
 }
 
-void janet_stream_level_triggered(JanetStream *stream) {
-    janet_register_stream_impl(stream, 1, 0);
+void bender_stream_level_triggered(BenderStream *stream) {
+    bender_register_stream_impl(stream, 1, 0);
 }
 
-void janet_unregister_stream(JanetStream *stream) {
-    if (stream->flags & JANET_STREAM_NODUPS) return;
+void bender_unregister_stream(BenderStream *stream) {
+    if (stream->flags & BENDER_STREAM_NODUPS) return;
     int status;
     do {
-        status = epoll_ctl(janet_vm.epoll, EPOLL_CTL_DEL, stream->handle, NULL);
+        status = epoll_ctl(bender_vm.epoll, EPOLL_CTL_DEL, stream->handle, NULL);
     } while (status == -1 && errno == EINTR);
     if (status == -1) {
-        janet_panicv(janet_ev_lasterr());
+        bender_panicv(bender_ev_lasterr());
     }
-    stream->flags |= JANET_STREAM_UNREGISTERED;
+    stream->flags |= BENDER_STREAM_UNREGISTERED;
 }
 
-#define JANET_EPOLL_MAX_EVENTS 64
-void janet_loop1_impl(int has_timeout, JanetTimestamp timeout) {
+#define BENDER_EPOLL_MAX_EVENTS 64
+void bender_loop1_impl(int has_timeout, BenderTimestamp timeout) {
     struct itimerspec its;
-    if (janet_vm.timer_enabled || has_timeout) {
+    if (bender_vm.timer_enabled || has_timeout) {
         memset(&its, 0, sizeof(its));
         if (has_timeout) {
             its.it_value.tv_sec = timeout / 1000;
             its.it_value.tv_nsec = (timeout % 1000) * 1000000;
         }
-        timerfd_settime(janet_vm.timerfd, TFD_TIMER_ABSTIME, &its, NULL);
+        timerfd_settime(bender_vm.timerfd, TFD_TIMER_ABSTIME, &its, NULL);
     }
-    janet_vm.timer_enabled = has_timeout;
+    bender_vm.timer_enabled = has_timeout;
 
     /* Poll for events */
-    struct epoll_event events[JANET_EPOLL_MAX_EVENTS];
+    struct epoll_event events[BENDER_EPOLL_MAX_EVENTS];
     int ready;
     do {
-        ready = epoll_wait(janet_vm.epoll, events, JANET_EPOLL_MAX_EVENTS, -1);
+        ready = epoll_wait(bender_vm.epoll, events, BENDER_EPOLL_MAX_EVENTS, -1);
     } while (ready == -1 && errno == EINTR);
     if (ready == -1) {
-        JANET_EXIT("failed to poll events");
+        BENDER_EXIT("failed to poll events");
     }
 
     /* Step state machines */
     for (int i = 0; i < ready; i++) {
         void *p = events[i].data.ptr;
-        if (&janet_vm.timerfd == p) {
+        if (&bender_vm.timerfd == p) {
             /* Timer expired, ignore */;
-        } else if (janet_vm.selfpipe == p) {
+        } else if (bender_vm.selfpipe == p) {
             /* Self-pipe handling */
-            janet_ev_handle_selfpipe();
+            bender_ev_handle_selfpipe();
         } else {
-            JanetStream *stream = p;
+            BenderStream *stream = p;
             int mask = events[i].events;
             int has_err = mask & EPOLLERR;
             int has_hup = mask & EPOLLHUP;
-            JanetFiber *rf = stream->read_fiber;
-            JanetFiber *wf = stream->write_fiber;
+            BenderFiber *rf = stream->read_fiber;
+            BenderFiber *wf = stream->write_fiber;
             if (rf) {
                 if (rf->ev_callback && (mask & EPOLLIN)) {
-                    rf->ev_callback(rf, JANET_ASYNC_EVENT_READ);
+                    rf->ev_callback(rf, BENDER_ASYNC_EVENT_READ);
                 }
                 if (rf->ev_callback && has_err) {
-                    rf->ev_callback(rf, JANET_ASYNC_EVENT_ERR);
+                    rf->ev_callback(rf, BENDER_ASYNC_EVENT_ERR);
                 }
                 if (rf->ev_callback && has_hup) {
-                    rf->ev_callback(rf, JANET_ASYNC_EVENT_HUP);
+                    rf->ev_callback(rf, BENDER_ASYNC_EVENT_HUP);
                 }
             }
             if (wf) {
                 if (wf->ev_callback && (mask & EPOLLOUT)) {
-                    wf->ev_callback(wf, JANET_ASYNC_EVENT_WRITE);
+                    wf->ev_callback(wf, BENDER_ASYNC_EVENT_WRITE);
                 }
                 if (wf->ev_callback && has_err) {
-                    wf->ev_callback(wf, JANET_ASYNC_EVENT_ERR);
+                    wf->ev_callback(wf, BENDER_ASYNC_EVENT_ERR);
                 }
                 if (wf->ev_callback && has_hup) {
-                    wf->ev_callback(wf, JANET_ASYNC_EVENT_HUP);
+                    wf->ev_callback(wf, BENDER_ASYNC_EVENT_HUP);
                 }
             }
-            janet_stream_checktoclose(stream);
+            bender_stream_checktoclose(stream);
         }
     }
 }
 
-void janet_ev_init(void) {
-    janet_ev_init_common();
-    janet_ev_setup_selfpipe();
-    janet_vm.epoll = epoll_create1(EPOLL_CLOEXEC);
-    janet_vm.timerfd = timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC | TFD_NONBLOCK);
-    janet_vm.timer_enabled = 0;
-    if (janet_vm.epoll == -1 || janet_vm.timerfd == -1) goto error;
+void bender_ev_init(void) {
+    bender_ev_init_common();
+    bender_ev_setup_selfpipe();
+    bender_vm.epoll = epoll_create1(EPOLL_CLOEXEC);
+    bender_vm.timerfd = timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC | TFD_NONBLOCK);
+    bender_vm.timer_enabled = 0;
+    if (bender_vm.epoll == -1 || bender_vm.timerfd == -1) goto error;
     struct epoll_event ev;
     ev.events = EPOLLIN | EPOLLET;
-    ev.data.ptr = &janet_vm.timerfd;
-    if (-1 == epoll_ctl(janet_vm.epoll, EPOLL_CTL_ADD, janet_vm.timerfd, &ev)) goto error;
+    ev.data.ptr = &bender_vm.timerfd;
+    if (-1 == epoll_ctl(bender_vm.epoll, EPOLL_CTL_ADD, bender_vm.timerfd, &ev)) goto error;
     ev.events = EPOLLIN | EPOLLET;
-    ev.data.ptr = janet_vm.selfpipe;
-    if (-1 == epoll_ctl(janet_vm.epoll, EPOLL_CTL_ADD, janet_vm.selfpipe[0], &ev)) goto error;
+    ev.data.ptr = bender_vm.selfpipe;
+    if (-1 == epoll_ctl(bender_vm.epoll, EPOLL_CTL_ADD, bender_vm.selfpipe[0], &ev)) goto error;
     return;
 error:
-    JANET_EXIT("failed to initialize event loop");
+    BENDER_EXIT("failed to initialize event loop");
 }
 
-void janet_ev_deinit(void) {
-    janet_ev_deinit_common();
-    close(janet_vm.epoll);
-    close(janet_vm.timerfd);
-    janet_ev_cleanup_selfpipe();
-    janet_vm.epoll = 0;
+void bender_ev_deinit(void) {
+    bender_ev_deinit_common();
+    close(bender_vm.epoll);
+    close(bender_vm.timerfd);
+    bender_ev_cleanup_selfpipe();
+    bender_vm.epoll = 0;
 }
 
 /*
  * End epoll implementation
  */
 
-#elif defined(JANET_EV_KQUEUE)
+#elif defined(BENDER_EV_KQUEUE)
 /* Definition from:
  *   https://github.com/wahern/cqueues/blob/master/src/lib/kpoll.c
  * NetBSD uses intptr_t while others use void * for .udata */
 #define EV_SETx(ev, a, b, c, d, e, f) EV_SET((ev), (a), (b), (c), (d), (e), ((__typeof__((ev)->udata))(f)))
-#define JANET_KQUEUE_MIN_INTERVAL 0
+#define BENDER_KQUEUE_MIN_INTERVAL 0
 
 /* NOTE:
  * NetBSD and OpenBSD expect things are always intervals, and FreeBSD doesn't
@@ -2946,243 +2946,243 @@ void janet_ev_deinit(void) {
  * kqueue. Also note that NetBSD doesn't accept timeout intervals less than 1
  * millisecond, so correct all intervals on that platform to be at least 1
  * millisecond.*/
-JanetTimestamp to_interval(const JanetTimestamp ts) {
-    return ts >= JANET_KQUEUE_MIN_INTERVAL ? ts : JANET_KQUEUE_MIN_INTERVAL;
+BenderTimestamp to_interval(const BenderTimestamp ts) {
+    return ts >= BENDER_KQUEUE_MIN_INTERVAL ? ts : BENDER_KQUEUE_MIN_INTERVAL;
 }
-#define JANET_KQUEUE_INTERVAL(timestamp) (to_interval((timestamp - ts_now())))
+#define BENDER_KQUEUE_INTERVAL(timestamp) (to_interval((timestamp - ts_now())))
 
-static JanetTimestamp ts_now(void) {
+static BenderTimestamp ts_now(void) {
     struct timespec now;
-    janet_assert(-1 != janet_gettime(&now, JANET_TIME_MONOTONIC), "failed to get time");
+    bender_assert(-1 != bender_gettime(&now, BENDER_TIME_MONOTONIC), "failed to get time");
     uint64_t res = 1000 * now.tv_sec;
     res += now.tv_nsec / 1000000;
     return res;
 }
 
-/* NOTE: Assumes Janet's timestamp precision is in milliseconds. */
-static void timestamp2timespec(struct timespec *t, JanetTimestamp ts) {
+/* NOTE: Assumes Bender's timestamp precision is in milliseconds. */
+static void timestamp2timespec(struct timespec *t, BenderTimestamp ts) {
     t->tv_sec = ts == 0 ? 0 : ts / 1000;
     t->tv_nsec = ts == 0 ? 0 : (ts % 1000) * 1000000;
 }
 
-void janet_register_stream_impl(JanetStream *stream, int edge_trigger) {
+void bender_register_stream_impl(BenderStream *stream, int edge_trigger) {
     struct kevent kevs[2];
     int length = 0;
     int clear = edge_trigger ? EV_CLEAR : 0;
-    if (stream->flags & (JANET_STREAM_READABLE | JANET_STREAM_ACCEPTABLE)) {
+    if (stream->flags & (BENDER_STREAM_READABLE | BENDER_STREAM_ACCEPTABLE)) {
         EV_SETx(&kevs[length++], stream->handle, EVFILT_READ, EV_ADD | EV_ENABLE | clear, 0, 0, stream);
     }
-    if (stream->flags & JANET_STREAM_WRITABLE) {
+    if (stream->flags & BENDER_STREAM_WRITABLE) {
         EV_SETx(&kevs[length++], stream->handle, EVFILT_WRITE, EV_ADD | EV_ENABLE | clear, 0, 0, stream);
     }
     int status;
     do {
-        status = kevent(janet_vm.kq, kevs, length, NULL, 0, NULL);
+        status = kevent(bender_vm.kq, kevs, length, NULL, 0, NULL);
     } while (status == -1 && errno == EINTR);
     if (status == -1) {
-        stream->flags |= JANET_STREAM_UNREGISTERED;
+        stream->flags |= BENDER_STREAM_UNREGISTERED;
     }
 }
 
-void janet_register_stream(JanetStream *stream) {
-    janet_register_stream_impl(stream, 1);
+void bender_register_stream(BenderStream *stream) {
+    bender_register_stream_impl(stream, 1);
 }
 
-void janet_stream_edge_triggered(JanetStream *stream) {
-    janet_register_stream_impl(stream, 1);
+void bender_stream_edge_triggered(BenderStream *stream) {
+    bender_register_stream_impl(stream, 1);
 }
 
-void janet_stream_level_triggered(JanetStream *stream) {
+void bender_stream_level_triggered(BenderStream *stream) {
     /* On macos, we seem to need to delete any registered events before re-registering without
      * EV_CLEAR, otherwise the new event will still have EV_CLEAR set erroneously. This could be a
      * kernel bug, but unfortunately the specification is vague here, esp. in regards to where and when
      * EV_CLEAR is set automatically. */
     struct kevent kevs[2];
     int length = 0;
-    if (stream->flags & (JANET_STREAM_READABLE | JANET_STREAM_ACCEPTABLE)) {
+    if (stream->flags & (BENDER_STREAM_READABLE | BENDER_STREAM_ACCEPTABLE)) {
         EV_SETx(&kevs[length++], stream->handle, EVFILT_READ, EV_DELETE, 0, 0, stream);
     }
-    if (stream->flags & JANET_STREAM_WRITABLE) {
+    if (stream->flags & BENDER_STREAM_WRITABLE) {
         EV_SETx(&kevs[length++], stream->handle, EVFILT_WRITE, EV_DELETE, 0, 0, stream);
     }
     int status;
     do {
-        status = kevent(janet_vm.kq, kevs, length, NULL, 0, NULL);
+        status = kevent(bender_vm.kq, kevs, length, NULL, 0, NULL);
     } while (status == -1 && errno == EINTR);
-    janet_register_stream_impl(stream, 0);
+    bender_register_stream_impl(stream, 0);
 }
 
-void janet_unregister_stream(JanetStream *stream) {
-    if (stream->flags & JANET_STREAM_NODUPS) return;
+void bender_unregister_stream(BenderStream *stream) {
+    if (stream->flags & BENDER_STREAM_NODUPS) return;
     struct kevent kevs[2];
     int length = 0;
-    if (stream->flags & (JANET_STREAM_READABLE | JANET_STREAM_ACCEPTABLE)) {
+    if (stream->flags & (BENDER_STREAM_READABLE | BENDER_STREAM_ACCEPTABLE)) {
         EV_SETx(&kevs[length++], stream->handle, EVFILT_READ, EV_DELETE, 0, 0, stream);
     }
-    if (stream->flags & JANET_STREAM_WRITABLE) {
+    if (stream->flags & BENDER_STREAM_WRITABLE) {
         EV_SETx(&kevs[length++], stream->handle, EVFILT_WRITE, EV_DELETE, 0, 0, stream);
     }
     int status;
     do {
-        status = kevent(janet_vm.kq, kevs, length, NULL, 0, NULL);
+        status = kevent(bender_vm.kq, kevs, length, NULL, 0, NULL);
     } while (status == -1 && errno == EINTR);
     /* Status might be -1 on BSDs for subprocesses */
-    stream->flags |= JANET_STREAM_UNREGISTERED;
+    stream->flags |= BENDER_STREAM_UNREGISTERED;
 }
 
-#define JANET_KQUEUE_MAX_EVENTS 512
+#define BENDER_KQUEUE_MAX_EVENTS 512
 
-void janet_loop1_impl(int has_timeout, JanetTimestamp timeout) {
+void bender_loop1_impl(int has_timeout, BenderTimestamp timeout) {
     /* Poll for events */
     /* NOTE:
      * We calculate the timeout interval per iteration. When the interval
      * drops to 0 or negative, we effect a timeout of 0. Effecting a timeout
      * of infinity will not work and could make other fibers with timeouts
      * miss their timeouts if we did so.
-     * JANET_KQUEUE_INTERVAL insures we have a timeout of no less than 0. */
+     * BENDER_KQUEUE_INTERVAL insures we have a timeout of no less than 0. */
     int status;
     struct timespec ts;
-    struct kevent events[JANET_KQUEUE_MAX_EVENTS];
+    struct kevent events[BENDER_KQUEUE_MAX_EVENTS];
     do {
-        if (janet_vm.timer_enabled || has_timeout) {
-            timestamp2timespec(&ts, JANET_KQUEUE_INTERVAL(timeout));
-            status = kevent(janet_vm.kq, NULL, 0, events,
-                            JANET_KQUEUE_MAX_EVENTS, &ts);
+        if (bender_vm.timer_enabled || has_timeout) {
+            timestamp2timespec(&ts, BENDER_KQUEUE_INTERVAL(timeout));
+            status = kevent(bender_vm.kq, NULL, 0, events,
+                            BENDER_KQUEUE_MAX_EVENTS, &ts);
         } else {
-            status = kevent(janet_vm.kq, NULL, 0, events,
-                            JANET_KQUEUE_MAX_EVENTS, NULL);
+            status = kevent(bender_vm.kq, NULL, 0, events,
+                            BENDER_KQUEUE_MAX_EVENTS, NULL);
         }
     } while (status == -1 && errno == EINTR);
     if (status == -1) {
-        JANET_EXIT("failed to poll events");
+        BENDER_EXIT("failed to poll events");
     }
 
     /* Make sure timer is set accordingly. */
-    janet_vm.timer_enabled = has_timeout;
+    bender_vm.timer_enabled = has_timeout;
 
     /* Step state machines */
     for (int i = 0; i < status; i++) {
         void *p = (void *) events[i].udata;
-        if (janet_vm.selfpipe == p) {
+        if (bender_vm.selfpipe == p) {
             /* Self-pipe handling */
-            janet_ev_handle_selfpipe();
+            bender_ev_handle_selfpipe();
         } else {
-            JanetStream *stream = p;
+            BenderStream *stream = p;
             int filt = events[i].filter;
             int has_err = events[i].flags & EV_ERROR;
             int has_hup = events[i].flags & EV_EOF;
             for (int j = 0; j < 2; j++) {
-                JanetFiber *f = j ? stream->read_fiber : stream->write_fiber;
+                BenderFiber *f = j ? stream->read_fiber : stream->write_fiber;
                 if (!f) continue;
                 if (f->ev_callback && has_err) {
-                    f->ev_callback(f, JANET_ASYNC_EVENT_ERR);
+                    f->ev_callback(f, BENDER_ASYNC_EVENT_ERR);
                 }
                 if (f->ev_callback && (filt == EVFILT_READ) && f == stream->read_fiber) {
-                    f->ev_callback(f, JANET_ASYNC_EVENT_READ);
+                    f->ev_callback(f, BENDER_ASYNC_EVENT_READ);
                 }
                 if (f->ev_callback && (filt == EVFILT_WRITE) && f == stream->write_fiber) {
-                    f->ev_callback(f, JANET_ASYNC_EVENT_WRITE);
+                    f->ev_callback(f, BENDER_ASYNC_EVENT_WRITE);
                 }
                 if (f->ev_callback && has_hup) {
-                    f->ev_callback(f, JANET_ASYNC_EVENT_HUP);
+                    f->ev_callback(f, BENDER_ASYNC_EVENT_HUP);
                 }
             }
-            janet_stream_checktoclose(stream);
+            bender_stream_checktoclose(stream);
         }
     }
 }
 
-void janet_ev_init(void) {
-    janet_ev_init_common();
+void bender_ev_init(void) {
+    bender_ev_init_common();
     /* TODO - replace selfpipe with EVFILT_USER (or other events) */
-    janet_ev_setup_selfpipe();
-    janet_vm.kq = kqueue();
-    janet_vm.timer_enabled = 0;
-    if (janet_vm.kq == -1) goto error;
+    bender_ev_setup_selfpipe();
+    bender_vm.kq = kqueue();
+    bender_vm.timer_enabled = 0;
+    if (bender_vm.kq == -1) goto error;
     struct kevent event;
-    EV_SETx(&event, janet_vm.selfpipe[0], EVFILT_READ, EV_ADD | EV_ENABLE, 0, 0, janet_vm.selfpipe);
+    EV_SETx(&event, bender_vm.selfpipe[0], EVFILT_READ, EV_ADD | EV_ENABLE, 0, 0, bender_vm.selfpipe);
     int status;
     do {
-        status = kevent(janet_vm.kq, &event, 1, NULL, 0, NULL);
+        status = kevent(bender_vm.kq, &event, 1, NULL, 0, NULL);
     } while (status == -1 && errno != EINTR);
     if (status == -1) goto error;
     return;
 error:
-    JANET_EXIT("failed to initialize event loop");
+    BENDER_EXIT("failed to initialize event loop");
 }
 
-void janet_ev_deinit(void) {
-    janet_ev_deinit_common();
-    close(janet_vm.kq);
-    janet_ev_cleanup_selfpipe();
-    janet_vm.kq = 0;
+void bender_ev_deinit(void) {
+    bender_ev_deinit_common();
+    close(bender_vm.kq);
+    bender_ev_cleanup_selfpipe();
+    bender_vm.kq = 0;
 }
 
-#elif defined(JANET_EV_POLL)
+#elif defined(BENDER_EV_POLL)
 
 /* Simple poll implementation. Efficiency is not the goal here, although the poll implementation should be farily efficient
  * for low numbers of concurrent file descriptors. Rather, the code should be simple, portable, correct, and mirror the
  * epoll and kqueue code. */
 
-static JanetTimestamp ts_now(void) {
+static BenderTimestamp ts_now(void) {
     struct timespec now;
-    janet_assert(-1 != janet_gettime(&now, JANET_TIME_MONOTONIC), "failed to get time");
+    bender_assert(-1 != bender_gettime(&now, BENDER_TIME_MONOTONIC), "failed to get time");
     uint64_t res = 1000 * now.tv_sec;
     res += now.tv_nsec / 1000000;
     return res;
 }
 
 /* Wait for the next event */
-void janet_register_stream(JanetStream *stream) {
+void bender_register_stream(BenderStream *stream) {
     struct pollfd ev = {0};
-    stream->index = (uint32_t) janet_vm.stream_count;
-    size_t new_count = janet_vm.stream_count + 1;
-    if (new_count > janet_vm.stream_capacity) {
+    stream->index = (uint32_t) bender_vm.stream_count;
+    size_t new_count = bender_vm.stream_count + 1;
+    if (new_count > bender_vm.stream_capacity) {
         size_t new_cap = new_count * 2;
-        janet_vm.fds = janet_realloc(janet_vm.fds, (1 + new_cap) * sizeof(struct pollfd));
-        janet_vm.streams = janet_realloc(janet_vm.streams, new_cap * sizeof(JanetStream *));
-        if (!janet_vm.fds || !janet_vm.streams) {
-            JANET_OUT_OF_MEMORY;
+        bender_vm.fds = bender_realloc(bender_vm.fds, (1 + new_cap) * sizeof(struct pollfd));
+        bender_vm.streams = bender_realloc(bender_vm.streams, new_cap * sizeof(BenderStream *));
+        if (!bender_vm.fds || !bender_vm.streams) {
+            BENDER_OUT_OF_MEMORY;
         }
-        janet_vm.stream_capacity = new_cap;
+        bender_vm.stream_capacity = new_cap;
     }
     ev.fd = stream->handle;
     ev.events = POLLIN | POLLOUT;
-    janet_vm.fds[janet_vm.stream_count + 1] = ev;
-    janet_vm.streams[janet_vm.stream_count] = stream;
-    janet_vm.stream_count = new_count;
+    bender_vm.fds[bender_vm.stream_count + 1] = ev;
+    bender_vm.streams[bender_vm.stream_count] = stream;
+    bender_vm.stream_count = new_count;
 }
 
-void janet_unregister_stream(JanetStream *stream) {
+void bender_unregister_stream(BenderStream *stream) {
     uint32_t i = stream->index;
-    size_t j = janet_vm.stream_count - 1;
-    JanetStream *last = janet_vm.streams[j];
-    struct pollfd lastfd = janet_vm.fds[j + 1];
-    janet_vm.fds[i + 1] = lastfd;
-    janet_vm.streams[i] = last;
+    size_t j = bender_vm.stream_count - 1;
+    BenderStream *last = bender_vm.streams[j];
+    struct pollfd lastfd = bender_vm.fds[j + 1];
+    bender_vm.fds[i + 1] = lastfd;
+    bender_vm.streams[i] = last;
     last->index = stream->index;
-    janet_vm.stream_count--;
-    stream->flags |= JANET_STREAM_UNREGISTERED;
+    bender_vm.stream_count--;
+    stream->flags |= BENDER_STREAM_UNREGISTERED;
 }
 
-void janet_stream_edge_triggered(JanetStream *stream) {
+void bender_stream_edge_triggered(BenderStream *stream) {
     (void) stream;
 }
 
-void janet_stream_level_triggered(JanetStream *stream) {
+void bender_stream_level_triggered(BenderStream *stream) {
     (void) stream;
 }
 
-void janet_loop1_impl(int has_timeout, JanetTimestamp timeout) {
+void bender_loop1_impl(int has_timeout, BenderTimestamp timeout) {
 
     /* set event flags */
-    for (size_t i = 0; i < janet_vm.stream_count; i++) {
-        JanetStream *stream = janet_vm.streams[i];
-        struct pollfd *pfd = janet_vm.fds + i + 1;
+    for (size_t i = 0; i < bender_vm.stream_count; i++) {
+        BenderStream *stream = bender_vm.streams[i];
+        struct pollfd *pfd = bender_vm.fds + i + 1;
         pfd->events = 0;
         pfd->revents = 0;
-        JanetFiber *rf = stream->read_fiber;
-        JanetFiber *wf = stream->write_fiber;
+        BenderFiber *rf = stream->read_fiber;
+        BenderFiber *wf = stream->write_fiber;
         if (rf && rf->ev_callback) pfd->events |= POLLIN;
         if (wf && wf->ev_callback) pfd->events |= POLLOUT;
         /* Hack to ignore a file descriptor - make file descriptor negative if we want to ignore */
@@ -3196,85 +3196,85 @@ void janet_loop1_impl(int has_timeout, JanetTimestamp timeout) {
     do {
         int to = -1;
         if (has_timeout) {
-            JanetTimestamp now = ts_now();
+            BenderTimestamp now = ts_now();
             to = now > timeout ? 0 : (int)(timeout - now);
         }
-        ready = poll(janet_vm.fds, janet_vm.stream_count + 1, to);
+        ready = poll(bender_vm.fds, bender_vm.stream_count + 1, to);
     } while (ready == -1 && errno == EINTR);
     if (ready == -1) {
-        JANET_EXIT("failed to poll events");
+        BENDER_EXIT("failed to poll events");
     }
 
     /* Undo negative hack */
-    for (size_t i = 0; i < janet_vm.stream_count; i++) {
-        struct pollfd *pfd = janet_vm.fds + i + 1;
+    for (size_t i = 0; i < bender_vm.stream_count; i++) {
+        struct pollfd *pfd = bender_vm.fds + i + 1;
         if (pfd->fd < 0) {
             pfd->fd = -pfd->fd;
         }
     }
 
     /* Check selfpipe */
-    if (janet_vm.fds[0].revents & POLLIN) {
-        janet_vm.fds[0].revents = 0;
-        janet_ev_handle_selfpipe();
+    if (bender_vm.fds[0].revents & POLLIN) {
+        bender_vm.fds[0].revents = 0;
+        bender_ev_handle_selfpipe();
     }
 
     /* Step state machines */
-    for (size_t i = 0; i < janet_vm.stream_count; i++) {
-        struct pollfd *pfd = janet_vm.fds + i + 1;
-        JanetStream *stream = janet_vm.streams[i];
+    for (size_t i = 0; i < bender_vm.stream_count; i++) {
+        struct pollfd *pfd = bender_vm.fds + i + 1;
+        BenderStream *stream = bender_vm.streams[i];
         int mask = pfd->revents;
         if (!mask) continue;
         int has_err = mask & POLLERR;
         int has_hup = mask & POLLHUP;
-        JanetFiber *rf = stream->read_fiber;
-        JanetFiber *wf = stream->write_fiber;
+        BenderFiber *rf = stream->read_fiber;
+        BenderFiber *wf = stream->write_fiber;
         if (rf) {
             if (rf->ev_callback && (mask & POLLIN)) {
-                rf->ev_callback(rf, JANET_ASYNC_EVENT_READ);
+                rf->ev_callback(rf, BENDER_ASYNC_EVENT_READ);
             } else if (rf->ev_callback && has_hup) {
-                rf->ev_callback(rf, JANET_ASYNC_EVENT_HUP);
+                rf->ev_callback(rf, BENDER_ASYNC_EVENT_HUP);
             } else if (rf->ev_callback && has_err) {
-                rf->ev_callback(rf, JANET_ASYNC_EVENT_ERR);
+                rf->ev_callback(rf, BENDER_ASYNC_EVENT_ERR);
             }
         }
         if (wf) {
             if (wf->ev_callback && (mask & POLLOUT)) {
-                wf->ev_callback(wf, JANET_ASYNC_EVENT_WRITE);
+                wf->ev_callback(wf, BENDER_ASYNC_EVENT_WRITE);
             } else if (wf->ev_callback && has_hup) {
-                wf->ev_callback(wf, JANET_ASYNC_EVENT_HUP);
+                wf->ev_callback(wf, BENDER_ASYNC_EVENT_HUP);
             } else if (wf->ev_callback && has_err) {
-                wf->ev_callback(wf, JANET_ASYNC_EVENT_ERR);
+                wf->ev_callback(wf, BENDER_ASYNC_EVENT_ERR);
             }
         }
-        janet_stream_checktoclose(stream);
+        bender_stream_checktoclose(stream);
     }
 }
 
-void janet_ev_init(void) {
-    janet_ev_init_common();
-    janet_vm.fds = NULL;
-    janet_ev_setup_selfpipe();
-    janet_vm.fds = janet_malloc(sizeof(struct pollfd));
-    if (NULL == janet_vm.fds) {
-        JANET_OUT_OF_MEMORY;
+void bender_ev_init(void) {
+    bender_ev_init_common();
+    bender_vm.fds = NULL;
+    bender_ev_setup_selfpipe();
+    bender_vm.fds = bender_malloc(sizeof(struct pollfd));
+    if (NULL == bender_vm.fds) {
+        BENDER_OUT_OF_MEMORY;
     }
-    janet_vm.fds[0].fd = janet_vm.selfpipe[0];
-    janet_vm.fds[0].events = POLLIN;
-    janet_vm.fds[0].revents = 0;
-    janet_vm.streams = NULL;
-    janet_vm.stream_count = 0;
-    janet_vm.stream_capacity = 0;
+    bender_vm.fds[0].fd = bender_vm.selfpipe[0];
+    bender_vm.fds[0].events = POLLIN;
+    bender_vm.fds[0].revents = 0;
+    bender_vm.streams = NULL;
+    bender_vm.stream_count = 0;
+    bender_vm.stream_capacity = 0;
     return;
 }
 
-void janet_ev_deinit(void) {
-    janet_ev_deinit_common();
-    janet_ev_cleanup_selfpipe();
-    janet_free(janet_vm.fds);
-    janet_free(janet_vm.streams);
-    janet_vm.fds = NULL;
-    janet_vm.streams = NULL;
+void bender_ev_deinit(void) {
+    bender_ev_deinit_common();
+    bender_ev_cleanup_selfpipe();
+    bender_free(bender_vm.fds);
+    bender_free(bender_vm.streams);
+    bender_vm.fds = NULL;
+    bender_vm.streams = NULL;
 }
 
 #endif
@@ -3287,24 +3287,24 @@ void janet_ev_deinit(void) {
  * Generic Callback system. Post a function pointer + data to the event loop (from another
  * thread or even a signal handler). Allows posting events from another thread or signal handler.
  */
-void janet_ev_post_event(JanetVM *vm, JanetCallback cb, JanetEVGenericMessage msg) {
-    vm = vm ? vm : &janet_vm;
-    janet_atomic_inc(&vm->listener_count);
-#ifdef JANET_WINDOWS
-    JanetHandle iocp = vm->iocp;
-    JanetSelfPipeEvent *event = janet_malloc(sizeof(JanetSelfPipeEvent));
+void bender_ev_post_event(BenderVM *vm, BenderCallback cb, BenderEVGenericMessage msg) {
+    vm = vm ? vm : &bender_vm;
+    bender_atomic_inc(&vm->listener_count);
+#ifdef BENDER_WINDOWS
+    BenderHandle iocp = vm->iocp;
+    BenderSelfPipeEvent *event = bender_malloc(sizeof(BenderSelfPipeEvent));
     if (NULL == event) {
-        JANET_OUT_OF_MEMORY;
+        BENDER_OUT_OF_MEMORY;
     }
     event->msg = msg;
     event->cb = cb;
-    janet_assert(PostQueuedCompletionStatus(iocp,
-                                            sizeof(JanetSelfPipeEvent),
+    bender_assert(PostQueuedCompletionStatus(iocp,
+                                            sizeof(BenderSelfPipeEvent),
                                             0,
                                             (LPOVERLAPPED) event),
                  "failed to post completion event");
 #else
-    JanetSelfPipeEvent event;
+    BenderSelfPipeEvent event;
     memset(&event, 0, sizeof(event));
     event.msg = msg;
     event.cb = cb;
@@ -3342,7 +3342,7 @@ void janet_ev_post_event(JanetVM *vm, JanetCallback cb, JanetEVGenericMessage ms
         }
         tries--;
     }
-    /* NOTE: do NOT block-and-wait here. janet_ev_post_event is called while
+    /* NOTE: do NOT block-and-wait here. bender_ev_post_event is called while
      * holding a channel lock (see the threaded-channel delivery paths), so a
      * poster that waits for the pipe to drain can hold the lock that the
      * draining VM needs to make progress -- a lock-order inversion, observed
@@ -3369,7 +3369,7 @@ void janet_ev_post_event(JanetVM *vm, JanetCallback cb, JanetEVGenericMessage ms
             nanosleep(&ts, NULL);
         }
     }
-    janet_assert(tries > 0, "failed to write event to self-pipe");
+    bender_assert(tries > 0, "failed to write event to self-pipe");
 #endif
 }
 
@@ -3377,32 +3377,32 @@ void janet_ev_post_event(JanetVM *vm, JanetCallback cb, JanetEVGenericMessage ms
  * Threaded calls
  */
 
-#ifdef JANET_WINDOWS
-static DWORD WINAPI janet_thread_body(LPVOID ptr) {
-    JanetEVThreadInit *init = (JanetEVThreadInit *)ptr;
-    JanetEVGenericMessage msg = init->msg;
-    JanetThreadedSubroutine subr = init->subr;
-    JanetThreadedCallback cb = init->cb;
-    JanetHandle iocp = init->write_pipe;
+#ifdef BENDER_WINDOWS
+static DWORD WINAPI bender_thread_body(LPVOID ptr) {
+    BenderEVThreadInit *init = (BenderEVThreadInit *)ptr;
+    BenderEVGenericMessage msg = init->msg;
+    BenderThreadedSubroutine subr = init->subr;
+    BenderThreadedCallback cb = init->cb;
+    BenderHandle iocp = init->write_pipe;
     /* Reuse memory from thread init for returning data */
     init->msg = subr(msg);
     init->cb = cb;
-    janet_assert(PostQueuedCompletionStatus(iocp,
-                                            sizeof(JanetSelfPipeEvent),
+    bender_assert(PostQueuedCompletionStatus(iocp,
+                                            sizeof(BenderSelfPipeEvent),
                                             0,
                                             (LPOVERLAPPED) init),
                  "failed to post completion event");
     return 0;
 }
 #else
-static void *janet_thread_body(void *ptr) {
-    JanetEVThreadInit *init = (JanetEVThreadInit *)ptr;
-    JanetEVGenericMessage msg = init->msg;
-    JanetThreadedSubroutine subr = init->subr;
-    JanetThreadedCallback cb = init->cb;
+static void *bender_thread_body(void *ptr) {
+    BenderEVThreadInit *init = (BenderEVThreadInit *)ptr;
+    BenderEVGenericMessage msg = init->msg;
+    BenderThreadedSubroutine subr = init->subr;
+    BenderThreadedCallback cb = init->cb;
     int fd = init->write_pipe;
-    janet_free(init);
-    JanetSelfPipeEvent response;
+    bender_free(init);
+    BenderSelfPipeEvent response;
     memset(&response, 0, sizeof(response));
     response.msg = subr(msg);
     response.cb = cb;
@@ -3421,77 +3421,77 @@ static void *janet_thread_body(void *ptr) {
 }
 #endif
 
-void janet_ev_threaded_call(JanetThreadedSubroutine fp, JanetEVGenericMessage arguments, JanetThreadedCallback cb) {
-    JanetEVThreadInit *init = janet_malloc(sizeof(JanetEVThreadInit));
+void bender_ev_threaded_call(BenderThreadedSubroutine fp, BenderEVGenericMessage arguments, BenderThreadedCallback cb) {
+    BenderEVThreadInit *init = bender_malloc(sizeof(BenderEVThreadInit));
     if (NULL == init) {
-        JANET_OUT_OF_MEMORY;
+        BENDER_OUT_OF_MEMORY;
     }
     init->msg = arguments;
     init->subr = fp;
     init->cb = cb;
 
-#ifdef JANET_WINDOWS
-    init->write_pipe = janet_vm.iocp;
-    HANDLE thread_handle = CreateThread(NULL, 0, janet_thread_body, init, 0, NULL);
+#ifdef BENDER_WINDOWS
+    init->write_pipe = bender_vm.iocp;
+    HANDLE thread_handle = CreateThread(NULL, 0, bender_thread_body, init, 0, NULL);
     if (NULL == thread_handle) {
-        janet_free(init);
-        janet_panic("failed to create thread");
+        bender_free(init);
+        bender_panic("failed to create thread");
     }
     CloseHandle(thread_handle); /* detach from thread */
 #else
-    init->write_pipe = janet_vm.selfpipe[1];
+    init->write_pipe = bender_vm.selfpipe[1];
     pthread_t waiter_thread;
-    int err = pthread_create(&waiter_thread, &janet_vm.new_thread_attr, janet_thread_body, init);
+    int err = pthread_create(&waiter_thread, &bender_vm.new_thread_attr, bender_thread_body, init);
     if (err) {
-        janet_free(init);
-        janet_panicf("%s", janet_strerror(err));
+        bender_free(init);
+        bender_panicf("%s", bender_strerror(err));
     }
 #endif
 
     /* Increment ev refcount so we don't quit while waiting for a subprocess */
-    janet_ev_inc_refcount();
+    bender_ev_inc_refcount();
 }
 
-/* Default callback for janet_ev_threaded_await. */
-void janet_ev_default_threaded_callback(JanetEVGenericMessage return_value) {
+/* Default callback for bender_ev_threaded_await. */
+void bender_ev_default_threaded_callback(BenderEVGenericMessage return_value) {
     if (return_value.fiber == NULL) {
         /* Clean up */
         switch (return_value.tag) {
             default:
                 break;
-            case JANET_EV_TCTAG_STRINGF:
-            case JANET_EV_TCTAG_ERR_STRINGF:
-                janet_free(return_value.argp);
+            case BENDER_EV_TCTAG_STRINGF:
+            case BENDER_EV_TCTAG_ERR_STRINGF:
+                bender_free(return_value.argp);
                 break;
         }
         return;
     }
-    if (janet_fiber_can_resume(return_value.fiber)) {
+    if (bender_fiber_can_resume(return_value.fiber)) {
         switch (return_value.tag) {
             default:
                 break;
-            case JANET_EV_TCTAG_NIL:
-                janet_schedule(return_value.fiber, janet_wrap_nil());
+            case BENDER_EV_TCTAG_NIL:
+                bender_schedule(return_value.fiber, bender_wrap_nil());
                 break;
-            case JANET_EV_TCTAG_INTEGER:
-                janet_schedule(return_value.fiber, janet_wrap_integer(return_value.argi));
+            case BENDER_EV_TCTAG_INTEGER:
+                bender_schedule(return_value.fiber, bender_wrap_integer(return_value.argi));
                 break;
-            case JANET_EV_TCTAG_STRING:
-            case JANET_EV_TCTAG_STRINGF:
-                janet_schedule(return_value.fiber, janet_cstringv((const char *) return_value.argp));
+            case BENDER_EV_TCTAG_STRING:
+            case BENDER_EV_TCTAG_STRINGF:
+                bender_schedule(return_value.fiber, bender_cstringv((const char *) return_value.argp));
                 break;
-            case JANET_EV_TCTAG_KEYWORD:
-                janet_schedule(return_value.fiber, janet_ckeywordv((const char *) return_value.argp));
+            case BENDER_EV_TCTAG_KEYWORD:
+                bender_schedule(return_value.fiber, bender_ckeywordv((const char *) return_value.argp));
                 break;
-            case JANET_EV_TCTAG_ERR_STRING:
-            case JANET_EV_TCTAG_ERR_STRINGF:
-                janet_cancel(return_value.fiber, janet_cstringv((const char *) return_value.argp));
+            case BENDER_EV_TCTAG_ERR_STRING:
+            case BENDER_EV_TCTAG_ERR_STRINGF:
+                bender_cancel(return_value.fiber, bender_cstringv((const char *) return_value.argp));
                 break;
-            case JANET_EV_TCTAG_ERR_KEYWORD:
-                janet_cancel(return_value.fiber, janet_ckeywordv((const char *) return_value.argp));
+            case BENDER_EV_TCTAG_ERR_KEYWORD:
+                bender_cancel(return_value.fiber, bender_ckeywordv((const char *) return_value.argp));
                 break;
-            case JANET_EV_TCTAG_BOOLEAN:
-                janet_schedule(return_value.fiber, janet_wrap_boolean(return_value.argi));
+            case BENDER_EV_TCTAG_BOOLEAN:
+                bender_schedule(return_value.fiber, bender_wrap_boolean(return_value.argi));
                 break;
         }
     }
@@ -3499,26 +3499,26 @@ void janet_ev_default_threaded_callback(JanetEVGenericMessage return_value) {
     switch (return_value.tag) {
         default:
             break;
-        case JANET_EV_TCTAG_STRINGF:
-        case JANET_EV_TCTAG_ERR_STRINGF:
-            janet_free(return_value.argp);
+        case BENDER_EV_TCTAG_STRINGF:
+        case BENDER_EV_TCTAG_ERR_STRINGF:
+            bender_free(return_value.argp);
             break;
     }
-    janet_gcunroot(janet_wrap_fiber(return_value.fiber));
+    bender_gcunroot(bender_wrap_fiber(return_value.fiber));
 }
 
 /* Convenience method for common case */
-JANET_NO_RETURN
-void janet_ev_threaded_await(JanetThreadedSubroutine fp, int tag, int argi, void *argp) {
-    JanetEVGenericMessage arguments;
+BENDER_NO_RETURN
+void bender_ev_threaded_await(BenderThreadedSubroutine fp, int tag, int argi, void *argp) {
+    BenderEVGenericMessage arguments;
     memset(&arguments, 0, sizeof(arguments));
     arguments.tag = tag;
     arguments.argi = argi;
     arguments.argp = argp;
-    arguments.fiber = janet_root_fiber();
-    janet_gcroot(janet_wrap_fiber(arguments.fiber));
-    janet_ev_threaded_call(fp, arguments, janet_ev_default_threaded_callback);
-    janet_await();
+    arguments.fiber = bender_root_fiber();
+    bender_gcroot(bender_wrap_fiber(arguments.fiber));
+    bender_ev_threaded_call(fp, arguments, bender_ev_default_threaded_callback);
+    bender_await();
 }
 
 /*
@@ -3527,26 +3527,26 @@ void janet_ev_threaded_await(JanetThreadedSubroutine fp, int tag, int argi, void
  * reading and writing primitives.
  */
 
-void janet_stream_flags(JanetStream *stream, uint32_t flags) {
-    if (stream->flags & JANET_STREAM_CLOSED) {
-        janet_panic("stream is closed");
+void bender_stream_flags(BenderStream *stream, uint32_t flags) {
+    if (stream->flags & BENDER_STREAM_CLOSED) {
+        bender_panic("stream is closed");
     }
     if ((stream->flags & flags) != flags) {
         const char *rmsg = "", *wmsg = "", *amsg = "", *dmsg = "", *smsg = "stream";
-        if (flags & JANET_STREAM_READABLE) rmsg = "readable ";
-        if (flags & JANET_STREAM_WRITABLE) wmsg = "writable ";
-        if (flags & JANET_STREAM_ACCEPTABLE) amsg = "server ";
-        if (flags & JANET_STREAM_UDPSERVER) dmsg = "datagram ";
-        if (flags & JANET_STREAM_SOCKET) smsg = "socket";
-        janet_panicf("bad stream, expected %s%s%s%s%s", rmsg, wmsg, amsg, dmsg, smsg);
+        if (flags & BENDER_STREAM_READABLE) rmsg = "readable ";
+        if (flags & BENDER_STREAM_WRITABLE) wmsg = "writable ";
+        if (flags & BENDER_STREAM_ACCEPTABLE) amsg = "server ";
+        if (flags & BENDER_STREAM_UDPSERVER) dmsg = "datagram ";
+        if (flags & BENDER_STREAM_SOCKET) smsg = "socket";
+        bender_panicf("bad stream, expected %s%s%s%s%s", rmsg, wmsg, amsg, dmsg, smsg);
     }
 }
 
-/* When there is an IO error, we need to be able to convert it to a Janet
- * string to raise a Janet error. */
-#ifdef JANET_WINDOWS
-#define JANET_EV_CHUNKSIZE 4096
-Janet janet_ev_lasterr(void) {
+/* When there is an IO error, we need to be able to convert it to a Bender
+ * string to raise a Bender error. */
+#ifdef BENDER_WINDOWS
+#define BENDER_EV_CHUNKSIZE 4096
+Bender bender_ev_lasterr(void) {
     int code = GetLastError();
     char msgbuf[256];
     msgbuf[0] = '\0';
@@ -3566,103 +3566,103 @@ Janet janet_ev_lasterr(void) {
         }
         c++;
     }
-    return janet_cstringv(msgbuf);
+    return bender_cstringv(msgbuf);
 }
 #else
-Janet janet_ev_lasterr(void) {
-    return janet_cstringv(janet_strerror(errno));
+Bender bender_ev_lasterr(void) {
+    return bender_cstringv(bender_strerror(errno));
 }
 #endif
 
 /* State machine for read/recv/recvfrom */
 
 typedef enum {
-    JANET_ASYNC_READMODE_READ,
-    JANET_ASYNC_READMODE_RECV,
-    JANET_ASYNC_READMODE_RECVFROM
-} JanetReadMode;
+    BENDER_ASYNC_READMODE_READ,
+    BENDER_ASYNC_READMODE_RECV,
+    BENDER_ASYNC_READMODE_RECVFROM
+} BenderReadMode;
 
 typedef struct {
-#ifdef JANET_WINDOWS
-    JanetOverlapped overlapped;
+#ifdef BENDER_WINDOWS
+    BenderOverlapped overlapped;
     DWORD flags;
-#ifdef JANET_NET
+#ifdef BENDER_NET
     WSABUF wbuf;
     struct sockaddr from;
     int fromlen;
 #endif
-    uint8_t chunk_buf[JANET_EV_CHUNKSIZE];
+    uint8_t chunk_buf[BENDER_EV_CHUNKSIZE];
 #else
     int flags;
 #endif
     int32_t bytes_left;
     int32_t bytes_read;
-    JanetBuffer *buf;
+    BenderBuffer *buf;
     int is_chunk;
-    JanetReadMode mode;
+    BenderReadMode mode;
 } StateRead;
 
-void ev_callback_read(JanetFiber *fiber, JanetAsyncEvent event) {
-    JanetStream *stream = fiber->ev_stream;
+void ev_callback_read(BenderFiber *fiber, BenderAsyncEvent event) {
+    BenderStream *stream = fiber->ev_stream;
     StateRead *state = (StateRead *) fiber->ev_state;
     switch (event) {
         default:
             break;
-        case JANET_ASYNC_EVENT_MARK:
-            janet_mark(janet_wrap_buffer(state->buf));
+        case BENDER_ASYNC_EVENT_MARK:
+            bender_mark(bender_wrap_buffer(state->buf));
             break;
-        case JANET_ASYNC_EVENT_CLOSE:
-            janet_schedule(fiber, janet_wrap_nil());
-            janet_async_end(fiber);
+        case BENDER_ASYNC_EVENT_CLOSE:
+            bender_schedule(fiber, bender_wrap_nil());
+            bender_async_end(fiber);
             break;
-#ifdef JANET_WINDOWS
-        case JANET_ASYNC_EVENT_FAILED:
-        case JANET_ASYNC_EVENT_COMPLETE: {
+#ifdef BENDER_WINDOWS
+        case BENDER_ASYNC_EVENT_FAILED:
+        case BENDER_ASYNC_EVENT_COMPLETE: {
             /* Called when read finished */
             uint32_t ev_bytes = (uint32_t) state->overlapped.bytes_transfered;
             state->bytes_read += ev_bytes;
-            if (state->bytes_read == 0 && (state->mode != JANET_ASYNC_READMODE_RECVFROM)) {
-                janet_schedule(fiber, janet_wrap_nil());
-                janet_async_end(fiber);
+            if (state->bytes_read == 0 && (state->mode != BENDER_ASYNC_READMODE_RECVFROM)) {
+                bender_schedule(fiber, bender_wrap_nil());
+                bender_async_end(fiber);
                 return;
             }
 
-            janet_buffer_push_bytes(state->buf, state->chunk_buf, ev_bytes);
+            bender_buffer_push_bytes(state->buf, state->chunk_buf, ev_bytes);
             state->bytes_left -= ev_bytes;
 
             if (state->bytes_left == 0 || !state->is_chunk || ev_bytes == 0) {
-                Janet resume_val;
-#ifdef JANET_NET
-                if (state->mode == JANET_ASYNC_READMODE_RECVFROM) {
-                    void *abst = janet_abstract(&janet_address_type, state->fromlen);
+                Bender resume_val;
+#ifdef BENDER_NET
+                if (state->mode == BENDER_ASYNC_READMODE_RECVFROM) {
+                    void *abst = bender_abstract(&bender_address_type, state->fromlen);
                     memcpy(abst, &state->from, state->fromlen);
-                    resume_val = janet_wrap_abstract(abst);
+                    resume_val = bender_wrap_abstract(abst);
                 } else
 #endif
                 {
-                    resume_val = janet_wrap_buffer(state->buf);
+                    resume_val = bender_wrap_buffer(state->buf);
                 }
-                janet_schedule(fiber, resume_val);
-                janet_async_end(fiber);
+                bender_schedule(fiber, resume_val);
+                bender_async_end(fiber);
                 return;
             }
         }
 
         /* fallthrough */
-        case JANET_ASYNC_EVENT_INIT: {
-            int32_t chunk_size = state->bytes_left > JANET_EV_CHUNKSIZE ? JANET_EV_CHUNKSIZE : state->bytes_left;
-            memset(&(state->overlapped), 0, sizeof(JanetOverlapped));
+        case BENDER_ASYNC_EVENT_INIT: {
+            int32_t chunk_size = state->bytes_left > BENDER_EV_CHUNKSIZE ? BENDER_EV_CHUNKSIZE : state->bytes_left;
+            memset(&(state->overlapped), 0, sizeof(BenderOverlapped));
             int status;
-#ifdef JANET_NET
-            if (state->mode == JANET_ASYNC_READMODE_RECVFROM) {
+#ifdef BENDER_NET
+            if (state->mode == BENDER_ASYNC_READMODE_RECVFROM) {
                 state->wbuf.len = (ULONG) chunk_size;
                 state->wbuf.buf = (char *) state->chunk_buf;
                 state->fromlen = sizeof(state->from);
                 status = WSARecvFrom((SOCKET) stream->handle, &state->wbuf, 1,
                                      NULL, &state->flags, &state->from, &state->fromlen, &state->overlapped.as.wsaoverlapped, NULL);
                 if (status && (WSA_IO_PENDING != WSAGetLastError())) {
-                    janet_cancel(fiber, janet_ev_lasterr());
-                    janet_async_end(fiber);
+                    bender_cancel(fiber, bender_ev_lasterr());
+                    bender_async_end(fiber);
                     return;
                 }
             } else
@@ -3676,51 +3676,51 @@ void ev_callback_read(JanetFiber *fiber, JanetAsyncEvent event) {
                 if (!status && (ERROR_IO_PENDING != GetLastError())) {
                     if (GetLastError() == ERROR_BROKEN_PIPE) {
                         if (state->bytes_read) {
-                            janet_schedule(fiber, janet_wrap_buffer(state->buf));
+                            bender_schedule(fiber, bender_wrap_buffer(state->buf));
                         } else {
-                            janet_schedule(fiber, janet_wrap_nil());
+                            bender_schedule(fiber, bender_wrap_nil());
                         }
                     } else {
-                        janet_cancel(fiber, janet_ev_lasterr());
+                        bender_cancel(fiber, bender_ev_lasterr());
                     }
-                    janet_async_end(fiber);
+                    bender_async_end(fiber);
                     return;
                 }
             }
-            janet_async_in_flight(fiber);
+            bender_async_in_flight(fiber);
         }
         break;
 #else
-        case JANET_ASYNC_EVENT_ERR: {
+        case BENDER_ASYNC_EVENT_ERR: {
             if (state->bytes_read) {
-                janet_schedule(fiber, janet_wrap_buffer(state->buf));
+                bender_schedule(fiber, bender_wrap_buffer(state->buf));
             } else {
-                janet_schedule(fiber, janet_wrap_nil());
+                bender_schedule(fiber, bender_wrap_nil());
             }
             stream->read_fiber = NULL;
-            janet_async_end(fiber);
+            bender_async_end(fiber);
             break;
         }
 
     read_more:
-        case JANET_ASYNC_EVENT_HUP:
-        case JANET_ASYNC_EVENT_INIT:
-        case JANET_ASYNC_EVENT_READ: {
-            JanetBuffer *buffer = state->buf;
+        case BENDER_ASYNC_EVENT_HUP:
+        case BENDER_ASYNC_EVENT_INIT:
+        case BENDER_ASYNC_EVENT_READ: {
+            BenderBuffer *buffer = state->buf;
             int32_t bytes_left = state->bytes_left;
             int32_t read_limit = state->is_chunk ? (bytes_left > 4096 ? 4096 : bytes_left) : bytes_left;
-            janet_buffer_extra(buffer, read_limit);
+            bender_buffer_extra(buffer, read_limit);
             ssize_t nread;
-#ifdef JANET_NET
+#ifdef BENDER_NET
             char saddr[256];
             socklen_t socklen = sizeof(saddr);
 #endif
             do {
-#ifdef JANET_NET
-                if (state->mode == JANET_ASYNC_READMODE_RECVFROM) {
+#ifdef BENDER_NET
+                if (state->mode == BENDER_ASYNC_READMODE_RECVFROM) {
                     nread = recvfrom(stream->handle, buffer->data + buffer->count, read_limit, state->flags,
                                      (struct sockaddr *)&saddr, &socklen);
-                } else if (state->mode == JANET_ASYNC_READMODE_RECV) {
+                } else if (state->mode == BENDER_ASYNC_READMODE_RECV) {
                     nread = recv(stream->handle, buffer->data + buffer->count, read_limit, state->flags);
                 } else
 #endif
@@ -3735,20 +3735,20 @@ void ev_callback_read(JanetFiber *fiber, JanetAsyncEvent event) {
                     break;
                 }
                 /* In stream protocols, a pipe error is end of stream */
-                if (errno == EPIPE && (state->mode != JANET_ASYNC_READMODE_RECVFROM)) {
+                if (errno == EPIPE && (state->mode != BENDER_ASYNC_READMODE_RECVFROM)) {
                     nread = 0;
                 } else {
-                    janet_cancel(fiber, janet_ev_lasterr());
-                    janet_async_end(fiber);
+                    bender_cancel(fiber, bender_ev_lasterr());
+                    bender_async_end(fiber);
                     break;
                 }
             }
 
             /* Only allow 0-length packets in recv-from. In stream protocols, a zero length packet is EOS. */
             state->bytes_read += nread;
-            if (state->bytes_read == 0 && (state->mode != JANET_ASYNC_READMODE_RECVFROM)) {
-                janet_schedule(fiber, janet_wrap_nil());
-                janet_async_end(fiber);
+            if (state->bytes_read == 0 && (state->mode != BENDER_ASYNC_READMODE_RECVFROM)) {
+                bender_schedule(fiber, bender_wrap_nil());
+                bender_async_end(fiber);
                 break;
             }
 
@@ -3759,19 +3759,19 @@ void ev_callback_read(JanetFiber *fiber, JanetAsyncEvent event) {
 
             /* Resume if done */
             if (!state->is_chunk || bytes_left == 0 || nread == 0) {
-                Janet resume_val;
-#ifdef JANET_NET
-                if (state->mode == JANET_ASYNC_READMODE_RECVFROM) {
-                    void *abst = janet_abstract(&janet_address_type, socklen);
+                Bender resume_val;
+#ifdef BENDER_NET
+                if (state->mode == BENDER_ASYNC_READMODE_RECVFROM) {
+                    void *abst = bender_abstract(&bender_address_type, socklen);
                     memcpy(abst, &saddr, socklen);
-                    resume_val = janet_wrap_abstract(abst);
+                    resume_val = bender_wrap_abstract(abst);
                 } else
 #endif
                 {
-                    resume_val = janet_wrap_buffer(buffer);
+                    resume_val = bender_wrap_buffer(buffer);
                 }
-                janet_schedule(fiber, resume_val);
-                janet_async_end(fiber);
+                bender_schedule(fiber, resume_val);
+                bender_async_end(fiber);
                 break;
             }
 
@@ -3783,36 +3783,36 @@ void ev_callback_read(JanetFiber *fiber, JanetAsyncEvent event) {
     }
 }
 
-static JANET_NO_RETURN void janet_ev_read_generic(JanetStream *stream, JanetBuffer *buf, int32_t nbytes, int is_chunked, JanetReadMode mode, int flags) {
-    StateRead *state = janet_malloc(sizeof(StateRead));
+static BENDER_NO_RETURN void bender_ev_read_generic(BenderStream *stream, BenderBuffer *buf, int32_t nbytes, int is_chunked, BenderReadMode mode, int flags) {
+    StateRead *state = bender_malloc(sizeof(StateRead));
     state->is_chunk = is_chunked;
     state->buf = buf;
     state->bytes_left = nbytes;
     state->bytes_read = 0;
     state->mode = mode;
-#ifdef JANET_WINDOWS
+#ifdef BENDER_WINDOWS
     state->flags = (DWORD) flags;
 #else
     state->flags = flags;
 #endif
-    janet_async_start(stream, JANET_ASYNC_LISTEN_READ, ev_callback_read, state);
+    bender_async_start(stream, BENDER_ASYNC_LISTEN_READ, ev_callback_read, state);
 }
 
-JANET_NO_RETURN void janet_ev_read(JanetStream *stream, JanetBuffer *buf, int32_t nbytes) {
-    janet_ev_read_generic(stream, buf, nbytes, 0, JANET_ASYNC_READMODE_READ, 0);
+BENDER_NO_RETURN void bender_ev_read(BenderStream *stream, BenderBuffer *buf, int32_t nbytes) {
+    bender_ev_read_generic(stream, buf, nbytes, 0, BENDER_ASYNC_READMODE_READ, 0);
 }
-JANET_NO_RETURN void janet_ev_readchunk(JanetStream *stream, JanetBuffer *buf, int32_t nbytes) {
-    janet_ev_read_generic(stream, buf, nbytes, 1, JANET_ASYNC_READMODE_READ, 0);
+BENDER_NO_RETURN void bender_ev_readchunk(BenderStream *stream, BenderBuffer *buf, int32_t nbytes) {
+    bender_ev_read_generic(stream, buf, nbytes, 1, BENDER_ASYNC_READMODE_READ, 0);
 }
-#ifdef JANET_NET
-JANET_NO_RETURN void janet_ev_recv(JanetStream *stream, JanetBuffer *buf, int32_t nbytes, int flags) {
-    janet_ev_read_generic(stream, buf, nbytes, 0, JANET_ASYNC_READMODE_RECV, flags);
+#ifdef BENDER_NET
+BENDER_NO_RETURN void bender_ev_recv(BenderStream *stream, BenderBuffer *buf, int32_t nbytes, int flags) {
+    bender_ev_read_generic(stream, buf, nbytes, 0, BENDER_ASYNC_READMODE_RECV, flags);
 }
-JANET_NO_RETURN void janet_ev_recvchunk(JanetStream *stream, JanetBuffer *buf, int32_t nbytes, int flags) {
-    janet_ev_read_generic(stream, buf, nbytes, 1, JANET_ASYNC_READMODE_RECV, flags);
+BENDER_NO_RETURN void bender_ev_recvchunk(BenderStream *stream, BenderBuffer *buf, int32_t nbytes, int flags) {
+    bender_ev_read_generic(stream, buf, nbytes, 1, BENDER_ASYNC_READMODE_RECV, flags);
 }
-JANET_NO_RETURN void janet_ev_recvfrom(JanetStream *stream, JanetBuffer *buf, int32_t nbytes, int flags) {
-    janet_ev_read_generic(stream, buf, nbytes, 0, JANET_ASYNC_READMODE_RECVFROM, flags);
+BENDER_NO_RETURN void bender_ev_recvfrom(BenderStream *stream, BenderBuffer *buf, int32_t nbytes, int flags) {
+    bender_ev_read_generic(stream, buf, nbytes, 0, BENDER_ASYNC_READMODE_RECVFROM, flags);
 }
 #endif
 
@@ -3821,16 +3821,16 @@ JANET_NO_RETURN void janet_ev_recvfrom(JanetStream *stream, JanetBuffer *buf, in
  */
 
 typedef enum {
-    JANET_ASYNC_WRITEMODE_WRITE,
-    JANET_ASYNC_WRITEMODE_SEND,
-    JANET_ASYNC_WRITEMODE_SENDTO
-} JanetWriteMode;
+    BENDER_ASYNC_WRITEMODE_WRITE,
+    BENDER_ASYNC_WRITEMODE_SEND,
+    BENDER_ASYNC_WRITEMODE_SENDTO
+} BenderWriteMode;
 
 typedef struct {
-#ifdef JANET_WINDOWS
-    JanetOverlapped overlapped;
+#ifdef BENDER_WINDOWS
+    BenderOverlapped overlapped;
     DWORD flags;
-#ifdef JANET_NET
+#ifdef BENDER_NET
     WSABUF wbuf;
 #endif
 #else
@@ -3838,83 +3838,83 @@ typedef struct {
     int32_t start;
 #endif
     union {
-        JanetBuffer *buf;
+        BenderBuffer *buf;
         const uint8_t *str;
     } src;
     int is_buffer;
-    JanetWriteMode mode;
+    BenderWriteMode mode;
     void *dest_abst;
 } StateWrite;
 
-void ev_callback_write(JanetFiber *fiber, JanetAsyncEvent event) {
-    JanetStream *stream = fiber->ev_stream;
+void ev_callback_write(BenderFiber *fiber, BenderAsyncEvent event) {
+    BenderStream *stream = fiber->ev_stream;
     StateWrite *state = (StateWrite *) fiber->ev_state;
     switch (event) {
         default:
             break;
-        case JANET_ASYNC_EVENT_MARK: {
-            janet_mark(state->is_buffer
-                       ? janet_wrap_buffer(state->src.buf)
-                       : janet_wrap_string(state->src.str));
-            if (state->mode == JANET_ASYNC_WRITEMODE_SENDTO) {
-                janet_mark(janet_wrap_abstract(state->dest_abst));
+        case BENDER_ASYNC_EVENT_MARK: {
+            bender_mark(state->is_buffer
+                       ? bender_wrap_buffer(state->src.buf)
+                       : bender_wrap_string(state->src.str));
+            if (state->mode == BENDER_ASYNC_WRITEMODE_SENDTO) {
+                bender_mark(bender_wrap_abstract(state->dest_abst));
             }
             break;
         }
-        case JANET_ASYNC_EVENT_CLOSE:
-            janet_cancel(fiber, janet_cstringv("stream closed"));
-            janet_async_end(fiber);
+        case BENDER_ASYNC_EVENT_CLOSE:
+            bender_cancel(fiber, bender_cstringv("stream closed"));
+            bender_async_end(fiber);
             break;
-#ifdef JANET_WINDOWS
-        case JANET_ASYNC_EVENT_FAILED:
-        case JANET_ASYNC_EVENT_COMPLETE: {
+#ifdef BENDER_WINDOWS
+        case BENDER_ASYNC_EVENT_FAILED:
+        case BENDER_ASYNC_EVENT_COMPLETE: {
             /* Called when write finished */
             uint32_t ev_bytes = (uint32_t) state->overlapped.bytes_transfered;
-            if (ev_bytes == 0 && (state->mode != JANET_ASYNC_WRITEMODE_SENDTO)) {
-                janet_cancel(fiber, janet_cstringv("disconnect"));
-                janet_async_end(fiber);
+            if (ev_bytes == 0 && (state->mode != BENDER_ASYNC_WRITEMODE_SENDTO)) {
+                bender_cancel(fiber, bender_cstringv("disconnect"));
+                bender_async_end(fiber);
                 return;
             }
 
-            janet_schedule(fiber, janet_wrap_nil());
-            janet_async_end(fiber);
+            bender_schedule(fiber, bender_wrap_nil());
+            bender_async_end(fiber);
             return;
         }
         break;
-        case JANET_ASYNC_EVENT_INIT: {
+        case BENDER_ASYNC_EVENT_INIT: {
             /* Begin write */
             int32_t len;
             const uint8_t *bytes;
             if (state->is_buffer) {
                 /* If buffer, convert to string. */
                 /* TODO - be more efficient about this */
-                JanetBuffer *buffer = state->src.buf;
-                JanetString str = janet_string(buffer->data, buffer->count);
+                BenderBuffer *buffer = state->src.buf;
+                BenderString str = bender_string(buffer->data, buffer->count);
                 bytes = str;
                 len = buffer->count;
                 state->is_buffer = 0;
                 state->src.str = str;
             } else {
                 bytes = state->src.str;
-                len = janet_string_length(bytes);
+                len = bender_string_length(bytes);
             }
-            memset(&(state->overlapped), 0, sizeof(JanetOverlapped));
+            memset(&(state->overlapped), 0, sizeof(BenderOverlapped));
 
             int status;
-#ifdef JANET_NET
-            if (state->mode == JANET_ASYNC_WRITEMODE_SENDTO) {
+#ifdef BENDER_NET
+            if (state->mode == BENDER_ASYNC_WRITEMODE_SENDTO) {
                 SOCKET sock = (SOCKET) stream->handle;
                 state->wbuf.buf = (char *) bytes;
                 state->wbuf.len = len;
                 const struct sockaddr *to = state->dest_abst;
-                int tolen = (int) janet_abstract_size((void *) to);
+                int tolen = (int) bender_abstract_size((void *) to);
                 status = WSASendTo(sock, &state->wbuf, 1, NULL, state->flags, to, tolen, &state->overlapped.as.wsaoverlapped, NULL);
                 if (status) {
                     if (WSA_IO_PENDING == WSAGetLastError()) {
-                        janet_async_in_flight(fiber);
+                        bender_async_in_flight(fiber);
                     } else {
-                        janet_cancel(fiber, janet_ev_lasterr());
-                        janet_async_end(fiber);
+                        bender_cancel(fiber, bender_ev_lasterr());
+                        bender_async_end(fiber);
                         return;
                     }
                 }
@@ -3936,10 +3936,10 @@ void ev_callback_write(JanetFiber *fiber, JanetAsyncEvent event) {
                 status = WriteFile(stream->handle, bytes, len, NULL, &state->overlapped.as.overlapped);
                 if (!status) {
                     if (ERROR_IO_PENDING == GetLastError()) {
-                        janet_async_in_flight(fiber);
+                        bender_async_in_flight(fiber);
                     } else {
-                        janet_cancel(fiber, janet_ev_lasterr());
-                        janet_async_end(fiber);
+                        bender_cancel(fiber, bender_ev_lasterr());
+                        bender_async_end(fiber);
                         return;
                     }
                 }
@@ -3947,37 +3947,37 @@ void ev_callback_write(JanetFiber *fiber, JanetAsyncEvent event) {
         }
         break;
 #else
-        case JANET_ASYNC_EVENT_ERR:
-            janet_cancel(fiber, janet_cstringv("stream err"));
-            janet_async_end(fiber);
+        case BENDER_ASYNC_EVENT_ERR:
+            bender_cancel(fiber, bender_cstringv("stream err"));
+            bender_async_end(fiber);
             break;
-        case JANET_ASYNC_EVENT_HUP:
-            janet_cancel(fiber, janet_cstringv("stream hup"));
-            janet_async_end(fiber);
+        case BENDER_ASYNC_EVENT_HUP:
+            bender_cancel(fiber, bender_cstringv("stream hup"));
+            bender_async_end(fiber);
             break;
-        case JANET_ASYNC_EVENT_INIT:
-        case JANET_ASYNC_EVENT_WRITE: {
+        case BENDER_ASYNC_EVENT_INIT:
+        case BENDER_ASYNC_EVENT_WRITE: {
             int32_t start, len;
             const uint8_t *bytes;
             start = state->start;
             if (state->is_buffer) {
-                JanetBuffer *buffer = state->src.buf;
+                BenderBuffer *buffer = state->src.buf;
                 bytes = buffer->data;
                 len = buffer->count;
             } else {
                 bytes = state->src.str;
-                len = janet_string_length(bytes);
+                len = bender_string_length(bytes);
             }
             ssize_t nwrote = 0;
             if (start < len) {
                 int32_t nbytes = len - start;
                 void *dest_abst = state->dest_abst;
                 do {
-#ifdef JANET_NET
-                    if (state->mode == JANET_ASYNC_WRITEMODE_SENDTO) {
+#ifdef BENDER_NET
+                    if (state->mode == BENDER_ASYNC_WRITEMODE_SENDTO) {
                         nwrote = sendto(stream->handle, bytes + start, nbytes, state->flags,
-                                        (struct sockaddr *) dest_abst, janet_abstract_size(dest_abst));
-                    } else if (state->mode == JANET_ASYNC_WRITEMODE_SEND) {
+                                        (struct sockaddr *) dest_abst, bender_abstract_size(dest_abst));
+                    } else if (state->mode == BENDER_ASYNC_WRITEMODE_SEND) {
                         nwrote = send(stream->handle, bytes + start, nbytes, state->flags);
                     } else
 #endif
@@ -3989,15 +3989,15 @@ void ev_callback_write(JanetFiber *fiber, JanetAsyncEvent event) {
                 /* Handle write errors */
                 if (nwrote == -1) {
                     if (errno == EAGAIN || errno == EWOULDBLOCK) break;
-                    janet_cancel(fiber, janet_ev_lasterr());
-                    janet_async_end(fiber);
+                    bender_cancel(fiber, bender_ev_lasterr());
+                    bender_async_end(fiber);
                     break;
                 }
 
                 /* Unless using datagrams, empty message is a disconnect */
                 if (nwrote == 0 && !dest_abst) {
-                    janet_cancel(fiber, janet_cstringv("disconnect"));
-                    janet_async_end(fiber);
+                    bender_cancel(fiber, bender_cstringv("disconnect"));
+                    bender_async_end(fiber);
                     break;
                 }
 
@@ -4009,8 +4009,8 @@ void ev_callback_write(JanetFiber *fiber, JanetAsyncEvent event) {
             }
             state->start = start;
             if (start >= len) {
-                janet_schedule(fiber, janet_wrap_nil());
-                janet_async_end(fiber);
+                bender_schedule(fiber, bender_wrap_nil());
+                bender_async_end(fiber);
                 break;
             }
             break;
@@ -4020,49 +4020,49 @@ void ev_callback_write(JanetFiber *fiber, JanetAsyncEvent event) {
     }
 }
 
-static JANET_NO_RETURN void janet_ev_write_generic(JanetStream *stream, void *buf, void *dest_abst, JanetWriteMode mode, int is_buffer, int flags) {
-    StateWrite *state = janet_malloc(sizeof(StateWrite));
+static BENDER_NO_RETURN void bender_ev_write_generic(BenderStream *stream, void *buf, void *dest_abst, BenderWriteMode mode, int is_buffer, int flags) {
+    StateWrite *state = bender_malloc(sizeof(StateWrite));
     state->is_buffer = is_buffer;
     state->src.buf = buf;
     state->dest_abst = dest_abst;
     state->mode = mode;
-#ifdef JANET_WINDOWS
+#ifdef BENDER_WINDOWS
     state->flags = (DWORD) flags;
 #else
     state->flags = flags;
     state->start = 0;
 #endif
-    janet_async_start(stream, JANET_ASYNC_LISTEN_WRITE, ev_callback_write, state);
+    bender_async_start(stream, BENDER_ASYNC_LISTEN_WRITE, ev_callback_write, state);
 }
 
-JANET_NO_RETURN void janet_ev_write_buffer(JanetStream *stream, JanetBuffer *buf) {
-    janet_ev_write_generic(stream, buf, NULL, JANET_ASYNC_WRITEMODE_WRITE, 1, 0);
+BENDER_NO_RETURN void bender_ev_write_buffer(BenderStream *stream, BenderBuffer *buf) {
+    bender_ev_write_generic(stream, buf, NULL, BENDER_ASYNC_WRITEMODE_WRITE, 1, 0);
 }
 
-JANET_NO_RETURN void janet_ev_write_string(JanetStream *stream, JanetString str) {
-    janet_ev_write_generic(stream, (void *) str, NULL, JANET_ASYNC_WRITEMODE_WRITE, 0, 0);
+BENDER_NO_RETURN void bender_ev_write_string(BenderStream *stream, BenderString str) {
+    bender_ev_write_generic(stream, (void *) str, NULL, BENDER_ASYNC_WRITEMODE_WRITE, 0, 0);
 }
 
-#ifdef JANET_NET
-JANET_NO_RETURN void janet_ev_send_buffer(JanetStream *stream, JanetBuffer *buf, int flags) {
-    janet_ev_write_generic(stream, buf, NULL, JANET_ASYNC_WRITEMODE_SEND, 1, flags);
+#ifdef BENDER_NET
+BENDER_NO_RETURN void bender_ev_send_buffer(BenderStream *stream, BenderBuffer *buf, int flags) {
+    bender_ev_write_generic(stream, buf, NULL, BENDER_ASYNC_WRITEMODE_SEND, 1, flags);
 }
 
-JANET_NO_RETURN void janet_ev_send_string(JanetStream *stream, JanetString str, int flags) {
-    janet_ev_write_generic(stream, (void *) str, NULL, JANET_ASYNC_WRITEMODE_SEND, 0, flags);
+BENDER_NO_RETURN void bender_ev_send_string(BenderStream *stream, BenderString str, int flags) {
+    bender_ev_write_generic(stream, (void *) str, NULL, BENDER_ASYNC_WRITEMODE_SEND, 0, flags);
 }
 
-JANET_NO_RETURN void janet_ev_sendto_buffer(JanetStream *stream, JanetBuffer *buf, void *dest, int flags) {
-    janet_ev_write_generic(stream, buf, dest, JANET_ASYNC_WRITEMODE_SENDTO, 1, flags);
+BENDER_NO_RETURN void bender_ev_sendto_buffer(BenderStream *stream, BenderBuffer *buf, void *dest, int flags) {
+    bender_ev_write_generic(stream, buf, dest, BENDER_ASYNC_WRITEMODE_SENDTO, 1, flags);
 }
 
-JANET_NO_RETURN void janet_ev_sendto_string(JanetStream *stream, JanetString str, void *dest, int flags) {
-    janet_ev_write_generic(stream, (void *) str, dest, JANET_ASYNC_WRITEMODE_SENDTO, 0, flags);
+BENDER_NO_RETURN void bender_ev_sendto_string(BenderStream *stream, BenderString str, void *dest, int flags) {
+    bender_ev_write_generic(stream, (void *) str, dest, BENDER_ASYNC_WRITEMODE_SENDTO, 0, flags);
 }
 #endif
 
 /* For a pipe ID */
-#ifdef JANET_WINDOWS
+#ifdef BENDER_WINDOWS
 static volatile long PipeSerialNumber;
 #endif
 
@@ -4072,13 +4072,13 @@ static volatile long PipeSerialNumber;
  * mode = 2: only write side non-blocking: read side sent to subprocess
  * mode = 3: both sides blocking - for use in two subprocesses (making pipeline from external processes)
  */
-int janet_make_pipe(JanetHandle handles[2], int mode) {
-#ifdef JANET_WINDOWS
+int bender_make_pipe(BenderHandle handles[2], int mode) {
+#ifdef BENDER_WINDOWS
     /*
      * On windows, the built in CreatePipe function doesn't support overlapped IO
      * so we lift from the windows source code and modify for our own version.
      */
-    JanetHandle shandle, chandle;
+    BenderHandle shandle, chandle;
     CHAR PipeNameBuffer[MAX_PATH];
     SECURITY_ATTRIBUTES saAttr;
     memset(&saAttr, 0, sizeof(saAttr));
@@ -4091,7 +4091,7 @@ int janet_make_pipe(JanetHandle handles[2], int mode) {
     }
     snprintf(PipeNameBuffer,
              sizeof(PipeNameBuffer),
-             "\\\\.\\Pipe\\JanetPipeFile.%08x.%08x",
+             "\\\\.\\Pipe\\BenderPipeFile.%08x.%08x",
              (unsigned int) GetCurrentProcessId(),
              (unsigned int) InterlockedIncrement(&PipeSerialNumber));
 
@@ -4147,7 +4147,7 @@ error:
 
 /* C functions */
 
-JANET_CORE_FN(cfun_ev_go,
+BENDER_CORE_FN(cfun_ev_go,
               "(ev/go fiber-or-fun &opt value supervisor)",
               "Put a fiber on the event loop to be resumed later. If a "
               "function is used, it is wrapped with `fiber/new` first. "
@@ -4164,81 +4164,81 @@ JANET_CORE_FN(cfun_ev_go,
               "every `ev/go` fiber. Call `(ev/pump)` once per iteration to "
               "drive the queue from a non-yielding loop such as a render "
               "frame, or `(ev/sleep 0)` to also yield the current fiber.") {
-    janet_arity(argc, 1, 3);
-    Janet value = argc >= 2 ? argv[1] : janet_wrap_nil();
-    void *supervisor = janet_optabstract(argv, argc, 2, &janet_channel_type, janet_vm.root_fiber->supervisor_channel);
-    JanetFiber *fiber;
-    if (janet_checktype(argv[0], JANET_FUNCTION)) {
+    bender_arity(argc, 1, 3);
+    Bender value = argc >= 2 ? argv[1] : bender_wrap_nil();
+    void *supervisor = bender_optabstract(argv, argc, 2, &bender_channel_type, bender_vm.root_fiber->supervisor_channel);
+    BenderFiber *fiber;
+    if (bender_checktype(argv[0], BENDER_FUNCTION)) {
         /* Create a fiber for the user */
-        JanetFunction *func = janet_unwrap_function(argv[0]);
+        BenderFunction *func = bender_unwrap_function(argv[0]);
         if (func->def->min_arity > 1) {
-            janet_panicf("task function must accept 0 or 1 arguments");
+            bender_panicf("task function must accept 0 or 1 arguments");
         }
-        fiber = janet_fiber(func, 64, func->def->min_arity, &value);
-        janet_assert(fiber != NULL, "bad fiber-func");
+        fiber = bender_fiber(func, 64, func->def->min_arity, &value);
+        bender_assert(fiber != NULL, "bad fiber-func");
         /* P3.6: ev tasks opt into the lane-shared stack when enabled
          * (fresh fibers only — user-supplied fibers keep theirs). */
-        fiber->shared_stack = janet_vm.shared_stacks_on;
+        fiber->shared_stack = bender_vm.shared_stacks_on;
         fiber->flags |=
-            JANET_FIBER_MASK_ERROR |
-            JANET_FIBER_MASK_USER0 |
-            JANET_FIBER_MASK_USER1 |
-            JANET_FIBER_MASK_USER2 |
-            JANET_FIBER_MASK_USER3 |
-            JANET_FIBER_MASK_USER4;
-        if (!janet_vm.fiber->env) {
-            janet_vm.fiber->env = janet_table(0);
+            BENDER_FIBER_MASK_ERROR |
+            BENDER_FIBER_MASK_USER0 |
+            BENDER_FIBER_MASK_USER1 |
+            BENDER_FIBER_MASK_USER2 |
+            BENDER_FIBER_MASK_USER3 |
+            BENDER_FIBER_MASK_USER4;
+        if (!bender_vm.fiber->env) {
+            bender_vm.fiber->env = bender_table(0);
         }
-        fiber->env = janet_table(0);
-        fiber->env->proto = janet_vm.fiber->env;
+        fiber->env = bender_table(0);
+        fiber->env->proto = bender_vm.fiber->env;
     } else {
-        fiber = janet_getfiber(argv, 0);
-        if (janet_fiber_status(fiber) != JANET_STATUS_NEW) {
-            janet_panic("can only schedule new fibers where (= (fiber/status f) :new)");
+        fiber = bender_getfiber(argv, 0);
+        if (bender_fiber_status(fiber) != BENDER_STATUS_NEW) {
+            bender_panic("can only schedule new fibers where (= (fiber/status f) :new)");
         }
     }
     fiber->supervisor_channel = supervisor;
-    janet_schedule(fiber, value);
-    return janet_wrap_fiber(fiber);
+    bender_schedule(fiber, value);
+    return bender_wrap_fiber(fiber);
 }
 
-#define JANET_THREAD_SUPERVISOR_FLAG 0x100
-/* Skip the worker VM's janet_deinit at thread end. Lane workers use
+#define BENDER_THREAD_SUPERVISOR_FLAG 0x100
+/* Skip the worker VM's bender_deinit at thread end. Lane workers use
  * this: several VMs' deinits race on jointly-owned structures (the
  * observed teardown abort), and a lane worker's TLS state is bounded
  * by the lane count anyway. */
-#define JANET_THREAD_NODEINIT_FLAG 0x8
+#define BENDER_THREAD_NODEINIT_FLAG 0x8
 
 /* For ev/thread - Run an interpreter in the new thread. */
-JanetEVGenericMessage janet_go_thread_subr(JanetEVGenericMessage args) {
-    JanetBuffer *buffer = (JanetBuffer *) args.argp;
+BenderEVGenericMessage bender_go_thread_subr(BenderEVGenericMessage args) {
+    BenderBuffer *buffer = (BenderBuffer *) args.argp;
     const uint8_t *nextbytes = buffer->data;
     const uint8_t *endbytes = nextbytes + buffer->count;
     uint32_t flags = args.tag;
     args.tag = 0;
     args.argp = NULL;
-    janet_init();
-    janet_vm.sandbox_flags = (uint32_t) args.argi;
-    JanetTryState tstate;
-    JanetSignal signal = janet_try(&tstate);
+    bender_init();
+    bender_vm.sandbox_flags = (uint32_t) args.argi;
+    BenderTryState tstate;
+    BenderSignal signal = bender_try(&tstate);
     if (!signal) {
 
         /* Set abstract registry */
         if (!(flags & 0x2)) {
-            Janet aregv = janet_unmarshal(nextbytes, endbytes - nextbytes,
-                                          JANET_MARSHAL_UNSAFE, NULL, &nextbytes);
-            janet_assert(janet_checktype(aregv, JANET_TABLE), "expected table for abstract registry");
-            janet_vm.abstract_registry = janet_unwrap_table(aregv);
-            janet_gcroot(janet_wrap_table(janet_vm.abstract_registry));
+            Bender aregv = bender_unmarshal(nextbytes, endbytes - nextbytes,
+                                          BENDER_MARSHAL_UNSAFE, NULL, &nextbytes);
+            bender_assert(bender_checktype(aregv, BENDER_TABLE), "expected table for abstract registry");
+            bender_vm.abstract_registry = bender_unwrap_table(aregv);
+            bender_gcroot(bender_wrap_table(bender_vm.abstract_registry));
         }
 
         /* Get supervisor */
-        if (flags & JANET_THREAD_SUPERVISOR_FLAG) {
-            Janet sup =
-                janet_unmarshal(nextbytes, endbytes - nextbytes,
-                                JANET_MARSHAL_UNSAFE, NULL, &nextbytes);
+        if (flags & BENDER_THREAD_SUPERVISOR_FLAG) {
+            Bender sup =
+                bender_unmarshal(nextbytes, endbytes - nextbytes,
+                                BENDER_MARSHAL_UNSAFE, NULL, &nextbytes);
             /* Hack - use a global variable to avoid longjmp clobber */
-            janet_vm.user = janet_unwrap_pointer(sup);
+            bender_vm.user = bender_unwrap_pointer(sup);
         }
 
         /* Set cfunction registry */
@@ -4247,87 +4247,87 @@ JanetEVGenericMessage janet_go_thread_subr(JanetEVGenericMessage args) {
             memcpy(&count1, nextbytes, sizeof(count1));
             size_t count = (size_t) count1;
             /* Use division to avoid overflowing size_t */
-            janet_assert(count <= (endbytes - nextbytes - sizeof(count1)) / sizeof(JanetCFunRegistry), "thread message invalid");
-            janet_vm.registry_count = count;
-            janet_vm.registry_cap = count;
-            janet_vm.registry = janet_malloc(count * sizeof(JanetCFunRegistry));
-            if (janet_vm.registry == NULL) {
-                JANET_OUT_OF_MEMORY;
+            bender_assert(count <= (endbytes - nextbytes - sizeof(count1)) / sizeof(BenderCFunRegistry), "thread message invalid");
+            bender_vm.registry_count = count;
+            bender_vm.registry_cap = count;
+            bender_vm.registry = bender_malloc(count * sizeof(BenderCFunRegistry));
+            if (bender_vm.registry == NULL) {
+                BENDER_OUT_OF_MEMORY;
             }
-            janet_vm.registry_dirty = 1;
+            bender_vm.registry_dirty = 1;
             nextbytes += sizeof(uint32_t);
-            memcpy(janet_vm.registry, nextbytes, count * sizeof(JanetCFunRegistry));
-            nextbytes += count * sizeof(JanetCFunRegistry);
+            memcpy(bender_vm.registry, nextbytes, count * sizeof(BenderCFunRegistry));
+            nextbytes += count * sizeof(BenderCFunRegistry);
         }
 
-        Janet fiberv = janet_unmarshal(nextbytes, endbytes - nextbytes,
-                                       JANET_MARSHAL_UNSAFE, NULL, &nextbytes);
-        Janet value = janet_unmarshal(nextbytes, endbytes - nextbytes,
-                                      JANET_MARSHAL_UNSAFE, NULL, &nextbytes);
-        JanetFiber *fiber;
-        if (!janet_checktype(fiberv, JANET_FIBER)) {
-            janet_assert(janet_checktype(fiberv, JANET_FUNCTION), "expected function or fiber");
-            JanetFunction *func = janet_unwrap_function(fiberv);
+        Bender fiberv = bender_unmarshal(nextbytes, endbytes - nextbytes,
+                                       BENDER_MARSHAL_UNSAFE, NULL, &nextbytes);
+        Bender value = bender_unmarshal(nextbytes, endbytes - nextbytes,
+                                      BENDER_MARSHAL_UNSAFE, NULL, &nextbytes);
+        BenderFiber *fiber;
+        if (!bender_checktype(fiberv, BENDER_FIBER)) {
+            bender_assert(bender_checktype(fiberv, BENDER_FUNCTION), "expected function or fiber");
+            BenderFunction *func = bender_unwrap_function(fiberv);
             /* TODO - normal panics here do not seem to work correctly on Wine + Mingw. This needs to be investigated, and while it appears to be related to longjmp behavior
              * on the platform not working correctly, it is not obvious the issue is. That said, we probably should assert and hard-exit anyway if there is an issue there. */
-            janet_assert(func->def->min_arity >= 0 && func->def->min_arity <= 1, "thread function must accept 0 or 1 arguments");
-            fiber = janet_fiber(func, 64, func->def->min_arity, &value);
-            janet_assert(fiber != NULL, "bad fiber in thread setup");
+            bender_assert(func->def->min_arity >= 0 && func->def->min_arity <= 1, "thread function must accept 0 or 1 arguments");
+            fiber = bender_fiber(func, 64, func->def->min_arity, &value);
+            bender_assert(fiber != NULL, "bad fiber in thread setup");
             fiber->flags |=
-                JANET_FIBER_MASK_ERROR |
-                JANET_FIBER_MASK_USER0 |
-                JANET_FIBER_MASK_USER1 |
-                JANET_FIBER_MASK_USER2 |
-                JANET_FIBER_MASK_USER3 |
-                JANET_FIBER_MASK_USER4;
+                BENDER_FIBER_MASK_ERROR |
+                BENDER_FIBER_MASK_USER0 |
+                BENDER_FIBER_MASK_USER1 |
+                BENDER_FIBER_MASK_USER2 |
+                BENDER_FIBER_MASK_USER3 |
+                BENDER_FIBER_MASK_USER4;
         } else {
-            fiber = janet_unwrap_fiber(fiberv);
+            fiber = bender_unwrap_fiber(fiberv);
         }
         if (flags & 0x8) {
-            if (NULL == fiber->env) fiber->env = janet_table(0);
-            janet_table_put(fiber->env, janet_ckeywordv("task-id"), value);
+            if (NULL == fiber->env) fiber->env = bender_table(0);
+            bender_table_put(fiber->env, bender_ckeywordv("task-id"), value);
         }
-        fiber->supervisor_channel = janet_vm.user;
-        janet_schedule(fiber, value);
-        janet_loop();
-        args.tag = JANET_EV_TCTAG_NIL;
-        janet_restore(&tstate);
+        fiber->supervisor_channel = bender_vm.user;
+        bender_schedule(fiber, value);
+        bender_loop();
+        args.tag = BENDER_EV_TCTAG_NIL;
+        bender_restore(&tstate);
     } else {
-        janet_restore(&tstate);
-        void *supervisor = janet_vm.user;
+        bender_restore(&tstate);
+        void *supervisor = bender_vm.user;
         if (NULL != supervisor) {
             /* Got a supervisor, write error there */
-            Janet pair[] = {
-                janet_ckeywordv("error"),
+            Bender pair[] = {
+                bender_ckeywordv("error"),
                 tstate.payload
             };
-            janet_channel_push((JanetChannel *)supervisor,
-                               janet_wrap_tuple(janet_tuple_n(pair, 2)), 2);
+            bender_channel_push((BenderChannel *)supervisor,
+                               bender_wrap_tuple(bender_tuple_n(pair, 2)), 2);
         } else if (flags & 0x1) {
             /* No wait, just print to stderr */
-            janet_eprintf("thread start failure: %v\n", tstate.payload);
+            bender_eprintf("thread start failure: %v\n", tstate.payload);
         } else {
             /* Make ev/thread call from parent thread error */
-            if (janet_checktype(tstate.payload, JANET_STRING)) {
-                args.tag = JANET_EV_TCTAG_ERR_STRINGF;
-                JanetString msg = janet_unwrap_string(tstate.payload);
-                args.argp = janet_malloc(janet_string_length(msg) + 1);
-                memcpy(args.argp, msg, janet_string_length(msg) + 1);
+            if (bender_checktype(tstate.payload, BENDER_STRING)) {
+                args.tag = BENDER_EV_TCTAG_ERR_STRINGF;
+                BenderString msg = bender_unwrap_string(tstate.payload);
+                args.argp = bender_malloc(bender_string_length(msg) + 1);
+                memcpy(args.argp, msg, bender_string_length(msg) + 1);
             } else {
-                args.tag = JANET_EV_TCTAG_ERR_STRING;
+                args.tag = BENDER_EV_TCTAG_ERR_STRING;
                 args.argp = "failed to start thread";
             }
         }
     }
-    janet_buffer_deinit(buffer);
-    janet_free(buffer);
-    if (!(flags & JANET_THREAD_NODEINIT_FLAG)) {
-        janet_deinit();
+    bender_buffer_deinit(buffer);
+    bender_free(buffer);
+    if (!(flags & BENDER_THREAD_NODEINIT_FLAG)) {
+        bender_deinit();
     }
     return args;
 }
 
-JANET_CORE_FN(cfun_ev_thread,
+BENDER_CORE_FN(cfun_ev_thread,
               "(ev/thread main &opt value flags supervisor)",
               "Run `main` in a new operating system thread, optionally passing `value` "
               "to resume with. The parameter `main` can either be a fiber, or a function that accepts "
@@ -4339,74 +4339,74 @@ JANET_CORE_FN(cfun_ev_thread,
               "* `:t` - set the task-id of the new thread to value. The task-id is passed in messages to the supervisor channel.\n"
               "* `:a` - don't copy abstract registry to new thread (performance optimization)\n"
               "* `:c` - don't copy cfunction registry to new thread (performance optimization)") {
-    janet_sandbox_assert(JANET_SANDBOX_THREADS);
-    janet_arity(argc, 1, 4);
-    Janet value = argc >= 2 ? argv[1] : janet_wrap_nil();
-    if (janet_checktype(argv[0], JANET_FUNCTION)) {
-        JanetFunction *func = janet_getfunction(argv, 0);
+    bender_sandbox_assert(BENDER_SANDBOX_THREADS);
+    bender_arity(argc, 1, 4);
+    Bender value = argc >= 2 ? argv[1] : bender_wrap_nil();
+    if (bender_checktype(argv[0], BENDER_FUNCTION)) {
+        BenderFunction *func = bender_getfunction(argv, 0);
         if (func->def->arity < 0 || func->def->min_arity > 1) {
-            janet_panic("function must take 0 or 1 arguments");
+            bender_panic("function must take 0 or 1 arguments");
         }
     } else {
-        janet_getfiber(argv, 0); /* arg check for fiber */
+        bender_getfiber(argv, 0); /* arg check for fiber */
     }
     uint64_t flags = 0;
     if (argc >= 3) {
-        flags = janet_getflags(argv, 2, "nact");
+        flags = bender_getflags(argv, 2, "nact");
     }
-    void *supervisor = janet_optabstract(argv, argc, 3, &janet_channel_type, janet_vm.root_fiber->supervisor_channel);
-    if (NULL != supervisor) flags |= JANET_THREAD_SUPERVISOR_FLAG;
+    void *supervisor = bender_optabstract(argv, argc, 3, &bender_channel_type, bender_vm.root_fiber->supervisor_channel);
+    if (NULL != supervisor) flags |= BENDER_THREAD_SUPERVISOR_FLAG;
 
     /* Marshal arguments for the new thread. */
-    JanetBuffer *buffer = janet_malloc(sizeof(JanetBuffer));
+    BenderBuffer *buffer = bender_malloc(sizeof(BenderBuffer));
     if (NULL == buffer) {
-        JANET_OUT_OF_MEMORY;
+        BENDER_OUT_OF_MEMORY;
     }
-    janet_buffer_init(buffer, 0);
+    bender_buffer_init(buffer, 0);
     if (!(flags & 0x2)) {
-        janet_marshal(buffer, janet_wrap_table(janet_vm.abstract_registry), NULL, JANET_MARSHAL_UNSAFE);
+        bender_marshal(buffer, bender_wrap_table(bender_vm.abstract_registry), NULL, BENDER_MARSHAL_UNSAFE);
     }
-    if (flags & JANET_THREAD_SUPERVISOR_FLAG) {
-        janet_marshal(buffer, janet_wrap_abstract(supervisor), NULL, JANET_MARSHAL_UNSAFE);
+    if (flags & BENDER_THREAD_SUPERVISOR_FLAG) {
+        bender_marshal(buffer, bender_wrap_abstract(supervisor), NULL, BENDER_MARSHAL_UNSAFE);
     }
     if (!(flags & 0x4)) {
-        janet_assert(janet_vm.registry_count <= INT32_MAX, "assert failed size check");
-        uint32_t temp = (uint32_t) janet_vm.registry_count;
-        janet_buffer_push_bytes(buffer, (uint8_t *) &temp, sizeof(temp));
-        janet_buffer_push_bytes(buffer, (uint8_t *) janet_vm.registry, (int32_t) janet_vm.registry_count * sizeof(JanetCFunRegistry));
+        bender_assert(bender_vm.registry_count <= INT32_MAX, "assert failed size check");
+        uint32_t temp = (uint32_t) bender_vm.registry_count;
+        bender_buffer_push_bytes(buffer, (uint8_t *) &temp, sizeof(temp));
+        bender_buffer_push_bytes(buffer, (uint8_t *) bender_vm.registry, (int32_t) bender_vm.registry_count * sizeof(BenderCFunRegistry));
     }
-    janet_marshal(buffer, argv[0], NULL, JANET_MARSHAL_UNSAFE);
-    janet_marshal(buffer, value, NULL, JANET_MARSHAL_UNSAFE);
+    bender_marshal(buffer, argv[0], NULL, BENDER_MARSHAL_UNSAFE);
+    bender_marshal(buffer, value, NULL, BENDER_MARSHAL_UNSAFE);
     if (flags & 0x1) {
         /* Return immediately */
-        JanetEVGenericMessage arguments;
+        BenderEVGenericMessage arguments;
         memset(&arguments, 0, sizeof(arguments));
         arguments.tag = (uint32_t) flags;
-        arguments.argi = (uint32_t) janet_vm.sandbox_flags;
+        arguments.argi = (uint32_t) bender_vm.sandbox_flags;
         arguments.argp = buffer;
         arguments.fiber = NULL;
-        janet_ev_threaded_call(janet_go_thread_subr, arguments, janet_ev_default_threaded_callback);
-        return janet_wrap_nil();
+        bender_ev_threaded_call(bender_go_thread_subr, arguments, bender_ev_default_threaded_callback);
+        return bender_wrap_nil();
     } else {
-        janet_ev_threaded_await(janet_go_thread_subr, (uint32_t) flags, (uint32_t) janet_vm.sandbox_flags, buffer);
+        bender_ev_threaded_await(bender_go_thread_subr, (uint32_t) flags, (uint32_t) bender_vm.sandbox_flags, buffer);
     }
 }
 
 /* Phase 3 slice: value-returning thread/new + thread/join.
  * Share-nothing: args marshalled in, result marshalled back.
- * Detached worker + pipe completion via janet_ev_post_event.
+ * Detached worker + pipe completion via bender_ev_post_event.
  * Handle state only mutated on owner thread; join is owner-checked. */
 
 typedef struct {
-    JanetVM *owner;
+    BenderVM *owner;
     int done;
     int joined;
     int is_error;
     int is_daemon;   /* daemon threads never pin process exit (no ev
                       * refcount); joining still works if they complete */
-    Janet result;
-    Janet profile_rows;   /* Phase C: harvested worker profile rows (or nil) */
-    JanetFiber *waiter;
+    Bender result;
+    Bender profile_rows;   /* Phase C: harvested worker profile rows (or nil) */
+    BenderFiber *waiter;
     /* sched_id of waiter when it suspended: every schedule bumps it, so
      * a waiter whose id moved on was already resumed elsewhere (timeout
      * or cancel) and must not be delivered to. Distinguishes a live
@@ -4416,42 +4416,42 @@ typedef struct {
      * channel abstract wrap, tag is an arbitrary value. Both entries are
      * gcrooted on register and unrooted on delivery (or handle free).
      * Only touched on the owner thread. */
-    Janet *monitors;
+    Bender *monitors;
     int32_t n_monitors;
     int32_t cap_monitors;
-} JanetThreadHandle;
+} BenderThreadHandle;
 
 typedef struct {
-    JanetThreadHandle *handle;
+    BenderThreadHandle *handle;
     uint8_t *bytes;
     size_t len;
     int is_error;
     uint8_t *pbytes;   /* Phase C: harvested profile rows (or NULL) */
     size_t plen;
-} JanetThreadCompletion;
+} BenderThreadCompletion;
 
 typedef struct {
-    JanetBuffer *input;
-    JanetThreadHandle *handle;
-    JanetVM *owner;
+    BenderBuffer *input;
+    BenderThreadHandle *handle;
+    BenderVM *owner;
     uint32_t flags;
     uint32_t sandbox_flags;
     int profile_active;  /* Phase C: boot with the collector on */
-} JanetThreadNewArgs;
+} BenderThreadNewArgs;
 
-static int janet_thread_handle_gc(void *p, size_t len) {
+static int bender_thread_handle_gc(void *p, size_t len) {
     (void) len;
-    JanetThreadHandle *h = (JanetThreadHandle *) p;
+    BenderThreadHandle *h = (BenderThreadHandle *) p;
     /* Drop undelivered monitors (completion already ran if done, so
      * this only fires when the handle is collected first). Tombstoned
      * slots hold nil and were unrooted by ev/demonitor. */
     if (h->monitors != NULL) {
         for (int32_t i = 0; i < h->n_monitors * 2; i++) {
-            if (!janet_checktype(h->monitors[i], JANET_NIL)) {
-                janet_gcunroot(h->monitors[i]);
+            if (!bender_checktype(h->monitors[i], BENDER_NIL)) {
+                bender_gcunroot(h->monitors[i]);
             }
         }
-        janet_free(h->monitors);
+        bender_free(h->monitors);
         h->monitors = NULL;
         h->n_monitors = 0;
         h->cap_monitors = 0;
@@ -4459,21 +4459,21 @@ static int janet_thread_handle_gc(void *p, size_t len) {
     return 0;
 }
 
-static int janet_thread_handle_mark(void *p, size_t len) {
+static int bender_thread_handle_mark(void *p, size_t len) {
     (void) len;
-    JanetThreadHandle *h = (JanetThreadHandle *) p;
-    janet_mark(h->result);
-    janet_mark(h->profile_rows);
+    BenderThreadHandle *h = (BenderThreadHandle *) p;
+    bender_mark(h->result);
+    bender_mark(h->profile_rows);
     if (h->waiter) {
-        janet_mark(janet_wrap_fiber(h->waiter));
+        bender_mark(bender_wrap_fiber(h->waiter));
     }
     return 0;
 }
 
-const JanetAbstractType janet_thread_handle_type = {
+const BenderAbstractType bender_thread_handle_type = {
     "core/thread-handle",
-    janet_thread_handle_gc,
-    janet_thread_handle_mark,
+    bender_thread_handle_gc,
+    bender_thread_handle_mark,
     NULL, /* get */
     NULL, /* put */
     NULL, /* marshal (refuse: handles stay on owner thread) */
@@ -4490,83 +4490,83 @@ const JanetAbstractType janet_thread_handle_type = {
 
 /* M2: build one [:down tag reason] message. reason is :normal on
  * clean exit, the (marshaled-back) error value on failure. */
-static Janet janet_thread_down_message(Janet tag, int is_error, Janet result) {
-    Janet tup[3];
-    tup[0] = janet_ckeywordv("down");
+static Bender bender_thread_down_message(Bender tag, int is_error, Bender result) {
+    Bender tup[3];
+    tup[0] = bender_ckeywordv("down");
     tup[1] = tag;
-    tup[2] = is_error ? result : janet_ckeywordv("normal");
-    return janet_wrap_tuple(janet_tuple_n(tup, 3));
+    tup[2] = is_error ? result : bender_ckeywordv("normal");
+    return bender_wrap_tuple(bender_tuple_n(tup, 3));
 }
 
 /* Best-effort delivery of one :down message (at-most-once: dropped
  * when the channel is closed or full). */
-static void janet_thread_give_down(Janet chanv, Janet msg) {
-    JanetChannel *chan = (JanetChannel *) janet_unwrap_abstract(chanv);
+static void bender_thread_give_down(Bender chanv, Bender msg) {
+    BenderChannel *chan = (BenderChannel *) bender_unwrap_abstract(chanv);
     if (chan->closed) return;
-    janet_channel_give(chan, msg);
+    bender_channel_give(chan, msg);
 }
 
 /* M2: deliver pending monitors after completion. Runs on the owner
  * event loop; each entry is unrooted and the list freed. Takes the
  * completion result explicitly: the waiter path below clears
  * h->result once a live joiner is resumed. */
-static void janet_thread_deliver_monitors(JanetThreadHandle *h, int is_error, Janet result) {
+static void bender_thread_deliver_monitors(BenderThreadHandle *h, int is_error, Bender result) {
     if (h->monitors == NULL) return;
     for (int32_t i = 0; i < h->n_monitors; i++) {
-        Janet chanv = h->monitors[i * 2];
-        Janet tag = h->monitors[i * 2 + 1];
+        Bender chanv = h->monitors[i * 2];
+        Bender tag = h->monitors[i * 2 + 1];
         /* Tombstoned by ev/demonitor: already unrooted, skip. */
-        if (janet_checktype(chanv, JANET_NIL)) continue;
-        janet_thread_give_down(chanv,
-            janet_thread_down_message(tag, is_error, result));
-        janet_gcunroot(chanv);
-        janet_gcunroot(tag);
+        if (bender_checktype(chanv, BENDER_NIL)) continue;
+        bender_thread_give_down(chanv,
+            bender_thread_down_message(tag, is_error, result));
+        bender_gcunroot(chanv);
+        bender_gcunroot(tag);
     }
-    janet_free(h->monitors);
+    bender_free(h->monitors);
     h->monitors = NULL;
     h->n_monitors = 0;
     h->cap_monitors = 0;
 }
 
-static void janet_thread_new_complete(JanetEVGenericMessage msg) {
-    JanetThreadCompletion *c = (JanetThreadCompletion *) msg.argp;
-    JanetThreadHandle *h = c->handle;
-    Janet result = janet_wrap_nil();
+static void bender_thread_new_complete(BenderEVGenericMessage msg) {
+    BenderThreadCompletion *c = (BenderThreadCompletion *) msg.argp;
+    BenderThreadHandle *h = c->handle;
+    Bender result = bender_wrap_nil();
     int result_rooted = 0;
     if (c->bytes != NULL && c->len > 0) {
-        result = janet_unmarshal(c->bytes, c->len, JANET_MARSHAL_UNSAFE, NULL, NULL);
+        result = bender_unmarshal(c->bytes, c->len, BENDER_MARSHAL_UNSAFE, NULL, NULL);
         /* result is freshly unmarshaled and lives only as a C local until
          * the barrier-protected store onto h below; root it explicitly for
          * this window rather than relying on h's own mark state to cover a
          * value it does not point to yet (closes the Phase 2b-i fiber-
          * rooting-chronology gap with the existing explicit-root API).
          * Skip immediates (nil included) to avoid needless roots-array
-         * churn, matching janet_gc_barrier's own immediate-skip policy;
+         * churn, matching bender_gc_barrier's own immediate-skip policy;
          * result_rooted records exactly what was rooted so the unroot
          * below stays symmetric regardless of what result later is. */
-        if (!janet_checktype(result, JANET_NIL)) {
-            janet_gcroot(result);
+        if (!bender_checktype(result, BENDER_NIL)) {
+            bender_gcroot(result);
             result_rooted = 1;
         }
-        janet_free(c->bytes);
+        bender_free(c->bytes);
     } else if (c->bytes != NULL) {
-        janet_free(c->bytes);
+        bender_free(c->bytes);
     }
     /* Phase C: harvested worker profile rows (nil when it profiled
      * nothing). Stored on the handle for thread/profile. */
     if (c->pbytes != NULL && c->plen > 0) {
-        h->profile_rows = janet_unmarshal(c->pbytes, c->plen, JANET_MARSHAL_UNSAFE, NULL, NULL);
-        janet_gc_barrier(h, h->profile_rows);
-        janet_free(c->pbytes);
+        h->profile_rows = bender_unmarshal(c->pbytes, c->plen, BENDER_MARSHAL_UNSAFE, NULL, NULL);
+        bender_gc_barrier(h, h->profile_rows);
+        bender_free(c->pbytes);
     } else if (c->pbytes != NULL) {
-        janet_free(c->pbytes);
+        bender_free(c->pbytes);
     }
     int is_error = c->is_error;
-    janet_free(c);
+    bender_free(c);
     h->result = result;
-    janet_gc_barrier(h, h->result);
+    bender_gc_barrier(h, h->result);
     if (result_rooted) {
-        janet_gcunroot(result);
+        bender_gcunroot(result);
     }
     h->is_error = is_error;
     h->done = 1;
@@ -4576,36 +4576,36 @@ static void janet_thread_new_complete(JanetEVGenericMessage msg) {
      * already resumed it elsewhere — keep the result for a later join
      * instead of scheduling a rogue resume). */
     if (h->waiter != NULL) {
-        JanetFiber *w = h->waiter;
+        BenderFiber *w = h->waiter;
         uint32_t ws = h->waiter_sched;
         h->waiter = NULL;
-        janet_gcunroot(janet_wrap_fiber(w));
-        janet_gcunroot(janet_wrap_abstract(h));
+        bender_gcunroot(bender_wrap_fiber(w));
+        bender_gcunroot(bender_wrap_abstract(h));
         if (w->sched_id == ws) {
             h->joined = 1;
-            h->result = janet_wrap_nil();
+            h->result = bender_wrap_nil();
             if (h->is_error) {
-                janet_cancel(w, result);
+                bender_cancel(w, result);
             } else {
-                janet_schedule(w, result);
+                bender_schedule(w, result);
             }
         }
     }
     /* M2: monitors fire after join delivery so the join path is
      * unaffected; :down messages are best-effort (at-most-once). */
-    janet_thread_deliver_monitors(h, is_error, result);
-    if (!h->is_daemon) janet_ev_dec_refcount();
+    bender_thread_deliver_monitors(h, is_error, result);
+    if (!h->is_daemon) bender_ev_dec_refcount();
     /* Release worker ref last; may free handle (with result) if owner
      * dropped it. Do not touch h after this. */
-    janet_abstract_decref_maybe_free(h);
+    bender_abstract_decref_maybe_free(h);
 }
 
 /* Build a completion holding a malloc'd copy of marshalled bytes. */
-static JanetThreadCompletion *janet_thread_make_completion(
-    JanetThreadHandle *handle, uint8_t *bytes, size_t len, int is_error) {
-    JanetThreadCompletion *c = janet_malloc(sizeof(JanetThreadCompletion));
+static BenderThreadCompletion *bender_thread_make_completion(
+    BenderThreadHandle *handle, uint8_t *bytes, size_t len, int is_error) {
+    BenderThreadCompletion *c = bender_malloc(sizeof(BenderThreadCompletion));
     if (NULL == c) {
-        JANET_OUT_OF_MEMORY;
+        BENDER_OUT_OF_MEMORY;
     }
     c->handle = handle;
     c->bytes = bytes;
@@ -4617,183 +4617,183 @@ static JanetThreadCompletion *janet_thread_make_completion(
 }
 
 /* Marshal v (worker VM) into a malloc'd byte copy for transfer. */
-static void janet_thread_marshal_result_copy(Janet v, uint8_t **out_bytes, size_t *out_len) {
-    JanetBuffer tmp;
-    janet_buffer_init(&tmp, 0);
-    janet_marshal(&tmp, v, NULL, JANET_MARSHAL_UNSAFE);
+static void bender_thread_marshal_result_copy(Bender v, uint8_t **out_bytes, size_t *out_len) {
+    BenderBuffer tmp;
+    bender_buffer_init(&tmp, 0);
+    bender_marshal(&tmp, v, NULL, BENDER_MARSHAL_UNSAFE);
     uint8_t *copy = NULL;
     if (tmp.count > 0) {
-        copy = janet_malloc((size_t) tmp.count);
+        copy = bender_malloc((size_t) tmp.count);
         if (NULL == copy) {
-            janet_buffer_deinit(&tmp);
-            JANET_OUT_OF_MEMORY;
+            bender_buffer_deinit(&tmp);
+            BENDER_OUT_OF_MEMORY;
         }
         memcpy(copy, tmp.data, (size_t) tmp.count);
     }
     *out_bytes = copy;
     *out_len = (size_t) tmp.count;
-    janet_buffer_deinit(&tmp);
+    bender_buffer_deinit(&tmp);
 }
 
-static JanetThreadCompletion *janet_thread_new_run(JanetThreadNewArgs *targs) {
-    JanetBuffer *buffer = targs->input;
+static BenderThreadCompletion *bender_thread_new_run(BenderThreadNewArgs *targs) {
+    BenderBuffer *buffer = targs->input;
     const uint8_t *nextbytes = buffer->data;
     const uint8_t *endbytes = nextbytes + buffer->count;
     uint32_t flags = targs->flags;
-    JanetThreadHandle *handle = targs->handle;
-    janet_init();
-    janet_vm.sandbox_flags = targs->sandbox_flags;
+    BenderThreadHandle *handle = targs->handle;
+    bender_init();
+    bender_vm.sandbox_flags = targs->sandbox_flags;
     /* Phase C: inherit the collector when the owner was profiling. */
-    if (targs->profile_active) janet_profile_start();
-    JanetThreadCompletion *comp = NULL;
-    JanetTryState tstate;
-    JanetSignal signal = janet_try(&tstate);
+    if (targs->profile_active) bender_profile_start();
+    BenderThreadCompletion *comp = NULL;
+    BenderTryState tstate;
+    BenderSignal signal = bender_try(&tstate);
     if (!signal) {
         /* Flag bits match the owner side (thread/new "acd"): :a skips
          * the abstract registry, :c skips the cfunction registry. */
         if (!(flags & 0x1)) {
-            Janet aregv = janet_unmarshal(nextbytes, endbytes - nextbytes,
-                JANET_MARSHAL_UNSAFE, NULL, &nextbytes);
-            janet_assert(janet_checktype(aregv, JANET_TABLE), "expected table for abstract registry");
-            janet_vm.abstract_registry = janet_unwrap_table(aregv);
-            janet_gcroot(janet_wrap_table(janet_vm.abstract_registry));
+            Bender aregv = bender_unmarshal(nextbytes, endbytes - nextbytes,
+                BENDER_MARSHAL_UNSAFE, NULL, &nextbytes);
+            bender_assert(bender_checktype(aregv, BENDER_TABLE), "expected table for abstract registry");
+            bender_vm.abstract_registry = bender_unwrap_table(aregv);
+            bender_gcroot(bender_wrap_table(bender_vm.abstract_registry));
         }
         if (!(flags & 0x2)) {
             uint32_t count1;
             memcpy(&count1, nextbytes, sizeof(count1));
             size_t count = (size_t) count1;
-            janet_assert(count <= (size_t)(endbytes - nextbytes - sizeof(count1)) / sizeof(JanetCFunRegistry),
+            bender_assert(count <= (size_t)(endbytes - nextbytes - sizeof(count1)) / sizeof(BenderCFunRegistry),
                 "thread message invalid");
-            janet_vm.registry_count = count;
-            janet_vm.registry_cap = count;
-            janet_vm.registry = janet_malloc(count * sizeof(JanetCFunRegistry));
-            if (janet_vm.registry == NULL) {
-                JANET_OUT_OF_MEMORY;
+            bender_vm.registry_count = count;
+            bender_vm.registry_cap = count;
+            bender_vm.registry = bender_malloc(count * sizeof(BenderCFunRegistry));
+            if (bender_vm.registry == NULL) {
+                BENDER_OUT_OF_MEMORY;
             }
-            janet_vm.registry_dirty = 1;
+            bender_vm.registry_dirty = 1;
             nextbytes += sizeof(uint32_t);
-            memcpy(janet_vm.registry, nextbytes, count * sizeof(JanetCFunRegistry));
-            nextbytes += count * sizeof(JanetCFunRegistry);
+            memcpy(bender_vm.registry, nextbytes, count * sizeof(BenderCFunRegistry));
+            nextbytes += count * sizeof(BenderCFunRegistry);
         }
-        Janet fiberv = janet_unmarshal(nextbytes, endbytes - nextbytes,
-            JANET_MARSHAL_UNSAFE, NULL, &nextbytes);
-        Janet value = janet_unmarshal(nextbytes, endbytes - nextbytes,
-            JANET_MARSHAL_UNSAFE, NULL, &nextbytes);
+        Bender fiberv = bender_unmarshal(nextbytes, endbytes - nextbytes,
+            BENDER_MARSHAL_UNSAFE, NULL, &nextbytes);
+        Bender value = bender_unmarshal(nextbytes, endbytes - nextbytes,
+            BENDER_MARSHAL_UNSAFE, NULL, &nextbytes);
         /* Input consumed; free before running (malloc only, no VM). */
-        janet_buffer_deinit(buffer);
-        janet_free(buffer);
-        janet_free(targs);
+        bender_buffer_deinit(buffer);
+        bender_free(buffer);
+        bender_free(targs);
         targs = NULL;
         buffer = NULL;
-        JanetFiber *fiber;
-        if (!janet_checktype(fiberv, JANET_FIBER)) {
-            janet_assert(janet_checktype(fiberv, JANET_FUNCTION), "expected function or fiber");
-            JanetFunction *func = janet_unwrap_function(fiberv);
-            janet_assert(func->def->min_arity >= 0 && func->def->min_arity <= 1,
+        BenderFiber *fiber;
+        if (!bender_checktype(fiberv, BENDER_FIBER)) {
+            bender_assert(bender_checktype(fiberv, BENDER_FUNCTION), "expected function or fiber");
+            BenderFunction *func = bender_unwrap_function(fiberv);
+            bender_assert(func->def->min_arity >= 0 && func->def->min_arity <= 1,
                 "thread function must accept 0 or 1 arguments");
-            fiber = janet_fiber(func, 64, func->def->min_arity, &value);
-            janet_assert(fiber != NULL, "bad fiber in thread setup");
+            fiber = bender_fiber(func, 64, func->def->min_arity, &value);
+            bender_assert(fiber != NULL, "bad fiber in thread setup");
             /* Phase C: primed fibers bypass JOP_CALL; record the root
              * invocation so worker rows carry calls/params. */
-            janet_profile_task_call(func, &value, 1);
+            bender_profile_task_call(func, &value, 1);
             fiber->flags |=
-                JANET_FIBER_MASK_ERROR |
-                JANET_FIBER_MASK_USER0 |
-                JANET_FIBER_MASK_USER1 |
-                JANET_FIBER_MASK_USER2 |
-                JANET_FIBER_MASK_USER3 |
-                JANET_FIBER_MASK_USER4;
+                BENDER_FIBER_MASK_ERROR |
+                BENDER_FIBER_MASK_USER0 |
+                BENDER_FIBER_MASK_USER1 |
+                BENDER_FIBER_MASK_USER2 |
+                BENDER_FIBER_MASK_USER3 |
+                BENDER_FIBER_MASK_USER4;
         } else {
-            fiber = janet_unwrap_fiber(fiberv);
+            fiber = bender_unwrap_fiber(fiberv);
         }
         fiber->supervisor_channel = NULL;
-        janet_schedule(fiber, value);
-        janet_loop();
-        JanetFiberStatus status = janet_fiber_status(fiber);
-        Janet result = fiber->last_value;
+        bender_schedule(fiber, value);
+        bender_loop();
+        BenderFiberStatus status = bender_fiber_status(fiber);
+        Bender result = fiber->last_value;
         int is_error = 0;
-        if (status == JANET_STATUS_ERROR) {
+        if (status == BENDER_STATUS_ERROR) {
             is_error = 1;
-        } else if (status != JANET_STATUS_DEAD) {
-            result = janet_cstringv("thread did not complete (yielded)");
+        } else if (status != BENDER_STATUS_DEAD) {
+            result = bender_cstringv("thread did not complete (yielded)");
             is_error = 1;
         }
         /* Root fiber (hence last_value) across marshalling allocations. */
-        Janet fiber_j = janet_wrap_fiber(fiber);
-        Janet result_j = result;
-        janet_gcroot(fiber_j);
-        janet_gcroot(result_j);
+        Bender fiber_j = bender_wrap_fiber(fiber);
+        Bender result_j = result;
+        bender_gcroot(fiber_j);
+        bender_gcroot(result_j);
         uint8_t *bytes = NULL;
         size_t len = 0;
-        janet_thread_marshal_result_copy(result, &bytes, &len);
-        janet_gcunroot(fiber_j);
-        janet_gcunroot(result_j);
-        comp = janet_thread_make_completion(handle, bytes, len, is_error);
+        bender_thread_marshal_result_copy(result, &bytes, &len);
+        bender_gcunroot(fiber_j);
+        bender_gcunroot(result_j);
+        comp = bender_thread_make_completion(handle, bytes, len, is_error);
         /* Phase C: harvest this worker's profile table (best-effort;
          * empty when profiling was off). The VM is still alive here. */
-        janet_profile_harvest_bytes(&comp->pbytes, &comp->plen);
-        janet_restore(&tstate);
+        bender_profile_harvest_bytes(&comp->pbytes, &comp->plen);
+        bender_restore(&tstate);
     } else {
-        janet_restore(&tstate);
+        bender_restore(&tstate);
         /* Startup or marshal failure: report payload if marshallable,
          * else a static fallback. */
-        Janet payload = tstate.payload;
+        Bender payload = tstate.payload;
         uint8_t *bytes = NULL;
         size_t len = 0;
-        Janet payload_j = payload;
-        janet_gcroot(payload_j);
-        JanetTryState tstate2;
-        JanetSignal sig2 = janet_try(&tstate2);
+        Bender payload_j = payload;
+        bender_gcroot(payload_j);
+        BenderTryState tstate2;
+        BenderSignal sig2 = bender_try(&tstate2);
         if (!sig2) {
-            janet_thread_marshal_result_copy(payload, &bytes, &len);
-            janet_restore(&tstate2);
+            bender_thread_marshal_result_copy(payload, &bytes, &len);
+            bender_restore(&tstate2);
         } else {
-            janet_restore(&tstate2);
-            Janet fallback = janet_cstringv("thread failed (unmarshallable error)");
-            Janet fallback_j = fallback;
-            janet_gcroot(fallback_j);
-            janet_thread_marshal_result_copy(fallback, &bytes, &len);
-            janet_gcunroot(fallback_j);
+            bender_restore(&tstate2);
+            Bender fallback = bender_cstringv("thread failed (unmarshallable error)");
+            Bender fallback_j = fallback;
+            bender_gcroot(fallback_j);
+            bender_thread_marshal_result_copy(fallback, &bytes, &len);
+            bender_gcunroot(fallback_j);
         }
-        janet_gcunroot(payload_j);
+        bender_gcunroot(payload_j);
         if (buffer != NULL) {
-            janet_buffer_deinit(buffer);
-            janet_free(buffer);
+            bender_buffer_deinit(buffer);
+            bender_free(buffer);
         }
         if (targs != NULL) {
-            janet_free(targs);
+            bender_free(targs);
         }
-        comp = janet_thread_make_completion(handle, bytes, len, 1);
+        comp = bender_thread_make_completion(handle, bytes, len, 1);
     }
-    janet_deinit();
+    bender_deinit();
     return comp;
 }
 
-#ifdef JANET_WINDOWS
-static DWORD WINAPI janet_thread_new_worker(LPVOID ptr) {
-    JanetThreadNewArgs *targs = (JanetThreadNewArgs *) ptr;
-    JanetVM *owner = targs->owner;
-    JanetThreadCompletion *comp = janet_thread_new_run(targs);
-    JanetEVGenericMessage msg;
+#ifdef BENDER_WINDOWS
+static DWORD WINAPI bender_thread_new_worker(LPVOID ptr) {
+    BenderThreadNewArgs *targs = (BenderThreadNewArgs *) ptr;
+    BenderVM *owner = targs->owner;
+    BenderThreadCompletion *comp = bender_thread_new_run(targs);
+    BenderEVGenericMessage msg;
     memset(&msg, 0, sizeof(msg));
     msg.argp = comp;
-    janet_ev_post_event(owner, janet_thread_new_complete, msg);
+    bender_ev_post_event(owner, bender_thread_new_complete, msg);
     return 0;
 }
 #else
-static void *janet_thread_new_worker(void *ptr) {
-    JanetThreadNewArgs *targs = (JanetThreadNewArgs *) ptr;
-    JanetVM *owner = targs->owner;
-    JanetThreadCompletion *comp = janet_thread_new_run(targs);
-    JanetEVGenericMessage msg;
+static void *bender_thread_new_worker(void *ptr) {
+    BenderThreadNewArgs *targs = (BenderThreadNewArgs *) ptr;
+    BenderVM *owner = targs->owner;
+    BenderThreadCompletion *comp = bender_thread_new_run(targs);
+    BenderEVGenericMessage msg;
     memset(&msg, 0, sizeof(msg));
     msg.argp = comp;
-    janet_ev_post_event(owner, janet_thread_new_complete, msg);
+    bender_ev_post_event(owner, bender_thread_new_complete, msg);
     return NULL;
 }
 #endif
 
-JANET_CORE_FN(cfun_thread_new,
+BENDER_CORE_FN(cfun_thread_new,
               "(thread/new main &opt value flags)",
               "Run `main` in a new operating system thread and return a handle. "
               "`main` is a function taking 0 or 1 arguments, or a fiber; `value` is passed as the argument. "
@@ -4803,184 +4803,184 @@ JANET_CORE_FN(cfun_thread_new,
               "`:d` daemon: the thread never pins process exit (no ev refcount); "
               "joining still works if it completes. Long-lived service threads "
               "(pools) should pass `:d`, or the event loop waits for them forever.") {
-    janet_sandbox_assert(JANET_SANDBOX_THREADS);
-    janet_arity(argc, 1, 3);
-    Janet value = argc >= 2 ? argv[1] : janet_wrap_nil();
-    if (janet_checktype(argv[0], JANET_FUNCTION)) {
-        JanetFunction *func = janet_getfunction(argv, 0);
+    bender_sandbox_assert(BENDER_SANDBOX_THREADS);
+    bender_arity(argc, 1, 3);
+    Bender value = argc >= 2 ? argv[1] : bender_wrap_nil();
+    if (bender_checktype(argv[0], BENDER_FUNCTION)) {
+        BenderFunction *func = bender_getfunction(argv, 0);
         if (func->def->arity < 0 || func->def->min_arity > 1) {
-            janet_panic("function must take 0 or 1 arguments");
+            bender_panic("function must take 0 or 1 arguments");
         }
     } else {
-        janet_getfiber(argv, 0);
+        bender_getfiber(argv, 0);
     }
     uint64_t flags = 0;
     if (argc >= 3) {
-        flags = janet_getflags(argv, 2, "acd");
+        flags = bender_getflags(argv, 2, "acd");
     }
-    JanetBuffer *buffer = janet_malloc(sizeof(JanetBuffer));
+    BenderBuffer *buffer = bender_malloc(sizeof(BenderBuffer));
     if (NULL == buffer) {
-        JANET_OUT_OF_MEMORY;
+        BENDER_OUT_OF_MEMORY;
     }
-    janet_buffer_init(buffer, 0);
-    /* Flag bits follow janet_getflags order ("acd"): :a skips the
+    bender_buffer_init(buffer, 0);
+    /* Flag bits follow bender_getflags order ("acd"): :a skips the
      * abstract registry, :c skips the cfunction registry, :d daemonizes
      * (no exit refcount — see below). */
     if (!(flags & 0x1)) {
-        janet_marshal(buffer, janet_wrap_table(janet_vm.abstract_registry), NULL, JANET_MARSHAL_UNSAFE);
+        bender_marshal(buffer, bender_wrap_table(bender_vm.abstract_registry), NULL, BENDER_MARSHAL_UNSAFE);
     }
     if (!(flags & 0x2)) {
-        janet_assert(janet_vm.registry_count <= INT32_MAX, "assert failed size check");
-        uint32_t temp = (uint32_t) janet_vm.registry_count;
-        janet_buffer_push_bytes(buffer, (uint8_t *) &temp, sizeof(temp));
-        janet_buffer_push_bytes(buffer, (uint8_t *) janet_vm.registry,
-            (int32_t) janet_vm.registry_count * sizeof(JanetCFunRegistry));
+        bender_assert(bender_vm.registry_count <= INT32_MAX, "assert failed size check");
+        uint32_t temp = (uint32_t) bender_vm.registry_count;
+        bender_buffer_push_bytes(buffer, (uint8_t *) &temp, sizeof(temp));
+        bender_buffer_push_bytes(buffer, (uint8_t *) bender_vm.registry,
+            (int32_t) bender_vm.registry_count * sizeof(BenderCFunRegistry));
     }
-    janet_marshal(buffer, argv[0], NULL, JANET_MARSHAL_UNSAFE);
-    janet_marshal(buffer, value, NULL, JANET_MARSHAL_UNSAFE);
-    JanetThreadHandle *handle = janet_abstract_threaded(&janet_thread_handle_type, sizeof(JanetThreadHandle));
-    handle->owner = &janet_vm;
+    bender_marshal(buffer, argv[0], NULL, BENDER_MARSHAL_UNSAFE);
+    bender_marshal(buffer, value, NULL, BENDER_MARSHAL_UNSAFE);
+    BenderThreadHandle *handle = bender_abstract_threaded(&bender_thread_handle_type, sizeof(BenderThreadHandle));
+    handle->owner = &bender_vm;
     handle->done = 0;
     handle->joined = 0;
     handle->is_error = 0;
     handle->is_daemon = (flags & 0x4) ? 1 : 0;
-    handle->result = janet_wrap_nil();
-    handle->profile_rows = janet_wrap_nil();
+    handle->result = bender_wrap_nil();
+    handle->profile_rows = bender_wrap_nil();
     handle->waiter = NULL;
     handle->waiter_sched = 0;
     handle->monitors = NULL;
     handle->n_monitors = 0;
     handle->cap_monitors = 0;
-    JanetThreadNewArgs *targs = janet_malloc(sizeof(JanetThreadNewArgs));
+    BenderThreadNewArgs *targs = bender_malloc(sizeof(BenderThreadNewArgs));
     if (NULL == targs) {
-        janet_buffer_deinit(buffer);
-        janet_free(buffer);
-        janet_panic("failed to allocate thread args");
+        bender_buffer_deinit(buffer);
+        bender_free(buffer);
+        bender_panic("failed to allocate thread args");
     }
     targs->input = buffer;
     targs->handle = handle;
-    targs->owner = &janet_vm;
+    targs->owner = &bender_vm;
     targs->flags = (uint32_t) flags;
-    targs->sandbox_flags = janet_vm.sandbox_flags;
+    targs->sandbox_flags = bender_vm.sandbox_flags;
     /* Phase C: the worker inherits the collector when profiling. */
-    targs->profile_active = (janet_vm.profile_table != NULL);
-    janet_abstract_incref(handle);
+    targs->profile_active = (bender_vm.profile_table != NULL);
+    bender_abstract_incref(handle);
     /* Daemon threads never pin process exit (long-lived service
      * threads would hold the event loop forever); joining still
      * works if they complete (the completion path skips its dec). */
     if (!handle->is_daemon) {
-        janet_ev_inc_refcount();
+        bender_ev_inc_refcount();
     }
-#ifdef JANET_WINDOWS
-    HANDLE wh = CreateThread(NULL, 0, janet_thread_new_worker, targs, 0, NULL);
+#ifdef BENDER_WINDOWS
+    HANDLE wh = CreateThread(NULL, 0, bender_thread_new_worker, targs, 0, NULL);
     if (NULL == wh) {
-        janet_abstract_decref_maybe_free(handle);
-        if (!handle->is_daemon) janet_ev_dec_refcount();
-        janet_buffer_deinit(buffer);
-        janet_free(buffer);
-        janet_free(targs);
-        janet_panic("failed to create thread");
+        bender_abstract_decref_maybe_free(handle);
+        if (!handle->is_daemon) bender_ev_dec_refcount();
+        bender_buffer_deinit(buffer);
+        bender_free(buffer);
+        bender_free(targs);
+        bender_panic("failed to create thread");
     }
     CloseHandle(wh);
 #else
     pthread_t worker;
-    int err = pthread_create(&worker, &janet_vm.new_thread_attr, janet_thread_new_worker, targs);
+    int err = pthread_create(&worker, &bender_vm.new_thread_attr, bender_thread_new_worker, targs);
     if (err) {
-        janet_abstract_decref_maybe_free(handle);
-        if (!handle->is_daemon) janet_ev_dec_refcount();
-        janet_buffer_deinit(buffer);
-        janet_free(buffer);
-        janet_free(targs);
-        janet_panicf("%s", janet_strerror(err));
+        bender_abstract_decref_maybe_free(handle);
+        if (!handle->is_daemon) bender_ev_dec_refcount();
+        bender_buffer_deinit(buffer);
+        bender_free(buffer);
+        bender_free(targs);
+        bender_panicf("%s", bender_strerror(err));
     }
 #endif
-    return janet_wrap_abstract(handle);
+    return bender_wrap_abstract(handle);
 }
 
-JANET_CORE_FN(cfun_thread_join,
+BENDER_CORE_FN(cfun_thread_join,
               "(thread/join handle &opt timeout)",
               "Wait for the thread `handle` created by `thread/new` to complete and return its value. "
               "Re-raises the thread's error if it failed. Must be called from the creating thread, exactly once. "
               "With `timeout` (seconds), raise a timeout error instead of waiting forever; a later join can "
               "still collect the result. Timeouts require joining from an ev task.") {
-    janet_arity(argc, 1, 2);
-    JanetThreadHandle *handle = janet_getabstract(argv, 0, &janet_thread_handle_type);
-    if (handle->owner != &janet_vm) {
-        janet_panic("thread/join called from non-owner thread");
+    bender_arity(argc, 1, 2);
+    BenderThreadHandle *handle = bender_getabstract(argv, 0, &bender_thread_handle_type);
+    if (handle->owner != &bender_vm) {
+        bender_panic("thread/join called from non-owner thread");
     }
     if (handle->joined) {
-        janet_panic("thread already joined");
+        bender_panic("thread already joined");
     }
-    if (janet_vm.coerce_error) {
-        janet_panic("cannot join inside janet_call");
+    if (bender_vm.coerce_error) {
+        bender_panic("cannot join inside bender_call");
     }
-    double timeout = janet_optnumber(argv, argc, 1, INFINITY);
+    double timeout = bender_optnumber(argv, argc, 1, INFINITY);
     if (handle->done) {
         /* Fast path: completion already ran. */
         handle->joined = 1;
-        Janet result = handle->result;
-        handle->result = janet_wrap_nil();
+        Bender result = handle->result;
+        handle->result = bender_wrap_nil();
         if (handle->is_error) {
-            janet_panicv(result);
+            bender_panicv(result);
         }
         return result;
     }
-    JanetFiber *root = janet_root_fiber();
+    BenderFiber *root = bender_root_fiber();
     if (handle->waiter != NULL) {
         /* A waiter whose sched_id moved on was already resumed elsewhere
          * (timeout or cancel): release its roots exactly and take over.
          * An unmoved waiter is a genuine concurrent join. */
         if (handle->waiter->sched_id == handle->waiter_sched) {
-            janet_panic("thread already being joined");
+            bender_panic("thread already being joined");
         }
-        janet_gcunroot(janet_wrap_fiber(handle->waiter));
-        janet_gcunroot(janet_wrap_abstract(handle));
+        bender_gcunroot(bender_wrap_fiber(handle->waiter));
+        bender_gcunroot(bender_wrap_abstract(handle));
         handle->waiter = NULL;
     }
     if (timeout != INFINITY &&
-            !(root->gc.flags & JANET_FIBER_EV_GCFLAG_ROOT)) {
-        janet_panic("thread/join with timeout requires joining from an ev task");
+            !(root->gc.flags & BENDER_FIBER_EV_GCFLAG_ROOT)) {
+        bender_panic("thread/join with timeout requires joining from an ev task");
     }
     handle->waiter = root;
     handle->waiter_sched = root->sched_id;
     /* Root across suspension; completion callback unroots
-     * (mirrors janet_ev_threaded_await's fiber rooting). */
-    janet_gcroot(janet_wrap_fiber(root));
-    janet_gcroot(janet_wrap_abstract(handle));
+     * (mirrors bender_ev_threaded_await's fiber rooting). */
+    bender_gcroot(bender_wrap_fiber(root));
+    bender_gcroot(bender_wrap_abstract(handle));
     if (timeout != INFINITY) {
-        janet_addtimeout(timeout);
+        bender_addtimeout(timeout);
     }
-    janet_await();
+    bender_await();
     /* Unreachable when suspending; the completion schedules this fiber
      * with the thread's result (or cancels with its error). */
-    return janet_wrap_nil();
+    return bender_wrap_nil();
 }
 
-JANET_CORE_FN(cfun_thread_alive,
+BENDER_CORE_FN(cfun_thread_alive,
               "(thread/alive? handle)",
               "Return whether the thread `handle` created by `thread/new` is "
               "still running. Once true it stays true until `thread/join`; "
               "after `thread/join` returns false. Must be called from the "
               "creating thread.") {
-    janet_fixarity(argc, 1);
-    JanetThreadHandle *handle = janet_getabstract(argv, 0, &janet_thread_handle_type);
-    if (handle->owner != &janet_vm) {
-        janet_panic("thread/alive? called from non-owner thread");
+    bender_fixarity(argc, 1);
+    BenderThreadHandle *handle = bender_getabstract(argv, 0, &bender_thread_handle_type);
+    if (handle->owner != &bender_vm) {
+        bender_panic("thread/alive? called from non-owner thread");
     }
-    return janet_wrap_boolean(!handle->done);
+    return bender_wrap_boolean(!handle->done);
 }
 
-JANET_CORE_FN(cfun_thread_profile,
+BENDER_CORE_FN(cfun_thread_profile,
               "(thread/profile handle)",
               "Return the worker's harvested profile rows (Phase C dump "
               "format) after the thread completed, or nil when it profiled "
               "nothing. Workers inherit the collector when the owner is "
               "profiling at thread/new time. Must be called from the "
               "creating thread.") {
-    janet_fixarity(argc, 1);
-    JanetThreadHandle *handle = janet_getabstract(argv, 0, &janet_thread_handle_type);
-    if (handle->owner != &janet_vm) {
-        janet_panic("thread/profile called from non-owner thread");
+    bender_fixarity(argc, 1);
+    BenderThreadHandle *handle = bender_getabstract(argv, 0, &bender_thread_handle_type);
+    if (handle->owner != &bender_vm) {
+        bender_panic("thread/profile called from non-owner thread");
     }
     return handle->profile_rows;
 }
@@ -4994,13 +4994,13 @@ JANET_CORE_FN(cfun_thread_profile,
  * isolated VMs (registries marshalled once at spawn, exactly like
  * thread/new); only tasks move. This is M:N at job level — never
  * migrating fibers. Cooperative like the rest of the layer: each task
- * runs under a per-task janet_loop (so ev/sleep works inside tasks),
+ * runs under a per-task bender_loop (so ev/sleep works inside tasks),
  * but a task that suspends forever wedges its worker.
  *
  * Suspension discipline: every blocking cfun below has at most ONE
  * trailing suspension (the proven take/join shape — code after
- * janet_await never runs). Capacity tokens are therefore acquired in a
- * separate step (pool/acquire, sequenced from Janet): the token take is
+ * bender_await never runs). Capacity tokens are therefore acquired in a
+ * separate step (pool/acquire, sequenced from Bender): the token take is
  * its suspension, the result wait is dispatch's.
  *
  * Lifetime: the pool abstract is gcrooted at spawn and unrooted at
@@ -5011,86 +5011,86 @@ JANET_CORE_FN(cfun_thread_profile,
  * a pool without pool/stop leaks its threads until process exit —
  * documented, same class as leaked threads. */
 
-typedef struct JanetPoolTask {
+typedef struct BenderPoolTask {
     uint8_t *bytes;          /* UNSAFE-marshalled [func args] tuple, malloc'd */
     size_t len;
-    JanetVM *owner;          /* completion target */
-    JanetFiber *waiter;      /* pool/call path (direct completion), else NULL */
+    BenderVM *owner;          /* completion target */
+    BenderFiber *waiter;      /* pool/call path (direct completion), else NULL */
     uint32_t waiter_sched;
     void *reply;             /* pool/submit path: incref'd threaded channel, else NULL */
-    struct JanetPoolTask *next;
-} JanetPoolTask;
+    struct BenderPoolTask *next;
+} BenderPoolTask;
 
 /* Phase C: per-worker profile harvest. Workers with profiling active
  * serialize their tables at exit into UNSAFE-marshal buffers; the
- * owner drains them via pool/profile-harvest (merged Janet-side by
- * tools/profile-merge.janet). Malloc'd, pool-locked, freed on drain
+ * owner drains them via pool/profile-harvest (merged Bender-side by
+ * tools/profile-merge.ben). Malloc'd, pool-locked, freed on drain
  * or with the pool. */
-typedef struct JanetProfileHarvest {
+typedef struct BenderProfileHarvest {
     uint8_t *bytes;
     size_t len;
-    struct JanetProfileHarvest *next;
-} JanetProfileHarvest;
+    struct BenderProfileHarvest *next;
+} BenderProfileHarvest;
 
 typedef struct {
-#ifdef JANET_WINDOWS
+#ifdef BENDER_WINDOWS
     CRITICAL_SECTION lock;
     CONDITION_VARIABLE nonempty;
 #else
     pthread_mutex_t lock;
     pthread_cond_t nonempty;
 #endif
-    JanetPoolTask *head, *tail;
+    BenderPoolTask *head, *tail;
     int32_t count;
     int stopping;            /* drain, then exit (stop or finalizer) */
     int joined;              /* stop() completed: workers joined, contents freed */
     int contents_freed;
     int32_t n_workers;
     int32_t live_workers;
-    JanetVM *owner;
+    BenderVM *owner;
     uint32_t flags;
     uint32_t sandbox_flags;
     uint8_t *prologue;       /* marshalled registries, immutable after spawn */
     size_t prologue_len;
-    JanetChannel *tokens;    /* capacity tokens (pool-incref'd, never rooted) */
-    JanetFiber *stop_waiter; /* pool/stop waiter (single), else NULL */
+    BenderChannel *tokens;    /* capacity tokens (pool-incref'd, never rooted) */
+    BenderFiber *stop_waiter; /* pool/stop waiter (single), else NULL */
     uint32_t stop_sched;
-    Janet self;              /* gcrooted wrapper: pins the struct until stop */
+    Bender self;              /* gcrooted wrapper: pins the struct until stop */
     int profile_active;      /* Phase C: workers boot with the collector on */
-    JanetProfileHarvest *harvest_head, *harvest_tail;
-#ifdef JANET_WINDOWS
+    BenderProfileHarvest *harvest_head, *harvest_tail;
+#ifdef BENDER_WINDOWS
     HANDLE *threads;
 #else
     pthread_t *threads;
 #endif
-} JanetPool;
+} BenderPool;
 
-static void janet_pool_lock(JanetPool *pool) {
-#ifdef JANET_WINDOWS
+static void bender_pool_lock(BenderPool *pool) {
+#ifdef BENDER_WINDOWS
     EnterCriticalSection(&pool->lock);
 #else
     pthread_mutex_lock(&pool->lock);
 #endif
 }
 
-static void janet_pool_unlock(JanetPool *pool) {
-#ifdef JANET_WINDOWS
+static void bender_pool_unlock(BenderPool *pool) {
+#ifdef BENDER_WINDOWS
     LeaveCriticalSection(&pool->lock);
 #else
     pthread_mutex_unlock(&pool->lock);
 #endif
 }
 
-static void janet_pool_broadcast(JanetPool *pool) {
-#ifdef JANET_WINDOWS
+static void bender_pool_broadcast(BenderPool *pool) {
+#ifdef BENDER_WINDOWS
     WakeAllConditionVariable(&pool->nonempty);
 #else
     pthread_cond_broadcast(&pool->nonempty);
 #endif
 }
 
-static void janet_pool_signal(JanetPool *pool) {
-#ifdef JANET_WINDOWS
+static void bender_pool_signal(BenderPool *pool) {
+#ifdef BENDER_WINDOWS
     WakeConditionVariable(&pool->nonempty);
 #else
     pthread_cond_signal(&pool->nonempty);
@@ -5100,10 +5100,10 @@ static void janet_pool_signal(JanetPool *pool) {
 /* Owner-loop callback: the last worker exited. Join (all already dead,
  * so immediate), free the contents, wake the pool/stop waiter. Runs on
  * the owner event loop — the only place teardown happens. */
-static void janet_pool_all_exited(JanetEVGenericMessage msg);
+static void bender_pool_all_exited(BenderEVGenericMessage msg);
 
-static void janet_pool_sync_destroy(JanetPool *pool) {
-#ifdef JANET_WINDOWS
+static void bender_pool_sync_destroy(BenderPool *pool) {
+#ifdef BENDER_WINDOWS
     /* CONDITION_VARIABLE needs no destroy; CRITICAL_SECTION does. */
     DeleteCriticalSection(&pool->lock);
 #else
@@ -5117,44 +5117,44 @@ static void janet_pool_sync_destroy(JanetPool *pool) {
  * worker (abandoned path). Callers must exclude each other via the
  * pool lock + contents_freed flag, except stop which is exclusive by
  * construction (owner-only, single stop). */
-static void janet_pool_free_contents(JanetPool *pool) {
-    JanetPoolTask *t = pool->head;
+static void bender_pool_free_contents(BenderPool *pool) {
+    BenderPoolTask *t = pool->head;
     while (t != NULL) {
-        JanetPoolTask *next = t->next;
+        BenderPoolTask *next = t->next;
         /* Abandon-path remnants: tasks the drain never ran. Their reply
          * channels keep them safe (worker incref pairs with this decref);
          * direct-completion waiters are gone with the owner flow. */
-        if (t->reply != NULL) janet_abstract_decref_maybe_free(t->reply);
-        if (t->bytes != NULL) janet_free(t->bytes);
-        janet_free(t);
+        if (t->reply != NULL) bender_abstract_decref_maybe_free(t->reply);
+        if (t->bytes != NULL) bender_free(t->bytes);
+        bender_free(t);
         t = next;
     }
     pool->head = pool->tail = NULL;
     if (pool->prologue != NULL) {
-        janet_free(pool->prologue);
+        bender_free(pool->prologue);
         pool->prologue = NULL;
     }
     if (pool->threads != NULL) {
         /* Thread handles are joined (stop) or abandoned with the leak
          * (documented): never closed here. Windows HANDLEs are closed
          * by pool/stop after joining. */
-        janet_free(pool->threads);
+        bender_free(pool->threads);
         pool->threads = NULL;
     }
     /* Drop the pool's own token ref; the wrapper-owned ref dies with
      * the tokens wrapper. */
     if (pool->tokens != NULL) {
-        janet_abstract_decref_maybe_free(pool->tokens);
+        bender_abstract_decref_maybe_free(pool->tokens);
         pool->tokens = NULL;
     }
     /* Phase C: unread harvest remnants (readers drain via
      * pool/profile-harvest; leftovers die with the pool). */
     {
-        JanetProfileHarvest *h = pool->harvest_head;
+        BenderProfileHarvest *h = pool->harvest_head;
         while (h != NULL) {
-            JanetProfileHarvest *next = h->next;
-            if (h->bytes != NULL) janet_free(h->bytes);
-            janet_free(h);
+            BenderProfileHarvest *next = h->next;
+            if (h->bytes != NULL) bender_free(h->bytes);
+            bender_free(h);
             h = next;
         }
         pool->harvest_head = pool->harvest_tail = NULL;
@@ -5162,33 +5162,33 @@ static void janet_pool_free_contents(JanetPool *pool) {
     pool->contents_freed = 1;
 }
 
-static int janet_pool_gc(void *p, size_t len) {
+static int bender_pool_gc(void *p, size_t len) {
     (void) len;
-    JanetPool *pool = (JanetPool *) p;
-    /* The wrapper is unreachable: no Janet code can name this pool
+    BenderPool *pool = (BenderPool *) p;
+    /* The wrapper is unreachable: no Bender code can name this pool
      * anymore. Joined pools (and spawn-failure leftovers, already
      * joined on the panic path) have no threads: free without the
      * lock held — destroying a locked mutex is UB, and nothing else
      * can run here. The live case (abandonment) never unroots, so it
      * cannot reach here; if it ever does, only ask for a drain and
      * leave the documented leak rather than freeing under workers. */
-    janet_pool_lock(pool);
+    bender_pool_lock(pool);
     if (!pool->joined && pool->live_workers != 0) {
         pool->stopping = 1;
-        janet_pool_broadcast(pool);
-        janet_pool_unlock(pool);
+        bender_pool_broadcast(pool);
+        bender_pool_unlock(pool);
         return 0;
     }
     int do_free = !pool->contents_freed;
-    janet_pool_unlock(pool);
+    bender_pool_unlock(pool);
     if (do_free) {
-        janet_pool_free_contents(pool);
-        janet_pool_sync_destroy(pool);
+        bender_pool_free_contents(pool);
+        bender_pool_sync_destroy(pool);
     }
     return 0;
 }
 
-static int janet_pool_mark(void *p, size_t len) {
+static int bender_pool_mark(void *p, size_t len) {
     (void) len;
     (void) p;
     /* Tasks reference no owner-VM heap objects (all payloads are
@@ -5196,10 +5196,10 @@ static int janet_pool_mark(void *p, size_t len) {
     return 0;
 }
 
-const JanetAbstractType janet_pool_type = {
+const BenderAbstractType bender_pool_type = {
     "core/pool",
-    janet_pool_gc,
-    janet_pool_mark,
+    bender_pool_gc,
+    bender_pool_mark,
     NULL, /* get */
     NULL, /* put */
     NULL, /* marshal (refuse: pools stay on the owner thread) */
@@ -5217,42 +5217,42 @@ const JanetAbstractType janet_pool_type = {
 /* Best-effort reply give (at-most-once: dropped when closed). The reply
  * channel has limit 1 and takes exactly one give, so mode 2 only fires
  * on close — which we pre-check to avoid panicking on the owner loop. */
-static void janet_pool_give_reply(JanetChannel *chan, Janet msg) {
+static void bender_pool_give_reply(BenderChannel *chan, Bender msg) {
     if (chan->closed) return;
-    janet_channel_push(chan, msg, 2);
+    bender_channel_push(chan, msg, 2);
 }
 
 typedef struct {
-    JanetFiber *waiter;      /* direct-completion waiter, else NULL */
+    BenderFiber *waiter;      /* direct-completion waiter, else NULL */
     uint32_t waiter_sched;
-    JanetChannel *reply;     /* reply channel (borrowed ref), else NULL */
+    BenderChannel *reply;     /* reply channel (borrowed ref), else NULL */
     uint8_t *bytes;
     size_t len;
     int is_error;
-} JanetPoolCompletion;
+} BenderPoolCompletion;
 
-static void janet_pool_complete(JanetEVGenericMessage msg) {
-    JanetPoolCompletion *c = (JanetPoolCompletion *) msg.argp;
-    Janet result = janet_wrap_nil();
+static void bender_pool_complete(BenderEVGenericMessage msg) {
+    BenderPoolCompletion *c = (BenderPoolCompletion *) msg.argp;
+    Bender result = bender_wrap_nil();
     if (c->bytes != NULL && c->len > 0) {
-        result = janet_unmarshal(c->bytes, c->len, JANET_MARSHAL_UNSAFE, NULL, NULL);
-        janet_free(c->bytes);
+        result = bender_unmarshal(c->bytes, c->len, BENDER_MARSHAL_UNSAFE, NULL, NULL);
+        bender_free(c->bytes);
     } else if (c->bytes != NULL) {
-        janet_free(c->bytes);
+        bender_free(c->bytes);
     }
     /* Same exactly-once waiter discipline as thread/join: deliver only
      * if the waiter is still suspended in our await (a moved sched_id
      * means timeout/cancel already resumed it — drop the value). */
     if (c->waiter != NULL) {
-        JanetFiber *w = c->waiter;
+        BenderFiber *w = c->waiter;
         uint32_t ws = c->waiter_sched;
         c->waiter = NULL;
-        janet_gcunroot(janet_wrap_fiber(w));
+        bender_gcunroot(bender_wrap_fiber(w));
         if (w->sched_id == ws) {
             if (c->is_error) {
-                janet_cancel(w, result);
+                bender_cancel(w, result);
             } else {
-                janet_schedule(w, result);
+                bender_schedule(w, result);
             }
         } else {
         }
@@ -5260,51 +5260,51 @@ static void janet_pool_complete(JanetEVGenericMessage msg) {
     if (c->reply != NULL) {
         /* Submit path: exactly one give into a limit-1 channel. The
          * task held a ref so the channel is alive here; drop ours. */
-        janet_pool_give_reply(c->reply, c->is_error
-            ? janet_wrap_tuple(janet_tuple_n((Janet[]) {
-                janet_ckeywordv("pool-error"), result }, 2))
+        bender_pool_give_reply(c->reply, c->is_error
+            ? bender_wrap_tuple(bender_tuple_n((Bender[]) {
+                bender_ckeywordv("pool-error"), result }, 2))
             : result);
-        janet_abstract_decref_maybe_free(c->reply);
+        bender_abstract_decref_maybe_free(c->reply);
     }
-    janet_free(c);
-    janet_ev_dec_refcount();
+    bender_free(c);
+    bender_ev_dec_refcount();
 }
 
 /* Boot one worker VM from the shared prologue (registries), mirroring
- * janet_thread_new_run's registry section. Returns NULL with the task
+ * bender_thread_new_run's registry section. Returns NULL with the task
  * fiber set up, or aborts on corrupt prologue (same fail-loud contract
  * as thread/new). */
 typedef struct {
-    JanetPool *pool;
+    BenderPool *pool;
     int index;
-} JanetPoolWorkerArgs;
+} BenderPoolWorkerArgs;
 
 /* Phase C: harvest this VM's profile table (if active) into malloc'd
  * UNSAFE-marshal bytes of the dump row array. Returns 1 when harvested
  * (caller frees *out_bytes). Runs on the harvesting VM; the bytes cross
  * threads like any completion payload. */
-static int janet_profile_harvest_bytes(uint8_t **out_bytes, size_t *out_len) {
-    JanetArray *rows;
-    Janet rows_j;
-    JanetBuffer tmp;
+static int bender_profile_harvest_bytes(uint8_t **out_bytes, size_t *out_len) {
+    BenderArray *rows;
+    Bender rows_j;
+    BenderBuffer tmp;
     uint8_t *copy;
-    if (NULL == janet_vm.profile_table) return 0;
-    rows = janet_profile_rows();
-    rows_j = janet_wrap_array(rows);
-    janet_gcroot(rows_j);
-    janet_buffer_init(&tmp, 0);
-    janet_marshal(&tmp, rows_j, NULL, JANET_MARSHAL_UNSAFE);
+    if (NULL == bender_vm.profile_table) return 0;
+    rows = bender_profile_rows();
+    rows_j = bender_wrap_array(rows);
+    bender_gcroot(rows_j);
+    bender_buffer_init(&tmp, 0);
+    bender_marshal(&tmp, rows_j, NULL, BENDER_MARSHAL_UNSAFE);
     copy = NULL;
     if (tmp.count > 0) {
         /* Best-effort: teardown callers must never panic (a panic
          * with the pool lock held wedges stop), so OOM drops the
          * evidence instead of raising. */
-        copy = janet_malloc((size_t) tmp.count);
+        copy = bender_malloc((size_t) tmp.count);
         if (NULL != copy) {
             memcpy(copy, tmp.data, (size_t) tmp.count);
         } else {
-            janet_buffer_deinit(&tmp);
-            janet_gcunroot(rows_j);
+            bender_buffer_deinit(&tmp);
+            bender_gcunroot(rows_j);
             *out_bytes = NULL;
             *out_len = 0;
             return 0;
@@ -5312,107 +5312,107 @@ static int janet_profile_harvest_bytes(uint8_t **out_bytes, size_t *out_len) {
     }
     *out_bytes = copy;
     *out_len = (size_t) tmp.count;
-    janet_buffer_deinit(&tmp);
-    janet_gcunroot(rows_j);
+    bender_buffer_deinit(&tmp);
+    bender_gcunroot(rows_j);
     return 1;
 }
 
-static void janet_pool_worker_boot(JanetPool *pool) {
-    janet_init();
-    janet_vm.sandbox_flags = pool->sandbox_flags;
+static void bender_pool_worker_boot(BenderPool *pool) {
+    bender_init();
+    bender_vm.sandbox_flags = pool->sandbox_flags;
     /* Phase C: inherit the collector when the owner was profiling at
      * spawn. Per-VM table; harvested at worker exit below. */
-    if (pool->profile_active) janet_profile_start();
+    if (pool->profile_active) bender_profile_start();
     const uint8_t *nextbytes = pool->prologue;
     const uint8_t *endbytes = nextbytes + pool->prologue_len;
     uint32_t flags = pool->flags;
     /* Same numbering as the owner side ("ac"): :a skips abstract, :c
      * skips cfunction (previously off by one on both sides). */
     if (!(flags & 0x1)) {
-        Janet aregv = janet_unmarshal(nextbytes, endbytes - nextbytes,
-            JANET_MARSHAL_UNSAFE, NULL, &nextbytes);
-        janet_assert(janet_checktype(aregv, JANET_TABLE), "pool prologue: abstract registry");
-        janet_vm.abstract_registry = janet_unwrap_table(aregv);
-        janet_gcroot(janet_wrap_table(janet_vm.abstract_registry));
+        Bender aregv = bender_unmarshal(nextbytes, endbytes - nextbytes,
+            BENDER_MARSHAL_UNSAFE, NULL, &nextbytes);
+        bender_assert(bender_checktype(aregv, BENDER_TABLE), "pool prologue: abstract registry");
+        bender_vm.abstract_registry = bender_unwrap_table(aregv);
+        bender_gcroot(bender_wrap_table(bender_vm.abstract_registry));
     }
     if (!(flags & 0x2)) {
         uint32_t count1;
         memcpy(&count1, nextbytes, sizeof(count1));
         size_t count = (size_t) count1;
-        janet_assert(count <= (size_t)(endbytes - nextbytes - sizeof(count1)) / sizeof(JanetCFunRegistry),
+        bender_assert(count <= (size_t)(endbytes - nextbytes - sizeof(count1)) / sizeof(BenderCFunRegistry),
             "pool prologue: registry bounds");
-        janet_vm.registry_count = count;
-        janet_vm.registry_cap = count;
-        janet_vm.registry = janet_malloc(count * sizeof(JanetCFunRegistry));
-        if (janet_vm.registry == NULL) {
-            JANET_OUT_OF_MEMORY;
+        bender_vm.registry_count = count;
+        bender_vm.registry_cap = count;
+        bender_vm.registry = bender_malloc(count * sizeof(BenderCFunRegistry));
+        if (bender_vm.registry == NULL) {
+            BENDER_OUT_OF_MEMORY;
         }
-        janet_vm.registry_dirty = 1;
+        bender_vm.registry_dirty = 1;
         nextbytes += sizeof(uint32_t);
-        memcpy(janet_vm.registry, nextbytes, count * sizeof(JanetCFunRegistry));
+        memcpy(bender_vm.registry, nextbytes, count * sizeof(BenderCFunRegistry));
     }
 }
 
 /* Run one task payload ([func args] tuple) to completion in this worker
- * VM under a per-task janet_loop (so ev/sleep works inside tasks).
+ * VM under a per-task bender_loop (so ev/sleep works inside tasks).
  * Returns the result value; sets *is_error on task failure. */
-static Janet janet_pool_run_task(Janet taskv, int *is_error) {
+static Bender bender_pool_run_task(Bender taskv, int *is_error) {
     *is_error = 0;
-    const Janet *pair = janet_unwrap_tuple(taskv);
-    Janet funcv = pair[0];
-    Janet argsv = pair[1];
-    JanetFiber *fiber;
-    if (janet_checktype(funcv, JANET_FIBER)) {
+    const Bender *pair = bender_unwrap_tuple(taskv);
+    Bender funcv = pair[0];
+    Bender argsv = pair[1];
+    BenderFiber *fiber;
+    if (bender_checktype(funcv, BENDER_FIBER)) {
         /* Fibers resume with the args array as the single resume value
          * (same single-value shape as thread/new). */
-        fiber = janet_unwrap_fiber(funcv);
-        janet_schedule(fiber, argsv);
+        fiber = bender_unwrap_fiber(funcv);
+        bender_schedule(fiber, argsv);
     } else {
-        JanetFunction *func = janet_unwrap_function(funcv);
-        const Janet *argdata = NULL;
+        BenderFunction *func = bender_unwrap_function(funcv);
+        const Bender *argdata = NULL;
         int32_t nargs = 0;
-        if (janet_checktype(argsv, JANET_ARRAY)) {
-            nargs = janet_unwrap_array(argsv)->count;
-            argdata = janet_unwrap_array(argsv)->data;
+        if (bender_checktype(argsv, BENDER_ARRAY)) {
+            nargs = bender_unwrap_array(argsv)->count;
+            argdata = bender_unwrap_array(argsv)->data;
         } else {
-            nargs = janet_tuple_length(janet_unwrap_tuple(argsv));
-            argdata = janet_unwrap_tuple(argsv);
+            nargs = bender_tuple_length(bender_unwrap_tuple(argsv));
+            argdata = bender_unwrap_tuple(argsv);
         }
-        fiber = janet_fiber(func, 64, nargs, argdata);
-        janet_assert(fiber != NULL, "pool task: bad fiber");
+        fiber = bender_fiber(func, 64, nargs, argdata);
+        bender_assert(fiber != NULL, "pool task: bad fiber");
         /* Phase C: primed fibers bypass JOP_CALL, so record the root
          * invocation explicitly (else rows show calls=0, no params). */
-        janet_profile_task_call(func, argdata, nargs);
-        janet_schedule(fiber, janet_wrap_nil());
+        bender_profile_task_call(func, argdata, nargs);
+        bender_schedule(fiber, bender_wrap_nil());
     }
     fiber->supervisor_channel = NULL;
-    janet_loop();
-    JanetFiberStatus status = janet_fiber_status(fiber);
-    if (status == JANET_STATUS_ERROR) {
+    bender_loop();
+    BenderFiberStatus status = bender_fiber_status(fiber);
+    if (status == BENDER_STATUS_ERROR) {
         *is_error = 1;
         return fiber->last_value;
     }
-    if (status != JANET_STATUS_DEAD) {
+    if (status != BENDER_STATUS_DEAD) {
         *is_error = 1;
-        return janet_cstringv("pool task did not complete (yielded)");
+        return bender_cstringv("pool task did not complete (yielded)");
     }
     return fiber->last_value;
 }
 
-#ifdef JANET_WINDOWS
-static DWORD WINAPI janet_pool_worker(LPVOID ptr) {
+#ifdef BENDER_WINDOWS
+static DWORD WINAPI bender_pool_worker(LPVOID ptr) {
 #else
-static void *janet_pool_worker(void *ptr) {
+static void *bender_pool_worker(void *ptr) {
 #endif
-    JanetPoolWorkerArgs *wargs = (JanetPoolWorkerArgs *) ptr;
-    JanetPool *pool = wargs->pool;
-    janet_free(wargs);
-    janet_pool_worker_boot(pool);
+    BenderPoolWorkerArgs *wargs = (BenderPoolWorkerArgs *) ptr;
+    BenderPool *pool = wargs->pool;
+    bender_free(wargs);
+    bender_pool_worker_boot(pool);
     for (;;) {
-        JanetPoolTask *task;
-        janet_pool_lock(pool);
+        BenderPoolTask *task;
+        bender_pool_lock(pool);
         while (pool->head == NULL && !pool->stopping) {
-#ifdef JANET_WINDOWS
+#ifdef BENDER_WINDOWS
             SleepConditionVariableCS(&pool->nonempty, &pool->lock, INFINITE);
 #else
             pthread_cond_wait(&pool->nonempty, &pool->lock);
@@ -5432,11 +5432,11 @@ static void *janet_pool_worker(void *ptr) {
             {
                 uint8_t *hbytes = NULL;
                 size_t hlen = 0;
-                if (janet_profile_harvest_bytes(&hbytes, &hlen)) {
-                    JanetProfileHarvest *h = janet_malloc(sizeof(JanetProfileHarvest));
+                if (bender_profile_harvest_bytes(&hbytes, &hlen)) {
+                    BenderProfileHarvest *h = bender_malloc(sizeof(BenderProfileHarvest));
                     if (NULL == h) {
                         /* Best-effort (see above): drop, keep exiting. */
-                        if (hbytes != NULL) janet_free(hbytes);
+                        if (hbytes != NULL) bender_free(hbytes);
                     } else {
                         h->bytes = hbytes;
                         h->len = hlen;
@@ -5452,17 +5452,17 @@ static void *janet_pool_worker(void *ptr) {
             }
             pool->live_workers--;
             int last = (pool->live_workers == 0);
-            janet_pool_unlock(pool);
+            bender_pool_unlock(pool);
             if (last) {
-                JanetEVGenericMessage msg;
+                BenderEVGenericMessage msg;
                 memset(&msg, 0, sizeof(msg));
                 msg.argp = pool;
                 /* No refcount here (thread-local counters): pool/stop
                  * inc'd on the owner; the callback decs there. */
-                janet_ev_post_event(pool->owner, janet_pool_all_exited, msg);
+                bender_ev_post_event(pool->owner, bender_pool_all_exited, msg);
             }
-            janet_deinit();
-#ifdef JANET_WINDOWS
+            bender_deinit();
+#ifdef BENDER_WINDOWS
             return 0;
 #else
             return NULL;
@@ -5472,52 +5472,52 @@ static void *janet_pool_worker(void *ptr) {
         pool->head = task->next;
         if (pool->head == NULL) pool->tail = NULL;
         pool->count--;
-        janet_pool_unlock(pool);
+        bender_pool_unlock(pool);
         /* Run + complete. The capacity token is held for the task's
          * whole lifetime and handed back after completion posts: that
          * is what bounds memory (a wedged worker pins its capacity).
          * Total tokens are constant, so the give always fits. */
-        Janet taskv = janet_unmarshal(task->bytes, task->len,
-            JANET_MARSHAL_UNSAFE, NULL, NULL);
-        janet_free(task->bytes);
+        Bender taskv = bender_unmarshal(task->bytes, task->len,
+            BENDER_MARSHAL_UNSAFE, NULL, NULL);
+        bender_free(task->bytes);
         task->bytes = NULL;
-        Janet taskv_j = taskv;
-        janet_gcroot(taskv_j);
+        Bender taskv_j = taskv;
+        bender_gcroot(taskv_j);
         int is_error = 0;
-        JanetTryState tstate;
-        Janet result = janet_wrap_nil();
-        JanetSignal sig = janet_try(&tstate);
+        BenderTryState tstate;
+        Bender result = bender_wrap_nil();
+        BenderSignal sig = bender_try(&tstate);
         if (!sig) {
-            result = janet_pool_run_task(taskv, &is_error);
-            janet_restore(&tstate);
+            result = bender_pool_run_task(taskv, &is_error);
+            bender_restore(&tstate);
         } else {
-            janet_restore(&tstate);
+            bender_restore(&tstate);
             result = tstate.payload;
             is_error = 1;
         }
-        Janet result_j = result;
-        janet_gcroot(result_j);
+        Bender result_j = result;
+        bender_gcroot(result_j);
         uint8_t *bytes = NULL;
         size_t len = 0;
-        JanetTryState tstate2;
-        JanetSignal sig2 = janet_try(&tstate2);
+        BenderTryState tstate2;
+        BenderSignal sig2 = bender_try(&tstate2);
         if (!sig2) {
-            janet_thread_marshal_result_copy(result, &bytes, &len);
-            janet_restore(&tstate2);
+            bender_thread_marshal_result_copy(result, &bytes, &len);
+            bender_restore(&tstate2);
         } else {
-            janet_restore(&tstate2);
-            Janet fallback = janet_cstringv("pool result failed to marshal");
-            Janet fallback_j = fallback;
-            janet_gcroot(fallback_j);
-            janet_thread_marshal_result_copy(fallback, &bytes, &len);
-            janet_gcunroot(fallback_j);
+            bender_restore(&tstate2);
+            Bender fallback = bender_cstringv("pool result failed to marshal");
+            Bender fallback_j = fallback;
+            bender_gcroot(fallback_j);
+            bender_thread_marshal_result_copy(fallback, &bytes, &len);
+            bender_gcunroot(fallback_j);
             is_error = 1;
         }
-        janet_gcunroot(taskv_j);
-        janet_gcunroot(result_j);
-        JanetPoolCompletion *comp = janet_malloc(sizeof(JanetPoolCompletion));
+        bender_gcunroot(taskv_j);
+        bender_gcunroot(result_j);
+        BenderPoolCompletion *comp = bender_malloc(sizeof(BenderPoolCompletion));
         if (NULL == comp) {
-            JANET_OUT_OF_MEMORY;
+            BENDER_OUT_OF_MEMORY;
         }
         comp->waiter = task->waiter;
         comp->waiter_sched = task->waiter_sched;
@@ -5525,28 +5525,28 @@ static void *janet_pool_worker(void *ptr) {
         comp->bytes = bytes;
         comp->len = len;
         comp->is_error = is_error;
-        JanetVM *owner = task->owner;
-        janet_free(task);
-        JanetEVGenericMessage msg;
+        BenderVM *owner = task->owner;
+        bender_free(task);
+        BenderEVGenericMessage msg;
         memset(&msg, 0, sizeof(msg));
         msg.argp = comp;
         /* No refcount here: the matching inc ran on the owner at
          * dispatch (refcounts are thread-local; worker-inc/owner-dec
          * would strand the worker's counter and wedge its next loop). */
-        janet_ev_post_event(owner, janet_pool_complete, msg);
+        bender_ev_post_event(owner, bender_pool_complete, msg);
         /* Hand the capacity token back now that the task is complete. */
-        janet_channel_push(pool->tokens, janet_wrap_nil(), 2);
+        bender_channel_push(pool->tokens, bender_wrap_nil(), 2);
     }
 }
 
-static void janet_pool_all_exited(JanetEVGenericMessage msg) {
-    JanetPool *pool = (JanetPool *) msg.argp;
+static void bender_pool_all_exited(BenderEVGenericMessage msg) {
+    BenderPool *pool = (BenderPool *) msg.argp;
     /* Join first (all workers already exited: immediate, loop unaffected).
      * Teardown of the internals happens in the type finalizer, not here:
      * the pool struct (and its lock) must stay mapped while any handle
-     * Janet exists, so use-after-stop always fails loud via the flags
+     * Bender exists, so use-after-stop always fails loud via the flags
      * instead of touching freed memory. */
-#ifdef JANET_WINDOWS
+#ifdef BENDER_WINDOWS
     for (int32_t i = 0; i < pool->n_workers; i++) {
         if (pool->threads[i] != NULL) {
             WaitForSingleObject(pool->threads[i], INFINITE);
@@ -5559,34 +5559,34 @@ static void janet_pool_all_exited(JanetEVGenericMessage msg) {
         pthread_join(pool->threads[i], NULL);
     }
 #endif
-    janet_pool_lock(pool);
+    bender_pool_lock(pool);
     pool->joined = 1;
-    JanetFiber *w = pool->stop_waiter;
+    BenderFiber *w = pool->stop_waiter;
     uint32_t ws = pool->stop_sched;
     pool->stop_waiter = NULL;
-    janet_pool_unlock(pool);
+    bender_pool_unlock(pool);
     /* Unpin the wrapper now that no thread can touch the pool. */
-    janet_gcunroot(pool->self);
-    pool->self = janet_wrap_nil();
+    bender_gcunroot(pool->self);
+    pool->self = bender_wrap_nil();
     /* Wake the stopper unless it moved on (cancel); teardown stands. */
     if (w != NULL) {
-        janet_gcunroot(janet_wrap_fiber(w));
+        bender_gcunroot(bender_wrap_fiber(w));
         if (w->sched_id == ws) {
-            janet_schedule(w, janet_wrap_nil());
+            bender_schedule(w, bender_wrap_nil());
         }
     }
-    janet_ev_dec_refcount();
+    bender_ev_dec_refcount();
 }
 
-static JanetPool *janet_getpool(const Janet *argv, int32_t n) {
-    JanetPool *pool = janet_getabstract(argv, n, &janet_pool_type);
-    if (pool->owner != &janet_vm) {
-        janet_panic("pool used from non-owner thread");
+static BenderPool *bender_getpool(const Bender *argv, int32_t n) {
+    BenderPool *pool = bender_getabstract(argv, n, &bender_pool_type);
+    if (pool->owner != &bender_vm) {
+        bender_panic("pool used from non-owner thread");
     }
     return pool;
 }
 
-JANET_CORE_FN(cfun_pool_spawn,
+BENDER_CORE_FN(cfun_pool_spawn,
               "(pool/spawn nthreads &opt capacity flags)",
               "Start a pool of `nthreads` worker VMs sharing one task queue "
               "and return a pool handle. `capacity` (default 1024) bounds "
@@ -5597,164 +5597,164 @@ JANET_CORE_FN(cfun_pool_spawn,
               "pool/map to run tasks and pool/stop to drain and shut down "
               "(required: an unstopped pool leaks its threads). Must be "
               "called from the owning thread.") {
-    janet_sandbox_assert(JANET_SANDBOX_THREADS);
-    janet_arity(argc, 1, 3);
-    int32_t nthreads = janet_getinteger(argv, 0);
+    bender_sandbox_assert(BENDER_SANDBOX_THREADS);
+    bender_arity(argc, 1, 3);
+    int32_t nthreads = bender_getinteger(argv, 0);
     if (nthreads <= 0 || nthreads > 1024) {
-        janet_panic("pool thread count must be between 1 and 1024");
+        bender_panic("pool thread count must be between 1 and 1024");
     }
     int32_t capacity = 1024;
-    if (argc >= 2 && !janet_checktype(argv[1], JANET_NIL)) {
-        capacity = janet_getinteger(argv, 1);
+    if (argc >= 2 && !bender_checktype(argv[1], BENDER_NIL)) {
+        capacity = bender_getinteger(argv, 1);
     }
     if (capacity <= 0 || capacity > 0xFFFFFF) {
-        janet_panic("pool capacity must be between 1 and 16777215");
+        bender_panic("pool capacity must be between 1 and 16777215");
     }
     uint64_t flags = 0;
     if (argc >= 3) {
-        flags = janet_getflags(argv, 2, "ac");
+        flags = bender_getflags(argv, 2, "ac");
     }
-    JanetPool *pool = janet_abstract_threaded(&janet_pool_type, sizeof(JanetPool));
-    memset(pool, 0, sizeof(JanetPool));
-#ifdef JANET_WINDOWS
+    BenderPool *pool = bender_abstract_threaded(&bender_pool_type, sizeof(BenderPool));
+    memset(pool, 0, sizeof(BenderPool));
+#ifdef BENDER_WINDOWS
     InitializeCriticalSection(&pool->lock);
     InitializeConditionVariable(&pool->nonempty);
 #else
     if (pthread_mutex_init(&pool->lock, NULL)) {
-        janet_panic("pool mutex init failed");
+        bender_panic("pool mutex init failed");
     }
     if (pthread_cond_init(&pool->nonempty, NULL)) {
         pthread_mutex_destroy(&pool->lock);
-        janet_panic("pool condvar init failed");
+        bender_panic("pool condvar init failed");
     }
 #endif
-    pool->owner = &janet_vm;
+    pool->owner = &bender_vm;
     pool->flags = (uint32_t) flags;
-    pool->sandbox_flags = janet_vm.sandbox_flags;
+    pool->sandbox_flags = bender_vm.sandbox_flags;
     pool->n_workers = nthreads;
     pool->live_workers = nthreads;
     /* Phase C: workers inherit the collector when the owner is
      * profiling at spawn (harvested at worker exit, read via
      * pool/profile-harvest). */
-    pool->profile_active = (janet_vm.profile_table != NULL);
+    pool->profile_active = (bender_vm.profile_table != NULL);
     /* Prologue: registries marshalled once, shared read-only (same
      * layout thread/new builds per thread). Flag bits follow
-     * janet_getflags order ("ac"): :a skips abstract, :c skips
+     * bender_getflags order ("ac"): :a skips abstract, :c skips
      * cfunction (previously off by one — :a matched nothing, :c
      * skipped the wrong registry; existing pins were insensitive). */
     {
-        JanetBuffer prologue;
-        janet_buffer_init(&prologue, 0);
+        BenderBuffer prologue;
+        bender_buffer_init(&prologue, 0);
         if (!(flags & 0x1)) {
-            janet_marshal(&prologue, janet_wrap_table(janet_vm.abstract_registry), NULL, JANET_MARSHAL_UNSAFE);
+            bender_marshal(&prologue, bender_wrap_table(bender_vm.abstract_registry), NULL, BENDER_MARSHAL_UNSAFE);
         }
         if (!(flags & 0x2)) {
-            janet_assert(janet_vm.registry_count <= INT32_MAX, "assert failed size check");
-            uint32_t temp = (uint32_t) janet_vm.registry_count;
-            janet_buffer_push_bytes(&prologue, (uint8_t *) &temp, sizeof(temp));
-            janet_buffer_push_bytes(&prologue, (uint8_t *) janet_vm.registry,
-                (int32_t) janet_vm.registry_count * sizeof(JanetCFunRegistry));
+            bender_assert(bender_vm.registry_count <= INT32_MAX, "assert failed size check");
+            uint32_t temp = (uint32_t) bender_vm.registry_count;
+            bender_buffer_push_bytes(&prologue, (uint8_t *) &temp, sizeof(temp));
+            bender_buffer_push_bytes(&prologue, (uint8_t *) bender_vm.registry,
+                (int32_t) bender_vm.registry_count * sizeof(BenderCFunRegistry));
         }
         if (prologue.count > 0) {
-            pool->prologue = janet_malloc((size_t) prologue.count);
+            pool->prologue = bender_malloc((size_t) prologue.count);
             if (NULL == pool->prologue) {
-                janet_buffer_deinit(&prologue);
-                janet_pool_sync_destroy(pool);
-                JANET_OUT_OF_MEMORY;
+                bender_buffer_deinit(&prologue);
+                bender_pool_sync_destroy(pool);
+                BENDER_OUT_OF_MEMORY;
             }
             memcpy(pool->prologue, prologue.data, (size_t) prologue.count);
             pool->prologue_len = (size_t) prologue.count;
         }
-        janet_buffer_deinit(&prologue);
+        bender_buffer_deinit(&prologue);
     }
     /* Capacity tokens: constant supply; submit takes, workers return. */
-    pool->tokens = janet_channel_make_threaded((uint32_t) capacity);
-    janet_abstract_incref(pool->tokens);
+    pool->tokens = bender_channel_make_threaded((uint32_t) capacity);
+    bender_abstract_incref(pool->tokens);
     for (int32_t i = 0; i < capacity; i++) {
-        janet_channel_push(pool->tokens, janet_wrap_nil(), 2);
+        bender_channel_push(pool->tokens, bender_wrap_nil(), 2);
     }
     /* Pin the wrapper until stop: workers must never see a freed pool. */
-    pool->self = janet_wrap_abstract(pool);
-    janet_gcroot(pool->self);
-#ifdef JANET_WINDOWS
-    pool->threads = janet_malloc((size_t) nthreads * sizeof(HANDLE));
+    pool->self = bender_wrap_abstract(pool);
+    bender_gcroot(pool->self);
+#ifdef BENDER_WINDOWS
+    pool->threads = bender_malloc((size_t) nthreads * sizeof(HANDLE));
 #else
-    pool->threads = janet_malloc((size_t) nthreads * sizeof(pthread_t));
+    pool->threads = bender_malloc((size_t) nthreads * sizeof(pthread_t));
 #endif
     if (NULL == pool->threads) {
-        janet_pool_free_contents(pool);
-        janet_pool_sync_destroy(pool);
-        janet_gcunroot(pool->self);
-        JANET_OUT_OF_MEMORY;
+        bender_pool_free_contents(pool);
+        bender_pool_sync_destroy(pool);
+        bender_gcunroot(pool->self);
+        BENDER_OUT_OF_MEMORY;
     }
     memset(pool->threads, 0, (size_t) nthreads * sizeof(pool->threads[0]));
     for (int32_t i = 0; i < nthreads; i++) {
-        JanetPoolWorkerArgs *wargs = janet_malloc(sizeof(JanetPoolWorkerArgs));
+        BenderPoolWorkerArgs *wargs = bender_malloc(sizeof(BenderPoolWorkerArgs));
         if (NULL == wargs) {
             pool->stopping = 1;
-            janet_pool_broadcast(pool);
+            bender_pool_broadcast(pool);
             goto pool_spawn_failed;
         }
         wargs->pool = pool;
         wargs->index = i;
-#ifdef JANET_WINDOWS
-        pool->threads[i] = CreateThread(NULL, 0, janet_pool_worker, wargs, 0, NULL);
+#ifdef BENDER_WINDOWS
+        pool->threads[i] = CreateThread(NULL, 0, bender_pool_worker, wargs, 0, NULL);
         if (NULL == pool->threads[i]) goto pool_spawn_failed;
 #else
-        int err = pthread_create(&pool->threads[i], NULL, janet_pool_worker, wargs);
+        int err = pthread_create(&pool->threads[i], NULL, bender_pool_worker, wargs);
         if (err) goto pool_spawn_failed;
 #endif
         continue;
 pool_spawn_failed:
-        if (wargs != NULL) janet_free(wargs);
+        if (wargs != NULL) bender_free(wargs);
         /* Reap the workers that did start (they exit on stopping with
          * an empty queue), then release everything and raise. */
         pool->stopping = 1;
-        janet_pool_broadcast(pool);
+        bender_pool_broadcast(pool);
         for (int32_t j = 0; j < i; j++) {
-#ifdef JANET_WINDOWS
+#ifdef BENDER_WINDOWS
             WaitForSingleObject(pool->threads[j], INFINITE);
             CloseHandle(pool->threads[j]);
 #else
             pthread_join(pool->threads[j], NULL);
 #endif
         }
-        janet_pool_free_contents(pool);
-        janet_pool_sync_destroy(pool);
-        janet_gcunroot(pool->self);
-        janet_panic("pool failed to start workers");
+        bender_pool_free_contents(pool);
+        bender_pool_sync_destroy(pool);
+        bender_gcunroot(pool->self);
+        bender_panic("pool failed to start workers");
     }
-    return janet_wrap_abstract(pool);
+    return bender_wrap_abstract(pool);
 }
 
-JANET_CORE_FN(cfun_pool_acquire,
+BENDER_CORE_FN(cfun_pool_acquire,
               "(pool/acquire p)",
               "Take one capacity token from pool `p`, blocking while the "
               "queue is full. Internal building block for pool/call and "
               "pool/submit: every acquire must be followed by exactly one "
               "pool/dispatch (the wrappers do this back-to-back with no "
               "suspension between, so the token cannot strand).") {
-    janet_fixarity(argc, 1);
-    JanetPool *pool = janet_getpool(argv, 0);
-    if (janet_vm.coerce_error) {
-        janet_panic("cannot acquire pool token inside janet_call");
+    bender_fixarity(argc, 1);
+    BenderPool *pool = bender_getpool(argv, 0);
+    if (bender_vm.coerce_error) {
+        bender_panic("cannot acquire pool token inside bender_call");
     }
     /* Fail loud on dead pools before touching the token channel (its
      * memory is released at wrapper collection). */
-    janet_pool_lock(pool);
+    bender_pool_lock(pool);
     int dead = pool->stopping || pool->joined;
-    janet_pool_unlock(pool);
+    bender_pool_unlock(pool);
     if (dead) {
-        janet_panic("pool is stopping");
+        bender_panic("pool is stopping");
     }
-    Janet item;
-    if (janet_channel_pop(pool->tokens, &item, 0)) {
-        janet_schedule(janet_vm.root_fiber, item);
+    Bender item;
+    if (bender_channel_pop(pool->tokens, &item, 0)) {
+        bender_schedule(bender_vm.root_fiber, item);
     }
-    janet_await();
+    bender_await();
 }
 
-JANET_CORE_FN(cfun_pool_dispatch,
+BENDER_CORE_FN(cfun_pool_dispatch,
               "(pool/dispatch p func args kind &opt timeout)",
               "Enqueue `[func args]` on pool `p` (caller must hold a token "
               "from pool/acquire) and, for `:call`, wait for the result. "
@@ -5766,27 +5766,27 @@ JANET_CORE_FN(cfun_pool_dispatch,
               "raise a timeout error instead of waiting; the late result "
               "is dropped. Panics if the pool is stopping (the token is "
               "handed back first).") {
-    janet_arity(argc, 4, 5);
-    JanetPool *pool = janet_getpool(argv, 0);
-    if (janet_vm.coerce_error) {
-        janet_panic("cannot dispatch pool task inside janet_call");
+    bender_arity(argc, 4, 5);
+    BenderPool *pool = bender_getpool(argv, 0);
+    if (bender_vm.coerce_error) {
+        bender_panic("cannot dispatch pool task inside bender_call");
     }
     int is_call;
-    if (janet_checktype(argv[3], JANET_KEYWORD)) {
-        const uint8_t *kw = janet_unwrap_keyword(argv[3]);
+    if (bender_checktype(argv[3], BENDER_KEYWORD)) {
+        const uint8_t *kw = bender_unwrap_keyword(argv[3]);
         if (!strcmp((const char *) kw, "call")) {
             is_call = 1;
         } else if (!strcmp((const char *) kw, "submit")) {
             is_call = 0;
         } else {
-            janet_panic("pool kind must be :call or :submit");
+            bender_panic("pool kind must be :call or :submit");
         }
     } else {
-        janet_panic("pool kind must be :call or :submit");
+        bender_panic("pool kind must be :call or :submit");
     }
-    double timeout = janet_optnumber(argv, argc, 4, INFINITY);
+    double timeout = bender_optnumber(argv, argc, 4, INFINITY);
     if (!is_call && timeout != INFINITY) {
-        janet_panic("pool timeout needs :call");
+        bender_panic("pool timeout needs :call");
     }
     /* Bind the waiter BEFORE the task is enqueued: the late-binding
      * variant wrote task->waiter after the enqueue+signal, so a fast
@@ -5795,83 +5795,83 @@ JANET_CORE_FN(cfun_pool_dispatch,
      * posted to nobody and the awaiter slept forever (the pool-call
      * hang: main in kevent, workers idle). The root is also gcrooted
      * here so a racing completion's unroot always pairs. */
-    JanetFiber *call_waiter = NULL;
+    BenderFiber *call_waiter = NULL;
     uint32_t call_ws = 0;
     if (is_call) {
-        call_waiter = janet_root_fiber();
+        call_waiter = bender_root_fiber();
         if (timeout != INFINITY &&
-                !(call_waiter->gc.flags & JANET_FIBER_EV_GCFLAG_ROOT)) {
-            janet_panic("pool/call with timeout requires an ev task");
+                !(call_waiter->gc.flags & BENDER_FIBER_EV_GCFLAG_ROOT)) {
+            bender_panic("pool/call with timeout requires an ev task");
         }
         call_ws = call_waiter->sched_id;
     }
     /* Validate the call shape on the owner (clear errors beat worker
      * asserts): functions take exactly nargs, fibers take the array. */
     int32_t nargs;
-    if (janet_checktype(argv[2], JANET_ARRAY)) {
-        nargs = janet_unwrap_array(argv[2])->count;
-    } else if (janet_checktype(argv[2], JANET_TUPLE)) {
-        nargs = janet_tuple_length(janet_unwrap_tuple(argv[2]));
+    if (bender_checktype(argv[2], BENDER_ARRAY)) {
+        nargs = bender_unwrap_array(argv[2])->count;
+    } else if (bender_checktype(argv[2], BENDER_TUPLE)) {
+        nargs = bender_tuple_length(bender_unwrap_tuple(argv[2]));
     } else {
-        janet_panic("pool args must be an array or tuple");
+        bender_panic("pool args must be an array or tuple");
     }
-    if (janet_checktype(argv[1], JANET_FUNCTION)) {
-        JanetFunction *func = janet_unwrap_function(argv[1]);
+    if (bender_checktype(argv[1], BENDER_FUNCTION)) {
+        BenderFunction *func = bender_unwrap_function(argv[1]);
         if (nargs < func->def->min_arity ||
                 (func->def->max_arity >= 0 && nargs > func->def->max_arity)) {
-            janet_panic("pool function arity mismatch");
+            bender_panic("pool function arity mismatch");
         }
-    } else if (!janet_checktype(argv[1], JANET_FIBER)) {
-        janet_panic("pool func must be a function or fiber");
+    } else if (!bender_checktype(argv[1], BENDER_FIBER)) {
+        bender_panic("pool func must be a function or fiber");
     }
     /* Marshal [func args] (UNSAFE: crosses into the worker VM). */
-    Janet pair[2];
+    Bender pair[2];
     pair[0] = argv[1];
     pair[1] = argv[2];
-    JanetBuffer payload;
-    janet_buffer_init(&payload, 0);
-    janet_marshal(&payload, janet_wrap_tuple(janet_tuple_n(pair, 2)), NULL, JANET_MARSHAL_UNSAFE);
+    BenderBuffer payload;
+    bender_buffer_init(&payload, 0);
+    bender_marshal(&payload, bender_wrap_tuple(bender_tuple_n(pair, 2)), NULL, BENDER_MARSHAL_UNSAFE);
     uint8_t *bytes = NULL;
     size_t len = (size_t) payload.count;
     if (len > 0) {
-        bytes = janet_malloc(len);
+        bytes = bender_malloc(len);
         if (NULL == bytes) {
-            janet_buffer_deinit(&payload);
-            JANET_OUT_OF_MEMORY;
+            bender_buffer_deinit(&payload);
+            BENDER_OUT_OF_MEMORY;
         }
         memcpy(bytes, payload.data, len);
     }
-    janet_buffer_deinit(&payload);
-    JanetPoolTask *task = janet_malloc(sizeof(JanetPoolTask));
+    bender_buffer_deinit(&payload);
+    BenderPoolTask *task = bender_malloc(sizeof(BenderPoolTask));
     if (NULL == task) {
-        if (bytes != NULL) janet_free(bytes);
-        JANET_OUT_OF_MEMORY;
+        if (bytes != NULL) bender_free(bytes);
+        BENDER_OUT_OF_MEMORY;
     }
     task->bytes = bytes;
     task->len = len;
-    task->owner = &janet_vm;
+    task->owner = &bender_vm;
     task->waiter = call_waiter;
     task->waiter_sched = call_ws;
-    if (NULL != call_waiter) janet_gcroot(janet_wrap_fiber(call_waiter));
+    if (NULL != call_waiter) bender_gcroot(bender_wrap_fiber(call_waiter));
     task->reply = NULL;
     task->next = NULL;
-    Janet replyv = janet_wrap_nil();
+    Bender replyv = bender_wrap_nil();
     if (!is_call) {
-        JanetChannel *reply = janet_channel_make_threaded(1);
-        janet_abstract_incref(reply);
+        BenderChannel *reply = bender_channel_make_threaded(1);
+        bender_abstract_incref(reply);
         task->reply = reply;
-        replyv = janet_wrap_abstract(reply);
+        replyv = bender_wrap_abstract(reply);
     }
-    janet_pool_lock(pool);
+    bender_pool_lock(pool);
     if (pool->stopping || pool->joined) {
-        janet_pool_unlock(pool);
+        bender_pool_unlock(pool);
         /* Hand the token back: total supply is constant, so it fits. */
-        janet_channel_push(pool->tokens, janet_wrap_nil(), 2);
-        if (NULL != call_waiter) janet_gcunroot(janet_wrap_fiber(call_waiter));
-        if (task->reply != NULL) janet_abstract_decref_maybe_free(task->reply);
-        if (task->bytes != NULL) janet_free(task->bytes);
-        janet_free(task);
-        janet_panic("pool is stopping");
+        bender_channel_push(pool->tokens, bender_wrap_nil(), 2);
+        if (NULL != call_waiter) bender_gcunroot(bender_wrap_fiber(call_waiter));
+        if (task->reply != NULL) bender_abstract_decref_maybe_free(task->reply);
+        if (task->bytes != NULL) bender_free(task->bytes);
+        bender_free(task);
+        bender_panic("pool is stopping");
     }
     if (pool->tail != NULL) {
         pool->tail->next = task;
@@ -5880,101 +5880,101 @@ JANET_CORE_FN(cfun_pool_dispatch,
     }
     pool->tail = task;
     pool->count++;
-    janet_pool_signal(pool);
-    janet_pool_unlock(pool);
+    bender_pool_signal(pool);
+    bender_pool_unlock(pool);
     /* Owner-side ref for the outstanding completion (paired with the
-     * dec in janet_pool_complete). Thread-local counters: must inc
+     * dec in bender_pool_complete). Thread-local counters: must inc
      * where the dec runs. */
-    janet_ev_inc_refcount();
+    bender_ev_inc_refcount();
     if (!is_call) {
         return replyv;
     }
     /* :call: single trailing suspension (take/join shape). The waiter
      * fiber is rooted; the completion unroots it. The pool itself is
      * pinned from spawn until stop. */
-    JanetFiber *root = call_waiter;
+    BenderFiber *root = call_waiter;
     if (timeout != INFINITY) {
-        janet_addtimeout(timeout);
+        bender_addtimeout(timeout);
     }
-    janet_await();
+    bender_await();
     /* Unreachable when suspending; the completion schedules this fiber
      * with the task result (or cancels with its error). */
-    return janet_wrap_nil();
+    return bender_wrap_nil();
 }
 
-JANET_CORE_FN(cfun_pool_profile_harvest,
+BENDER_CORE_FN(cfun_pool_profile_harvest,
               "(pool/profile-harvest p)",
               "Drain this pool's harvested per-worker profiles (Phase C): "
               "returns an array with one dump-format row array per exited "
               "worker that profiled (empty when profiling was off or "
               "nothing exited yet). Workers inherit the collector when the "
               "owner is profiling at spawn; each exiting worker appends "
-              "its table. Merge rows Janet-side (tools/profile-merge.janet) "
+              "its table. Merge rows Bender-side (tools/profile-merge.ben) "
               "and feed callgraph --profile. Must be called from the owning "
               "thread. Unread harvests are freed with the pool.") {
-    janet_fixarity(argc, 1);
-    JanetPool *pool = janet_getpool(argv, 0);
-    JanetArray *out = janet_array(0);
-    Janet out_j = janet_wrap_array(out);
-    janet_gcroot(out_j);
-    janet_pool_lock(pool);
-    JanetProfileHarvest *h = pool->harvest_head;
+    bender_fixarity(argc, 1);
+    BenderPool *pool = bender_getpool(argv, 0);
+    BenderArray *out = bender_array(0);
+    Bender out_j = bender_wrap_array(out);
+    bender_gcroot(out_j);
+    bender_pool_lock(pool);
+    BenderProfileHarvest *h = pool->harvest_head;
     pool->harvest_head = pool->harvest_tail = NULL;
-    janet_pool_unlock(pool);
+    bender_pool_unlock(pool);
     while (h != NULL) {
-        JanetProfileHarvest *next = h->next;
+        BenderProfileHarvest *next = h->next;
         if (h->bytes != NULL && h->len > 0) {
-            Janet rows = janet_unmarshal(h->bytes, h->len, JANET_MARSHAL_UNSAFE, NULL, NULL);
-            janet_array_push(out, rows);
-            janet_free(h->bytes);
+            Bender rows = bender_unmarshal(h->bytes, h->len, BENDER_MARSHAL_UNSAFE, NULL, NULL);
+            bender_array_push(out, rows);
+            bender_free(h->bytes);
         } else if (h->bytes != NULL) {
-            janet_free(h->bytes);
+            bender_free(h->bytes);
         }
-        janet_free(h);
+        bender_free(h);
         h = next;
     }
-    janet_gcunroot(out_j);
+    bender_gcunroot(out_j);
     return out_j;
 }
 
-JANET_CORE_FN(cfun_pool_stop,
+BENDER_CORE_FN(cfun_pool_stop,
               "(pool/stop p)",
               "Drain-stop pool `p`: queued tasks run first, then every "
               "worker exits; returns nil once all workers are joined. "
               "Suspends (the loop stays live during the drain). Further "
               "use panics. Must be called from the owning thread, exactly "
               "once. Pools must be stopped (like files must be closed).") {
-    janet_fixarity(argc, 1);
-    JanetPool *pool = janet_getpool(argv, 0);
-    if (janet_vm.coerce_error) {
-        janet_panic("cannot stop pool inside janet_call");
+    bender_fixarity(argc, 1);
+    BenderPool *pool = bender_getpool(argv, 0);
+    if (bender_vm.coerce_error) {
+        bender_panic("cannot stop pool inside bender_call");
     }
-    janet_pool_lock(pool);
+    bender_pool_lock(pool);
     if (pool->joined || pool->stopping) {
-        janet_pool_unlock(pool);
-        janet_panic("pool already stopped");
+        bender_pool_unlock(pool);
+        bender_panic("pool already stopped");
     }
     pool->stopping = 1;
     if (pool->stop_waiter != NULL) {
-        janet_pool_unlock(pool);
-        janet_panic("pool already stopping");
+        bender_pool_unlock(pool);
+        bender_panic("pool already stopping");
     }
-    JanetFiber *root = janet_root_fiber();
+    BenderFiber *root = bender_root_fiber();
     pool->stop_waiter = root;
     pool->stop_sched = root->sched_id;
-    janet_pool_broadcast(pool);
-    janet_pool_unlock(pool);
+    bender_pool_broadcast(pool);
+    bender_pool_unlock(pool);
     /* Rooted until the all-exited callback unroots (teardown stands
      * even if this waiter is cancelled first). Owner-side ref for the
      * all-exited event, paired with its dec there. */
-    janet_gcroot(janet_wrap_fiber(root));
-    janet_ev_inc_refcount();
-    janet_await();
+    bender_gcroot(bender_wrap_fiber(root));
+    bender_ev_inc_refcount();
+    bender_await();
     /* Unreachable when suspending; the callback schedules nil here. */
-    return janet_wrap_nil();
+    return bender_wrap_nil();
 }
 
-JANET_CORE_FN(cfun_thread_monitor,
+BENDER_CORE_FN(cfun_thread_monitor,
               "(ev/monitor handle tag chan)",
               "Watch the thread `handle` created by `thread/new`: when the "
               "worker exits, send `[:down tag reason]` to `chan`, where "
@@ -5984,42 +5984,42 @@ JANET_CORE_FN(cfun_thread_monitor,
               "Monitoring an already-finished thread delivers immediately "
               "and returns nil. Must be called from the creating thread. "
               "Returns an integer monitor ref for `ev/demonitor`.") {
-    janet_sandbox_assert(JANET_SANDBOX_THREADS);
-    janet_fixarity(argc, 3);
-    JanetThreadHandle *handle = janet_getabstract(argv, 0, &janet_thread_handle_type);
-    if (handle->owner != &janet_vm) {
-        janet_panic("ev/monitor called from non-owner thread");
+    bender_sandbox_assert(BENDER_SANDBOX_THREADS);
+    bender_fixarity(argc, 3);
+    BenderThreadHandle *handle = bender_getabstract(argv, 0, &bender_thread_handle_type);
+    if (handle->owner != &bender_vm) {
+        bender_panic("ev/monitor called from non-owner thread");
     }
-    Janet chanv = argv[2];
-    janet_getchannel(argv, 2);
-    Janet tag = argv[1];
+    Bender chanv = argv[2];
+    bender_getchannel(argv, 2);
+    Bender tag = argv[1];
     if (handle->done) {
         /* Late registration: completion already ran, deliver now.
          * No slot is stored, so there is no ref to return. */
-        janet_thread_give_down(chanv,
-            janet_thread_down_message(tag, handle->is_error, handle->result));
-        return janet_wrap_nil();
+        bender_thread_give_down(chanv,
+            bender_thread_down_message(tag, handle->is_error, handle->result));
+        return bender_wrap_nil();
     }
     if (handle->n_monitors >= handle->cap_monitors) {
         int32_t ncap = handle->cap_monitors ? handle->cap_monitors * 2 : 4;
-        Janet *nmon = janet_realloc(handle->monitors, (size_t) ncap * 2 * sizeof(Janet));
+        Bender *nmon = bender_realloc(handle->monitors, (size_t) ncap * 2 * sizeof(Bender));
         if (NULL == nmon) {
-            JANET_OUT_OF_MEMORY;
+            BENDER_OUT_OF_MEMORY;
         }
         handle->monitors = nmon;
         handle->cap_monitors = ncap;
     }
-    janet_gcroot(chanv);
-    janet_gcroot(tag);
+    bender_gcroot(chanv);
+    bender_gcroot(tag);
     int32_t ref = handle->n_monitors;
     handle->monitors[ref * 2] = chanv;
     handle->monitors[ref * 2 + 1] = tag;
     handle->n_monitors++;
-    return janet_wrap_integer(ref);
+    return bender_wrap_integer(ref);
 }
 
 /* M3: process-global name registry. One store shared by every VM
- * in the process (Janet tables are per-VM and isolated, so this lives
+ * in the process (Bender tables are per-VM and isolated, so this lives
  * in C). Values are kept as marshaled byte copies: no cross-heap
  * references, no GC coupling — lookups copy out and unmarshal in the
  * caller's VM. Marshal runs BEFORE the lock is taken, so a refusal
@@ -6031,13 +6031,13 @@ typedef struct {
     char *name;
     uint8_t *bytes;
     size_t len;
-} JanetNameRegistryEntry;
+} BenderNameRegistryEntry;
 
-static JanetNameRegistryEntry *reg_entries = NULL;
+static BenderNameRegistryEntry *reg_entries = NULL;
 static int32_t reg_count = 0;
 static int32_t reg_cap = 0;
-/* Local platform mutex (JanetOSMutex is opaque and cannot embed). */
-#ifdef JANET_WINDOWS
+/* Local platform mutex (BenderOSMutex is opaque and cannot embed). */
+#ifdef BENDER_WINDOWS
 static CRITICAL_SECTION reg_lock;
 static void reg_lock_init(void) { InitializeCriticalSection(&reg_lock); }
 static void reg_lock_take(void) { EnterCriticalSection(&reg_lock); }
@@ -6048,7 +6048,7 @@ static void reg_lock_init(void) { pthread_mutex_init(&reg_lock, NULL); }
 static void reg_lock_take(void) { pthread_mutex_lock(&reg_lock); }
 static void reg_lock_drop(void) { pthread_mutex_unlock(&reg_lock); }
 #endif
-#ifdef JANET_WINDOWS
+#ifdef BENDER_WINDOWS
 static INIT_ONCE reg_once = INIT_ONCE_STATIC_INIT;
 static BOOL CALLBACK reg_do_init(PINIT_ONCE once, PVOID arg, PVOID *ctx) {
     (void) once;
@@ -6078,7 +6078,7 @@ static int32_t reg_find(const char *name) {
     return -1;
 }
 
-JANET_CORE_FN(cfun_registry_register,
+BENDER_CORE_FN(cfun_registry_register,
               "(ev/register name value)",
               "Bind keyword `name` to `value` in the process-global "
               "registry, visible from every thread. `value` is stored as "
@@ -6086,53 +6086,53 @@ JANET_CORE_FN(cfun_registry_register,
               "caller's own VM, never a cross-heap reference. Replacing "
               "an entry drops the old copy. Unmarshalable values (thread "
               "handles) raise. Returns `value`.") {
-    janet_fixarity(argc, 2);
-    const uint8_t *kws = janet_getkeyword(argv, 0);
+    bender_fixarity(argc, 2);
+    const uint8_t *kws = bender_getkeyword(argv, 0);
     const char *name = (const char *) kws;
     /* Thread handles are owner-local capabilities: UNSAFE marshal
      * would pass them by pointer (silently leaking a ref and handing
      * out a handle every foreign use rejects). Refuse explicitly. */
-    if (janet_checktype(argv[1], JANET_ABSTRACT) &&
-            janet_abstract_type(janet_unwrap_abstract(argv[1])) == &janet_thread_handle_type) {
-        janet_panic("ev/register cannot store thread handles (owner-local)");
+    if (bender_checktype(argv[1], BENDER_ABSTRACT) &&
+            bender_abstract_type(bender_unwrap_abstract(argv[1])) == &bender_thread_handle_type) {
+        bender_panic("ev/register cannot store thread handles (owner-local)");
     }
-    JanetBuffer tmp;
-    janet_buffer_init(&tmp, 0);
-    janet_marshal(&tmp, argv[1], NULL, JANET_MARSHAL_UNSAFE);
-    uint8_t *copy = janet_malloc(tmp.count ? (size_t) tmp.count : 1);
+    BenderBuffer tmp;
+    bender_buffer_init(&tmp, 0);
+    bender_marshal(&tmp, argv[1], NULL, BENDER_MARSHAL_UNSAFE);
+    uint8_t *copy = bender_malloc(tmp.count ? (size_t) tmp.count : 1);
     if (NULL == copy) {
-        janet_buffer_deinit(&tmp);
-        JANET_OUT_OF_MEMORY;
+        bender_buffer_deinit(&tmp);
+        BENDER_OUT_OF_MEMORY;
     }
     if (tmp.count) memcpy(copy, tmp.data, (size_t) tmp.count);
     size_t len = (size_t) tmp.count;
-    janet_buffer_deinit(&tmp);
+    bender_buffer_deinit(&tmp);
     reg_ensure_init();
     reg_lock_take();
     int32_t at = reg_find(name);
     if (at >= 0) {
-        janet_free(reg_entries[at].bytes);
+        bender_free(reg_entries[at].bytes);
         reg_entries[at].bytes = copy;
         reg_entries[at].len = len;
     } else {
         if (reg_count >= reg_cap) {
             int32_t ncap = reg_cap ? reg_cap * 2 : 8;
-            JanetNameRegistryEntry *nent = janet_realloc(reg_entries,
-                (size_t) ncap * sizeof(JanetNameRegistryEntry));
+            BenderNameRegistryEntry *nent = bender_realloc(reg_entries,
+                (size_t) ncap * sizeof(BenderNameRegistryEntry));
             if (NULL == nent) {
                 reg_lock_drop();
-                janet_free(copy);
-                JANET_OUT_OF_MEMORY;
+                bender_free(copy);
+                BENDER_OUT_OF_MEMORY;
             }
             reg_entries = nent;
             reg_cap = ncap;
         }
         size_t nlen = strlen(name) + 1;
-        char *kcopy = janet_malloc(nlen);
+        char *kcopy = bender_malloc(nlen);
         if (NULL == kcopy) {
             reg_lock_drop();
-            janet_free(copy);
-            JANET_OUT_OF_MEMORY;
+            bender_free(copy);
+            BENDER_OUT_OF_MEMORY;
         }
         memcpy(kcopy, name, nlen);
         reg_entries[reg_count].name = kcopy;
@@ -6144,13 +6144,13 @@ JANET_CORE_FN(cfun_registry_register,
     return argv[1];
 }
 
-JANET_CORE_FN(cfun_registry_whereis,
+BENDER_CORE_FN(cfun_registry_whereis,
               "(ev/whereis name)",
               "Look up keyword `name` in the process-global registry. "
               "Returns an unmarshaled copy of the registered value in "
               "the caller's VM, or nil when absent.") {
-    janet_fixarity(argc, 1);
-    const uint8_t *kws = janet_getkeyword(argv, 0);
+    bender_fixarity(argc, 1);
+    const uint8_t *kws = bender_getkeyword(argv, 0);
     const char *name = (const char *) kws;
     reg_ensure_init();
     reg_lock_take();
@@ -6159,41 +6159,41 @@ JANET_CORE_FN(cfun_registry_whereis,
     size_t len = 0;
     if (at >= 0 && reg_entries[at].len) {
         len = reg_entries[at].len;
-        copy = janet_malloc(len);
+        copy = bender_malloc(len);
         if (NULL == copy) {
             reg_lock_drop();
-            JANET_OUT_OF_MEMORY;
+            BENDER_OUT_OF_MEMORY;
         }
         memcpy(copy, reg_entries[at].bytes, len);
     }
     reg_lock_drop();
     if (NULL == copy) {
-        return janet_wrap_nil();
+        return bender_wrap_nil();
     }
-    Janet out = janet_unmarshal(copy, len, JANET_MARSHAL_UNSAFE, NULL, NULL);
-    janet_free(copy);
+    Bender out = bender_unmarshal(copy, len, BENDER_MARSHAL_UNSAFE, NULL, NULL);
+    bender_free(copy);
     return out;
 }
 
-JANET_CORE_FN(cfun_registry_unregister,
+BENDER_CORE_FN(cfun_registry_unregister,
               "(ev/unregister name)",
               "Remove keyword `name` from the process-global registry. "
               "Returns true when an entry was removed, false otherwise.") {
-    janet_fixarity(argc, 1);
-    const uint8_t *kws = janet_getkeyword(argv, 0);
+    bender_fixarity(argc, 1);
+    const uint8_t *kws = bender_getkeyword(argv, 0);
     const char *name = (const char *) kws;
     reg_ensure_init();
     reg_lock_take();
     int32_t at = reg_find(name);
     int found = (at >= 0);
     if (found) {
-        janet_free(reg_entries[at].name);
-        janet_free(reg_entries[at].bytes);
+        bender_free(reg_entries[at].name);
+        bender_free(reg_entries[at].bytes);
         reg_entries[at] = reg_entries[reg_count - 1];
         reg_count--;
     }
     reg_lock_drop();
-    return janet_wrap_boolean(found);
+    return bender_wrap_boolean(found);
 }
 
 /* M5: shareable immutable blobs (see
@@ -6205,136 +6205,136 @@ JANET_CORE_FN(cfun_registry_unregister,
  * fixed-width throughout (same-machine sharing; cross-machine stays
  * marshal-based). Tags: 0 nil, 1 false, 2 true, 3 f64, 4 string,
  * 5 keyword, 6 symbol, 7 struct, 8 tuple, 9 nested-shared. */
-static const JanetAbstractType janet_shared_type;
+static const BenderAbstractType bender_shared_type;
 #define SHARED_MAX_DEPTH 256
 
 typedef struct {
     uint32_t len;
     uint8_t data[];
-} JanetSharedBlob;
+} BenderSharedBlob;
 
-static void shared_push_u32(JanetBuffer *buf, uint32_t v) {
+static void shared_push_u32(BenderBuffer *buf, uint32_t v) {
     uint8_t b[4];
     b[0] = (uint8_t) (v & 0xFF);
     b[1] = (uint8_t) ((v >> 8) & 0xFF);
     b[2] = (uint8_t) ((v >> 16) & 0xFF);
     b[3] = (uint8_t) ((v >> 24) & 0xFF);
-    janet_buffer_push_bytes(buf, b, 4);
+    bender_buffer_push_bytes(buf, b, 4);
 }
 
-static int shared_is_blob(Janet x) {
-    return janet_checktype(x, JANET_ABSTRACT) &&
-        janet_abstract_type(janet_unwrap_abstract(x)) == &janet_shared_type;
+static int shared_is_blob(Bender x) {
+    return bender_checktype(x, BENDER_ABSTRACT) &&
+        bender_abstract_type(bender_unwrap_abstract(x)) == &bender_shared_type;
 }
 
 /* Forward declarations (encoder/decoder recurse). */
-static void shared_encode(JanetBuffer *buf, Janet x, int depth);
+static void shared_encode(BenderBuffer *buf, Bender x, int depth);
 
 /* Deep shareability check: only immutable, heap-free leaves. */
-static int shared_checkable(Janet x, int depth) {
+static int shared_checkable(Bender x, int depth) {
     if (depth > SHARED_MAX_DEPTH) return 0;
-    switch (janet_type(x)) {
-        case JANET_NIL:
-        case JANET_BOOLEAN:
-        case JANET_NUMBER:
+    switch (bender_type(x)) {
+        case BENDER_NIL:
+        case BENDER_BOOLEAN:
+        case BENDER_NUMBER:
             return 1;
-        case JANET_STRING:
-        case JANET_SYMBOL:
-        case JANET_KEYWORD:
+        case BENDER_STRING:
+        case BENDER_SYMBOL:
+        case BENDER_KEYWORD:
             return 1;
-        case JANET_TUPLE: {
-            JanetTuple t = janet_unwrap_tuple(x);
-            int32_t n = janet_tuple_length(t);
+        case BENDER_TUPLE: {
+            BenderTuple t = bender_unwrap_tuple(x);
+            int32_t n = bender_tuple_length(t);
             for (int32_t i = 0; i < n; i++) {
                 if (!shared_checkable(t[i], depth + 1)) return 0;
             }
             return 1;
         }
-        case JANET_STRUCT: {
+        case BENDER_STRUCT: {
             /* Structs are open-addressed hash tables: iterate to
              * CAPACITY skipping nil keys (length counts live only).
              * Prototypes change lookup semantics and do not flatten,
              * so protos are rejected. */
-            JanetStruct s = janet_unwrap_struct(x);
-            if (NULL != janet_struct_proto(s)) return 0;
-            int32_t cap = janet_struct_capacity(s);
+            BenderStruct s = bender_unwrap_struct(x);
+            if (NULL != bender_struct_proto(s)) return 0;
+            int32_t cap = bender_struct_capacity(s);
             for (int32_t i = 0; i < cap; i++) {
-                if (janet_checktype(s[i].key, JANET_NIL)) continue;
+                if (bender_checktype(s[i].key, BENDER_NIL)) continue;
                 if (!shared_checkable(s[i].key, depth + 1)) return 0;
                 if (!shared_checkable(s[i].value, depth + 1)) return 0;
             }
             return 1;
         }
-        case JANET_ABSTRACT:
+        case BENDER_ABSTRACT:
             return shared_is_blob(x);
         default:
             return 0;
     }
 }
 
-static void shared_encode_str(JanetBuffer *buf, uint8_t tag, const uint8_t *s) {
-    int32_t len = janet_string_length(s);
-    janet_buffer_push_u8(buf, tag);
+static void shared_encode_str(BenderBuffer *buf, uint8_t tag, const uint8_t *s) {
+    int32_t len = bender_string_length(s);
+    bender_buffer_push_u8(buf, tag);
     shared_push_u32(buf, (uint32_t) len);
-    janet_buffer_push_bytes(buf, s, len);
+    bender_buffer_push_bytes(buf, s, len);
 }
 
-static void shared_encode(JanetBuffer *buf, Janet x, int depth) {
-    if (depth > SHARED_MAX_DEPTH) janet_panic("shared value too deep");
-    switch (janet_type(x)) {
-        case JANET_NIL:
-            janet_buffer_push_u8(buf, 0);
+static void shared_encode(BenderBuffer *buf, Bender x, int depth) {
+    if (depth > SHARED_MAX_DEPTH) bender_panic("shared value too deep");
+    switch (bender_type(x)) {
+        case BENDER_NIL:
+            bender_buffer_push_u8(buf, 0);
             break;
-        case JANET_BOOLEAN:
-            janet_buffer_push_u8(buf, janet_unwrap_boolean(x) ? 2 : 1);
+        case BENDER_BOOLEAN:
+            bender_buffer_push_u8(buf, bender_unwrap_boolean(x) ? 2 : 1);
             break;
-        case JANET_NUMBER: {
-            double d = janet_unwrap_number(x);
-            janet_buffer_push_u8(buf, 3);
-            janet_buffer_push_bytes(buf, (uint8_t *) &d, 8);
+        case BENDER_NUMBER: {
+            double d = bender_unwrap_number(x);
+            bender_buffer_push_u8(buf, 3);
+            bender_buffer_push_bytes(buf, (uint8_t *) &d, 8);
             break;
         }
-        case JANET_STRING:
-            shared_encode_str(buf, 4, janet_unwrap_string(x));
+        case BENDER_STRING:
+            shared_encode_str(buf, 4, bender_unwrap_string(x));
             break;
-        case JANET_SYMBOL:
-            shared_encode_str(buf, 6, janet_unwrap_symbol(x));
+        case BENDER_SYMBOL:
+            shared_encode_str(buf, 6, bender_unwrap_symbol(x));
             break;
-        case JANET_KEYWORD:
-            shared_encode_str(buf, 5, janet_unwrap_keyword(x));
+        case BENDER_KEYWORD:
+            shared_encode_str(buf, 5, bender_unwrap_keyword(x));
             break;
-        case JANET_TUPLE: {
-            JanetTuple t = janet_unwrap_tuple(x);
-            int32_t n = janet_tuple_length(t);
-            janet_buffer_push_u8(buf, 8);
+        case BENDER_TUPLE: {
+            BenderTuple t = bender_unwrap_tuple(x);
+            int32_t n = bender_tuple_length(t);
+            bender_buffer_push_u8(buf, 8);
             shared_push_u32(buf, (uint32_t) n);
             for (int32_t i = 0; i < n; i++) shared_encode(buf, t[i], depth + 1);
             break;
         }
-        case JANET_STRUCT: {
-            JanetStruct s = janet_unwrap_struct(x);
-            int32_t n = janet_struct_length(s);
-            int32_t cap = janet_struct_capacity(s);
-            janet_buffer_push_u8(buf, 7);
+        case BENDER_STRUCT: {
+            BenderStruct s = bender_unwrap_struct(x);
+            int32_t n = bender_struct_length(s);
+            int32_t cap = bender_struct_capacity(s);
+            bender_buffer_push_u8(buf, 7);
             shared_push_u32(buf, (uint32_t) n);
             for (int32_t i = 0; i < cap; i++) {
-                if (janet_checktype(s[i].key, JANET_NIL)) continue;
+                if (bender_checktype(s[i].key, BENDER_NIL)) continue;
                 shared_encode(buf, s[i].key, depth + 1);
                 shared_encode(buf, s[i].value, depth + 1);
             }
             break;
         }
-        case JANET_ABSTRACT: {
+        case BENDER_ABSTRACT: {
             /* Nested shared: inline expansion (deep copy — sharing is
              * by value, still immutable so semantics hold). */
-            JanetSharedBlob *nb = janet_unwrap_abstract(x);
-            janet_buffer_push_u8(buf, 9);
+            BenderSharedBlob *nb = bender_unwrap_abstract(x);
+            bender_buffer_push_u8(buf, 9);
             shared_push_u32(buf, nb->len);
-            janet_buffer_push_bytes(buf, nb->data, nb->len);
+            bender_buffer_push_bytes(buf, nb->data, nb->len);
             break;
         }
         default:
-            janet_panicf("cannot share value of type %s", janet_type_names[janet_type(x)]);
+            bender_panicf("cannot share value of type %s", bender_type_names[bender_type(x)]);
     }
 }
 
@@ -6343,18 +6343,18 @@ static void shared_encode(JanetBuffer *buf, Janet x, int depth) {
 typedef struct {
     const uint8_t *p;
     const uint8_t *end;
-} JanetSharedCursor;
+} BenderSharedCursor;
 
-static void shared_need(JanetSharedCursor *c, size_t n) {
-    if ((size_t)(c->end - c->p) < n) janet_panic("truncated shared value");
+static void shared_need(BenderSharedCursor *c, size_t n) {
+    if ((size_t)(c->end - c->p) < n) bender_panic("truncated shared value");
 }
 
-static uint8_t shared_rd_u8(JanetSharedCursor *c) {
+static uint8_t shared_rd_u8(BenderSharedCursor *c) {
     shared_need(c, 1);
     return *(c->p)++;
 }
 
-static uint32_t shared_rd_u32(JanetSharedCursor *c) {
+static uint32_t shared_rd_u32(BenderSharedCursor *c) {
     shared_need(c, 4);
     uint32_t v = ((uint32_t) c->p[0]) | ((uint32_t) c->p[1] << 8) |
         ((uint32_t) c->p[2] << 16) | ((uint32_t) c->p[3] << 24);
@@ -6362,76 +6362,76 @@ static uint32_t shared_rd_u32(JanetSharedCursor *c) {
     return v;
 }
 
-static const uint8_t *shared_rd_bytes(JanetSharedCursor *c, size_t n) {
+static const uint8_t *shared_rd_bytes(BenderSharedCursor *c, size_t n) {
     shared_need(c, n);
     const uint8_t *p = c->p;
     c->p += n;
     return p;
 }
 
-static Janet shared_decode(JanetSharedCursor *c, int depth) {
-    if (depth > SHARED_MAX_DEPTH) janet_panic("shared value too deep");
+static Bender shared_decode(BenderSharedCursor *c, int depth) {
+    if (depth > SHARED_MAX_DEPTH) bender_panic("shared value too deep");
     uint8_t tag = shared_rd_u8(c);
     switch (tag) {
         case 0:
-            return janet_wrap_nil();
+            return bender_wrap_nil();
         case 1:
-            return janet_wrap_boolean(0);
+            return bender_wrap_boolean(0);
         case 2:
-            return janet_wrap_boolean(1);
+            return bender_wrap_boolean(1);
         case 3: {
             double d = 0;
             memcpy(&d, shared_rd_bytes(c, 8), 8);
-            return janet_wrap_number(d);
+            return bender_wrap_number(d);
         }
         case 4: {
             uint32_t n = shared_rd_u32(c);
             const uint8_t *b = shared_rd_bytes(c, n);
-            return janet_stringv(b, (int32_t) n);
+            return bender_stringv(b, (int32_t) n);
         }
         case 5: {
             uint32_t n = shared_rd_u32(c);
             const uint8_t *b = shared_rd_bytes(c, n);
-            return janet_keywordv(b, (int32_t) n);
+            return bender_keywordv(b, (int32_t) n);
         }
         case 6: {
             uint32_t n = shared_rd_u32(c);
             const uint8_t *b = shared_rd_bytes(c, n);
-            return janet_symbolv(b, (int32_t) n);
+            return bender_symbolv(b, (int32_t) n);
         }
         case 7: {
             uint32_t n = shared_rd_u32(c);
-            JanetTable *t = janet_table(0);
+            BenderTable *t = bender_table(0);
             for (uint32_t i = 0; i < n; i++) {
-                Janet k = shared_decode(c, depth + 1);
-                Janet v = shared_decode(c, depth + 1);
-                janet_table_put(t, k, v);
+                Bender k = shared_decode(c, depth + 1);
+                Bender v = shared_decode(c, depth + 1);
+                bender_table_put(t, k, v);
             }
-            return janet_wrap_struct(janet_table_to_struct(t));
+            return bender_wrap_struct(bender_table_to_struct(t));
         }
         case 8: {
             uint32_t n = shared_rd_u32(c);
-            Janet *items = janet_malloc(sizeof(Janet) * (n ? n : 1));
-            if (NULL == items) JANET_OUT_OF_MEMORY;
+            Bender *items = bender_malloc(sizeof(Bender) * (n ? n : 1));
+            if (NULL == items) BENDER_OUT_OF_MEMORY;
             uint32_t i = 0;
             for (; i < n; i++) items[i] = shared_decode(c, depth + 1);
-            Janet ret = janet_wrap_tuple(janet_tuple_n(items, (int32_t) n));
-            janet_free(items);
+            Bender ret = bender_wrap_tuple(bender_tuple_n(items, (int32_t) n));
+            bender_free(items);
             return ret;
         }
         case 9: {
             /* Nested blob: rebuild fresh (deep-copy semantics). */
             uint32_t n = shared_rd_u32(c);
             const uint8_t *b = shared_rd_bytes(c, n);
-            JanetSharedBlob *nb = janet_abstract_threaded(&janet_shared_type,
-                sizeof(JanetSharedBlob) + n);
+            BenderSharedBlob *nb = bender_abstract_threaded(&bender_shared_type,
+                sizeof(BenderSharedBlob) + n);
             nb->len = n;
             if (n) memcpy(nb->data, b, n);
-            return janet_wrap_abstract(nb);
+            return bender_wrap_abstract(nb);
         }
         default:
-            janet_panicf("invalid shared tag %d", tag);
-            return janet_wrap_nil();
+            bender_panicf("invalid shared tag %d", tag);
+            return bender_wrap_nil();
     }
 }
 
@@ -6505,99 +6505,99 @@ static int shared_struct_find(const uint8_t *base, const uint8_t *end,
     return 0;
 }
 
-JANET_CORE_FN(cfun_thread_demonitor,
+BENDER_CORE_FN(cfun_thread_demonitor,
               "(ev/demonitor handle ref)",
               "Remove the monitor `ref` (returned by `ev/monitor`) from "
               "the thread `handle`, so no `:down` message is delivered for "
               "it. Unknown refs, already-removed monitors, and monitors on "
               "finished threads are silent no-ops. Must be called from the "
               "creating thread. Returns nil.") {
-    janet_sandbox_assert(JANET_SANDBOX_THREADS);
-    janet_fixarity(argc, 2);
-    JanetThreadHandle *handle = janet_getabstract(argv, 0, &janet_thread_handle_type);
-    if (handle->owner != &janet_vm) {
-        janet_panic("ev/demonitor called from non-owner thread");
+    bender_sandbox_assert(BENDER_SANDBOX_THREADS);
+    bender_fixarity(argc, 2);
+    BenderThreadHandle *handle = bender_getabstract(argv, 0, &bender_thread_handle_type);
+    if (handle->owner != &bender_vm) {
+        bender_panic("ev/demonitor called from non-owner thread");
     }
-    if (!janet_checkint(argv[1])) {
-        janet_panic("ev/demonitor ref must be an integer");
+    if (!bender_checkint(argv[1])) {
+        bender_panic("ev/demonitor ref must be an integer");
     }
-    int32_t ref = janet_unwrap_integer(argv[1]);
+    int32_t ref = bender_unwrap_integer(argv[1]);
     /* Finished threads already delivered and freed the list. */
     if (handle->monitors == NULL) {
-        return janet_wrap_nil();
+        return bender_wrap_nil();
     }
     if (ref < 0 || ref >= handle->n_monitors) {
-        return janet_wrap_nil();
+        return bender_wrap_nil();
     }
-    Janet chanv = handle->monitors[ref * 2];
-    Janet tag = handle->monitors[ref * 2 + 1];
-    if (janet_checktype(chanv, JANET_NIL)) {
+    Bender chanv = handle->monitors[ref * 2];
+    Bender tag = handle->monitors[ref * 2 + 1];
+    if (bender_checktype(chanv, BENDER_NIL)) {
         /* Already removed. */
-        return janet_wrap_nil();
+        return bender_wrap_nil();
     }
-    janet_gcunroot(chanv);
-    janet_gcunroot(tag);
-    handle->monitors[ref * 2] = janet_wrap_nil();
-    handle->monitors[ref * 2 + 1] = janet_wrap_nil();
-    return janet_wrap_nil();
+    bender_gcunroot(chanv);
+    bender_gcunroot(tag);
+    handle->monitors[ref * 2] = bender_wrap_nil();
+    handle->monitors[ref * 2 + 1] = bender_wrap_nil();
+    return bender_wrap_nil();
 }
 
 /* Blob construction + type-level (un)marshal + accessors. */
 
-static JanetSharedBlob *shared_blob_new(const uint8_t *data, uint32_t len) {
-    JanetSharedBlob *b = janet_abstract_threaded(&janet_shared_type,
-        sizeof(JanetSharedBlob) + (len ? len : 1));
+static BenderSharedBlob *shared_blob_new(const uint8_t *data, uint32_t len) {
+    BenderSharedBlob *b = bender_abstract_threaded(&bender_shared_type,
+        sizeof(BenderSharedBlob) + (len ? len : 1));
     b->len = len;
     if (len) memcpy(b->data, data, len);
     return b;
 }
 
-static void janet_shared_marshal(void *p, JanetMarshalContext *ctx) {
-    JanetSharedBlob *b = p;
-    janet_marshal_int(ctx, (int32_t) b->len);
-    if (b->len) janet_marshal_bytes(ctx, b->data, b->len);
+static void bender_shared_marshal(void *p, BenderMarshalContext *ctx) {
+    BenderSharedBlob *b = p;
+    bender_marshal_int(ctx, (int32_t) b->len);
+    if (b->len) bender_marshal_bytes(ctx, b->data, b->len);
 }
 
-static void *janet_shared_unmarshal(JanetMarshalContext *ctx) {
-    int32_t len = janet_unmarshal_int(ctx);
-    if (len < 0) janet_panic("invalid shared length");
-    JanetSharedBlob *b = janet_abstract_threaded(&janet_shared_type,
-        sizeof(JanetSharedBlob) + (len ? (uint32_t) len : 1));
+static void *bender_shared_unmarshal(BenderMarshalContext *ctx) {
+    int32_t len = bender_unmarshal_int(ctx);
+    if (len < 0) bender_panic("invalid shared length");
+    BenderSharedBlob *b = bender_abstract_threaded(&bender_shared_type,
+        sizeof(BenderSharedBlob) + (len ? (uint32_t) len : 1));
     b->len = (uint32_t) len;
     if (len) {
-        uint8_t *tmp = janet_malloc((size_t) len);
-        if (NULL == tmp) JANET_OUT_OF_MEMORY;
-        janet_unmarshal_bytes(ctx, tmp, (size_t) len);
+        uint8_t *tmp = bender_malloc((size_t) len);
+        if (NULL == tmp) BENDER_OUT_OF_MEMORY;
+        bender_unmarshal_bytes(ctx, tmp, (size_t) len);
         memcpy(b->data, tmp, (size_t) len);
-        janet_free(tmp);
+        bender_free(tmp);
     }
     /* Register in the lookup table (alias/cycle tracking + the
      * framework's completion check); stays threaded either way. */
-    janet_unmarshal_abstract_reuse(ctx, b);
+    bender_unmarshal_abstract_reuse(ctx, b);
     return b;
 }
 
-static int janet_shared_mark(void *p, size_t len) {
+static int bender_shared_mark(void *p, size_t len) {
     /* Payload holds no GC pointers — nothing to mark. */
     (void) p;
     (void) len;
     return 0;
 }
 
-static void janet_shared_tostring(void *p, JanetBuffer *buffer) {
+static void bender_shared_tostring(void *p, BenderBuffer *buffer) {
     (void) p;
-    janet_buffer_push_cstring(buffer, "<shared>");
+    bender_buffer_push_cstring(buffer, "<shared>");
 }
 
-static const JanetAbstractType janet_shared_type = {
+static const BenderAbstractType bender_shared_type = {
     "core/shared",
     NULL, /* gc (inline payload frees with the allocation) */
-    janet_shared_mark,
+    bender_shared_mark,
     NULL, /* get (use shared/get) */
     NULL, /* put */
-    janet_shared_marshal,
-    janet_shared_unmarshal,
-    janet_shared_tostring,
+    bender_shared_marshal,
+    bender_shared_unmarshal,
+    bender_shared_tostring,
     NULL, /* compare */
     NULL, /* hash */
     NULL, /* next */
@@ -6607,12 +6607,12 @@ static const JanetAbstractType janet_shared_type = {
     NULL  /* gcperthread (no nested refs to drop) */
 };
 
-static JanetSharedBlob *shared_get_blob(Janet x) {
-    if (!shared_is_blob(x)) janet_panic("expected shared blob");
-    return janet_unwrap_abstract(x);
+static BenderSharedBlob *shared_get_blob(Bender x) {
+    if (!shared_is_blob(x)) bender_panic("expected shared blob");
+    return bender_unwrap_abstract(x);
 }
 
-JANET_CORE_FN(cfun_shared_new,
+BENDER_CORE_FN(cfun_shared_new,
               "(shared/new x)",
               "Freeze the shareable value `x` into an immutable blob "
               "that is sound in every VM at once (lifetime is atomic "
@@ -6621,154 +6621,154 @@ JANET_CORE_FN(cfun_shared_new,
               "keywords, tuples, structs, and nested shared blobs. "
               "Anything else (tables, arrays, buffers, functions, fibers, "
               "other abstracts) raises. Returns the blob.") {
-    janet_fixarity(argc, 1);
+    bender_fixarity(argc, 1);
     if (!shared_checkable(argv[0], 0)) {
-        janet_panicf("cannot share value of type %s",
-            janet_type_names[janet_type(argv[0])]);
+        bender_panicf("cannot share value of type %s",
+            bender_type_names[bender_type(argv[0])]);
     }
-    JanetBuffer buf;
-    janet_buffer_init(&buf, 0);
+    BenderBuffer buf;
+    bender_buffer_init(&buf, 0);
     shared_encode(&buf, argv[0], 0);
-    JanetSharedBlob *b = shared_blob_new(buf.data, buf.count);
-    janet_buffer_deinit(&buf);
-    return janet_wrap_abstract(b);
+    BenderSharedBlob *b = shared_blob_new(buf.data, buf.count);
+    bender_buffer_deinit(&buf);
+    return bender_wrap_abstract(b);
 }
 
-JANET_CORE_FN(cfun_shared_shareable,
+BENDER_CORE_FN(cfun_shared_shareable,
               "(shared/shareable? x)",
               "True when `x` can be frozen with shared/new (deep check).") {
-    janet_fixarity(argc, 1);
-    return janet_wrap_boolean(shared_checkable(argv[0], 0));
+    bender_fixarity(argc, 1);
+    return bender_wrap_boolean(shared_checkable(argv[0], 0));
 }
 
-JANET_CORE_FN(cfun_shared_length,
+BENDER_CORE_FN(cfun_shared_length,
               "(shared/length b)",
               "Element count of a struct/tuple blob, else nil.") {
-    janet_fixarity(argc, 1);
-    JanetSharedBlob *b = shared_get_blob(argv[0]);
-    if (b->len < 1) return janet_wrap_nil();
+    bender_fixarity(argc, 1);
+    BenderSharedBlob *b = shared_get_blob(argv[0]);
+    if (b->len < 1) return bender_wrap_nil();
     uint8_t tag = b->data[0];
-    if (tag != 7 && tag != 8) return janet_wrap_nil();
-    if (b->len < 5) return janet_wrap_nil();
+    if (tag != 7 && tag != 8) return bender_wrap_nil();
+    if (b->len < 5) return bender_wrap_nil();
     uint32_t n = ((uint32_t) b->data[1]) | ((uint32_t) b->data[2] << 8) |
         ((uint32_t) b->data[3] << 16) | ((uint32_t) b->data[4] << 24);
-    return janet_wrap_integer((int32_t) n);
+    return bender_wrap_integer((int32_t) n);
 }
 
-JANET_CORE_FN(cfun_shared_get,
+BENDER_CORE_FN(cfun_shared_get,
               "(shared/get b k)",
               "Look up key `k` in a struct blob (or index a tuple blob) "
               "without decoding the whole value. Missing keys, "
               "out-of-range indices, and scalar blobs give nil. "
               "Unshareable key types also give nil.") {
-    janet_fixarity(argc, 2);
-    JanetSharedBlob *b = shared_get_blob(argv[0]);
+    bender_fixarity(argc, 2);
+    BenderSharedBlob *b = shared_get_blob(argv[0]);
     const uint8_t *end = b->data + b->len;
-    if (b->len < 1) return janet_wrap_nil();
+    if (b->len < 1) return bender_wrap_nil();
     uint8_t tag = b->data[0];
     if (tag == 8) {
         /* Tuple index. */
-        if (!janet_checkint(argv[1])) return janet_wrap_nil();
-        int32_t idx = janet_unwrap_integer(argv[1]);
-        if (b->len < 5 || idx < 0) return janet_wrap_nil();
+        if (!bender_checkint(argv[1])) return bender_wrap_nil();
+        int32_t idx = bender_unwrap_integer(argv[1]);
+        if (b->len < 5 || idx < 0) return bender_wrap_nil();
         uint32_t n = ((uint32_t) b->data[1]) | ((uint32_t) b->data[2] << 8) |
             ((uint32_t) b->data[3] << 16) | ((uint32_t) b->data[4] << 24);
-        if ((uint32_t) idx >= n) return janet_wrap_nil();
+        if ((uint32_t) idx >= n) return bender_wrap_nil();
         const uint8_t *p = b->data + 5;
         for (int32_t i = 0; i < idx; i++) {
             p = shared_skip_value(p, end);
-            if (NULL == p) return janet_wrap_nil();
+            if (NULL == p) return bender_wrap_nil();
         }
-        JanetSharedCursor c = {p, end};
+        BenderSharedCursor c = {p, end};
         return shared_decode(&c, 0);
     }
-    if (tag != 7) return janet_wrap_nil();
-    if (!shared_checkable(argv[1], 0)) return janet_wrap_nil();
-    JanetBuffer kb;
-    janet_buffer_init(&kb, 0);
+    if (tag != 7) return bender_wrap_nil();
+    if (!shared_checkable(argv[1], 0)) return bender_wrap_nil();
+    BenderBuffer kb;
+    bender_buffer_init(&kb, 0);
     shared_encode(&kb, argv[1], 0);
     const uint8_t *valp = NULL;
     int found = shared_struct_find(b->data + 1, end, kb.data, kb.count, &valp);
-    janet_buffer_deinit(&kb);
-    if (!found) return janet_wrap_nil();
-    JanetSharedCursor c = {valp, end};
+    bender_buffer_deinit(&kb);
+    if (!found) return bender_wrap_nil();
+    BenderSharedCursor c = {valp, end};
     return shared_decode(&c, 0);
 }
 
-JANET_CORE_FN(cfun_shared_materialize,
+BENDER_CORE_FN(cfun_shared_materialize,
               "(shared/materialize b)",
               "Decode a whole blob back to ordinary caller-heap values "
               "(structs, tuples, re-interned keywords). The blob itself "
               "is unchanged.") {
-    janet_fixarity(argc, 1);
-    JanetSharedBlob *b = shared_get_blob(argv[0]);
-    JanetSharedCursor c = {b->data, b->data + b->len};
+    bender_fixarity(argc, 1);
+    BenderSharedBlob *b = shared_get_blob(argv[0]);
+    BenderSharedCursor c = {b->data, b->data + b->len};
     return shared_decode(&c, 0);
 }
 
-JANET_CORE_FN(cfun_ev_timeslice,
+BENDER_CORE_FN(cfun_ev_timeslice,
               "(ev/timeslice &opt on?)",
               "Enable (truthy) or disable (false/nil) preemptive "
               "round-robin quanta for the current VM, and return the new "
               "setting. Quanta are ON by default (Step 2 preemptive "
-              "reductions; JANET_TIMESLICE=0 starts a process with them "
+              "reductions; BENDER_TIMESLICE=0 starts a process with them "
               "off): every scheduled task runs at most "
-              "JANET_QUANTUM_BUDGET back-edge/call polls before it is "
+              "BENDER_QUANTUM_BUDGET back-edge/call polls before it is "
               "transparently re-queued: compute hogs can no longer starve "
               "sleepers and takers, with results bit-exact. Quanta never "
-              "land inside C calls or pcall regions (poll points are Janet "
+              "land inside C calls or pcall regions (poll points are Bender "
               "ops only). Incompatible with external C quiesce while on. "
               "Per-VM; workers inherit the default independently.") {
-    janet_arity(argc, 0, 1);
+    bender_arity(argc, 0, 1);
     if (argc >= 1) {
-        janet_vm.quantum = janet_truthy(argv[0]) ? 1 : 0;
+        bender_vm.quantum = bender_truthy(argv[0]) ? 1 : 0;
     }
-    return janet_wrap_boolean(janet_vm.quantum);
+    return bender_wrap_boolean(bender_vm.quantum);
 }
 
-JANET_CORE_FN(cfun_ev_interrupt,
+BENDER_CORE_FN(cfun_ev_interrupt,
               "(ev/interrupt fiber &opt payload)",
               "Request `fiber` (same VM) suspend with a yield of `payload` "
               "(default nil) at its next resume boundary: before running "
               "another instruction, never inside pcall, never in C. A "
               "racing wakeup value is dropped (interrupt wins); interrupts "
               "do not cross VMs (cleared on unmarshal). Returns `fiber`.") {
-    janet_arity(argc, 1, 2);
-    JanetFiber *fiber = janet_getfiber(argv, 0);
+    bender_arity(argc, 1, 2);
+    BenderFiber *fiber = bender_getfiber(argv, 0);
     fiber->interrupt_requested = 1;
-    fiber->interrupt_value = (argc >= 2) ? argv[1] : janet_wrap_nil();
+    fiber->interrupt_value = (argc >= 2) ? argv[1] : bender_wrap_nil();
     return argv[0];
 }
 
-JANET_CORE_FN(cfun_ev_give_supervisor,
+BENDER_CORE_FN(cfun_ev_give_supervisor,
               "(ev/give-supervisor tag & payload)",
               "Send a message to the current supervisor channel if there is one. The message will be a "
               "tuple of all of the arguments combined into a single message, where the first element is tag. "
               "By convention, tag should be a keyword indicating the type of message. Returns nil.") {
-    janet_arity(argc, 1, -1);
-    void *chanv = janet_vm.root_fiber->supervisor_channel;
+    bender_arity(argc, 1, -1);
+    void *chanv = bender_vm.root_fiber->supervisor_channel;
     if (NULL != chanv) {
-        JanetChannel *chan = janet_channel_unwrap(chanv);
-        if (janet_channel_push(chan, janet_wrap_tuple(janet_tuple_n(argv, argc)), 0)) {
-            janet_await();
+        BenderChannel *chan = bender_channel_unwrap(chanv);
+        if (bender_channel_push(chan, bender_wrap_tuple(bender_tuple_n(argv, argc)), 0)) {
+            bender_await();
         }
     }
-    return janet_wrap_nil();
+    return bender_wrap_nil();
 }
 
-JANET_NO_RETURN void janet_sleep_await(double sec) {
-    JanetTimeout to;
+BENDER_NO_RETURN void bender_sleep_await(double sec) {
+    BenderTimeout to;
     to.when = ts_delta(ts_now(), sec);
-    to.fiber = janet_vm.root_fiber;
+    to.fiber = bender_vm.root_fiber;
     to.is_error = 0;
     to.sched_id = to.fiber->sched_id;
     to.curr_fiber = NULL;
     to.has_worker = 0;
     add_timeout(to);
-    janet_await();
+    bender_await();
 }
 
-JANET_CORE_FN(cfun_ev_pump,
+BENDER_CORE_FN(cfun_ev_pump,
               "(ev/pump)",
               "Run one non-blocking turn of the event loop and return. Any ready "
               "task fiber runs, and ready I/O is sampled with a zero deadline, "
@@ -6778,31 +6778,31 @@ JANET_CORE_FN(cfun_ev_pump,
               "without suspending the caller. Returns nil. `ev/sleep 0` is the "
               "suspending alternative; it additionally yields the current "
               "fiber.") {
-    janet_fixarity(argc, 0);
+    bender_fixarity(argc, 0);
     (void) argv;
     /* Run one non-blocking scheduler turn.
      *
-     * This must not re-enter janet_loop1 inside the calling frame: the loop
-     * resumes task fibers, which swaps janet_vm.fiber and the C stack out from
+     * This must not re-enter bender_loop1 inside the calling frame: the loop
+     * resumes task fibers, which swaps bender_vm.fiber and the C stack out from
      * under the caller (observed as a bus error). So pump never runs a task
      * directly. It first samples expired timers and ready I/O with a
      * zero-deadline poll that cannot block, then suspends with a zero-duration
      * sleep. Once parked, the ordinary driver resumes queued task fibers and
      * the timer wakes us immediately, so a pump costs one scheduler round trip
      * and stays in the microseconds. */
-    janet_loop1_poll_now();
-    janet_sleep_await(0.0);
+    bender_loop1_poll_now();
+    bender_sleep_await(0.0);
 }
 
-JANET_CORE_FN(cfun_ev_sleep,
+BENDER_CORE_FN(cfun_ev_sleep,
               "(ev/sleep sec)",
               "Suspend the current fiber for sec seconds without blocking the event loop.") {
-    janet_fixarity(argc, 1);
-    double sec = janet_getnumber(argv, 0);
-    janet_sleep_await(sec);
+    bender_fixarity(argc, 1);
+    double sec = bender_getnumber(argv, 0);
+    bender_sleep_await(sec);
 }
 
-JANET_CORE_FN(cfun_ev_deadline,
+BENDER_CORE_FN(cfun_ev_deadline,
               "(ev/deadline sec &opt tocancel tocheck intr?)",
               "Schedules the event loop to try to cancel the `tocancel` task as with `ev/cancel`. "
               "After `sec` seconds, the event loop will attempt cancellation of `tocancel` if the "
@@ -6811,52 +6811,52 @@ JANET_CORE_FN(cfun_ev_deadline,
               "fiber). `tocheck` defaults to `(fiber/current)`, but if specified, must be a fiber. "
               "Returns `tocancel` immediately. If `interrupt?` is set to true, will create a "
               "background thread to try to interrupt the VM if the timeout expires.") {
-    janet_arity(argc, 1, 4);
-    double sec = janet_getnumber(argv, 0);
+    bender_arity(argc, 1, 4);
+    double sec = bender_getnumber(argv, 0);
     sec = (sec < 0) ? 0 : sec;
-    JanetFiber *tocancel = janet_optfiber(argv, argc, 1, janet_vm.root_fiber);
-    JanetFiber *tocheck = janet_optfiber(argv, argc, 2, janet_vm.fiber);
-    int use_interrupt = janet_optboolean(argv, argc, 3, 0);
-    JanetTimeout to;
+    BenderFiber *tocancel = bender_optfiber(argv, argc, 1, bender_vm.root_fiber);
+    BenderFiber *tocheck = bender_optfiber(argv, argc, 2, bender_vm.fiber);
+    int use_interrupt = bender_optboolean(argv, argc, 3, 0);
+    BenderTimeout to;
     to.when = ts_delta(ts_now(), sec);
     to.fiber = tocancel;
     to.curr_fiber = tocheck;
     to.is_error = 0;
     to.sched_id = to.fiber->sched_id;
     if (use_interrupt) {
-#ifdef JANET_ANDROID
-        janet_sandbox_assert(JANET_SANDBOX_SIGNAL);
+#ifdef BENDER_ANDROID
+        bender_sandbox_assert(BENDER_SANDBOX_SIGNAL);
 #endif
-        JanetThreadedTimeout *tto = janet_malloc(sizeof(JanetThreadedTimeout));
+        BenderThreadedTimeout *tto = bender_malloc(sizeof(BenderThreadedTimeout));
         if (NULL == tto) {
-            JANET_OUT_OF_MEMORY;
+            BENDER_OUT_OF_MEMORY;
         }
         tto->sec = sec;
-        tto->vm = &janet_vm;
+        tto->vm = &bender_vm;
         tto->fiber = tocheck;
-#ifdef JANET_WINDOWS
+#ifdef BENDER_WINDOWS
         HANDLE cancel_event = CreateEvent(NULL, TRUE, FALSE, NULL);
         if (NULL == cancel_event) {
-            janet_free(tto);
-            janet_panic("failed to create cancel event");
+            bender_free(tto);
+            bender_panic("failed to create cancel event");
         }
         tto->cancel_event = cancel_event;
-        HANDLE worker = CreateThread(NULL, 0, janet_timeout_body, tto, CREATE_SUSPENDED, NULL);
+        HANDLE worker = CreateThread(NULL, 0, bender_timeout_body, tto, CREATE_SUSPENDED, NULL);
         if (NULL == worker) {
-            janet_free(tto);
-            janet_panic("failed to create thread");
+            bender_free(tto);
+            bender_panic("failed to create thread");
         }
 #else
         pthread_t worker;
-        int err = pthread_create(&worker, NULL, janet_timeout_body, tto);
+        int err = pthread_create(&worker, NULL, bender_timeout_body, tto);
         if (err) {
-            janet_free(tto);
-            janet_panicf("%s", janet_strerror(err));
+            bender_free(tto);
+            bender_panicf("%s", bender_strerror(err));
         }
 #endif
         to.has_worker = 1;
         to.worker = worker;
-#ifdef JANET_WINDOWS
+#ifdef BENDER_WINDOWS
         to.worker_event = cancel_event;
         ResumeThread(worker);
 #endif
@@ -6864,31 +6864,31 @@ JANET_CORE_FN(cfun_ev_deadline,
         to.has_worker = 0;
     }
     add_timeout(to);
-    return janet_wrap_fiber(tocancel);
+    return bender_wrap_fiber(tocancel);
 }
 
-JANET_CORE_FN(cfun_ev_cancel,
+BENDER_CORE_FN(cfun_ev_cancel,
               "(ev/cancel fib err)",
               "Cancel a suspended task fiber `fib` in the event loop. "
               "Differs from `cancel` in that it returns the canceled "
               "fiber immediately.") {
-    janet_fixarity(argc, 2);
-    JanetFiber *fiber = janet_getfiber(argv, 0);
-    Janet err = argv[1];
-    janet_cancel(fiber, err);
+    bender_fixarity(argc, 2);
+    BenderFiber *fiber = bender_getfiber(argv, 0);
+    Bender err = argv[1];
+    bender_cancel(fiber, err);
     return argv[0];
 }
 
-JANET_CORE_FN(janet_cfun_stream_close,
+BENDER_CORE_FN(bender_cfun_stream_close,
               "(ev/close stream)",
               "Close a stream. This should be the same as calling (:close stream) for all streams.") {
-    janet_fixarity(argc, 1);
-    JanetStream *stream = janet_getabstract(argv, 0, &janet_stream_type);
-    janet_stream_close(stream);
+    bender_fixarity(argc, 1);
+    BenderStream *stream = bender_getabstract(argv, 0, &bender_stream_type);
+    bender_stream_close(stream);
     return argv[0];
 }
 
-JANET_CORE_FN(janet_cfun_stream_read,
+BENDER_CORE_FN(bender_cfun_stream_read,
               "(ev/read stream n &opt buf timeout)",
               "Read at most `n` bytes into a buffer asynchronously from a "
               "stream. `n` can also be `:all` to read into the buffer until "
@@ -6901,174 +6901,174 @@ JANET_CORE_FN(janet_cfun_stream_read,
               "buffer if the read "
               "was successful or nil if end-of-stream reached. Raises "
               "an error if there were problems with the IO operation.") {
-    janet_arity(argc, 2, 4);
-    JanetStream *stream = janet_getabstract(argv, 0, &janet_stream_type);
-    janet_stream_flags(stream, JANET_STREAM_READABLE);
-    JanetBuffer *buffer = janet_optbuffer(argv, argc, 2, 10);
-    double to = janet_optnumber(argv, argc, 3, INFINITY);
-    if (janet_keyeq(argv[1], "all")) {
-        if (to != INFINITY) janet_addtimeout(to);
-        janet_ev_readchunk(stream, buffer, INT32_MAX);
+    bender_arity(argc, 2, 4);
+    BenderStream *stream = bender_getabstract(argv, 0, &bender_stream_type);
+    bender_stream_flags(stream, BENDER_STREAM_READABLE);
+    BenderBuffer *buffer = bender_optbuffer(argv, argc, 2, 10);
+    double to = bender_optnumber(argv, argc, 3, INFINITY);
+    if (bender_keyeq(argv[1], "all")) {
+        if (to != INFINITY) bender_addtimeout(to);
+        bender_ev_readchunk(stream, buffer, INT32_MAX);
     } else {
-        int32_t n = janet_getnat(argv, 1);
-        if (to != INFINITY) janet_addtimeout(to);
-        janet_ev_read(stream, buffer, n);
+        int32_t n = bender_getnat(argv, 1);
+        if (to != INFINITY) bender_addtimeout(to);
+        bender_ev_read(stream, buffer, n);
     }
 }
 
-JANET_CORE_FN(janet_cfun_stream_chunk,
+BENDER_CORE_FN(bender_cfun_stream_chunk,
               "(ev/chunk stream n &opt buf timeout)",
               "Same as `ev/read`, but does not return early if less than "
               "`n` bytes are available. If an end-of-stream is reached, "
               "returns early with the collected bytes.") {
-    janet_arity(argc, 2, 4);
-    JanetStream *stream = janet_getabstract(argv, 0, &janet_stream_type);
-    janet_stream_flags(stream, JANET_STREAM_READABLE);
-    int32_t n = janet_getnat(argv, 1);
-    JanetBuffer *buffer = janet_optbuffer(argv, argc, 2, 10);
-    double to = janet_optnumber(argv, argc, 3, INFINITY);
-    if (to != INFINITY) janet_addtimeout(to);
-    janet_ev_readchunk(stream, buffer, n);
+    bender_arity(argc, 2, 4);
+    BenderStream *stream = bender_getabstract(argv, 0, &bender_stream_type);
+    bender_stream_flags(stream, BENDER_STREAM_READABLE);
+    int32_t n = bender_getnat(argv, 1);
+    BenderBuffer *buffer = bender_optbuffer(argv, argc, 2, 10);
+    double to = bender_optnumber(argv, argc, 3, INFINITY);
+    if (to != INFINITY) bender_addtimeout(to);
+    bender_ev_readchunk(stream, buffer, n);
 }
 
-JANET_CORE_FN(janet_cfun_stream_write,
+BENDER_CORE_FN(bender_cfun_stream_write,
               "(ev/write stream data &opt timeout)",
               "Write data to a stream, suspending the current fiber until the write "
               "completes. Takes an optional timeout in seconds, after which will return nil. "
               "Returns nil, or raises an error if the write failed.") {
-    janet_arity(argc, 2, 3);
-    JanetStream *stream = janet_getabstract(argv, 0, &janet_stream_type);
-    janet_stream_flags(stream, JANET_STREAM_WRITABLE);
-    double to = janet_optnumber(argv, argc, 2, INFINITY);
-    if (janet_checktype(argv[1], JANET_BUFFER)) {
-        if (to != INFINITY) janet_addtimeout(to);
-        janet_ev_write_buffer(stream, janet_getbuffer(argv, 1));
+    bender_arity(argc, 2, 3);
+    BenderStream *stream = bender_getabstract(argv, 0, &bender_stream_type);
+    bender_stream_flags(stream, BENDER_STREAM_WRITABLE);
+    double to = bender_optnumber(argv, argc, 2, INFINITY);
+    if (bender_checktype(argv[1], BENDER_BUFFER)) {
+        if (to != INFINITY) bender_addtimeout(to);
+        bender_ev_write_buffer(stream, bender_getbuffer(argv, 1));
     } else {
-        JanetByteView bytes = janet_getbytes(argv, 1);
-        if (to != INFINITY) janet_addtimeout(to);
-        janet_ev_write_string(stream, bytes.bytes);
+        BenderByteView bytes = bender_getbytes(argv, 1);
+        if (to != INFINITY) bender_addtimeout(to);
+        bender_ev_write_string(stream, bytes.bytes);
     }
 }
 
 static int mutexgc(void *p, size_t size) {
     (void) size;
-    janet_os_mutex_deinit(p);
+    bender_os_mutex_deinit(p);
     return 0;
 }
 
-const JanetAbstractType janet_mutex_type = {
+const BenderAbstractType bender_mutex_type = {
     "core/lock",
     mutexgc,
-    JANET_ATEND_GC
+    BENDER_ATEND_GC
 };
 
-JANET_CORE_FN(janet_cfun_mutex,
+BENDER_CORE_FN(bender_cfun_mutex,
               "(ev/lock)",
               "Create a new lock to coordinate threads.") {
-    janet_fixarity(argc, 0);
+    bender_fixarity(argc, 0);
     (void) argv;
-    void *mutex = janet_abstract_threaded(&janet_mutex_type, janet_os_mutex_size());
-    janet_os_mutex_init(mutex);
-    return janet_wrap_abstract(mutex);
+    void *mutex = bender_abstract_threaded(&bender_mutex_type, bender_os_mutex_size());
+    bender_os_mutex_init(mutex);
+    return bender_wrap_abstract(mutex);
 }
 
-JANET_CORE_FN(janet_cfun_mutex_acquire,
+BENDER_CORE_FN(bender_cfun_mutex_acquire,
               "(ev/acquire-lock lock)",
               "Acquire a lock such that this operating system thread is the only thread with access to this resource."
               " This will block this entire thread until the lock becomes available, and will not yield to other fibers "
               "on this system thread.") {
-    janet_fixarity(argc, 1);
-    void *mutex = janet_getabstract(argv, 0, &janet_mutex_type);
-    janet_os_mutex_lock(mutex);
+    bender_fixarity(argc, 1);
+    void *mutex = bender_getabstract(argv, 0, &bender_mutex_type);
+    bender_os_mutex_lock(mutex);
     return argv[0];
 }
 
-JANET_CORE_FN(janet_cfun_mutex_release,
+BENDER_CORE_FN(bender_cfun_mutex_release,
               "(ev/release-lock lock)",
               "Release a lock such that other threads may acquire it.") {
-    janet_fixarity(argc, 1);
-    void *mutex = janet_getabstract(argv, 0, &janet_mutex_type);
-    janet_os_mutex_unlock(mutex);
+    bender_fixarity(argc, 1);
+    void *mutex = bender_getabstract(argv, 0, &bender_mutex_type);
+    bender_os_mutex_unlock(mutex);
     return argv[0];
 }
 
 static int rwlockgc(void *p, size_t size) {
     (void) size;
-    janet_os_rwlock_deinit(p);
+    bender_os_rwlock_deinit(p);
     return 0;
 }
 
-const JanetAbstractType janet_rwlock_type = {
+const BenderAbstractType bender_rwlock_type = {
     "core/rwlock",
     rwlockgc,
-    JANET_ATEND_GC
+    BENDER_ATEND_GC
 };
 
-JANET_CORE_FN(janet_cfun_rwlock,
+BENDER_CORE_FN(bender_cfun_rwlock,
               "(ev/rwlock)",
               "Create a new read-write lock to coordinate threads.") {
-    janet_fixarity(argc, 0);
+    bender_fixarity(argc, 0);
     (void) argv;
-    void *rwlock = janet_abstract_threaded(&janet_rwlock_type, janet_os_rwlock_size());
-    janet_os_rwlock_init(rwlock);
-    return janet_wrap_abstract(rwlock);
+    void *rwlock = bender_abstract_threaded(&bender_rwlock_type, bender_os_rwlock_size());
+    bender_os_rwlock_init(rwlock);
+    return bender_wrap_abstract(rwlock);
 }
 
-JANET_CORE_FN(janet_cfun_rwlock_read_lock,
+BENDER_CORE_FN(bender_cfun_rwlock_read_lock,
               "(ev/acquire-rlock rwlock)",
               "Acquire a read lock an a read-write lock.") {
-    janet_fixarity(argc, 1);
-    void *rwlock = janet_getabstract(argv, 0, &janet_rwlock_type);
-    janet_os_rwlock_rlock(rwlock);
+    bender_fixarity(argc, 1);
+    void *rwlock = bender_getabstract(argv, 0, &bender_rwlock_type);
+    bender_os_rwlock_rlock(rwlock);
     return argv[0];
 }
 
-JANET_CORE_FN(janet_cfun_rwlock_write_lock,
+BENDER_CORE_FN(bender_cfun_rwlock_write_lock,
               "(ev/acquire-wlock rwlock)",
               "Acquire a write lock on a read-write lock.") {
-    janet_fixarity(argc, 1);
-    void *rwlock = janet_getabstract(argv, 0, &janet_rwlock_type);
-    janet_os_rwlock_wlock(rwlock);
+    bender_fixarity(argc, 1);
+    void *rwlock = bender_getabstract(argv, 0, &bender_rwlock_type);
+    bender_os_rwlock_wlock(rwlock);
     return argv[0];
 }
 
-JANET_CORE_FN(janet_cfun_rwlock_read_release,
+BENDER_CORE_FN(bender_cfun_rwlock_read_release,
               "(ev/release-rlock rwlock)",
               "Release a read lock on a read-write lock") {
-    janet_fixarity(argc, 1);
-    void *rwlock = janet_getabstract(argv, 0, &janet_rwlock_type);
-    janet_os_rwlock_runlock(rwlock);
+    bender_fixarity(argc, 1);
+    void *rwlock = bender_getabstract(argv, 0, &bender_rwlock_type);
+    bender_os_rwlock_runlock(rwlock);
     return argv[0];
 }
 
-JANET_CORE_FN(janet_cfun_rwlock_write_release,
+BENDER_CORE_FN(bender_cfun_rwlock_write_release,
               "(ev/release-wlock rwlock)",
               "Release a write lock on a read-write lock") {
-    janet_fixarity(argc, 1);
-    void *rwlock = janet_getabstract(argv, 0, &janet_rwlock_type);
-    janet_os_rwlock_wunlock(rwlock);
+    bender_fixarity(argc, 1);
+    void *rwlock = bender_getabstract(argv, 0, &bender_rwlock_type);
+    bender_os_rwlock_wunlock(rwlock);
     return argv[0];
 }
 
-static JanetFile *get_file_for_stream(JanetStream *stream) {
+static BenderFile *get_file_for_stream(BenderStream *stream) {
     int32_t flags = 0;
     char fmt[4] = {0};
     int index = 0;
-    if (stream->flags & JANET_STREAM_READABLE) {
-        flags |= JANET_FILE_READ;
-        janet_sandbox_assert(JANET_SANDBOX_FS_READ);
+    if (stream->flags & BENDER_STREAM_READABLE) {
+        flags |= BENDER_FILE_READ;
+        bender_sandbox_assert(BENDER_SANDBOX_FS_READ);
         fmt[index++] = 'r';
     }
-    if (stream->flags & JANET_STREAM_WRITABLE) {
-        flags |= JANET_FILE_WRITE;
-        janet_sandbox_assert(JANET_SANDBOX_FS_WRITE);
+    if (stream->flags & BENDER_STREAM_WRITABLE) {
+        flags |= BENDER_FILE_WRITE;
+        bender_sandbox_assert(BENDER_SANDBOX_FS_WRITE);
         int currindex = index;
         fmt[index++] = (currindex == 0) ? 'w' : '+';
     }
     if (index == 0) return NULL;
     /* duplicate handle when converting stream to file */
-    stream->flags &= ~JANET_STREAM_NODUPS;
-#ifdef JANET_WINDOWS
+    stream->flags &= ~BENDER_STREAM_NODUPS;
+#ifdef BENDER_WINDOWS
     int htype = 0;
     if (fmt[0] == 'r' && fmt[1] == '+') {
         htype = _O_RDWR;
@@ -7095,102 +7095,102 @@ static JanetFile *get_file_for_stream(JanetStream *stream) {
         return NULL;
     }
 #endif
-    return janet_makejfile(f, flags);
+    return bender_makejfile(f, flags);
 }
 
-JANET_CORE_FN(janet_cfun_to_file,
+BENDER_CORE_FN(bender_cfun_to_file,
               "(ev/to-file)",
               "Create core/file copy of the stream. This value can be used "
               "when blocking IO behavior is needed.") {
-    janet_fixarity(argc, 1);
-    JanetStream *stream = janet_getabstract(argv, 0, &janet_stream_type);
-    JanetFile *iof = get_file_for_stream(stream);
-    if (iof == NULL) janet_panic("cannot make file from stream");
-    return janet_wrap_abstract(iof);
+    bender_fixarity(argc, 1);
+    BenderStream *stream = bender_getabstract(argv, 0, &bender_stream_type);
+    BenderFile *iof = get_file_for_stream(stream);
+    if (iof == NULL) bender_panic("cannot make file from stream");
+    return bender_wrap_abstract(iof);
 }
 
-JANET_CORE_FN(janet_cfun_ev_all_tasks,
+BENDER_CORE_FN(bender_cfun_ev_all_tasks,
               "(ev/all-tasks)",
               "Get an array of all active task fibers that are being used by the scheduler.") {
-    janet_fixarity(argc, 0);
+    bender_fixarity(argc, 0);
     (void) argv;
-    JanetArray *array = janet_array(janet_vm.active_tasks.count);
-    for (int32_t i = 0; i < janet_vm.active_tasks.capacity; i++) {
-        if (!janet_checktype(janet_vm.active_tasks.data[i].key, JANET_NIL)) {
-            janet_array_push(array, janet_vm.active_tasks.data[i].key);
+    BenderArray *array = bender_array(bender_vm.active_tasks.count);
+    for (int32_t i = 0; i < bender_vm.active_tasks.capacity; i++) {
+        if (!bender_checktype(bender_vm.active_tasks.data[i].key, BENDER_NIL)) {
+            bender_array_push(array, bender_vm.active_tasks.data[i].key);
         }
     }
-    return janet_wrap_array(array);
+    return bender_wrap_array(array);
 }
 
-void janet_lib_ev(JanetTable *env) {
-    JanetRegExt ev_cfuns_ext[] = {
-        JANET_CORE_REG("ev/give", cfun_channel_push),
-        JANET_CORE_REG("ev/take", cfun_channel_pop),
-        JANET_CORE_REG("ev/try-give", cfun_channel_try_push),
-        JANET_CORE_REG("ev/try-take", cfun_channel_try_pop),
-        JANET_CORE_REG("ev/full", cfun_channel_full),
-        JANET_CORE_REG("ev/capacity", cfun_channel_capacity),
-        JANET_CORE_REG("ev/count", cfun_channel_count),
-        JANET_CORE_REG("ev/select", cfun_channel_choice),
-        JANET_CORE_REG("ev/rselect", cfun_channel_rchoice),
-        JANET_CORE_REG("ev/chan", cfun_channel_new),
-        JANET_CORE_REG("ev/thread-chan", cfun_channel_new_threaded),
-        JANET_CORE_REG("ev/ichan", cfun_channel_new_isolated),
-        JANET_CORE_REG("ev/chan-close", cfun_channel_close),
-        JANET_CORE_REG("ev/go", cfun_ev_go),
-        JANET_CORE_REG("ev/thread", cfun_ev_thread),
-        JANET_CORE_REG("thread/new", cfun_thread_new),
-        JANET_CORE_REG("thread/join", cfun_thread_join),
-        JANET_CORE_REG("thread/alive?", cfun_thread_alive),
-        JANET_CORE_REG("thread/profile", cfun_thread_profile),
-        JANET_CORE_REG("pool/spawn", cfun_pool_spawn),
-        JANET_CORE_REG("pool/acquire", cfun_pool_acquire),
-        JANET_CORE_REG("pool/dispatch", cfun_pool_dispatch),
-        JANET_CORE_REG("pool/profile-harvest", cfun_pool_profile_harvest),
-        JANET_CORE_REG("pool/stop", cfun_pool_stop),
-        JANET_CORE_REG("ev/monitor", cfun_thread_monitor),
-        JANET_CORE_REG("ev/demonitor", cfun_thread_demonitor),
-        JANET_CORE_REG("ev/register", cfun_registry_register),
-        JANET_CORE_REG("ev/whereis", cfun_registry_whereis),
-        JANET_CORE_REG("ev/unregister", cfun_registry_unregister),
-        JANET_CORE_REG("shared/new", cfun_shared_new),
-        JANET_CORE_REG("shared/shareable?", cfun_shared_shareable),
-        JANET_CORE_REG("shared/length", cfun_shared_length),
-        JANET_CORE_REG("shared/get", cfun_shared_get),
-        JANET_CORE_REG("shared/materialize", cfun_shared_materialize),
-        JANET_CORE_REG("ev/give-supervisor", cfun_ev_give_supervisor),
-        JANET_CORE_REG("ev/interrupt", cfun_ev_interrupt),
-        JANET_CORE_REG("ev/timeslice", cfun_ev_timeslice),
-        JANET_CORE_REG("ev/pump", cfun_ev_pump),
-        JANET_CORE_REG("ev/sleep", cfun_ev_sleep),
-        JANET_CORE_REG("ev/deadline", cfun_ev_deadline),
-        JANET_CORE_REG("ev/cancel", cfun_ev_cancel),
-        JANET_CORE_REG("ev/close", janet_cfun_stream_close),
-        JANET_CORE_REG("ev/read", janet_cfun_stream_read),
-        JANET_CORE_REG("ev/chunk", janet_cfun_stream_chunk),
-        JANET_CORE_REG("ev/write", janet_cfun_stream_write),
-        JANET_CORE_REG("ev/lock", janet_cfun_mutex),
-        JANET_CORE_REG("ev/acquire-lock", janet_cfun_mutex_acquire),
-        JANET_CORE_REG("ev/release-lock", janet_cfun_mutex_release),
-        JANET_CORE_REG("ev/rwlock", janet_cfun_rwlock),
-        JANET_CORE_REG("ev/acquire-rlock", janet_cfun_rwlock_read_lock),
-        JANET_CORE_REG("ev/acquire-wlock", janet_cfun_rwlock_write_lock),
-        JANET_CORE_REG("ev/release-rlock", janet_cfun_rwlock_read_release),
-        JANET_CORE_REG("ev/release-wlock", janet_cfun_rwlock_write_release),
-        JANET_CORE_REG("ev/to-file", janet_cfun_to_file),
-        JANET_CORE_REG("ev/all-tasks", janet_cfun_ev_all_tasks),
-        JANET_REG_END
+void bender_lib_ev(BenderTable *env) {
+    BenderRegExt ev_cfuns_ext[] = {
+        BENDER_CORE_REG("ev/give", cfun_channel_push),
+        BENDER_CORE_REG("ev/take", cfun_channel_pop),
+        BENDER_CORE_REG("ev/try-give", cfun_channel_try_push),
+        BENDER_CORE_REG("ev/try-take", cfun_channel_try_pop),
+        BENDER_CORE_REG("ev/full", cfun_channel_full),
+        BENDER_CORE_REG("ev/capacity", cfun_channel_capacity),
+        BENDER_CORE_REG("ev/count", cfun_channel_count),
+        BENDER_CORE_REG("ev/select", cfun_channel_choice),
+        BENDER_CORE_REG("ev/rselect", cfun_channel_rchoice),
+        BENDER_CORE_REG("ev/chan", cfun_channel_new),
+        BENDER_CORE_REG("ev/thread-chan", cfun_channel_new_threaded),
+        BENDER_CORE_REG("ev/ichan", cfun_channel_new_isolated),
+        BENDER_CORE_REG("ev/chan-close", cfun_channel_close),
+        BENDER_CORE_REG("ev/go", cfun_ev_go),
+        BENDER_CORE_REG("ev/thread", cfun_ev_thread),
+        BENDER_CORE_REG("thread/new", cfun_thread_new),
+        BENDER_CORE_REG("thread/join", cfun_thread_join),
+        BENDER_CORE_REG("thread/alive?", cfun_thread_alive),
+        BENDER_CORE_REG("thread/profile", cfun_thread_profile),
+        BENDER_CORE_REG("pool/spawn", cfun_pool_spawn),
+        BENDER_CORE_REG("pool/acquire", cfun_pool_acquire),
+        BENDER_CORE_REG("pool/dispatch", cfun_pool_dispatch),
+        BENDER_CORE_REG("pool/profile-harvest", cfun_pool_profile_harvest),
+        BENDER_CORE_REG("pool/stop", cfun_pool_stop),
+        BENDER_CORE_REG("ev/monitor", cfun_thread_monitor),
+        BENDER_CORE_REG("ev/demonitor", cfun_thread_demonitor),
+        BENDER_CORE_REG("ev/register", cfun_registry_register),
+        BENDER_CORE_REG("ev/whereis", cfun_registry_whereis),
+        BENDER_CORE_REG("ev/unregister", cfun_registry_unregister),
+        BENDER_CORE_REG("shared/new", cfun_shared_new),
+        BENDER_CORE_REG("shared/shareable?", cfun_shared_shareable),
+        BENDER_CORE_REG("shared/length", cfun_shared_length),
+        BENDER_CORE_REG("shared/get", cfun_shared_get),
+        BENDER_CORE_REG("shared/materialize", cfun_shared_materialize),
+        BENDER_CORE_REG("ev/give-supervisor", cfun_ev_give_supervisor),
+        BENDER_CORE_REG("ev/interrupt", cfun_ev_interrupt),
+        BENDER_CORE_REG("ev/timeslice", cfun_ev_timeslice),
+        BENDER_CORE_REG("ev/pump", cfun_ev_pump),
+        BENDER_CORE_REG("ev/sleep", cfun_ev_sleep),
+        BENDER_CORE_REG("ev/deadline", cfun_ev_deadline),
+        BENDER_CORE_REG("ev/cancel", cfun_ev_cancel),
+        BENDER_CORE_REG("ev/close", bender_cfun_stream_close),
+        BENDER_CORE_REG("ev/read", bender_cfun_stream_read),
+        BENDER_CORE_REG("ev/chunk", bender_cfun_stream_chunk),
+        BENDER_CORE_REG("ev/write", bender_cfun_stream_write),
+        BENDER_CORE_REG("ev/lock", bender_cfun_mutex),
+        BENDER_CORE_REG("ev/acquire-lock", bender_cfun_mutex_acquire),
+        BENDER_CORE_REG("ev/release-lock", bender_cfun_mutex_release),
+        BENDER_CORE_REG("ev/rwlock", bender_cfun_rwlock),
+        BENDER_CORE_REG("ev/acquire-rlock", bender_cfun_rwlock_read_lock),
+        BENDER_CORE_REG("ev/acquire-wlock", bender_cfun_rwlock_write_lock),
+        BENDER_CORE_REG("ev/release-rlock", bender_cfun_rwlock_read_release),
+        BENDER_CORE_REG("ev/release-wlock", bender_cfun_rwlock_write_release),
+        BENDER_CORE_REG("ev/to-file", bender_cfun_to_file),
+        BENDER_CORE_REG("ev/all-tasks", bender_cfun_ev_all_tasks),
+        BENDER_REG_END
     };
 
-    janet_core_cfuns_ext(env, NULL, ev_cfuns_ext);
-    janet_register_abstract_type(&janet_stream_type);
-    janet_register_abstract_type(&janet_channel_type);
-    janet_register_abstract_type(&janet_mutex_type);
-    janet_register_abstract_type(&janet_rwlock_type);
-    janet_register_abstract_type(&janet_thread_handle_type);
-    janet_register_abstract_type(&janet_pool_type);
-    janet_register_abstract_type(&janet_shared_type);
+    bender_core_cfuns_ext(env, NULL, ev_cfuns_ext);
+    bender_register_abstract_type(&bender_stream_type);
+    bender_register_abstract_type(&bender_channel_type);
+    bender_register_abstract_type(&bender_mutex_type);
+    bender_register_abstract_type(&bender_rwlock_type);
+    bender_register_abstract_type(&bender_thread_handle_type);
+    bender_register_abstract_type(&bender_pool_type);
+    bender_register_abstract_type(&bender_shared_type);
 }
 
 #endif

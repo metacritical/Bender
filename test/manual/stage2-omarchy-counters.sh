@@ -4,18 +4,18 @@
 # and extended with executor counter printing AFTER the normal run.
 set -eu
 T=/private/var/folders/v6/lmp2f1ws4jl76bjbhzm0tcwm0000gn/T/opencode
-JANET=/Users/pankajdoharey/Development/Projects/janet
-APP=/Users/pankajdoharey/Development/Projects/ML/ttfx/janet-port
+BENDER=/Users/pankajdoharey/Development/Projects/bender
+APP=/Users/pankajdoharey/Development/Projects/ML/ttfx/bender-port
 OUT=$T/stage2-omarchy-probe
 CACHE=$T/stage2-omarchy-probe-cache
-PROBE_SRC=$APP/bin/ttfx-probe-tmp.janet
+PROBE_SRC=$APP/bin/ttfx-probe-tmp.ben
 rm -rf "$OUT" "$CACHE"; mkdir -p "$OUT" "$CACHE"
 trap 'rm -f "$PROBE_SRC"' EXIT
-export JANET_NO_PROFILE=1
-python3 - "$APP/bin/ttfx-cli.janet" "$PROBE_SRC" <<'PYEOF'
+export BENDER_NO_PROFILE=1
+python3 - "$APP/bin/ttfx-cli.ben" "$PROBE_SRC" <<'PYEOF'
 import sys
 src, dst = sys.argv[1], sys.argv[2]
-app = "/Users/pankajdoharey/Development/Projects/ML/ttfx/janet-port"
+app = "/Users/pankajdoharey/Development/Projects/ML/ttfx/bender-port"
 text = open(src).read()
 # keep the app's relative imports intact by placing the probe beside
 # the original in bin/ (temporary untracked file, removed after build)
@@ -40,7 +40,7 @@ text = text.replace(anchor, "    (S/faithful-dump ctx fx maxf)\n" + probe_tail +
 open(dst, "w").write(text)
 PYEOF
 cd "$APP"
-XDG_CACHE_HOME="$CACHE" JANET_NATIVE_EXECUTORS=1 "$JANET/build/bender" --aot "$PROBE_SRC" --native --no-auto-pgo -o "$OUT/ttfx-probe" > "$OUT/build.log" 2>&1
+XDG_CACHE_HOME="$CACHE" BENDER_NATIVE_EXECUTORS=1 "$BENDER/build/bender" --aot "$PROBE_SRC" --native --no-auto-pgo -o "$OUT/ttfx-probe" > "$OUT/build.log" 2>&1
 MANIFEST=$(find "$OUT" -maxdepth 2 -name native-executors.txt | while read m; do [ -s "$m" ] && echo "$m"; done | head -1)
 echo "manifest: $MANIFEST ($(wc -l < "$MANIFEST" | tr -d ' ') entries)"
 for effect in decrypt fireworks; do

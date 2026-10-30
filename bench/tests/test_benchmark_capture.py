@@ -602,12 +602,12 @@ class ScrubPolicyTests(CaptureHarness):
     def test_declared_scrub_policy_is_recorded(self):
         record = self.run_capture(
             py("print('x')"),
-            scrubbed_prefixes=("JANET_", "BENDER_"),
+            scrubbed_prefixes=("BENDER_", "BENDER_"),
             scrubbed_names=("XDG_CACHE_HOME",),
         )
         scrub = record["scrub"]
         self.assertEqual(scrub["performed_by"], "launcher")
-        self.assertEqual(scrub["removed_prefixes"], ["JANET_", "BENDER_"])
+        self.assertEqual(scrub["removed_prefixes"], ["BENDER_", "BENDER_"])
         self.assertEqual(scrub["removed_names"], ["XDG_CACHE_HOME"])
 
     def test_an_empty_policy_says_so_rather_than_looking_like_none_ran(self):
@@ -628,11 +628,11 @@ class ScrubPolicyTests(CaptureHarness):
     def test_failed_captures_also_carry_the_scrub_policy(self):
         with self.assertRaises(capture_tool.CaptureError):
             self.run_capture(
-                py("pass"), resource_tool="not-a-tool", scrubbed_prefixes=("JANET_",)
+                py("pass"), resource_tool="not-a-tool", scrubbed_prefixes=("BENDER_",)
             )
         record = self.read_record()
         self.assertFalse(record["complete"])
-        self.assertEqual(record["scrub"]["removed_prefixes"], ["JANET_"])
+        self.assertEqual(record["scrub"]["removed_prefixes"], ["BENDER_"])
 
 
 if __name__ == "__main__":

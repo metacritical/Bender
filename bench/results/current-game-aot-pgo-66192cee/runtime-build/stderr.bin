@@ -1,25 +1,25 @@
-src/core/abstract.c:265:13: warning: unused function 'janet_abstract_release_cb' [-Wunused-function]
-  265 | static void janet_abstract_release_cb(JanetEVGenericMessage msg) {
+src/core/abstract.c:265:13: warning: unused function 'bender_abstract_release_cb' [-Wunused-function]
+  265 | static void bender_abstract_release_cb(BenderEVGenericMessage msg) {
       |             ^~~~~~~~~~~~~~~~~~~~~~~~~
 1 warning generated.
 src/core/ffi.c:246:1: warning: missing field 'gcperthread' initializer [-Wmissing-field-initializers]
   246 | };
       | ^
-src/core/ev.c:107:3: warning: redefinition of typedef 'JanetChanPendReg' is a C11 feature [-Wtypedef-redefinition]
-  107 | } JanetChanPendReg;
+src/core/ev.c:107:3: warning: redefinition of typedef 'BenderChanPendReg' is a C11 feature [-Wtypedef-redefinition]
+  107 | } BenderChanPendReg;
       |   ^
 src/core/ev.c:66:33: note: previous definition is here
-   66 | typedef struct JanetChanPendReg JanetChanPendReg;
+   66 | typedef struct BenderChanPendReg BenderChanPendReg;
       |                                 ^
 1 warning generated.
 src/core/ev.c:5895:17: warning: unused variable 'root' [-Wunused-variable]
- 5895 |     JanetFiber *root = call_waiter;
+ 5895 |     BenderFiber *root = call_waiter;
       |                 ^~~~
 src/core/ev.c:1138:13: warning: unused function 'flag_chanpend_node' [-Wunused-function]
- 1138 | static void flag_chanpend_node(JanetChannelPending *p) {
+ 1138 | static void flag_chanpend_node(BenderChannelPending *p) {
       |             ^~~~~~~~~~~~~~~~~~
-src/core/gc.c:1052:13: warning: unused function 'janet_quarantine_maybe_drain' [-Wunused-function]
- 1052 | static void janet_quarantine_maybe_drain(void) {
+src/core/gc.c:1052:13: warning: unused function 'bender_quarantine_maybe_drain' [-Wunused-function]
+ 1052 | static void bender_quarantine_maybe_drain(void) {
       |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~
 3 warnings generated.
 1 warning generated.
@@ -34,7 +34,7 @@ src/core/proc.c:1044:1: warning: missing field 'gcperthread' initializer [-Wmiss
  1044 | };
       | ^
 src/core/specials.c:326:35: warning: unused variable 'vv' [-Wunused-variable]
-  326 |                             Janet vv = kvs[oi].value;
+  326 |                             Bender vv = kvs[oi].value;
       |                                   ^~
 1 warning generated.
 1 warning generated.
@@ -45,14 +45,14 @@ src/core/vm.c:2142:9: warning: excess elements in array initializer [-Wexcess-in
 total bytecode instructions created: 26153
 total function definitions optimized: 1168
 total optimization loops executed: 2138
-src/core/ev.c:107:3: warning: redefinition of typedef 'JanetChanPendReg' is a C11 feature [-Wtypedef-redefinition]
-  107 | } JanetChanPendReg;
+src/core/ev.c:107:3: warning: redefinition of typedef 'BenderChanPendReg' is a C11 feature [-Wtypedef-redefinition]
+  107 | } BenderChanPendReg;
       |   ^
 src/core/ev.c:66:33: note: previous definition is here
-   66 | typedef struct JanetChanPendReg JanetChanPendReg;
+   66 | typedef struct BenderChanPendReg BenderChanPendReg;
       |                                 ^
 src/core/ev.c:5895:17: warning: unused variable 'root' [-Wunused-variable]
- 5895 |     JanetFiber *root = call_waiter;
+ 5895 |     BenderFiber *root = call_waiter;
       |                 ^~~~
 src/core/ffi.c:246:1: warning: missing field 'gcperthread' initializer [-Wmissing-field-initializers]
   246 | };
@@ -67,19 +67,19 @@ src/core/proc.c:1044:1: warning: missing field 'gcperthread' initializer [-Wmiss
  1044 | };
       | ^
 src/core/specials.c:326:35: warning: unused variable 'vv' [-Wunused-variable]
-  326 |                             Janet vv = kvs[oi].value;
+  326 |                             Bender vv = kvs[oi].value;
       |                                   ^~
 src/core/vm.c:2142:9: warning: excess elements in array initializer [-Wexcess-initializers]
  2142 |         &&label_unknown_op
       |         ^~~~~~~~~~~~~~~~~~
-src/core/abstract.c:265:13: warning: unused function 'janet_abstract_release_cb' [-Wunused-function]
-  265 | static void janet_abstract_release_cb(JanetEVGenericMessage msg) {
+src/core/abstract.c:265:13: warning: unused function 'bender_abstract_release_cb' [-Wunused-function]
+  265 | static void bender_abstract_release_cb(BenderEVGenericMessage msg) {
       |             ^~~~~~~~~~~~~~~~~~~~~~~~~
 src/core/ev.c:1138:13: warning: unused function 'flag_chanpend_node' [-Wunused-function]
- 1138 | static void flag_chanpend_node(JanetChannelPending *p) {
+ 1138 | static void flag_chanpend_node(BenderChannelPending *p) {
       |             ^~~~~~~~~~~~~~~~~~
-src/core/gc.c:1052:13: warning: unused function 'janet_quarantine_maybe_drain' [-Wunused-function]
- 1052 | static void janet_quarantine_maybe_drain(void) {
+src/core/gc.c:1052:13: warning: unused function 'bender_quarantine_maybe_drain' [-Wunused-function]
+ 1052 | static void bender_quarantine_maybe_drain(void) {
       |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~
 10 warnings generated.
-profile-merge: 15 rows -> /Users/pankajdoharey/.cache/janet/pgo/interpreter/source-860436856/cumulative-28595.pending (run=15)
+profile-merge: 15 rows -> /Users/pankajdoharey/.cache/bender/pgo/interpreter/source-860436856/cumulative-28595.pending (run=15)

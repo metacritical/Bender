@@ -19,7 +19,7 @@ The emitter reports **6 scalar kernels and 78 executor candidates**, with 0 cont
 
 ## Mechanism and scope
 
-The compiler rejects a captured parent-local slot above 255 (`src/core/compile.c:435-440` in the pinned runtime source). The encoding is one byte; silently relaxing the check would be incorrect. The native image path adds prelude/registration forms before compiling the program as one thunk (`tools/mkimage.janet`, including native-name prepends at lines 336-345, executor registration and FFI-alias forms). The plain-image path does not add the native prelude and compiles the same game successfully.
+The compiler rejects a captured parent-local slot above 255 (`src/core/compile.c:435-440` in the pinned runtime source). The encoding is one byte; silently relaxing the check would be incorrect. The native image path adds prelude/registration forms before compiling the program as one thunk (`tools/mkimage.ben`, including native-name prepends at lines 336-345, executor registration and FFI-alias forms). The plain-image path does not add the native prelude and compiles the same game successfully.
 
 An independent read-only audit confirmed the same failure in both logs and found no supported driver flag or environment variable that changes this capture limit. `--dce` does not avoid it on this workload. Fixing image/prelude scoping in the runtime or restructuring game locals would change the controlled sources; neither is part of this comparison.
 

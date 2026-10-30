@@ -20,115 +20,115 @@
 * IN THE SOFTWARE.
 */
 
-#ifndef JANET_COMPILE_H
-#define JANET_COMPILE_H
+#ifndef BENDER_COMPILE_H
+#define BENDER_COMPILE_H
 
-#ifndef JANET_AMALG
+#ifndef BENDER_AMALG
 #include "features.h"
-#include <janet.h>
+#include <bender.h>
 #include "regalloc.h"
 #endif
 
 /* Levels for compiler warnings */
 typedef enum {
-    JANET_C_LINT_RELAXED,
-    JANET_C_LINT_NORMAL,
-    JANET_C_LINT_STRICT
-} JanetCompileLintLevel;
+    BENDER_C_LINT_RELAXED,
+    BENDER_C_LINT_NORMAL,
+    BENDER_C_LINT_STRICT
+} BenderCompileLintLevel;
 
 /* Kinds of variable shadowing for linting */
 typedef enum {
-    JANETC_SHADOW_NONE,
-    JANETC_SHADOW_MACRO,
-    JANETC_SHADOW_GLOBAL_HIDES_GLOBAL,
-    JANETC_SHADOW_LOCAL_HIDES_GLOBAL,
-    JANETC_SHADOW_LOCAL_HIDES_LOCAL
+    BENDERC_SHADOW_NONE,
+    BENDERC_SHADOW_MACRO,
+    BENDERC_SHADOW_GLOBAL_HIDES_GLOBAL,
+    BENDERC_SHADOW_LOCAL_HIDES_GLOBAL,
+    BENDERC_SHADOW_LOCAL_HIDES_LOCAL
 } Shadowing;
 
 /* Tags for some functions for the prepared inliner */
-#define JANET_FUN_DEBUG 1
-#define JANET_FUN_ERROR 2
-#define JANET_FUN_APPLY 3
-#define JANET_FUN_YIELD 4
-#define JANET_FUN_RESUME 5
-#define JANET_FUN_IN 6
-#define JANET_FUN_PUT 7
-#define JANET_FUN_LENGTH 8
-#define JANET_FUN_ADD 9
-#define JANET_FUN_SUBTRACT 10
-#define JANET_FUN_MULTIPLY 11
-#define JANET_FUN_DIVIDE 12
-#define JANET_FUN_BAND 13
-#define JANET_FUN_BOR 14
-#define JANET_FUN_BXOR 15
-#define JANET_FUN_LSHIFT 16
-#define JANET_FUN_RSHIFT 17
-#define JANET_FUN_RSHIFTU 18
-#define JANET_FUN_BNOT 19
-#define JANET_FUN_GT 20
-#define JANET_FUN_LT 21
-#define JANET_FUN_GTE 22
-#define JANET_FUN_LTE 23
-#define JANET_FUN_EQ 24
-#define JANET_FUN_NEQ 25
-#define JANET_FUN_PROP 26
-#define JANET_FUN_GET 27
-#define JANET_FUN_NEXT 28
-#define JANET_FUN_MODULO 29
-#define JANET_FUN_REMAINDER 30
-#define JANET_FUN_CMP 31
-#define JANET_FUN_CANCEL 32
-#define JANET_FUN_DIVIDE_FLOOR 33
+#define BENDER_FUN_DEBUG 1
+#define BENDER_FUN_ERROR 2
+#define BENDER_FUN_APPLY 3
+#define BENDER_FUN_YIELD 4
+#define BENDER_FUN_RESUME 5
+#define BENDER_FUN_IN 6
+#define BENDER_FUN_PUT 7
+#define BENDER_FUN_LENGTH 8
+#define BENDER_FUN_ADD 9
+#define BENDER_FUN_SUBTRACT 10
+#define BENDER_FUN_MULTIPLY 11
+#define BENDER_FUN_DIVIDE 12
+#define BENDER_FUN_BAND 13
+#define BENDER_FUN_BOR 14
+#define BENDER_FUN_BXOR 15
+#define BENDER_FUN_LSHIFT 16
+#define BENDER_FUN_RSHIFT 17
+#define BENDER_FUN_RSHIFTU 18
+#define BENDER_FUN_BNOT 19
+#define BENDER_FUN_GT 20
+#define BENDER_FUN_LT 21
+#define BENDER_FUN_GTE 22
+#define BENDER_FUN_LTE 23
+#define BENDER_FUN_EQ 24
+#define BENDER_FUN_NEQ 25
+#define BENDER_FUN_PROP 26
+#define BENDER_FUN_GET 27
+#define BENDER_FUN_NEXT 28
+#define BENDER_FUN_MODULO 29
+#define BENDER_FUN_REMAINDER 30
+#define BENDER_FUN_CMP 31
+#define BENDER_FUN_CANCEL 32
+#define BENDER_FUN_DIVIDE_FLOOR 33
 
 /* Compiler typedefs */
-typedef struct JanetCompiler JanetCompiler;
+typedef struct BenderCompiler BenderCompiler;
 typedef struct FormOptions FormOptions;
 typedef struct SlotTracker SlotTracker;
-typedef struct JanetScope JanetScope;
-typedef struct JanetSlot JanetSlot;
-typedef struct JanetFopts JanetFopts;
-typedef struct JanetFunOptimizer JanetFunOptimizer;
-typedef struct JanetSpecial JanetSpecial;
-typedef struct JanetRetainedDef JanetRetainedDef;
+typedef struct BenderScope BenderScope;
+typedef struct BenderSlot BenderSlot;
+typedef struct BenderFopts BenderFopts;
+typedef struct BenderFunOptimizer BenderFunOptimizer;
+typedef struct BenderSpecial BenderSpecial;
+typedef struct BenderRetainedDef BenderRetainedDef;
 
-struct JanetRetainedDef {
-    JanetScope *scope; /* Live scope only; cleared at finalization or pop. */
-    JanetFuncDef *parent;
-    JanetFuncDef *child;
-    Janet hint;
+struct BenderRetainedDef {
+    BenderScope *scope; /* Live scope only; cleared at finalization or pop. */
+    BenderFuncDef *parent;
+    BenderFuncDef *child;
+    Bender hint;
     int profiled; /* Analysis-only observed exported binding. */
 };
 
-#define JANET_SLOT_CONSTANT 0x10000
-#define JANET_SLOT_NAMED 0x20000
-#define JANET_SLOT_MUTABLE 0x40000
-#define JANET_SLOT_REF 0x80000
-#define JANET_SLOT_RETURNED 0x100000
-#define JANET_SLOT_DEP_NOTE 0x200000
-#define JANET_SLOT_DEP_WARN 0x400000
-#define JANET_SLOT_DEP_ERROR 0x800000
-#define JANET_SLOT_SPLICED 0x1000000
+#define BENDER_SLOT_CONSTANT 0x10000
+#define BENDER_SLOT_NAMED 0x20000
+#define BENDER_SLOT_MUTABLE 0x40000
+#define BENDER_SLOT_REF 0x80000
+#define BENDER_SLOT_RETURNED 0x100000
+#define BENDER_SLOT_DEP_NOTE 0x200000
+#define BENDER_SLOT_DEP_WARN 0x400000
+#define BENDER_SLOT_DEP_ERROR 0x800000
+#define BENDER_SLOT_SPLICED 0x1000000
 
-#define JANET_SLOTTYPE_ANY 0xFFFF
+#define BENDER_SLOTTYPE_ANY 0xFFFF
 
 /* A stack slot */
-struct JanetSlot {
-    Janet constant; /* If the slot has a constant value */
+struct BenderSlot {
+    Bender constant; /* If the slot has a constant value */
     int32_t index;
     int32_t envindex; /* -1 is local, positive number is an upvalue */
     uint32_t flags;
 };
 
-#define JANET_SCOPE_FUNCTION 1
-#define JANET_SCOPE_ENV 2
-#define JANET_SCOPE_TOP 4
-#define JANET_SCOPE_UNUSED 8
-#define JANET_SCOPE_CLOSURE 16
-#define JANET_SCOPE_WHILE 32
+#define BENDER_SCOPE_FUNCTION 1
+#define BENDER_SCOPE_ENV 2
+#define BENDER_SCOPE_TOP 4
+#define BENDER_SCOPE_UNUSED 8
+#define BENDER_SCOPE_CLOSURE 16
+#define BENDER_SCOPE_WHILE 32
 
 /* A symbol and slot pair */
 typedef struct SymPair {
-    JanetSlot slot;
+    BenderSlot slot;
     const uint8_t *sym;
     const uint8_t *sym2;
     int keep;
@@ -137,81 +137,81 @@ typedef struct SymPair {
     uint32_t death_pc;
 } SymPair;
 
-typedef struct JanetEnvRef {
+typedef struct BenderEnvRef {
     int32_t envindex;
-    JanetScope *scope;
-} JanetEnvRef;
+    BenderScope *scope;
+} BenderEnvRef;
 
 /* A lexical scope during compilation */
-struct JanetScope {
+struct BenderScope {
 
     /* For debugging the compiler */
     const char *name;
 
     /* Scopes are doubly linked list */
-    JanetScope *parent;
-    JanetScope *child;
+    BenderScope *parent;
+    BenderScope *child;
 
     /* Constants for this funcdef */
-    Janet *consts;
+    Bender *consts;
 
     /* Map of symbols to slots. Use a simple linear scan for symbols. */
     SymPair *syms;
 
     /* FuncDefs */
-    JanetFuncDef **defs;
+    BenderFuncDef **defs;
 
     /* Register allocator */
-    JanetcRegisterAllocator ra;
+    BendercRegisterAllocator ra;
 
     /* Upvalue allocator */
-    JanetcRegisterAllocator ua;
+    BendercRegisterAllocator ua;
 
     /* Referenced closure environments. The values at each index correspond
      * to which index to get the environment from in the parent. The environment
      * that corresponds to the direct parent's stack will always have value 0. */
-    JanetEnvRef *envs;
+    BenderEnvRef *envs;
 
     int32_t bytecode_start;
     int flags;
 };
 
 /* Compilation state */
-struct JanetCompiler {
+struct BenderCompiler {
 
     /* Pointer to current scope */
-    JanetScope *scope;
+    BenderScope *scope;
 
     uint32_t *buffer;
-    JanetSourceMapping *mapbuffer;
+    BenderSourceMapping *mapbuffer;
 
     /* Hold the environment */
-    JanetTable *env;
+    BenderTable *env;
 
     /* Name of source to attach to generated functions */
     const uint8_t *source;
 
     /* The result of compilation */
-    JanetCompileResult result;
+    BenderCompileResult result;
 
     /* Keep track of where we are in the source */
-    JanetSourceMapping current_mapping;
+    BenderSourceMapping current_mapping;
 
     /* Prevent unbounded recursion */
     int recursion_guard;
 
     /* Collect linting results */
-    JanetArray *lints;
+    BenderArray *lints;
 
-    /* Pinned Janet values. The compiler stashes values (macroexpansion
+    /* Pinned Bender values. The compiler stashes values (macroexpansion
      * results, and anything else held across nested allocations) in C
      * structs that the collector cannot see. Everything pushed here is
      * rooted for the whole compilation; the array itself is gcrooted in
-     * janetc_init and unrooted in janetc_deinit. See janetc_pin. */
-    JanetArray *pins;
+     * benderc_init and unrooted in benderc_deinit. See benderc_pin. */
+    BenderArray *pins;
 
     /* Compiler-only, GC-marked identities; never serialized on FuncDefs. */
-    JanetRetainedDef *retained_defs;
+    BenderRetainedDef *retained_defs;
     int retain_hinted_exports_for_analysis;
 
     /* Cached version of (dyn *redef*) and (dyn *optimize*) */
@@ -221,113 +221,113 @@ struct JanetCompiler {
     /* Link for the VM's compiler stack (Phase 2a root discipline). While
      * a compilation is active, the collector walks live scopes through
      * this chain to mark values held in compiler C structs. Pushed in
-     * janetc_init, popped in janetc_deinit. */
-    JanetCompiler *compiler_next;
+     * benderc_init, popped in benderc_deinit. */
+    BenderCompiler *compiler_next;
 };
 
-#define JANET_FOPTS_TAIL 0x10000
-#define JANET_FOPTS_HINT 0x20000
-#define JANET_FOPTS_DROP 0x40000
-#define JANET_FOPTS_ACCEPT_SPLICE 0x80000
+#define BENDER_FOPTS_TAIL 0x10000
+#define BENDER_FOPTS_HINT 0x20000
+#define BENDER_FOPTS_DROP 0x40000
+#define BENDER_FOPTS_ACCEPT_SPLICE 0x80000
 
 /* Options for compiling a single form */
-struct JanetFopts {
-    JanetCompiler *compiler;
-    JanetSlot hint;
+struct BenderFopts {
+    BenderCompiler *compiler;
+    BenderSlot hint;
     uint32_t flags; /* bit set of accepted primitive types */
 };
 
 /* Get the default form options */
-JanetFopts janetc_fopts_default(JanetCompiler *c);
+BenderFopts benderc_fopts_default(BenderCompiler *c);
 
 /* For optimizing builtin normal functions. */
-struct JanetFunOptimizer {
-    int (*can_optimize)(JanetFopts opts, JanetSlot *args);
-    JanetSlot(*optimize)(JanetFopts opts, JanetSlot *args);
+struct BenderFunOptimizer {
+    int (*can_optimize)(BenderFopts opts, BenderSlot *args);
+    BenderSlot(*optimize)(BenderFopts opts, BenderSlot *args);
 };
 
 /* A grouping of a named special and the corresponding compiler fragment */
-struct JanetSpecial {
+struct BenderSpecial {
     const char *name;
-    JanetSlot(*compile)(JanetFopts opts, int32_t argn, const Janet *argv);
+    BenderSlot(*compile)(BenderFopts opts, int32_t argn, const Bender *argv);
 };
 
 /****************************************************/
 
 /* Get an optimizer if it exists, otherwise NULL */
-const JanetFunOptimizer *janetc_funopt(uint32_t flags);
+const BenderFunOptimizer *benderc_funopt(uint32_t flags);
 
 /* Get a special. Return NULL if none exists */
-const JanetSpecial *janetc_special(const uint8_t *name);
+const BenderSpecial *benderc_special(const uint8_t *name);
 
-#define JANET_DEFFLAG_NO_SHADOWCHECK 1
-#define JANET_DEFFLAG_NO_UNUSED 2
+#define BENDER_DEFFLAG_NO_SHADOWCHECK 1
+#define BENDER_DEFFLAG_NO_UNUSED 2
 
-void janetc_freeslot(JanetCompiler *c, JanetSlot s);
-void janetc_nameslot(JanetCompiler *c, const uint8_t *sym, JanetSlot s, uint32_t flags);
-JanetSlot janetc_farslot(JanetCompiler *c);
+void benderc_freeslot(BenderCompiler *c, BenderSlot s);
+void benderc_nameslot(BenderCompiler *c, const uint8_t *sym, BenderSlot s, uint32_t flags);
+BenderSlot benderc_farslot(BenderCompiler *c);
 
 /* Throw away some code after checking that it is well formed. */
-void janetc_throwaway(JanetFopts opts, Janet x);
+void benderc_throwaway(BenderFopts opts, Bender x);
 
 /* Get a target slot for emitting an instruction. Will always return
  * a local slot. */
-JanetSlot janetc_gettarget(JanetFopts opts);
+BenderSlot benderc_gettarget(BenderFopts opts);
 
 /* Get a bunch of slots for function arguments */
-JanetSlot *janetc_toslots(JanetCompiler *c, const Janet *vals, int32_t len);
+BenderSlot *benderc_toslots(BenderCompiler *c, const Bender *vals, int32_t len);
 
 /* Get a bunch of slots for function arguments */
-JanetSlot *janetc_toslotskv(JanetCompiler *c, Janet ds);
+BenderSlot *benderc_toslotskv(BenderCompiler *c, Bender ds);
 
-/* Push slots loaded via janetc_toslots. */
-int32_t janetc_pushslots(JanetCompiler *c, JanetSlot *slots);
+/* Push slots loaded via benderc_toslots. */
+int32_t benderc_pushslots(BenderCompiler *c, BenderSlot *slots);
 
-/* Free slots loaded via janetc_toslots */
-void janetc_freeslots(JanetCompiler *c, JanetSlot *slots);
+/* Free slots loaded via benderc_toslots */
+void benderc_freeslots(BenderCompiler *c, BenderSlot *slots);
 
 /* Generate the return instruction for a slot. */
-JanetSlot janetc_return(JanetCompiler *c, JanetSlot s);
+BenderSlot benderc_return(BenderCompiler *c, BenderSlot s);
 
 /* Store an error */
-void janetc_error(JanetCompiler *c, const uint8_t *m);
-void janetc_cerror(JanetCompiler *c, const char *m);
+void benderc_error(BenderCompiler *c, const uint8_t *m);
+void benderc_cerror(BenderCompiler *c, const char *m);
 
 /* Linting */
-void janetc_lintf(JanetCompiler *C, JanetCompileLintLevel level, const char *format, ...);
+void benderc_lintf(BenderCompiler *C, BenderCompileLintLevel level, const char *format, ...);
 
 /* Dispatch to correct form compiler */
-JanetSlot janetc_value(JanetFopts opts, Janet x);
+BenderSlot benderc_value(BenderFopts opts, Bender x);
 
-/* Pin a Janet value for the duration of the compilation (Phase 2a root
+/* Pin a Bender value for the duration of the compilation (Phase 2a root
  * discipline). Use for values held in C structs across nested allocations
  * (and therefore collections), e.g. macroexpansion results consumed
  * element-by-element by the emitter. */
-void janetc_pin(JanetCompiler *c, Janet x);
-void janetc_optimize_funcdef(JanetCompiler *c, JanetFuncDef *def);
+void benderc_pin(BenderCompiler *c, Bender x);
+void benderc_optimize_funcdef(BenderCompiler *c, BenderFuncDef *def);
 
 /* Push and pop from the scope stack */
-void janetc_scope(JanetScope *s, JanetCompiler *c, int flags, const char *name);
-void janetc_popscope(JanetCompiler *c);
-void janetc_popscope_keepslot(JanetCompiler *c, JanetSlot retslot);
-JanetFuncDef *janetc_pop_funcdef(JanetCompiler *c, JanetString name);
+void benderc_scope(BenderScope *s, BenderCompiler *c, int flags, const char *name);
+void benderc_popscope(BenderCompiler *c);
+void benderc_popscope_keepslot(BenderCompiler *c, BenderSlot retslot);
+BenderFuncDef *benderc_pop_funcdef(BenderCompiler *c, BenderString name);
 
 /* Create a destroy slot */
-JanetSlot janetc_cslot(Janet x);
+BenderSlot benderc_cslot(Bender x);
 
 /* Search for a symbol, and mark any found symbols as "used" for dead code elimination and linting */
-JanetSlot janetc_resolve(JanetCompiler *c, const uint8_t *sym);
+BenderSlot benderc_resolve(BenderCompiler *c, const uint8_t *sym);
 
 /* Check if a symbol is already in scope for shadowing lints */
-Shadowing janetc_shadowcheck(JanetCompiler *c, const uint8_t *sym);
+Shadowing benderc_shadowcheck(BenderCompiler *c, const uint8_t *sym);
 
 /* Inlining. We can do inling both from bytecode and from our frontend */
-uint32_t *janet_bytecode_inline_chunk(JanetFuncDef *idef,
+uint32_t *bender_bytecode_inline_chunk(BenderFuncDef *idef,
                                       int32_t dest_slot, uint32_t slot_delta, uint32_t const_delta);
 
 /* Bytecode optimization */
-void janet_bytecode_optimize(JanetFuncDef *def, int32_t level);
-void janet_bytecode_optimize_for_analysis(JanetFuncDef *def, int32_t level,
-                                         const JanetRetainedDef *retained, int32_t count);
+void bender_bytecode_optimize(BenderFuncDef *def, int32_t level);
+void bender_bytecode_optimize_for_analysis(BenderFuncDef *def, int32_t level,
+                                         const BenderRetainedDef *retained, int32_t count);
 
 #endif

@@ -1,6 +1,6 @@
 # Isolated collector candidate: no reclaimable young objects
 
-Status: **landed as `f82d0642` after independent source review and focused regression checks**. Base35671ede; isolated worktree `/tmp/janet-wave-candidate-35671ede`; measured patch `collector-candidate.patch`. Production differs only in explanatory comments and includes the separately committed null-process correctness fix.
+Status: **landed as `f82d0642` after independent source review and focused regression checks**. Base35671ede; isolated worktree `/tmp/bender-wave-candidate-35671ede`; measured patch `collector-candidate.patch`. Production differs only in explanatory comments and includes the separately committed null-process correctness fix.
 
 ## Hypothesis and scope
 

@@ -26,7 +26,7 @@ that was not established.
 
 ## What was reportedly implemented (transcript-only)
 
-No part of this design survives in the tree: `git log -S JANET_LANE_FASTPOST --
+No part of this design survives in the tree: `git log -S BENDER_LANE_FASTPOST --
 src` returns nothing, and `git diff de84e900..HEAD -- src` is empty — the whole
 range from the "root cause" commit through HEAD contains no `src/` change at all.
 So there is no reverted blob to diff against and no commit message describing the
@@ -34,16 +34,16 @@ mechanism; the description below exists only in the prior session's transcript.
 
 As described in the prior session, the change was:
 
-- a per-VM power-of-two ring of `JanetSelfPipeEvent` (`fastq`), described as
+- a per-VM power-of-two ring of `BenderSelfPipeEvent` (`fastq`), described as
   multi-producer single-consumer with the slot `state` published last under
   release ordering;
-- `janet_ev_post_event` pushing to the ring first and writing the pipe only as a
+- `bender_ev_post_event` pushing to the ring first and writing the pipe only as a
   nudge when the target announced itself parked;
-- `janet_loop1` draining the ring at the top of every turn and again after poll;
+- `bender_loop1` draining the ring at the top of every turn and again after poll;
 - a two-step parked handshake (announce parked, then re-check the ring) intended
   to close a lost-wakeup window;
-- opt-in via `JANET_LANE_FASTPOST=1`, pipe path untouched when off;
-- a new `janet_atomic_store` with release semantics for publication.
+- opt-in via `BENDER_LANE_FASTPOST=1`, pipe path untouched when off;
+- a new `bender_atomic_store` with release semantics for publication.
 
 Three details of that description are self-inconsistent and are recorded here
 because they bear on the rejection, not because they were ever verified:
@@ -64,8 +64,8 @@ because they bear on the rejection, not because they were ever verified:
    would have been duplicated rather than consolidated, and the ring reportedly
    had no cleanup path — so a VM that never drained the ring could retain its
    entries. The current code has exactly one setup/cleanup pair per event-loop
-   flavor (`src/core/ev.c:2648` `janet_ev_setup_selfpipe`, `:2690`
-   `janet_ev_cleanup_selfpipe`, called at `:2906`/`:2927`, `:3098`/`:3117`,
+   flavor (`src/core/ev.c:2648` `bender_ev_setup_selfpipe`, `:2690`
+   `bender_ev_cleanup_selfpipe`, called at `:2906`/`:2927`, `:3098`/`:3117`,
    `:3257`/`:3273`), which is what "duplicated setup" would have broken.
 
 Two further signal-path notes were reported and are transcript-only: the post
@@ -141,7 +141,7 @@ So the earlier revision's central inference — "the pipe is 10% of it ... the
 target lane's event loop **must** be woken and scheduled by the kernel" — is not
 supported by these two programs. It is also contradicted in spirit by the
 retained GC profile: `local8000.sample.txt` has **zero** `kevent` frames and
-4,148 of 4,151 main-thread samples under `janet_collect_fiber_minor`, whereas
+4,148 of 4,151 main-thread samples under `bender_collect_fiber_minor`, whereas
 the only retained `kevent`-heavy sample
 (`lanes2-100k.sample.txt`) is from a process the runner itself killed
 (`lanes2-100k-profile.json`, `returncode: -9`) and therefore shows an idle loop
@@ -158,15 +158,15 @@ controlled table in `bench/results/phase4-controlled-35671ede/legacy-scale.jsonl
 Also note that a cross-lane round trip and a chain hop are not interchangeable
 quantities. A ping-pong RTT includes request and reply; its count of actual OS wakeups
 is not established. Dividing the reported 6.9 us RTT by two to infer a
-chain-hop floor would require equivalence that `bench/lane-rt.janet`
+chain-hop floor would require equivalence that `bench/lane-rt.ben`
 (buffered `ev/thread-chan 64`, lines 13-14) does not establish.
 
 ## Decision
 
 The change was reverted and **nothing shipped**. That part is verifiable and
 holds: `git diff de84e900..HEAD -- src` is empty, so `src/core/ev.c`,
-`src/core/state.h`, `src/core/capi.c` and `src/include/janet.h` are identical to
-`de84e900`, and `git log -S JANET_LANE_FASTPOST -- src` finds no commit.
+`src/core/state.h`, `src/core/capi.c` and `src/include/bender.h` are identical to
+`de84e900`, and `git log -S BENDER_LANE_FASTPOST -- src` finds no commit.
 
 Two corrections to the earlier wording:
 
@@ -192,7 +192,7 @@ Two corrections to the earlier wording:
    park/wake floor, but its value depends on the unmeasured share of that floor.
 
 The earlier revision closed by asserting Go's advantage "is ~1.3 us/hop against
-Janet's 6.9, and the same ~6 us OS wake cost applies to any C-level loop that
+Bender's 6.9, and the same ~6 us OS wake cost applies to any C-level loop that
 sleeps between messages". All three parts are unverified here: 1.3 us/hop is a
 division of a single unretained Go total by N, 6.9 us is from a buffered-channel
 harness, and the generality about "any C-level loop" is not tested at all.

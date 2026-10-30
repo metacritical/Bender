@@ -1,0 +1,181 @@
+# Regression: closed-shape local-table flattening to native flat
+# structs. See docs/internals/blueant-type-generator-plan.md Phase 5
+# and the full decision-rule block comment in tools/infer.ben
+# (shape-dst-ops).
+#
+# A table constructed by `mktab` with a fixed literal keyword key set,
+# :long/:double fields, ONE entry-block construction site, and only
+# constant-key get/put uses inside its own function is flattened to a
+# local C struct (`struct nsh<id>_<slot> { ... };` declared at the
+# construction site) whose field reads/writes reuse the same
+# direct-memory-access discipline as the hand-declared ffi/defstruct +
+# :kernel pread/pwrite intrinsics (same :long/:double field contract,
+# same fail-closed guards). The keyword-key ldc loads are proven dead
+# in emitted code (field indices resolve statically) via a fail-closed
+# forward scan, which is what keeps the Phase 2/3 slot-mixing guard
+# from refusing every table literal -- the compiler routes :kw keys
+# through temp slots it reuses for the numeric values.
+#
+# Honest, tested boundaries (a refusal here is a CORRECT boxed
+# fallback, never a silent miscompile -- each is asserted below):
+#   - TWO construction sites reaching one use (even shape-identical
+#     ones) stay boxed (sticky-open);
+#   - escape to generic reflection (pairs/keys/values via a push into
+#     any call) stays boxed;
+#   - struct literals ({...}/mkstu), non-entry-block construction,
+#     :number/string/composite field values stay boxed.
+(import ./helper :prefix "" :exit true)
+(start-suite)
+(def root "/tmp/bender-aot-native-struct-shape-suite")
+(os/execute ["/bin/rm" "-rf" root] :p)
+(os/mkdir root)
+(def env (merge @{} (os/environ) {"BENDER_NO_PROFILE" "1"}))
+
+(defn build-and-run [name source]
+  # Output verification, not just exit codes: this phase's failure
+  # mode is a SILENT VALUE-CORRUPTION miscompile (side C-struct layout
+  # + dead-keyword-load elimination), which exit codes cannot see.
+  # Both the native binary's stdout and the interpreter's stdout are
+  # captured to temp files via shell redirection and byte-diffed; the
+  # returned :match is what the per-case assertions below gate on
+  # (alongside :build/:run/:interp and the native-names checks).
+  (def src (string root "/" name ".ben"))
+  (def bin (string root "/" name))
+  (spit src source)
+  (def build-ok (= 0 (os/execute ["./build/bender" "--aot" src "--native"
+                                  "--no-auto-pgo" "-o" bin] :e env)))
+  (def nout (string root "/" name ".native.out"))
+  (def iout (string root "/" name ".interp.out"))
+  (def run-ok (and build-ok (= 0 (os/execute
+    ["/bin/sh" "-c" (string bin " > " nout)] :e env))))
+  (def interp-ok (= 0 (os/execute
+    ["/bin/sh" "-c" (string "./build/bender " src " > " iout)] :e env)))
+  (def match (and build-ok run-ok interp-ok
+                  (= 0 (os/execute ["/usr/bin/diff" "-u" nout iout] :p))))
+  {:build build-ok :run run-ok :interp interp-ok :match match
+   :names (if build-ok (string (slurp (string bin "-native/native-names.txt"))) "")})
+
+# --- Positive: closed-shape table, construct + constant-key put +
+# constant-key gets, all :double fields, one function -- must compile
+# native and be byte-correct vs the interpreter.
+(def r1 (build-and-run "flat-doubles" `
+(defn- flat-sum [a]
+  (def t @{:x 0.5 :y 2.25})
+  (put t :x 1.25)
+  (+ (t :x) (t :y) a))
+(defn main [&]
+  (print (flat-sum 10))
+  (print (flat-sum 0.5))
+  (print (flat-sum -3.25)))
+`))
+(assert (r1 :build) "flat double-field fn build succeeds")
+(assert (string/find "flat-sum" (r1 :names))
+        "closed-shape table fn got a native kernel (the positive case)")
+(assert (r1 :run) "native binary's own assertions pass (flat struct stores/loads)")
+(assert (r1 :interp) "same source passes identically under the interpreter")
+(assert (r1 :match) "POSITIVE: flat-doubles native output byte-matches the interpreter")
+
+# --- Positive: MIXED field widths (:long and :double in one shape),
+# tail-position get (tcall pread) -- must also compile native.
+(def r2 (build-and-run "flat-mixed" `
+(defn- tail-get [a]
+  (def t @{:v 0.25 :w 1.5 :n 3})
+  (put t :v (+ (t :v) a))
+  (+ (t :v) (t :w) (t :n)))
+(defn- tail-read [a]
+  (def t @{:v 0.5 :w 2.25})
+  (put t :w a)
+  (t :w))
+# NOTE: every call argument is fractional on purpose -- an integral
+# argument (e.g. 100) widens the param to :number, and the put VALUE
+# (+ (t :v) a) then no longer matches the field's exact :double type,
+# so the table correctly stays boxed (the rule working as designed).
+(defn main [&]
+  (print (tail-get 0.5))
+  (print (tail-read 7.5))
+  (print (tail-read -0.25))
+  (print (tail-get 100.5)))
+`))
+(assert (r2 :build) "mixed-width + tail-get fn build succeeds")
+(assert (string/find "tail-get" (r2 :names))
+        "mixed long/double shape flattened natively")
+(assert (string/find "tail-read" (r2 :names))
+        "tail-position constant-key get (tcall pread) flattened natively")
+(assert (r2 :run) "native binary's own assertions pass (mixed-width flat struct)")
+(assert (r2 :interp) "same source passes identically under the interpreter")
+(assert (r2 :match) "POSITIVE: flat-mixed native output byte-matches the interpreter")
+
+# --- Positive: a live keyword comparison (param vs :kw constant) in
+# the SAME function as a closed-shape table -- proves the dead-key
+# skip never eats a LIVE keyword load (the forward scan's reader
+# coverage), the Phase 5 carve-out's main soundness risk.
+(def r3 (build-and-run "live-kw-coexist" `
+(defn- mixed-use [a]
+  (def t @{:x 0.5})
+  (+ (t :x) (if (= a :x) 1.25 2.25)))
+(defn main [&]
+  (print (mixed-use :x))
+  (print (mixed-use :y))
+  (print (mixed-use :zzz)))
+`))
+(assert (r3 :build) "live-keyword + table fn build succeeds")
+(assert (r3 :run) "native binary correct with a live keyword comparison beside a flat table")
+(assert (r3 :interp) "same source passes identically under the interpreter")
+(assert (r3 :match) "POSITIVE: live-kw-coexist native output byte-matches the interpreter")
+
+# --- Negative (equally important): TWO construction sites with
+# different key sets reaching the same use must NOT flatten -- sticky
+# open, boxed fallback, still correct output.
+(def r4 (build-and-run "two-sites" `
+(defn- two-sites [c a]
+  (def t (if c @{:x 0.5} @{:x 0.5 :y 2.25}))
+  (+ (t :x) a))
+(defn main [&]
+  (print (two-sites true 10))
+  (print (two-sites false 10)))
+`))
+(assert (r4 :build) "two-construction-site fn build succeeds (boxed fallback, not an error)")
+(assert (not (string/find "two-sites" (r4 :names)))
+        "two construction sites reaching one use correctly stay boxed (sticky open, never forced)")
+(assert (r4 :run) "boxed fallback still produces correct output for the two-site case")
+(assert (r4 :interp) "same source passes identically under the interpreter")
+(assert (r4 :match) "NEGATIVE: two-sites boxed-fallback output byte-matches the interpreter")
+
+# --- Negative: table escaping to generic reflection (`keys` -- the
+# push-into-call escape) must NOT flatten; boxed fallback correct.
+(def r5 (build-and-run "reflection-escape" `
+(defn- reflected [t]
+  (var s 0)
+  (each k (keys t) (+= s 1))
+  s)
+(defn- closed [a]
+  (def t @{:x 0.5 :y 2.25})
+  (+ (reflected t) (t :y) a))
+(defn main [&]
+  (print (closed 10)))
+`))
+(assert (r5 :build) "reflection-escape fn build succeeds (boxed fallback, not an error)")
+(assert (not (string/find "closed" (r5 :names)))
+        "table passed to generic reflection (keys) correctly stays boxed")
+(assert (r5 :run) "boxed fallback still produces correct output for the reflection case")
+(assert (r5 :interp) "same source passes identically under the interpreter")
+(assert (r5 :match) "NEGATIVE: reflection-escape boxed-fallback output byte-matches the interpreter")
+
+# --- Negative: a non-numeric field VALUE (:string) keeps the table
+# boxed -- the shape rule only admits :long/:double fields (the exact
+# :kernel pread/pwrite field contract).
+(def r6 (build-and-run "string-field" `
+(defn- str-field [a]
+  (def t @{:x 0.5 :name "bob"})
+  (+ (t :x) a))
+(defn main [&]
+  (print (str-field 1.5)))
+`))
+(assert (r6 :build) "string-field fn build succeeds (boxed fallback, not an error)")
+(assert (not (string/find "str-field" (r6 :names)))
+        "non-numeric field value correctly keeps the table boxed")
+(assert (r6 :run) "boxed fallback still produces correct output for the string-field case")
+(assert (r6 :interp) "same source passes identically under the interpreter")
+(assert (r6 :match) "NEGATIVE: string-field boxed-fallback output byte-matches the interpreter")
+
+(end-suite)

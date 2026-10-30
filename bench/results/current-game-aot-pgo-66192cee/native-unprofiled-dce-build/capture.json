@@ -1,30 +1,30 @@
 {
-  "schema": "janet/benchmark-capture/1",
+  "schema": "bender/benchmark-capture/1",
   "label": "native-unprofiled-dce-build",
   "complete": true,
-  "evidence_dir": "/Users/pankajdoharey/Development/Projects/janet/bench/results/current-game-aot-pgo-66192cee/native-unprofiled-dce-build",
+  "evidence_dir": "/Users/pankajdoharey/Development/Projects/bender/bench/results/current-game-aot-pgo-66192cee/native-unprofiled-dce-build",
   "command": {
     "argv": [
-      "/Users/pankajdoharey/Development/Projects/janet/build/current-game-aot-pgo-66192cee/runtime/build/bender",
+      "/Users/pankajdoharey/Development/Projects/bender/build/current-game-aot-pgo-66192cee/runtime/build/bender",
       "--aot",
-      "/Users/pankajdoharey/Development/Projects/janet/build/current-game-aot-pgo-66192cee/game-source/main.janet",
+      "/Users/pankajdoharey/Development/Projects/bender/build/current-game-aot-pgo-66192cee/game-source/main.ben",
       "--native",
       "--no-auto-pgo",
       "--dce",
       "-o",
-      "/Users/pankajdoharey/Development/Projects/janet/build/current-game-aot-pgo-66192cee/artifacts/native-unprofiled-dce"
+      "/Users/pankajdoharey/Development/Projects/bender/build/current-game-aot-pgo-66192cee/artifacts/native-unprofiled-dce"
     ],
-    "cwd": "/Users/pankajdoharey/Development/Projects/janet/build/current-game-aot-pgo-66192cee/game-source",
+    "cwd": "/Users/pankajdoharey/Development/Projects/bender/build/current-game-aot-pgo-66192cee/game-source",
     "stdin": "devnull",
     "env_overrides": {
-      "JANET_NO_PROFILE": "1",
-      "JANET_LANES": "0",
-      "JANET_NATIVE_EXECUTORS": "1",
-      "JANET_TOOLS": "/Users/pankajdoharey/Development/Projects/janet/build/current-game-aot-pgo-66192cee/runtime/tools",
-      "XDG_CACHE_HOME": "/Users/pankajdoharey/Development/Projects/janet/build/current-game-aot-pgo-66192cee/cache-native-unprofiled-dce-build"
+      "BENDER_NO_PROFILE": "1",
+      "BENDER_LANES": "0",
+      "BENDER_NATIVE_EXECUTORS": "1",
+      "BENDER_TOOLS": "/Users/pankajdoharey/Development/Projects/bender/build/current-game-aot-pgo-66192cee/runtime/tools",
+      "XDG_CACHE_HOME": "/Users/pankajdoharey/Development/Projects/bender/build/current-game-aot-pgo-66192cee/cache-native-unprofiled-dce-build"
     },
     "executable": {
-      "path": "/Users/pankajdoharey/Development/Projects/janet/build/current-game-aot-pgo-66192cee/runtime/build/bender",
+      "path": "/Users/pankajdoharey/Development/Projects/bender/build/current-game-aot-pgo-66192cee/runtime/build/bender",
       "sha256": "6e5639fdaf08e49dafeb61a08170e2c9db3a48447465fcb5a49c8b5afe50c436",
       "bytes": 1392776,
       "error": null

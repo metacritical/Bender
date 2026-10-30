@@ -4,7 +4,7 @@
 Usage: python3 test/suite-ttfx-site-profile.py <diagnostic stderr> [saturation]
 The fixture has hand-counted CALL and branch loops plus a 301-PC function.
 Run it using both computed-goto and switch interpreter builds and compare
-full stderr; a reduced JANET_SITE_COUNTER_MAX build exercises saturation.
+full stderr; a reduced BENDER_SITE_COUNTER_MAX build exercises saturation.
 """
 import sys
 from pathlib import Path

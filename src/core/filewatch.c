@@ -20,25 +20,25 @@
 * IN THE SOFTWARE.
 */
 
-#ifndef JANET_AMALG
+#ifndef BENDER_AMALG
 #include "features.h"
-#include <janet.h>
+#include <bender.h>
 #include "util.h"
 #endif
 
-#ifdef JANET_EV
-#ifdef JANET_FILEWATCH
+#ifdef BENDER_EV
+#ifdef BENDER_FILEWATCH
 
-#ifdef JANET_LINUX
+#ifdef BENDER_LINUX
 #include <sys/inotify.h>
 #include <unistd.h>
 #endif
 
-#ifdef JANET_WINDOWS
+#ifdef BENDER_WINDOWS
 #include <windows.h>
 #endif
 
-#if defined(JANET_APPLE) || defined(JANET_BSD)
+#if defined(BENDER_APPLE) || defined(BENDER_BSD)
 #include <sys/event.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -48,24 +48,24 @@
 typedef struct {
     const char *name;
     uint32_t flag;
-} JanetWatchFlagName;
+} BenderWatchFlagName;
 
 typedef struct {
-#ifndef JANET_WINDOWS
-    JanetStream *stream;
+#ifndef BENDER_WINDOWS
+    BenderStream *stream;
 #endif
-    JanetTable *watch_descriptors;
-    JanetChannel *channel;
+    BenderTable *watch_descriptors;
+    BenderChannel *channel;
     uint32_t default_flags;
     int is_watching;
-} JanetWatcher;
+} BenderWatcher;
 
-#ifdef JANET_LINUX
+#ifdef BENDER_LINUX
 
 #include <sys/inotify.h>
 #include <unistd.h>
 
-static const JanetWatchFlagName watcher_flags_linux[] = {
+static const BenderWatchFlagName watcher_flags_linux[] = {
     {"access", IN_ACCESS},
     {"all", IN_ALL_EVENTS},
     {"attrib", IN_ATTRIB},
@@ -84,100 +84,100 @@ static const JanetWatchFlagName watcher_flags_linux[] = {
     {"unmount", IN_UNMOUNT},
 };
 
-static uint32_t decode_watch_flags(const Janet *options, int32_t n) {
+static uint32_t decode_watch_flags(const Bender *options, int32_t n) {
     uint32_t flags = 0;
     for (int32_t i = 0; i < n; i++) {
-        if (!(janet_checktype(options[i], JANET_KEYWORD))) {
-            janet_panicf("expected keyword, got %v", options[i]);
+        if (!(bender_checktype(options[i], BENDER_KEYWORD))) {
+            bender_panicf("expected keyword, got %v", options[i]);
         }
-        JanetKeyword keyw = janet_unwrap_keyword(options[i]);
-        const JanetWatchFlagName *result = janet_strbinsearch(watcher_flags_linux,
-            sizeof(watcher_flags_linux) / sizeof(JanetWatchFlagName),
-            sizeof(JanetWatchFlagName),
+        BenderKeyword keyw = bender_unwrap_keyword(options[i]);
+        const BenderWatchFlagName *result = bender_strbinsearch(watcher_flags_linux,
+            sizeof(watcher_flags_linux) / sizeof(BenderWatchFlagName),
+            sizeof(BenderWatchFlagName),
             keyw);
         if (!result) {
-            janet_panicf("unknown linux flag %v", options[i]);
+            bender_panicf("unknown linux flag %v", options[i]);
         }
         flags |= result->flag;
     }
     return flags;
 }
 
-static void janet_watcher_init(JanetWatcher *watcher, JanetChannel *channel, uint32_t default_flags) {
+static void bender_watcher_init(BenderWatcher *watcher, BenderChannel *channel, uint32_t default_flags) {
     int fd;
     do {
         fd = inotify_init1(IN_NONBLOCK | IN_CLOEXEC);
     } while (fd == -1 && errno == EINTR);
     if (fd == -1) {
-        janet_panicv(janet_ev_lasterr());
+        bender_panicv(bender_ev_lasterr());
     }
-    watcher->watch_descriptors = janet_table(0);
+    watcher->watch_descriptors = bender_table(0);
     watcher->channel = channel;
     watcher->default_flags = default_flags;
     watcher->is_watching = 0;
-    watcher->stream = janet_stream(fd, JANET_STREAM_READABLE, NULL);
+    watcher->stream = bender_stream(fd, BENDER_STREAM_READABLE, NULL);
 }
 
-static void janet_watcher_add(JanetWatcher *watcher, const char *path, uint32_t flags) {
-    if (watcher->stream == NULL) janet_panic("watcher closed");
+static void bender_watcher_add(BenderWatcher *watcher, const char *path, uint32_t flags) {
+    if (watcher->stream == NULL) bender_panic("watcher closed");
     int result;
     do {
         result = inotify_add_watch(watcher->stream->handle, path, flags);
     } while (result == -1 && errno == EINTR);
     if (result == -1) {
-        janet_panicv(janet_ev_lasterr());
+        bender_panicv(bender_ev_lasterr());
     }
-    Janet name = janet_cstringv(path);
-    Janet wd = janet_wrap_integer(result);
-    janet_table_put(watcher->watch_descriptors, name, wd);
-    janet_table_put(watcher->watch_descriptors, wd, name);
+    Bender name = bender_cstringv(path);
+    Bender wd = bender_wrap_integer(result);
+    bender_table_put(watcher->watch_descriptors, name, wd);
+    bender_table_put(watcher->watch_descriptors, wd, name);
 }
 
-static void janet_watcher_remove(JanetWatcher *watcher, const char *path) {
-    if (watcher->stream == NULL) janet_panic("watcher closed");
-    Janet pathv = janet_cstringv(path);
-    Janet check = janet_table_get(watcher->watch_descriptors, pathv);
-    if (!janet_checktype(check, JANET_NUMBER)) {
-        janet_panic("bad watch descriptor");
+static void bender_watcher_remove(BenderWatcher *watcher, const char *path) {
+    if (watcher->stream == NULL) bender_panic("watcher closed");
+    Bender pathv = bender_cstringv(path);
+    Bender check = bender_table_get(watcher->watch_descriptors, pathv);
+    if (!bender_checktype(check, BENDER_NUMBER)) {
+        bender_panic("bad watch descriptor");
     }
-    int watch_handle = janet_unwrap_integer(check);
+    int watch_handle = bender_unwrap_integer(check);
     int result;
     do {
         result = inotify_rm_watch(watcher->stream->handle, watch_handle);
     } while (result != -1 && errno == EINTR);
     if (result == -1) {
-        janet_panicv(janet_ev_lasterr());
+        bender_panicv(bender_ev_lasterr());
     }
     /*
-    janet_table_put(watcher->watch_descriptors, pathv, janet_wrap_nil());
-    janet_table_put(watcher->watch_descriptors, janet_wrap_integer(watch_handle), janet_wrap_nil());
+    bender_table_put(watcher->watch_descriptors, pathv, bender_wrap_nil());
+    bender_table_put(watcher->watch_descriptors, bender_wrap_integer(watch_handle), bender_wrap_nil());
     */
 }
 
-static void watcher_callback_read(JanetFiber *fiber, JanetAsyncEvent event) {
-    JanetStream *stream = fiber->ev_stream;
-    JanetWatcher *watcher = *((JanetWatcher **) fiber->ev_state);
+static void watcher_callback_read(BenderFiber *fiber, BenderAsyncEvent event) {
+    BenderStream *stream = fiber->ev_stream;
+    BenderWatcher *watcher = *((BenderWatcher **) fiber->ev_state);
     char buf[1024];
     switch (event) {
         default:
             break;
-        case JANET_ASYNC_EVENT_MARK:
-            janet_mark(janet_wrap_abstract(watcher));
+        case BENDER_ASYNC_EVENT_MARK:
+            bender_mark(bender_wrap_abstract(watcher));
             break;
-        case JANET_ASYNC_EVENT_CLOSE:
-            janet_schedule(fiber, janet_wrap_nil());
-            janet_async_end(fiber);
+        case BENDER_ASYNC_EVENT_CLOSE:
+            bender_schedule(fiber, bender_wrap_nil());
+            bender_async_end(fiber);
             break;
-        case JANET_ASYNC_EVENT_ERR: {
-            janet_schedule(fiber, janet_wrap_nil());
-            janet_async_end(fiber);
+        case BENDER_ASYNC_EVENT_ERR: {
+            bender_schedule(fiber, bender_wrap_nil());
+            bender_async_end(fiber);
             break;
         }
     read_more:
-        case JANET_ASYNC_EVENT_HUP:
-        case JANET_ASYNC_EVENT_INIT:
-        case JANET_ASYNC_EVENT_READ: {
-            Janet name = janet_wrap_nil();
+        case BENDER_ASYNC_EVENT_HUP:
+        case BENDER_ASYNC_EVENT_INIT:
+        case BENDER_ASYNC_EVENT_READ: {
+            Bender name = bender_wrap_nil();
 
             /* Assumption - read will never return partial events *
              * From documentation:
@@ -201,9 +201,9 @@ static void watcher_callback_read(JanetFiber *fiber, JanetAsyncEvent event) {
                 if (errno == EAGAIN || errno == EWOULDBLOCK) {
                     break;
                 }
-                janet_cancel(fiber, janet_ev_lasterr());
+                bender_cancel(fiber, bender_ev_lasterr());
                 fiber->ev_state = NULL;
-                janet_async_end(fiber);
+                bender_async_end(fiber);
                 break;
             }
             if (nread < (ssize_t) sizeof(struct inotify_event)) break;
@@ -216,43 +216,43 @@ static void watcher_callback_read(JanetFiber *fiber, JanetAsyncEvent event) {
                 cursor += sizeof(inevent);
                 /* Read path of inevent */
                 if (inevent.len) {
-                    name = janet_cstringv(cursor);
+                    name = bender_cstringv(cursor);
                     cursor += inevent.len;
                 }
 
                 /* Got an event */
-                Janet path = janet_table_get(watcher->watch_descriptors, janet_wrap_integer(inevent.wd));
-                JanetKV *event = janet_struct_begin(6);
-                janet_struct_put(event, janet_ckeywordv("wd"), janet_wrap_integer(inevent.wd));
-                janet_struct_put(event, janet_ckeywordv("wd-path"), path);
-                if (janet_checktype(name, JANET_NIL)) {
+                Bender path = bender_table_get(watcher->watch_descriptors, bender_wrap_integer(inevent.wd));
+                BenderKV *event = bender_struct_begin(6);
+                bender_struct_put(event, bender_ckeywordv("wd"), bender_wrap_integer(inevent.wd));
+                bender_struct_put(event, bender_ckeywordv("wd-path"), path);
+                if (bender_checktype(name, BENDER_NIL)) {
                     /* We were watching a file directly, so path is the full path. Split into dirname / basename */
-                    JanetString spath = janet_unwrap_string(path);
-                    const uint8_t *cursor = spath + janet_string_length(spath);
+                    BenderString spath = bender_unwrap_string(path);
+                    const uint8_t *cursor = spath + bender_string_length(spath);
                     const uint8_t *cursor_end = cursor;
                     while (cursor > spath && cursor[0] != '/') {
                         cursor--;
                     }
                     if (cursor == spath) {
-                        janet_struct_put(event, janet_ckeywordv("dir-name"), path);
-                        janet_struct_put(event, janet_ckeywordv("file-name"), name);
+                        bender_struct_put(event, bender_ckeywordv("dir-name"), path);
+                        bender_struct_put(event, bender_ckeywordv("file-name"), name);
                     } else {
-                        janet_struct_put(event, janet_ckeywordv("dir-name"), janet_wrap_string(janet_string(spath, (cursor - spath))));
-                        janet_struct_put(event, janet_ckeywordv("file-name"), janet_wrap_string(janet_string(cursor + 1, (cursor_end - cursor - 1))));
+                        bender_struct_put(event, bender_ckeywordv("dir-name"), bender_wrap_string(bender_string(spath, (cursor - spath))));
+                        bender_struct_put(event, bender_ckeywordv("file-name"), bender_wrap_string(bender_string(cursor + 1, (cursor_end - cursor - 1))));
                     }
                 } else {
-                    janet_struct_put(event, janet_ckeywordv("dir-name"), path);
-                    janet_struct_put(event, janet_ckeywordv("file-name"), name);
+                    bender_struct_put(event, bender_ckeywordv("dir-name"), path);
+                    bender_struct_put(event, bender_ckeywordv("file-name"), name);
                 }
-                janet_struct_put(event, janet_ckeywordv("cookie"), janet_wrap_integer(inevent.cookie));
-                Janet etype = janet_ckeywordv("type");
-                const JanetWatchFlagName *wfn_end = watcher_flags_linux + sizeof(watcher_flags_linux) / sizeof(watcher_flags_linux[0]);
-                for (const JanetWatchFlagName *wfn = watcher_flags_linux; wfn < wfn_end; wfn++) {
-                    if ((inevent.mask & wfn->flag) == wfn->flag) janet_struct_put(event, etype, janet_ckeywordv(wfn->name));
+                bender_struct_put(event, bender_ckeywordv("cookie"), bender_wrap_integer(inevent.cookie));
+                Bender etype = bender_ckeywordv("type");
+                const BenderWatchFlagName *wfn_end = watcher_flags_linux + sizeof(watcher_flags_linux) / sizeof(watcher_flags_linux[0]);
+                for (const BenderWatchFlagName *wfn = watcher_flags_linux; wfn < wfn_end; wfn++) {
+                    if ((inevent.mask & wfn->flag) == wfn->flag) bender_struct_put(event, etype, bender_ckeywordv(wfn->name));
                 }
-                Janet eventv = janet_wrap_struct(janet_struct_end(event));
+                Bender eventv = bender_wrap_struct(bender_struct_end(event));
 
-                janet_channel_give(watcher->channel, eventv);
+                bender_channel_give(watcher->channel, eventv);
             }
 
             /* Read some more if possible */
@@ -262,29 +262,29 @@ static void watcher_callback_read(JanetFiber *fiber, JanetAsyncEvent event) {
     }
 }
 
-static void janet_watcher_listen(JanetWatcher *watcher) {
-    if (watcher->is_watching) janet_panic("already watching");
+static void bender_watcher_listen(BenderWatcher *watcher) {
+    if (watcher->is_watching) bender_panic("already watching");
     watcher->is_watching = 1;
-    JanetFunction *thunk = janet_thunk_delay(janet_wrap_nil());
-    JanetFiber *fiber = janet_fiber(thunk, 64, 0, NULL);
-    JanetWatcher **state = janet_malloc(sizeof(JanetWatcher *)); /* Gross */
+    BenderFunction *thunk = bender_thunk_delay(bender_wrap_nil());
+    BenderFiber *fiber = bender_fiber(thunk, 64, 0, NULL);
+    BenderWatcher **state = bender_malloc(sizeof(BenderWatcher *)); /* Gross */
     *state = watcher;
-    janet_async_start_fiber(fiber, watcher->stream, JANET_ASYNC_LISTEN_READ, watcher_callback_read, state);
-    janet_gcroot(janet_wrap_abstract(watcher));
+    bender_async_start_fiber(fiber, watcher->stream, BENDER_ASYNC_LISTEN_READ, watcher_callback_read, state);
+    bender_gcroot(bender_wrap_abstract(watcher));
 }
 
-static void janet_watcher_unlisten(JanetWatcher *watcher) {
+static void bender_watcher_unlisten(BenderWatcher *watcher) {
     if (!watcher->is_watching) return;
     watcher->is_watching = 0;
-    janet_stream_close(watcher->stream);
-    janet_gcunroot(janet_wrap_abstract(watcher));
+    bender_stream_close(watcher->stream);
+    bender_gcunroot(bender_wrap_abstract(watcher));
 }
 
-#elif JANET_WINDOWS
+#elif BENDER_WINDOWS
 
 #define WATCHFLAG_RECURSIVE 0x100000u
 
-static const JanetWatchFlagName watcher_flags_windows[] = {
+static const BenderWatchFlagName watcher_flags_windows[] = {
     {
         "all",
         FILE_NOTIFY_CHANGE_ATTRIBUTES |
@@ -308,27 +308,27 @@ static const JanetWatchFlagName watcher_flags_windows[] = {
     {"size", FILE_NOTIFY_CHANGE_SIZE},
 };
 
-static uint32_t decode_watch_flags(const Janet *options, int32_t n) {
+static uint32_t decode_watch_flags(const Bender *options, int32_t n) {
     uint32_t flags = 0;
     for (int32_t i = 0; i < n; i++) {
-        if (!(janet_checktype(options[i], JANET_KEYWORD))) {
-            janet_panicf("expected keyword, got %v", options[i]);
+        if (!(bender_checktype(options[i], BENDER_KEYWORD))) {
+            bender_panicf("expected keyword, got %v", options[i]);
         }
-        JanetKeyword keyw = janet_unwrap_keyword(options[i]);
-        const JanetWatchFlagName *result = janet_strbinsearch(watcher_flags_windows,
-            sizeof(watcher_flags_windows) / sizeof(JanetWatchFlagName),
-            sizeof(JanetWatchFlagName),
+        BenderKeyword keyw = bender_unwrap_keyword(options[i]);
+        const BenderWatchFlagName *result = bender_strbinsearch(watcher_flags_windows,
+            sizeof(watcher_flags_windows) / sizeof(BenderWatchFlagName),
+            sizeof(BenderWatchFlagName),
             keyw);
         if (!result) {
-            janet_panicf("unknown windows filewatch flag %v", options[i]);
+            bender_panicf("unknown windows filewatch flag %v", options[i]);
         }
         flags |= result->flag;
     }
     return flags;
 }
 
-static void janet_watcher_init(JanetWatcher *watcher, JanetChannel *channel, uint32_t default_flags) {
-    watcher->watch_descriptors = janet_table(0);
+static void bender_watcher_init(BenderWatcher *watcher, BenderChannel *channel, uint32_t default_flags) {
+    watcher->watch_descriptors = bender_table(0);
     watcher->channel = channel;
     watcher->default_flags = default_flags;
     watcher->is_watching = 0;
@@ -340,11 +340,11 @@ static void janet_watcher_init(JanetWatcher *watcher, JanetChannel *channel, uin
 #define FILE_INFO_PADDING (4096 * 4)
 
 typedef struct {
-    JanetOverlapped overlapped;
-    JanetStream *stream;
-    JanetWatcher *watcher;
-    JanetFiber *fiber;
-    JanetString dir_path;
+    BenderOverlapped overlapped;
+    BenderStream *stream;
+    BenderWatcher *watcher;
+    BenderFiber *fiber;
+    BenderString dir_path;
     uint32_t flags;
     uint64_t buf[FILE_INFO_PADDING / sizeof(uint64_t)]; /* Ensure alignment */
 } OverlappedWatch;
@@ -361,7 +361,7 @@ static void read_dir_changes(OverlappedWatch *ow) {
                                         (OVERLAPPED *) ow,
                                         NULL);
     if (!result) {
-        janet_panicv(janet_ev_lasterr());
+        bender_panicv(bender_ev_lasterr());
     }
 }
 
@@ -374,31 +374,31 @@ static const char *watcher_actions_windows[] = {
     "renamed-new",
 };
 
-static void watcher_callback_read(JanetFiber *fiber, JanetAsyncEvent event) {
+static void watcher_callback_read(BenderFiber *fiber, BenderAsyncEvent event) {
     OverlappedWatch *ow = (OverlappedWatch *) fiber->ev_state;
-    JanetWatcher *watcher = ow->watcher;
+    BenderWatcher *watcher = ow->watcher;
     switch (event) {
         default:
             break;
-        case JANET_ASYNC_EVENT_INIT:
-            janet_async_in_flight(fiber);
+        case BENDER_ASYNC_EVENT_INIT:
+            bender_async_in_flight(fiber);
             break;
-        case JANET_ASYNC_EVENT_MARK:
-            janet_mark(janet_wrap_abstract(ow->stream));
-            janet_mark(janet_wrap_fiber(ow->fiber));
-            janet_mark(janet_wrap_abstract(watcher));
-            janet_mark(janet_wrap_string(ow->dir_path));
+        case BENDER_ASYNC_EVENT_MARK:
+            bender_mark(bender_wrap_abstract(ow->stream));
+            bender_mark(bender_wrap_fiber(ow->fiber));
+            bender_mark(bender_wrap_abstract(watcher));
+            bender_mark(bender_wrap_string(ow->dir_path));
             break;
-        case JANET_ASYNC_EVENT_CLOSE:
-            janet_table_remove(ow->watcher->watch_descriptors, janet_wrap_string(ow->dir_path));
+        case BENDER_ASYNC_EVENT_CLOSE:
+            bender_table_remove(ow->watcher->watch_descriptors, bender_wrap_string(ow->dir_path));
             break;
-        case JANET_ASYNC_EVENT_ERR:
-        case JANET_ASYNC_EVENT_FAILED:
-            janet_stream_close(ow->stream);
+        case BENDER_ASYNC_EVENT_ERR:
+        case BENDER_ASYNC_EVENT_FAILED:
+            bender_stream_close(ow->stream);
             break;
-        case JANET_ASYNC_EVENT_COMPLETE: {
+        case BENDER_ASYNC_EVENT_COMPLETE: {
             if (!watcher->is_watching) {
-                janet_stream_close(ow->stream);
+                bender_stream_close(ow->stream);
                 break;
             }
 
@@ -408,24 +408,24 @@ static void watcher_callback_read(JanetFiber *fiber, JanetAsyncEvent event) {
                 /* Got an event */
 
                 /* Extract name */
-                Janet filename;
+                Bender filename;
                 if (fni->FileNameLength) {
                     int32_t nbytes = (int32_t) WideCharToMultiByte(CP_UTF8, 0, fni->FileName, fni->FileNameLength / sizeof(wchar_t), NULL, 0, NULL, NULL);
-                    janet_assert(nbytes, "bad utf8 path");
-                    uint8_t *into = janet_string_begin(nbytes);
+                    bender_assert(nbytes, "bad utf8 path");
+                    uint8_t *into = bender_string_begin(nbytes);
                     WideCharToMultiByte(CP_UTF8, 0, fni->FileName, fni->FileNameLength / sizeof(wchar_t), (char *) into, nbytes, NULL, NULL);
-                    filename = janet_wrap_string(janet_string_end(into));
+                    filename = bender_wrap_string(bender_string_end(into));
                 } else {
-                    filename = janet_cstringv("");
+                    filename = bender_cstringv("");
                 }
 
-                JanetKV *event = janet_struct_begin(3);
-                janet_struct_put(event, janet_ckeywordv("type"), janet_ckeywordv(watcher_actions_windows[fni->Action]));
-                janet_struct_put(event, janet_ckeywordv("file-name"), filename);
-                janet_struct_put(event, janet_ckeywordv("dir-name"), janet_wrap_string(ow->dir_path));
-                Janet eventv = janet_wrap_struct(janet_struct_end(event));
+                BenderKV *event = bender_struct_begin(3);
+                bender_struct_put(event, bender_ckeywordv("type"), bender_ckeywordv(watcher_actions_windows[fni->Action]));
+                bender_struct_put(event, bender_ckeywordv("file-name"), filename);
+                bender_struct_put(event, bender_ckeywordv("dir-name"), bender_wrap_string(ow->dir_path));
+                Bender eventv = bender_wrap_struct(bender_struct_end(event));
 
-                janet_channel_give(watcher->channel, eventv);
+                bender_channel_give(watcher->channel, eventv);
 
                 /* Next event */
                 if (!fni->NextEntryOffset) break;
@@ -434,7 +434,7 @@ static void watcher_callback_read(JanetFiber *fiber, JanetAsyncEvent event) {
 
             /* Make another call to read directory changes */
             read_dir_changes(ow);
-            janet_async_in_flight(fiber);
+            bender_async_in_flight(fiber);
         }
         break;
     }
@@ -442,15 +442,15 @@ static void watcher_callback_read(JanetFiber *fiber, JanetAsyncEvent event) {
 
 static void start_listening_ow(OverlappedWatch *ow) {
     read_dir_changes(ow);
-    JanetStream *stream = ow->stream;
-    JanetFunction *thunk = janet_thunk_delay(janet_wrap_nil());
-    JanetFiber *fiber = janet_fiber(thunk, 64, 0, NULL);
-    fiber->supervisor_channel = janet_root_fiber()->supervisor_channel;
+    BenderStream *stream = ow->stream;
+    BenderFunction *thunk = bender_thunk_delay(bender_wrap_nil());
+    BenderFiber *fiber = bender_fiber(thunk, 64, 0, NULL);
+    fiber->supervisor_channel = bender_root_fiber()->supervisor_channel;
     ow->fiber = fiber;
-    janet_async_start_fiber(fiber, stream, JANET_ASYNC_LISTEN_READ, watcher_callback_read, ow);
+    bender_async_start_fiber(fiber, stream, BENDER_ASYNC_LISTEN_READ, watcher_callback_read, ow);
 }
 
-static void janet_watcher_add(JanetWatcher *watcher, const char *path, uint32_t flags) {
+static void bender_watcher_add(BenderWatcher *watcher, const char *path, uint32_t flags) {
     HANDLE handle = CreateFileA(path,
                                 FILE_LIST_DIRECTORY | GENERIC_READ,
                                 FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
@@ -459,62 +459,62 @@ static void janet_watcher_add(JanetWatcher *watcher, const char *path, uint32_t 
                                 FILE_FLAG_OVERLAPPED | FILE_FLAG_BACKUP_SEMANTICS,
                                 NULL);
     if (handle == INVALID_HANDLE_VALUE) {
-        janet_panicv(janet_ev_lasterr());
+        bender_panicv(bender_ev_lasterr());
     }
-    JanetStream *stream = janet_stream(handle, JANET_STREAM_READABLE, NULL);
-    OverlappedWatch *ow = janet_malloc(sizeof(OverlappedWatch));
+    BenderStream *stream = bender_stream(handle, BENDER_STREAM_READABLE, NULL);
+    OverlappedWatch *ow = bender_malloc(sizeof(OverlappedWatch));
     memset(ow, 0, sizeof(OverlappedWatch));
     ow->stream = stream;
-    ow->dir_path = janet_cstring(path);
+    ow->dir_path = bender_cstring(path);
     ow->fiber = NULL;
-    Janet pathv = janet_wrap_string(ow->dir_path);
+    Bender pathv = bender_wrap_string(ow->dir_path);
     ow->flags = flags | watcher->default_flags;
     ow->watcher = watcher;
     ow->overlapped.as.overlapped.hEvent = CreateEvent(NULL, FALSE, 0, NULL); /* Do we need this */
-    Janet streamv = janet_wrap_pointer(ow);
-    janet_table_put(watcher->watch_descriptors, pathv, streamv);
+    Bender streamv = bender_wrap_pointer(ow);
+    bender_table_put(watcher->watch_descriptors, pathv, streamv);
     if (watcher->is_watching) {
         start_listening_ow(ow);
     }
 }
 
-static void janet_watcher_remove(JanetWatcher *watcher, const char *path) {
-    Janet pathv = janet_cstringv(path);
-    Janet streamv = janet_table_get(watcher->watch_descriptors, pathv);
-    if (janet_checktype(streamv, JANET_NIL)) {
-        janet_panicf("path %v is not being watched", pathv);
+static void bender_watcher_remove(BenderWatcher *watcher, const char *path) {
+    Bender pathv = bender_cstringv(path);
+    Bender streamv = bender_table_get(watcher->watch_descriptors, pathv);
+    if (bender_checktype(streamv, BENDER_NIL)) {
+        bender_panicf("path %v is not being watched", pathv);
     }
-    janet_table_remove(watcher->watch_descriptors, pathv);
-    OverlappedWatch *ow = janet_unwrap_pointer(streamv);
-    janet_stream_close(ow->stream);
+    bender_table_remove(watcher->watch_descriptors, pathv);
+    OverlappedWatch *ow = bender_unwrap_pointer(streamv);
+    bender_stream_close(ow->stream);
 }
 
-static void janet_watcher_listen(JanetWatcher *watcher) {
-    if (watcher->is_watching) janet_panic("already watching");
+static void bender_watcher_listen(BenderWatcher *watcher) {
+    if (watcher->is_watching) bender_panic("already watching");
     watcher->is_watching = 1;
     for (int32_t i = 0; i < watcher->watch_descriptors->capacity; i++) {
-        const JanetKV *kv = watcher->watch_descriptors->data + i;
-        if (!janet_checktype(kv->value, JANET_POINTER)) continue;
-        OverlappedWatch *ow = janet_unwrap_pointer(kv->value);
+        const BenderKV *kv = watcher->watch_descriptors->data + i;
+        if (!bender_checktype(kv->value, BENDER_POINTER)) continue;
+        OverlappedWatch *ow = bender_unwrap_pointer(kv->value);
         start_listening_ow(ow);
     }
-    janet_gcroot(janet_wrap_abstract(watcher));
+    bender_gcroot(bender_wrap_abstract(watcher));
 }
 
-static void janet_watcher_unlisten(JanetWatcher *watcher) {
+static void bender_watcher_unlisten(BenderWatcher *watcher) {
     if (!watcher->is_watching) return;
     watcher->is_watching = 0;
     for (int32_t i = 0; i < watcher->watch_descriptors->capacity; i++) {
-        const JanetKV *kv = watcher->watch_descriptors->data + i;
-        if (!janet_checktype(kv->value, JANET_POINTER)) continue;
-        OverlappedWatch *ow = janet_unwrap_pointer(kv->value);
-        janet_stream_close(ow->stream);
+        const BenderKV *kv = watcher->watch_descriptors->data + i;
+        if (!bender_checktype(kv->value, BENDER_POINTER)) continue;
+        OverlappedWatch *ow = bender_unwrap_pointer(kv->value);
+        bender_stream_close(ow->stream);
     }
-    janet_table_clear(watcher->watch_descriptors);
-    janet_gcunroot(janet_wrap_abstract(watcher));
+    bender_table_clear(watcher->watch_descriptors);
+    bender_gcunroot(bender_wrap_abstract(watcher));
 }
 
-#elif defined(JANET_APPLE) || defined(JANET_BSD)
+#elif defined(BENDER_APPLE) || defined(BENDER_BSD)
 
 /* kqueue implementation */
 
@@ -523,7 +523,7 @@ static void janet_watcher_unlisten(JanetWatcher *watcher) {
 
 /* Different BSDs define different NOTE_* constants for different kinds of events. Use ifdef to
    determine when they are available (assuming they are defines and not enums */
-static const JanetWatchFlagName watcher_flags_kqueue[] = {
+static const BenderWatchFlagName watcher_flags_kqueue[] = {
     {
         "all", NOTE_ATTRIB | NOTE_DELETE | NOTE_EXTEND | NOTE_RENAME | NOTE_REVOKE | NOTE_WRITE | NOTE_LINK
 #ifdef NOTE_CLOSE
@@ -572,37 +572,37 @@ static const JanetWatchFlagName watcher_flags_kqueue[] = {
     {"write", NOTE_WRITE},
 };
 
-static uint32_t decode_watch_flags(const Janet *options, int32_t n) {
+static uint32_t decode_watch_flags(const Bender *options, int32_t n) {
     uint32_t flags = 0;
     for (int32_t i = 0; i < n; i++) {
-        if (!(janet_checktype(options[i], JANET_KEYWORD))) {
-            janet_panicf("expected keyword, got %v", options[i]);
+        if (!(bender_checktype(options[i], BENDER_KEYWORD))) {
+            bender_panicf("expected keyword, got %v", options[i]);
         }
-        JanetKeyword keyw = janet_unwrap_keyword(options[i]);
-        const JanetWatchFlagName *result = janet_strbinsearch(watcher_flags_kqueue,
-            sizeof(watcher_flags_kqueue) / sizeof(JanetWatchFlagName),
-            sizeof(JanetWatchFlagName),
+        BenderKeyword keyw = bender_unwrap_keyword(options[i]);
+        const BenderWatchFlagName *result = bender_strbinsearch(watcher_flags_kqueue,
+            sizeof(watcher_flags_kqueue) / sizeof(BenderWatchFlagName),
+            sizeof(BenderWatchFlagName),
             keyw);
         if (!result) {
-            janet_panicf("unknown bsd flag %v", options[i]);
+            bender_panicf("unknown bsd flag %v", options[i]);
         }
         flags |= result->flag;
     }
     return flags;
 }
 
-static void janet_watcher_init(JanetWatcher *watcher, JanetChannel *channel, uint32_t default_flags) {
+static void bender_watcher_init(BenderWatcher *watcher, BenderChannel *channel, uint32_t default_flags) {
     int kq = kqueue();
-    watcher->watch_descriptors = janet_table(0);
+    watcher->watch_descriptors = bender_table(0);
     watcher->channel = channel;
     watcher->default_flags = default_flags;
     watcher->is_watching = 0;
-    watcher->stream = janet_stream(kq, JANET_STREAM_READABLE, NULL);
-    janet_stream_level_triggered(watcher->stream);
+    watcher->stream = bender_stream(kq, BENDER_STREAM_READABLE, NULL);
+    bender_stream_level_triggered(watcher->stream);
 }
 
-static void janet_watcher_add(JanetWatcher *watcher, const char *path, uint32_t flags) {
-    if (watcher->stream == NULL) janet_panic("watcher closed");
+static void bender_watcher_add(BenderWatcher *watcher, const char *path, uint32_t flags) {
+    if (watcher->stream == NULL) bender_panic("watcher closed");
     int kq = watcher->stream->handle;
     struct kevent kev = {0};
     /* Get file descriptor for path */
@@ -611,7 +611,7 @@ static void janet_watcher_add(JanetWatcher *watcher, const char *path, uint32_t 
         file_fd = open(path, O_RDONLY);
     } while (file_fd == -1 && errno == EINTR);
     if (file_fd == -1) {
-        janet_panicf("failed to open: %v", janet_ev_lasterr());
+        bender_panicf("failed to open: %v", bender_ev_lasterr());
     }
     /* Watch for EVFILT_VNODE on the file descriptor */
     EV_SETx(&kev, file_fd, EVFILT_VNODE, EV_ADD | EV_ENABLE | EV_CLEAR, flags, 0, NULL);
@@ -621,61 +621,61 @@ static void janet_watcher_add(JanetWatcher *watcher, const char *path, uint32_t 
     } while (status == -1 && errno == EINTR);
     if (status == -1) {
         close(file_fd);
-        janet_panicf("failed to listen: %v", janet_ev_lasterr());
+        bender_panicf("failed to listen: %v", bender_ev_lasterr());
     }
     /* Bookkeeping */
-    Janet name = janet_cstringv(path);
-    Janet wd = janet_wrap_integer(file_fd);
-    janet_table_put(watcher->watch_descriptors, name, wd);
-    janet_table_put(watcher->watch_descriptors, wd, name);
+    Bender name = bender_cstringv(path);
+    Bender wd = bender_wrap_integer(file_fd);
+    bender_table_put(watcher->watch_descriptors, name, wd);
+    bender_table_put(watcher->watch_descriptors, wd, name);
 }
 
-static void janet_watcher_remove(JanetWatcher *watcher, const char *path) {
-    if (watcher->stream == NULL) janet_panic("watcher closed");
-    Janet pathv = janet_cstringv(path);
-    Janet check = janet_table_get(watcher->watch_descriptors, pathv);
-    if (!janet_checktype(check, JANET_NUMBER)) {
-        janet_panic("bad watch descriptor");
+static void bender_watcher_remove(BenderWatcher *watcher, const char *path) {
+    if (watcher->stream == NULL) bender_panic("watcher closed");
+    Bender pathv = bender_cstringv(path);
+    Bender check = bender_table_get(watcher->watch_descriptors, pathv);
+    if (!bender_checktype(check, BENDER_NUMBER)) {
+        bender_panic("bad watch descriptor");
     }
     /* Closing the file descriptor will also remove it from the kqueue */
-    int wd = janet_unwrap_integer(check);
+    int wd = bender_unwrap_integer(check);
     int result;
     do {
         result = close(wd);
     } while (result != -1 && errno == EINTR);
     if (result == -1) {
-        janet_panicv(janet_ev_lasterr());
+        bender_panicv(bender_ev_lasterr());
     }
-    janet_table_put(watcher->watch_descriptors, pathv, janet_wrap_nil());
-    janet_table_put(watcher->watch_descriptors, janet_wrap_integer(wd), janet_wrap_nil());
+    bender_table_put(watcher->watch_descriptors, pathv, bender_wrap_nil());
+    bender_table_put(watcher->watch_descriptors, bender_wrap_integer(wd), bender_wrap_nil());
 }
 
 typedef struct {
-    JanetWatcher *watcher;
+    BenderWatcher *watcher;
     uint32_t cookie;
 } KqueueWatcherState;
 
-static void watcher_callback_read(JanetFiber *fiber, JanetAsyncEvent event) {
-    JanetStream *stream = fiber->ev_stream;
+static void watcher_callback_read(BenderFiber *fiber, BenderAsyncEvent event) {
+    BenderStream *stream = fiber->ev_stream;
     KqueueWatcherState *state = fiber->ev_state;
-    JanetWatcher *watcher = state->watcher;
+    BenderWatcher *watcher = state->watcher;
     switch (event) {
-        case JANET_ASYNC_EVENT_MARK:
-            janet_mark(janet_wrap_abstract(watcher));
+        case BENDER_ASYNC_EVENT_MARK:
+            bender_mark(bender_wrap_abstract(watcher));
             break;
-        case JANET_ASYNC_EVENT_CLOSE:
-            janet_schedule(fiber, janet_wrap_nil());
-            janet_async_end(fiber);
+        case BENDER_ASYNC_EVENT_CLOSE:
+            bender_schedule(fiber, bender_wrap_nil());
+            bender_async_end(fiber);
             break;
-        case JANET_ASYNC_EVENT_ERR: {
-            janet_schedule(fiber, janet_wrap_nil());
-            janet_async_end(fiber);
+        case BENDER_ASYNC_EVENT_ERR: {
+            bender_schedule(fiber, bender_wrap_nil());
+            bender_async_end(fiber);
             break;
         }
-        case JANET_ASYNC_EVENT_HUP:
-        case JANET_ASYNC_EVENT_INIT:
+        case BENDER_ASYNC_EVENT_HUP:
+        case BENDER_ASYNC_EVENT_INIT:
             break;
-        case JANET_ASYNC_EVENT_READ: {
+        case BENDER_ASYNC_EVENT_READ: {
             /* Pump events from the sub kqueue */
             const int num_events = 512; /* Extra will be pumped after another event loop rotation. */
             struct kevent events[num_events];
@@ -685,8 +685,8 @@ static void watcher_callback_read(JanetFiber *fiber, JanetAsyncEvent event) {
                 status = kevent(kq, NULL, 0, events, num_events, NULL);
             } while (status == -1 && errno == EINTR);
             if (status == -1) {
-                janet_schedule(fiber, janet_wrap_nil());
-                janet_async_end(fiber);
+                bender_schedule(fiber, bender_wrap_nil());
+                bender_async_end(fiber);
                 break;
             }
             for (int i = 0; i < status; i++) {
@@ -700,40 +700,40 @@ static void watcher_callback_read(JanetFiber *fiber, JanetAsyncEvent event) {
                 } while (status == -1 && errno == EINTR);
                 if (status == -1) continue;
                 int is_dir = S_ISDIR(stat_buf.st_mode);
-                Janet ident = janet_wrap_integer(kev.ident);
-                Janet path = janet_table_get(watcher->watch_descriptors, ident);
+                Bender ident = bender_wrap_integer(kev.ident);
+                Bender path = bender_table_get(watcher->watch_descriptors, ident);
                 for (unsigned int j = 1; j < (sizeof(watcher_flags_kqueue) / sizeof(watcher_flags_kqueue[0])); j++) {
                     uint32_t flagcheck = watcher_flags_kqueue[j].flag;
                     if (kev.fflags & flagcheck) {
-                        JanetKV *event = janet_struct_begin(6);
-                        janet_struct_put(event, janet_ckeywordv("wd"), ident);
-                        janet_struct_put(event, janet_ckeywordv("wd-path"), path);
-                        janet_struct_put(event, janet_ckeywordv("cookie"), janet_wrap_number((double) state->cookie));
-                        janet_struct_put(event, janet_ckeywordv("type"), janet_ckeywordv(watcher_flags_kqueue[j].name));
+                        BenderKV *event = bender_struct_begin(6);
+                        bender_struct_put(event, bender_ckeywordv("wd"), ident);
+                        bender_struct_put(event, bender_ckeywordv("wd-path"), path);
+                        bender_struct_put(event, bender_ckeywordv("cookie"), bender_wrap_number((double) state->cookie));
+                        bender_struct_put(event, bender_ckeywordv("type"), bender_ckeywordv(watcher_flags_kqueue[j].name));
                         if (is_dir) {
                             /* Pass in directly */
-                            janet_struct_put(event, janet_ckeywordv("file-name"), janet_cstringv(""));
-                            janet_struct_put(event, janet_ckeywordv("dir-name"), path);
+                            bender_struct_put(event, bender_ckeywordv("file-name"), bender_cstringv(""));
+                            bender_struct_put(event, bender_ckeywordv("dir-name"), path);
                         } else {
                             /* Split path */
-                            JanetString spath = janet_unwrap_string(path);
-                            const uint8_t *cursor = spath + janet_string_length(spath);
+                            BenderString spath = bender_unwrap_string(path);
+                            const uint8_t *cursor = spath + bender_string_length(spath);
                             const uint8_t *cursor_end = cursor;
                             while (cursor > spath && cursor[0] != '/') {
                                 cursor--;
                             }
                             if (cursor == spath) {
                                 /* No path separators */
-                                janet_struct_put(event, janet_ckeywordv("dir-name"), janet_cstringv("."));
-                                janet_struct_put(event, janet_ckeywordv("file-name"), janet_wrap_string(spath));
+                                bender_struct_put(event, bender_ckeywordv("dir-name"), bender_cstringv("."));
+                                bender_struct_put(event, bender_ckeywordv("file-name"), bender_wrap_string(spath));
                             } else {
                                 /* Found path separator */
-                                janet_struct_put(event, janet_ckeywordv("dir-name"), janet_wrap_string(janet_string(spath, (cursor - spath))));
-                                janet_struct_put(event, janet_ckeywordv("file-name"), janet_wrap_string(janet_string(cursor + 1, (cursor_end - cursor - 1))));
+                                bender_struct_put(event, bender_ckeywordv("dir-name"), bender_wrap_string(bender_string(spath, (cursor - spath))));
+                                bender_struct_put(event, bender_ckeywordv("file-name"), bender_wrap_string(bender_string(cursor + 1, (cursor_end - cursor - 1))));
                             }
                         }
-                        Janet eventv = janet_wrap_struct(janet_struct_end(event));
-                        janet_channel_give(watcher->channel, eventv);
+                        Bender eventv = bender_wrap_struct(bender_struct_end(event));
+                        bender_channel_give(watcher->channel, eventv);
                     }
                 }
             }
@@ -744,97 +744,97 @@ static void watcher_callback_read(JanetFiber *fiber, JanetAsyncEvent event) {
     }
 }
 
-static void janet_watcher_listen(JanetWatcher *watcher) {
-    if (watcher->is_watching) janet_panic("already watching");
+static void bender_watcher_listen(BenderWatcher *watcher) {
+    if (watcher->is_watching) bender_panic("already watching");
     watcher->is_watching = 1;
-    JanetFunction *thunk = janet_thunk_delay(janet_wrap_nil());
-    JanetFiber *fiber = janet_fiber(thunk, 64, 0, NULL);
-    KqueueWatcherState *state = janet_malloc(sizeof(KqueueWatcherState));
+    BenderFunction *thunk = bender_thunk_delay(bender_wrap_nil());
+    BenderFiber *fiber = bender_fiber(thunk, 64, 0, NULL);
+    KqueueWatcherState *state = bender_malloc(sizeof(KqueueWatcherState));
     state->watcher = watcher;
-    janet_async_start_fiber(fiber, watcher->stream, JANET_ASYNC_LISTEN_READ, watcher_callback_read, state);
-    janet_gcroot(janet_wrap_abstract(watcher));
+    bender_async_start_fiber(fiber, watcher->stream, BENDER_ASYNC_LISTEN_READ, watcher_callback_read, state);
+    bender_gcroot(bender_wrap_abstract(watcher));
 }
 
-static void janet_watcher_unlisten(JanetWatcher *watcher) {
+static void bender_watcher_unlisten(BenderWatcher *watcher) {
     if (!watcher->is_watching) return;
     watcher->is_watching = 0;
-    janet_stream_close(watcher->stream);
-    janet_gcunroot(janet_wrap_abstract(watcher));
+    bender_stream_close(watcher->stream);
+    bender_gcunroot(bender_wrap_abstract(watcher));
 }
 
 #else
 
 /* Default implementation */
 
-static uint32_t decode_watch_flags(const Janet *options, int32_t n) {
+static uint32_t decode_watch_flags(const Bender *options, int32_t n) {
     (void) options;
     (void) n;
     return 0;
 }
 
-static void janet_watcher_init(JanetWatcher *watcher, JanetChannel *channel, uint32_t default_flags) {
+static void bender_watcher_init(BenderWatcher *watcher, BenderChannel *channel, uint32_t default_flags) {
     (void) watcher;
     (void) channel;
     (void) default_flags;
-    janet_panic("filewatch not supported on this platform");
+    bender_panic("filewatch not supported on this platform");
 }
 
-static void janet_watcher_add(JanetWatcher *watcher, const char *path, uint32_t flags) {
+static void bender_watcher_add(BenderWatcher *watcher, const char *path, uint32_t flags) {
     (void) watcher;
     (void) flags;
     (void) path;
-    janet_panic("filewatch not supported on this platform");
+    bender_panic("filewatch not supported on this platform");
 }
 
-static void janet_watcher_remove(JanetWatcher *watcher, const char *path) {
+static void bender_watcher_remove(BenderWatcher *watcher, const char *path) {
     (void) watcher;
     (void) path;
-    janet_panic("filewatch not supported on this platform");
+    bender_panic("filewatch not supported on this platform");
 }
 
-static void janet_watcher_listen(JanetWatcher *watcher) {
+static void bender_watcher_listen(BenderWatcher *watcher) {
     (void) watcher;
-    janet_panic("filewatch not supported on this platform");
+    bender_panic("filewatch not supported on this platform");
 }
 
-static void janet_watcher_unlisten(JanetWatcher *watcher) {
+static void bender_watcher_unlisten(BenderWatcher *watcher) {
     (void) watcher;
-    janet_panic("filewatch not supported on this platform");
+    bender_panic("filewatch not supported on this platform");
 }
 
 #endif
 
 /* C Functions */
 
-static int janet_filewatch_mark(void *p, size_t s) {
-    JanetWatcher *watcher = (JanetWatcher *) p;
+static int bender_filewatch_mark(void *p, size_t s) {
+    BenderWatcher *watcher = (BenderWatcher *) p;
     (void) s;
     if (watcher->channel == NULL) return 0; /* Incomplete initialization */
-#ifdef JANET_WINDOWS
+#ifdef BENDER_WINDOWS
     for (int32_t i = 0; i < watcher->watch_descriptors->capacity; i++) {
-        const JanetKV *kv = watcher->watch_descriptors->data + i;
-        if (!janet_checktype(kv->value, JANET_POINTER)) continue;
-        OverlappedWatch *ow = janet_unwrap_pointer(kv->value);
-        janet_mark(janet_wrap_fiber(ow->fiber));
-        janet_mark(janet_wrap_abstract(ow->stream));
-        janet_mark(janet_wrap_string(ow->dir_path));
+        const BenderKV *kv = watcher->watch_descriptors->data + i;
+        if (!bender_checktype(kv->value, BENDER_POINTER)) continue;
+        OverlappedWatch *ow = bender_unwrap_pointer(kv->value);
+        bender_mark(bender_wrap_fiber(ow->fiber));
+        bender_mark(bender_wrap_abstract(ow->stream));
+        bender_mark(bender_wrap_string(ow->dir_path));
     }
 #else
-    janet_mark(janet_wrap_abstract(watcher->stream));
+    bender_mark(bender_wrap_abstract(watcher->stream));
 #endif
-    janet_mark(janet_wrap_abstract(watcher->channel));
-    janet_mark(janet_wrap_table(watcher->watch_descriptors));
+    bender_mark(bender_wrap_abstract(watcher->channel));
+    bender_mark(bender_wrap_table(watcher->watch_descriptors));
     return 0;
 }
 
-static const JanetAbstractType janet_filewatch_at = {
+static const BenderAbstractType bender_filewatch_at = {
     "filewatch/watcher",
     NULL,
-    janet_filewatch_mark,
-    JANET_ATEND_GCMARK
+    bender_filewatch_mark,
+    BENDER_ATEND_GCMARK
 };
 
-JANET_CORE_FN(cfun_filewatch_make,
+BENDER_CORE_FN(cfun_filewatch_make,
               "(filewatch/new chan & default-flags)",
               "Create a new filewatcher that will give events to a channel "
               "`chan`. See `filewatch/add` for available flags.\n"
@@ -867,16 +867,16 @@ JANET_CORE_FN(cfun_filewatch_make,
               "\n"
               "* `:cookie` - a semi-randomized integer used to associate "
               "related events, such as `:moved-from` and `:moved-to`.") {
-    janet_sandbox_assert(JANET_SANDBOX_FS_READ);
-    janet_arity(argc, 1, -1);
-    JanetChannel *channel = janet_getchannel(argv, 0);
-    JanetWatcher *watcher = janet_abstract(&janet_filewatch_at, sizeof(JanetWatcher));
+    bender_sandbox_assert(BENDER_SANDBOX_FS_READ);
+    bender_arity(argc, 1, -1);
+    BenderChannel *channel = bender_getchannel(argv, 0);
+    BenderWatcher *watcher = bender_abstract(&bender_filewatch_at, sizeof(BenderWatcher));
     uint32_t default_flags = decode_watch_flags(argv + 1, argc - 1);
-    janet_watcher_init(watcher, channel, default_flags);
-    return janet_wrap_abstract(watcher);
+    bender_watcher_init(watcher, channel, default_flags);
+    return bender_wrap_abstract(watcher);
 }
 
-JANET_CORE_FN(cfun_filewatch_add,
+BENDER_CORE_FN(cfun_filewatch_add,
               "(filewatch/add watcher path flags & more-flags)",
               "Add a path to the watcher. Available flags and event types "
               "depend on the current OS, and are as follows.\n"
@@ -948,55 +948,55 @@ JANET_CORE_FN(cfun_filewatch_add,
               "On Linux and BSDs, events will have a `:type` corresponding "
               "to the possible flags, excluding `:all`.\n"
               "") {
-    janet_sandbox_assert(JANET_SANDBOX_FS_READ);
-    janet_arity(argc, 2, -1);
-    JanetWatcher *watcher = janet_getabstract(argv, 0, &janet_filewatch_at);
-    const char *path = janet_getcstring(argv, 1);
+    bender_sandbox_assert(BENDER_SANDBOX_FS_READ);
+    bender_arity(argc, 2, -1);
+    BenderWatcher *watcher = bender_getabstract(argv, 0, &bender_filewatch_at);
+    const char *path = bender_getcstring(argv, 1);
     uint32_t flags = watcher->default_flags | decode_watch_flags(argv + 2, argc - 2);
-    janet_watcher_add(watcher, path, flags);
+    bender_watcher_add(watcher, path, flags);
     return argv[0];
 }
 
-JANET_CORE_FN(cfun_filewatch_remove,
+BENDER_CORE_FN(cfun_filewatch_remove,
               "(filewatch/remove watcher path)",
               "Remove a path from the watcher.") {
-    janet_fixarity(argc, 2);
-    JanetWatcher *watcher = janet_getabstract(argv, 0, &janet_filewatch_at);
+    bender_fixarity(argc, 2);
+    BenderWatcher *watcher = bender_getabstract(argv, 0, &bender_filewatch_at);
     /* TODO - pass string in directly to avoid extra allocation */
-    const char *path = janet_getcstring(argv, 1);
-    janet_watcher_remove(watcher, path);
+    const char *path = bender_getcstring(argv, 1);
+    bender_watcher_remove(watcher, path);
     return argv[0];
 }
 
-JANET_CORE_FN(cfun_filewatch_listen,
+BENDER_CORE_FN(cfun_filewatch_listen,
               "(filewatch/listen watcher)",
               "Listen for changes in the watcher.") {
-    janet_fixarity(argc, 1);
-    JanetWatcher *watcher = janet_getabstract(argv, 0, &janet_filewatch_at);
-    janet_watcher_listen(watcher);
-    return janet_wrap_nil();
+    bender_fixarity(argc, 1);
+    BenderWatcher *watcher = bender_getabstract(argv, 0, &bender_filewatch_at);
+    bender_watcher_listen(watcher);
+    return bender_wrap_nil();
 }
 
-JANET_CORE_FN(cfun_filewatch_unlisten,
+BENDER_CORE_FN(cfun_filewatch_unlisten,
               "(filewatch/unlisten watcher)",
               "Stop listening for changes on a given watcher.") {
-    janet_fixarity(argc, 1);
-    JanetWatcher *watcher = janet_getabstract(argv, 0, &janet_filewatch_at);
-    janet_watcher_unlisten(watcher);
-    return janet_wrap_nil();
+    bender_fixarity(argc, 1);
+    BenderWatcher *watcher = bender_getabstract(argv, 0, &bender_filewatch_at);
+    bender_watcher_unlisten(watcher);
+    return bender_wrap_nil();
 }
 
 /* Module entry point */
-void janet_lib_filewatch(JanetTable *env) {
-    JanetRegExt cfuns[] = {
-        JANET_CORE_REG("filewatch/new", cfun_filewatch_make),
-        JANET_CORE_REG("filewatch/add", cfun_filewatch_add),
-        JANET_CORE_REG("filewatch/remove", cfun_filewatch_remove),
-        JANET_CORE_REG("filewatch/listen", cfun_filewatch_listen),
-        JANET_CORE_REG("filewatch/unlisten", cfun_filewatch_unlisten),
-        JANET_REG_END
+void bender_lib_filewatch(BenderTable *env) {
+    BenderRegExt cfuns[] = {
+        BENDER_CORE_REG("filewatch/new", cfun_filewatch_make),
+        BENDER_CORE_REG("filewatch/add", cfun_filewatch_add),
+        BENDER_CORE_REG("filewatch/remove", cfun_filewatch_remove),
+        BENDER_CORE_REG("filewatch/listen", cfun_filewatch_listen),
+        BENDER_CORE_REG("filewatch/unlisten", cfun_filewatch_unlisten),
+        BENDER_REG_END
     };
-    janet_core_cfuns_ext(env, NULL, cfuns);
+    bender_core_cfuns_ext(env, NULL, cfuns);
 }
 
 #endif

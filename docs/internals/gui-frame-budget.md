@@ -1,13 +1,13 @@
 # ttfx GUI frame budget (measured 2026-10-20)
 
-Where does the remaining Janet-vs-Rust gap live? This note answers that
+Where does the remaining Bender-vs-Rust gap live? This note answers that
 with main-thread samples of the two GUIs on the same effects, then states
 the concrete budget for the "97% of Rust" target.
 
 ## Method
 
-- Engines: canonical release Janet GUI
-  (`ttfx/janet-port/build/ttfx-gui-rel`, PGO collect x2 + verified
+- Engines: canonical release Bender GUI
+  (`ttfx/bender-port/build/ttfx-gui-rel`, PGO collect x2 + verified
   `--release`) and the Rust GUI (`ttfx/target/release/ttfx-gui`).
 - Window: 1458x400, windowed, uncapped, `--show-fps`, seed 42,
   `ruby-port/logo.txt`, `--probe-seconds 6`.
@@ -24,7 +24,7 @@ the concrete budget for the "97% of Rust" target.
 
 ## Frame table
 
-Janet columns: EndDrawing and prep are disjoint and sum to the frame.
+Bender columns: EndDrawing and prep are disjoint and sum to the frame.
 Pure VM and draw-text split the rest of prep (plus 1-2% other FFI);
 "pure VM" is `run_vm` minus all FFI alias subtrees, and it includes GC
 (GC's own share is shown separately). "draw-text" is the
@@ -32,12 +32,12 @@ Pure VM and draw-text split the rest of prep (plus 1-2% other FFI);
 
 | effect | engine | fps | frame us | EndDrawing us | prep us | pure VM us | draw-text us | GC us |
 |---|---|---:|---:|---:|---:|---:|---:|---:|
-| blackhole | janet | 2594 | 386 | 187 (49%) | 198 | 131 | 58 | 19 |
+| blackhole | bender | 2594 | 386 | 187 (49%) | 198 | 131 | 58 | 19 |
 | blackhole | rust | 3693 | 271 | 186 (69%) | 85 | - | - | - |
-| scattered | janet | 1461 | 684 | 260 (38%) | 425 | 198 | 212 | 34 |
+| scattered | bender | 1461 | 684 | 260 (38%) | 425 | 198 | 212 | 34 |
 | scattered | rust | 2346 | 426 | 207 (49%) | 219 | - | - | - |
-| laseretch | janet | 2294 | 436 | 280 (64%) | 156 | 92 | 52 | 17 |
-| bouncyballs | janet | 2364 | 423 | 275 (65%) | 148 | 72 | 68 | 13 |
+| laseretch | bender | 2294 | 436 | 280 (64%) | 156 | 92 | 52 | 17 |
+| bouncyballs | bender | 2364 | 423 | 275 (65%) | 148 | 72 | 68 | 13 |
 
 The Rust binary's own VM/frame-prep symbols are not broken out here; the
 table only needs its EndDrawing floor and total prep.
@@ -45,12 +45,12 @@ table only needs its EndDrawing floor and total prep.
 ## Findings
 
 1. **The swap floor is shared.** On blackhole, EndDrawing is 187 us for
-   Janet and 186 us for Rust. This is the Metal-backed GL present path
+   Bender and 186 us for Rust. This is the Metal-backed GL present path
    and WindowServer, so it is the same for both engines and independent
    of VM speed. At this window size it caps blackhole near 5.3k fps even
    with zero prep.
 
-2. **The whole gap is prep.** Janet's non-swap time is 198 us vs Rust's
+2. **The whole gap is prep.** Bender's non-swap time is 198 us vs Rust's
    85 us on blackhole (2.33x); 425 vs 219 us on scattered (1.94x).
    Matching Rust at 3693 fps on blackhole means a 271 us frame, i.e.
    **prep <= 84 us** -- the concrete 97% budget. That is roughly a

@@ -23,7 +23,7 @@ choice on Apple Silicon E/P cores — the OS scheduler is better informed).
 
 ## 1. One-shot tasks: `thread/new`, `thread/join`, `thread/alive?`
 
-```janet
+```bender
 (def h (thread/new (fn [x] (* x x)) 21))  # value arg marshals in
 (thread/alive? h)                          # true until joined
 (thread/join h)                            # 441; re-raises thread errors
@@ -35,13 +35,13 @@ background work you join once, or test fixtures. Do NOT use for
 long-lived services (no mailbox, no restart) or high-rate batches
 (spawn cost is a full VM boot — see pool).
 
-## 2. Workers: `examples/mailbox.janet`
+## 2. Workers: `examples/mailbox.ben`
 
 Long-lived worker thread + private queue + dispatch loop. Handlers
 receive `[tag payload]` and return the reply value; handler errors
 keep the worker alive and surface as errors in `call` callers.
 
-```janet
+```bender
 (import ../examples/mailbox :as mailbox)
 
 (def db (mailbox/spawn
@@ -69,7 +69,7 @@ one-shot calls.
 `ev/monitor` is the runtime primitive; the mailbox layer adds
 `:down` traffic handling, links, and trapping.
 
-```janet
+```bender
 # raw: watch any thread handle, get [:down tag reason] on a channel
 (def ch (ev/thread-chan 4))
 (def ref (ev/monitor h :w ch))  # -> integer ref (nil if already dead)
@@ -106,7 +106,7 @@ the `:down` handler — a one-level supervisor in ~10 lines).
 
 ## 4. Identity: pids and `self`
 
-```janet
+```bender
 (def pid (mb :pid))            # [:pid 0 7 chan]
 (mailbox/pid? pid)             # type check
 (mailbox/self)                 # calling worker's pid (nil outside)
@@ -125,7 +125,7 @@ from the handle table (registries, link sets, reply-to addresses).
 
 ## 5. Names: the registry
 
-```janet
+```bender
 (mailbox/register physics :physics)  # keyword -> pid, process-global
 (mailbox/whereis :physics)            # -> pid or nil; plugs into
                                       # send/call/monitor/link directly
@@ -146,11 +146,11 @@ through (game systems finding `:physics`, mods finding services).
 M one-shot calls over N long-lived worker VMs on a shared condvar
 queue — no per-task spawn cost (the cheap-restart substrate). The C
 runtime (M4c) is primary: one hop, direct completion events for
-`pool/call` (no per-task reply channel). `examples/pool.janet` stays
-as the reference implementation (same semantics, Janet-level dispatch
+`pool/call` (no per-task reply channel). `examples/pool.ben` stays
+as the reference implementation (same semantics, Bender-level dispatch
 loop, per-task reply channels).
 
-```janet
+```bender
 (def p (pool/spawn 4))
 (pool/call p + [3 4])                    # 7
 (pool/call p image-blur [pixels] 5)      # with timeout
@@ -188,14 +188,14 @@ strictly ordered streams (use one mailbox).
 
 ## 6b. Tasklets: bare fibers with owned isolated queues
 
-BEAM-shaped processes inside one VM (`examples/tasklet.janet`):
+BEAM-shaped processes inside one VM (`examples/tasklet.ben`):
 each task owns an `ev/ichan` mailbox (marshal-copied values, never
 shared mutable references), has a `[:pid node serial chan]` identity
 (shared shape with mailbox pids), and supports send/call/selective
 receive, links/monitors/trap-exit, and a same-VM name registry.
 Fibers stay pinned N:1; supervision is cooperative.
 
-```janet
+```bender
 (import ../examples/tasklet :as tasklet)
 
 (def db (tasklet/spawn
@@ -220,11 +220,11 @@ queue — pass registry names instead); supervisor channels are plain
 (completion events embed the task fiber, which packing would try to
 marshal); quit on a completed task returns at once; raw tasks that
 never read their mailbox cannot quit. `(break val)` discards val in
-this Janet — loops park results in cells instead.
+this Bender — loops park results in cells instead.
 
 Kill and supervision (`tasklet/kill`, `supervisor-start`):
 
-```janet
+```bender
 (tasklet/kill db :killed)   # untrappable at loop level (trap-exit
                              # never saves the victim); wedged hogs die
                              # at the next quantum boundary (<=200 polls);
@@ -247,10 +247,10 @@ Raw tasks that protect their whole body can trap a kill (loop tasks
 cannot) — the one documented hole in "untrappable".
 
 Lanes (Step 4): thread VMs + the shared job queue are the lanes
-(`pool/*`, `examples/pool.janet`); tasklets stay pinned to their home
+(`pool/*`, `examples/pool.ben`); tasklets stay pinned to their home
 loop. Isolated channels enforce the pin (same-pointer foreign-thread
-use panics; from Janet every crossing copies, so ownership visibly
-follows the value). Suspended pure-Janet fibers migrate across
+use panics; from Bender every crossing copies, so ownership visibly
+follows the value). Suspended pure-Bender fibers migrate across
 threads with exact state (`thread/new` a suspended fiber); fibers
 suspended with C frames (any tasklet blocked in take/recv/sleep)
 refuse marshal — running tasks relocate by respawn, never stack copy.
@@ -260,7 +260,7 @@ refuse marshal — running tasks relocate by respawn, never stack copy.
 Immutable values frozen once, readable in every VM with zero copies
 after the first (refcounted off-heap blobs; reads copy out).
 
-```janet
+```bender
 (def cfg (shared/new {:gravity 9.8 :tiles ["a" "b"]}))
 (shared/shareable? {:a @[]})   # false — tables/arrays/buffers/
                                # functions/fibers rejected (fail-closed)
@@ -281,7 +281,7 @@ handles/channels.
 
 ## 8. Cancellation: `ev/interrupt`
 
-```janet
+```bender
 (ev/interrupt fiber :cancelled)  # next resume yields payload instead
                                  # of running; returns the fiber
 ```
@@ -299,7 +299,7 @@ supervisor-driven shutdown. Do NOT expect it to stop running code
 
 ## 9. Fairness: `ev/timeslice` (Step 2: on by default)
 
-```janet
+```bender
 (ev/timeslice)          # -> current setting (per-VM, default on)
 (ev/timeslice false)    # fully cooperative (opt out)
 (ev/timeslice true)     # back on
@@ -310,9 +310,9 @@ jumps and calls — forward code is free); exhaustion suspends
 transparently (resume continues exactly — verified bit-exact) and
 the scheduler re-queues instead of unwinding. Compute hogs can no
 longer starve sleepers and takers; C calls stay atomic (polls are
-Janet ops only); try/pcall regions are transparent. Manual `resume`
+Bender ops only); try/pcall regions are transparent. Manual `resume`
 loops are unaffected (exhaustion inside a resumed fiber retries
-transparently). `JANET_TIMESLICE=0` starts a process fully
+transparently). `BENDER_TIMESLICE=0` starts a process fully
 cooperative. External C quiesce still unwinds (checked first).
 ~1% overhead measured.
 
@@ -338,17 +338,17 @@ aren't preemptible mid-way; native kernels don't poll).
 | broadcast constants | `shared/new` |
 | cancel/wake a sleeper | `ev/interrupt` (+ `ev/cancel` to kill) |
 | hogs starving the loop | `ev/timeslice` |
-| non-blocking check (never suspends, safe in `janet_call`) | `ev/try-give` / `ev/try-take` (nil = full/empty; closed `give` panics, closed `take` gives nil) |
+| non-blocking check (never suspends, safe in `bender_call`) | `ev/try-give` / `ev/try-take` (nil = full/empty; closed `give` panics, closed `take` gives nil) |
 | isolated same-VM mailbox (copy, no lock) | `ev/ichan` — payloads marshal-copy like thread-chans; single-VM only |
-| bare-fiber actor (send/call/recv/link/monitor) | `examples/tasklet.janet` (`spawn`, `spawn-raw`, `recv`, `link`, `monitor`, `register`) |
+| bare-fiber actor (send/call/recv/link/monitor) | `examples/tasklet.ben` (`spawn`, `spawn-raw`, `recv`, `link`, `monitor`, `register`) |
 | Erlang-style proc (owned mailbox, pid, lanes) | `proc/spawn`, `proc/send`/`recv`, `proc/pid`, `proc/spawn-isolated` (§11) |
-| one value, many blocking consumers | `future`/`deref` (examples/future.janet) |
+| one value, many blocking consumers | `future`/`deref` (examples/future.ben) |
 | single-assignment box across tasks | `promise`/`deliver`/`deref` |
 | heaviest isolation (crash-proof workers) | `os/spawn` + pipes (§10) |
 
 ## Worked example: supervised physics with named broadcast config
 
-```janet
+```bender
 (import ../examples/mailbox :as mailbox)
 (import ../examples/pool :as pool)
 
@@ -408,7 +408,7 @@ mailbox-holder task — is designed, unbuilt; today `os/spawn` gives
 byte streams (`:out :pipe`), and pids carry a `node` slot in
 anticipation of cross-node routing.
 
-```janet
+```bender
 (def p (os/spawn ["./worker" "arg"] :p {:out :pipe}))
 (def out (:read (p :out) :all))
 (os/proc-wait p)
@@ -420,14 +420,14 @@ anticipation of cross-node routing.
 proc spawned onto a lane receives a marshalled COPY of its closure, so captured
 mutable state (arrays, plain `ev/chan`) is detached: writes from the worker are
 invisible to the spawner. Lanes are opt-in via `proc/lanes-start` or
-`JANET_LANES=<n>`, and use `ev/thread-chan` (not `ev/chan`) to return results.
+`BENDER_LANES=<n>`, and use `ev/thread-chan` (not `ev/chan`) to return results.
 
 One GC object per process (mailbox fiber + supervisor channel +
-serial). Same-lane basics, M:N lanes via `examples/proc-lane.janet`
+serial). Same-lane basics, M:N lanes via `examples/proc-lane.ben`
 (control thread-chans; placement pools), strict isolated heaps for
 density + per-proc collection.
 
-```janet
+```bender
 (def p (proc/spawn (fn [] (pp (proc/recv)))))
 (proc/pid p)           # => (:pid 0 1 <core/channel ...>)
 (proc/send p :hi)      # by object or pid tuple — same delivery
@@ -436,7 +436,7 @@ density + per-proc collection.
 (proc/spawn-isolated (fn [] ...))  # marshal-copied entry, own heap
 ```
 
-## 12. Futures and promises: `examples/future.janet`
+## 12. Futures and promises: `examples/future.ben`
 
 `(future & body)` runs on the shared pool and returns immediately;
 `deref` blocks (any number of consumers — the `thread/join` gap),
@@ -445,13 +445,13 @@ caches, re-raises errors, takes `timeout` / `timeout-val`;
 (running workers finish). `(promise)` + `(deliver p v)` (first wins)
 + blocking `deref`. Handles pin the lane: same-VM typical.
 
-```janet
+```bender
 (import ../examples/future :as fut)
 (def f (fut/future (compute x)))
 (fut/deref f 5 :too-slow)
 ```
 
-## 13. Shared C stacks: `JANET_SHARED_STACKS=1`
+## 13. Shared C stacks: `BENDER_SHARED_STACKS=1`
 
 Opt-in lane-shared native stacks for ev tasks and procs (~1.5KB/task
 measured, 10x down; context-switch cost identical). Raw C-API yield

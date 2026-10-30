@@ -8,7 +8,7 @@ terminal emulator benchmark. No application source was changed.
 
 - Compiler: original checkout `build/bender`, `1.43.0-dev-5180da8a`.
   Experimental native executors remain compiled off by default.
-- New Janet application: unchanged ttfx Janet source, AOT `--native`, two
+- New Bender application: unchanged ttfx Bender source, AOT `--native`, two
   PGO workloads using Omarchy decrypt seeds 42 and 7, bounded at 12 frames,
   then `--release`. Release explicitly replayed both workloads and passed
   `pgo parity ok`. No benchmark data from seed 99 was used for training.
@@ -22,12 +22,12 @@ terminal emulator benchmark. No application source was changed.
   This binary contains optional local profiling instrumentation, not a
   newly rebuilt pristine upstream artifact. Timed comparisons did not
   enable its phase profiler.
-- Previous Janet SHA-256:
+- Previous Bender SHA-256:
   `7f9bfa0ecc874cf3e1c171d65673070583bb51c1861120ac39b8d4fc91ec3b30`.
-- New verified Janet SHA-256:
+- New verified Bender SHA-256:
   `2bc41d2c311c6e4db72cc3c81d33da2b4fdf6729e9b9368e68bb8c4ae3e7398f`.
-  Installed at ttfx `janet-port/build/ttfx`; previous binary preserved at
-  `janet-port/build/ttfx.before-compiler-5180da8a`.
+  Installed at ttfx `bender-port/build/ttfx`; previous binary preserved at
+  `bender-port/build/ttfx.before-compiler-5180da8a`.
 
 Classic native names remain `floor-div`, `round-half-even`, `out-bounce`,
 `k-next-word!`, `k-next-pack!`, `k-next-scale!`. **No new scene kernel or
@@ -35,9 +35,9 @@ native loop executor runs in this release.**
 
 ## Correctness and timing method
 
-Full seed-42 dumps match the previous Janet binary for all 37 effects.
+Full seed-42 dumps match the previous Bender binary for all 37 effects.
 The five timed effects also match Rust original and fx byte-for-byte at
-seed 42; seed-99 new/previous Janet and Rust fx dumps match too. Seed-42
+seed 42; seed-99 new/previous Bender and Rust fx dumps match too. Seed-42
 frame counts are wipe 138, fireworks 1216, decrypt 895, beams 331, smoke 265.
 
 Three rounds per effect/seed, rotating engine order. Wall timer surrounds
@@ -45,9 +45,9 @@ the entire subprocess: startup, effect build, stepping, frame formatting,
 and dump writes to `/dev/null`. Input-file handle prepared before timing.
 All outputs discarded equally. Rust subprocess times are only 7–23 ms,
 so process-launch overhead is significant; ratios are not inner-loop ratios.
-Existing Janet `--bench` excludes effect build; it was **not** used here.
+Existing Bender `--bench` excludes effect build; it was **not** used here.
 
-| Seed | Effect | Previous Janet ms | AOT+PGO release ms | Rust original ms | Rust fx ms | Rust fx speed advantage |
+| Seed | Effect | Previous Bender ms | AOT+PGO release ms | Rust original ms | Rust fx ms | Rust fx speed advantage |
 |---:|---|---:|---:|---:|---:|---:|
 | 42 | wipe | 50.65 | 51.18 | 10.06 | 8.21 | 6.2× |
 | 42 | fireworks | 436.43 | 440.06 | 20.30 | 12.25 | 35.9× |
@@ -60,7 +60,7 @@ Existing Janet `--bench` excludes effect build; it was **not** used here.
 | 99 | beams | 221.99 | 225.45 | 20.00 | 8.80 | 25.6× |
 | 99 | smoke | 228.35 | 231.86 | 19.09 | 8.86 | 26.2× |
 
-**Result:** no improvement established; new Janet is 0–3% slower, within
+**Result:** no improvement established; new Bender is 0–3% slower, within
 the previously observed CLI noise band. General PGO/discovery/dispatch
 infrastructure has not yet accelerated these application hot loops.
 The requested 10% lead over Rust/Node is not met.
@@ -84,7 +84,7 @@ wall time minus these counters must not be called “setup time.” No matching
 Rust fx phase counters were observed. Rust fx's ordinary output can use a
 renderer thread whereas the dump path is synchronous.
 
-Janet's earlier logo sample captured VM dispatch, dictionary lookup, table
+Bender's earlier logo sample captured VM dispatch, dictionary lookup, table
 updates, buffer operations and GC, but lacked phase tagging. Its fresh
 closure-call profiles show repeated scene predicate/animation and geometry
 calls, **not CPU percentages**. The next compiler work must establish native
@@ -99,14 +99,14 @@ of that temporary directory.
 
 ## Subsequent GUI check (separate metric)
 
-The same compiler built the unchanged Janet GUI with AOT/native PGO training
+The same compiler built the unchanged Bender GUI with AOT/native PGO training
 on Omarchy decrypt seeds 42/7 and verified release replay of both workloads;
-six kernels remain. An adjacent Janet/Rust comparison used two rounds with
+six kernels remain. An adjacent Bender/Rust comparison used two rounds with
 reversed engine order, windowed/uncapped, live FPS overlay, topmost 1458×400,
 same logo and seed42, 1-second warm-up and **8-second measurement** per run.
 Rust used its existing local release GUI, not a new source rebuild.
 
-| Effect | Janet median render FPS | Rust median render FPS | Rust/Janet |
+| Effect | Bender median render FPS | Rust median render FPS | Rust/Bender |
 |---|---:|---:|---:|
 | wipe | 967 | 1405 | 1.45× |
 | fireworks | 1878 | 2101 | 1.12× |
@@ -118,5 +118,5 @@ All probes maintained 59–60 animation ticks/s. Absolute FPS varied noticeably
 between adjacent runs; this is a two-round comparison under current load, not
 a precise small-delta claim. Rust remains ahead on all five. These render FPS
 numbers cannot be compared to CLI throughput. Raw logs/results are in scratch
-run `gui-rust-paired-8_sawy44`; the single Janet GUI run preceding this paired
+run `gui-rust-paired-8_sawy44`; the single Bender GUI run preceding this paired
 check is not an A/B baseline.

@@ -21,11 +21,11 @@ runs more than one child.
    (`runtime-source-manifest.json` 228, `saved-world-manifest.json` 214). Block
    before spawning if either mismatches. Re-validate AFTER the run to prove the
    arm wrote nothing into the frozen tree.
-3. **Environment**: drop every `JANET_*`/`BENDER_*`, then set
-   `JANET_LANES=0` and `XDG_CACHE_HOME=<cache-root>`.
-   - BENCH: `JANET_NO_PROFILE=1`.
-   - TRAIN: `JANET_PROFILE=1` + `JANET_PROFILE_OUT=<evidence>/profile.jdn`,
-     and **no** `JANET_NO_PROFILE` (verified: the dump is suppressed otherwise).
+3. **Environment**: drop every `BENDER_*`/`BENDER_*`, then set
+   `BENDER_LANES=0` and `XDG_CACHE_HOME=<cache-root>`.
+   - BENCH: `BENDER_NO_PROFILE=1`.
+   - TRAIN: `BENDER_PROFILE=1` + `BENDER_PROFILE_OUT=<evidence>/profile.jdn`,
+     and **no** `BENDER_NO_PROFILE` (verified: the dump is suppressed otherwise).
 4. **Invocation**: `<executable> [<script>] --frames 6000 --uncapped
    --world-slot 15f2268da8ec2a4105ef2deaf6ae0b19 --world-root <frozen>/worlds-v1`,
    cwd = frozen game dir, `--resource-tool time`.

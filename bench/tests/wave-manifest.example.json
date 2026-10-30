@@ -5,21 +5,21 @@
   "repeats": 3,
   "timeout_s": 600,
   "env": {
-    "JANET_NO_PROFILE": "1"
+    "BENDER_NO_PROFILE": "1"
   },
   "variants": [
     {
-      "name": "janet-script-lanes0",
-      "argv": ["./build/bender", "bench/cross-runtime/wave.janet", "{n}"],
+      "name": "bender-script-lanes0",
+      "argv": ["./build/bender", "bench/cross-runtime/wave.ben", "{n}"],
       "env": {
-        "JANET_LANES": "0"
+        "BENDER_LANES": "0"
       }
     },
     {
-      "name": "janet-script-lanes11",
-      "argv": ["./build/bender", "bench/cross-runtime/wave.janet", "{n}"],
+      "name": "bender-script-lanes11",
+      "argv": ["./build/bender", "bench/cross-runtime/wave.ben", "{n}"],
       "env": {
-        "JANET_LANES": "11"
+        "BENDER_LANES": "11"
       }
     },
     {

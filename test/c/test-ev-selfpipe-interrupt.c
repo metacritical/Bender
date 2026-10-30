@@ -3,15 +3,15 @@
  *
  * Build after `make`:
  *   cc -Isrc/include -Isrc/conf test/c/test-ev-selfpipe-interrupt.c \
- *      build/libjanet.a -lm -lpthread -ldl -o build/test-ev-selfpipe-interrupt
+ *      build/libbender.a -lm -lpthread -ldl -o build/test-ev-selfpipe-interrupt
  * Run:
  *   ./build/test-ev-selfpipe-interrupt
  */
 
-#include "janet.h"
+#include "bender.h"
 #include <stdio.h>
 
-#ifndef JANET_WINDOWS
+#ifndef BENDER_WINDOWS
 #include <signal.h>
 #include <unistd.h>
 
@@ -24,40 +24,40 @@ static void on_timeout(int signal_number) {
 #endif
 
 int main(void) {
-    if (janet_init()) {
-        fprintf(stderr, "FAIL: janet_init\n");
+    if (bender_init()) {
+        fprintf(stderr, "FAIL: bender_init\n");
         return 1;
     }
 
-#ifndef JANET_WINDOWS
+#ifndef BENDER_WINDOWS
     signal(SIGALRM, on_timeout);
     alarm(3);
 #endif
 
-    if (!janet_loop_done()) {
+    if (!bender_loop_done()) {
         fprintf(stderr, "FAIL: event loop not initially empty\n");
         return 1;
     }
 
-    janet_loop1_interrupt(NULL);
-    janet_interpreter_interrupt_handled(NULL);
-    if (janet_loop_done()) {
+    bender_loop1_interrupt(NULL);
+    bender_interpreter_interrupt_handled(NULL);
+    if (bender_loop_done()) {
         fprintf(stderr, "FAIL: posted interrupt was not counted\n");
         return 1;
     }
 
     /* One loop turn consumes the self-pipe event; a leaked listener would
      * keep the loop alive and cause the following turn to block forever. */
-    (void) janet_loop1();
-    if (!janet_loop_done()) {
+    (void) bender_loop1();
+    if (!bender_loop_done()) {
         fprintf(stderr, "FAIL: interrupt listener remained after drain\n");
         return 1;
     }
 
-#ifndef JANET_WINDOWS
+#ifndef BENDER_WINDOWS
     alarm(0);
 #endif
-    janet_deinit();
+    bender_deinit();
     puts("PASS: interrupt event drains without retaining a listener");
     return 0;
 }

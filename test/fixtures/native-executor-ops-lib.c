@@ -1,11 +1,11 @@
 #include <stdint.h>
 
-typedef struct { int32_t x, y; } JanetOpsPair;
+typedef struct { int32_t x, y; } BenderOpsPair;
 
-int32_t janet_test_pair_sum(JanetOpsPair p) {
+int32_t bender_test_pair_sum(BenderOpsPair p) {
     return p.x + p.y;
 }
 
-JanetOpsPair janet_test_pair_bump(JanetOpsPair p) {
-    return (JanetOpsPair){p.x + 1, p.y + 1};
+BenderOpsPair bender_test_pair_bump(BenderOpsPair p) {
+    return (BenderOpsPair){p.x + 1, p.y + 1};
 }

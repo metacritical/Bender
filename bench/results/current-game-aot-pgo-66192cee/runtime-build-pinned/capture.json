@@ -1,22 +1,22 @@
 {
-  "schema": "janet/benchmark-capture/1",
+  "schema": "bender/benchmark-capture/1",
   "label": "runtime-build-pinned",
   "complete": true,
-  "evidence_dir": "/Users/pankajdoharey/Development/Projects/janet/bench/results/current-game-aot-pgo-66192cee/runtime-build-pinned",
+  "evidence_dir": "/Users/pankajdoharey/Development/Projects/bender/bench/results/current-game-aot-pgo-66192cee/runtime-build-pinned",
   "command": {
     "argv": [
       "make",
       "-B",
       "NATIVE_EXECUTORS=1",
-      "JANET_BUILD=66192cee",
+      "BENDER_BUILD=66192cee",
       "-j4"
     ],
-    "cwd": "/Users/pankajdoharey/Development/Projects/janet/build/current-game-aot-pgo-66192cee/runtime",
+    "cwd": "/Users/pankajdoharey/Development/Projects/bender/build/current-game-aot-pgo-66192cee/runtime",
     "stdin": "devnull",
     "env_overrides": {
-      "JANET_NO_PROFILE": "1",
-      "JANET_LANES": "0",
-      "XDG_CACHE_HOME": "/Users/pankajdoharey/Development/Projects/janet/build/current-game-aot-pgo-66192cee/cache-runtime-pinned"
+      "BENDER_NO_PROFILE": "1",
+      "BENDER_LANES": "0",
+      "XDG_CACHE_HOME": "/Users/pankajdoharey/Development/Projects/bender/build/current-game-aot-pgo-66192cee/cache-runtime-pinned"
     },
     "executable": {
       "path": "/usr/bin/make",

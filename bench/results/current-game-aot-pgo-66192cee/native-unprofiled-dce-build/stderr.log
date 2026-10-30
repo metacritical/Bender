@@ -64,4 +64,4 @@ mkimage: executor target fit-text has no retained top-level defn; relying on laz
 mkimage: executor target find-raylib has no retained top-level defn; relying on lazy structural attachment at runtime
 mkimage: executor target submit has no retained top-level defn; relying on lazy structural attachment at runtime
 mkimage: ffi aliases: 77 install form(s) prepended
-/Users/pankajdoharey/Development/Projects/janet/build/current-game-aot-pgo-66192cee/game-source/main.janet: compile error: cannot capture parent local save-on-exit!: captured upvalue slot 256 exceeds bytecode limit 255
+/Users/pankajdoharey/Development/Projects/bender/build/current-game-aot-pgo-66192cee/game-source/main.ben: compile error: cannot capture parent local save-on-exit!: captured upvalue slot 256 exceeds bytecode limit 255

@@ -20,9 +20,9 @@
 * IN THE SOFTWARE.
 */
 
-#ifndef JANET_AMALG
+#ifndef BENDER_AMALG
 #include "features.h"
-#include <janet.h>
+#include <bender.h>
 #include "util.h"
 #include "state.h"
 #include <math.h>
@@ -33,7 +33,7 @@
 #include <inttypes.h>
 #include <float.h>
 
-/* Implements a pretty printer for Janet. The pretty printer
+/* Implements a pretty printer for Bender. The pretty printer
  * is simple and not that flexible, but fast. */
 
 /* Temporary buffer size */
@@ -43,11 +43,11 @@
 #define STR_HELPER(x) #x
 #define STR(x) STR_HELPER(x)
 
-static void number_to_string_b(JanetBuffer *buffer, double x) {
-    janet_buffer_ensure(buffer, buffer->count + BUFSIZE, 2);
+static void number_to_string_b(BenderBuffer *buffer, double x) {
+    bender_buffer_ensure(buffer, buffer->count + BUFSIZE, 2);
     const char *fmt = (x == floor(x) &&
-                       x <= JANET_INTMAX_DOUBLE &&
-                       x >= JANET_INTMIN_DOUBLE) ? "%.0f" : ("%." STR(DBL_DIG) "g");
+                       x <= BENDER_INTMAX_DOUBLE &&
+                       x >= BENDER_INTMIN_DOUBLE) ? "%.0f" : ("%." STR(DBL_DIG) "g");
     int count;
     if (x == 0.0) {
         /* Prevent printing of '-0' */
@@ -72,8 +72,8 @@ static int count_dig10(int32_t x) {
     }
 }
 
-static int32_t integer_to_string_b(JanetBuffer *buffer, int32_t x) {
-    janet_buffer_extra(buffer, BUFSIZE);
+static int32_t integer_to_string_b(BenderBuffer *buffer, int32_t x) {
+    bender_buffer_extra(buffer, BUFSIZE);
     uint8_t *buf = buffer->data + buffer->count;
     int32_t neg = 0;
     int32_t len = 0;
@@ -99,12 +99,12 @@ static int32_t integer_to_string_b(JanetBuffer *buffer, int32_t x) {
     return len + neg;
 }
 
-#define HEX(i) (((uint8_t *) janet_base64)[(i)])
+#define HEX(i) (((uint8_t *) bender_base64)[(i)])
 
 /* Returns a string description for a pointer. Truncates
  * title to 32 characters */
-static void string_description_b(JanetBuffer *buffer, const char *title, void *pointer) {
-    janet_buffer_ensure(buffer, buffer->count + BUFSIZE, 2);
+static void string_description_b(BenderBuffer *buffer, const char *title, void *pointer) {
+    bender_buffer_ensure(buffer, buffer->count + BUFSIZE, 2);
     uint8_t *c = buffer->data + buffer->count;
     int32_t i;
     union {
@@ -120,7 +120,7 @@ static void string_description_b(JanetBuffer *buffer, const char *title, void *p
     *c++ = ' ';
     *c++ = '0';
     *c++ = 'x';
-#if defined(JANET_NANBOX_64)
+#if defined(BENDER_NANBOX_64)
 #define POINTSIZE 6
 #else
 #define POINTSIZE (sizeof(void *))
@@ -135,54 +135,54 @@ static void string_description_b(JanetBuffer *buffer, const char *title, void *p
 #undef POINTSIZE
 }
 
-static int janet_escape_string_impl(JanetBuffer *buffer, const uint8_t *str, int32_t len) {
-    janet_buffer_push_u8(buffer, '"');
+static int bender_escape_string_impl(BenderBuffer *buffer, const uint8_t *str, int32_t len) {
+    bender_buffer_push_u8(buffer, '"');
     int align = 1;
     for (int32_t i = 0; i < len; ++i) {
         uint8_t c = str[i];
         switch (c) {
             case '"':
-                janet_buffer_push_bytes(buffer, (const uint8_t *)"\\\"", 2);
+                bender_buffer_push_bytes(buffer, (const uint8_t *)"\\\"", 2);
                 align += 2;
                 break;
             case '\n':
-                janet_buffer_push_bytes(buffer, (const uint8_t *)"\\n", 2);
+                bender_buffer_push_bytes(buffer, (const uint8_t *)"\\n", 2);
                 align += 2;
                 break;
             case '\r':
-                janet_buffer_push_bytes(buffer, (const uint8_t *)"\\r", 2);
+                bender_buffer_push_bytes(buffer, (const uint8_t *)"\\r", 2);
                 align += 2;
                 break;
             case '\0':
-                janet_buffer_push_bytes(buffer, (const uint8_t *)"\\0", 2);
+                bender_buffer_push_bytes(buffer, (const uint8_t *)"\\0", 2);
                 align += 2;
                 break;
             case '\f':
-                janet_buffer_push_bytes(buffer, (const uint8_t *)"\\f", 2);
+                bender_buffer_push_bytes(buffer, (const uint8_t *)"\\f", 2);
                 align += 2;
                 break;
             case '\v':
-                janet_buffer_push_bytes(buffer, (const uint8_t *)"\\v", 2);
+                bender_buffer_push_bytes(buffer, (const uint8_t *)"\\v", 2);
                 align += 2;
                 break;
             case '\a':
-                janet_buffer_push_bytes(buffer, (const uint8_t *)"\\a", 2);
+                bender_buffer_push_bytes(buffer, (const uint8_t *)"\\a", 2);
                 align += 2;
                 break;
             case '\b':
-                janet_buffer_push_bytes(buffer, (const uint8_t *)"\\b", 2);
+                bender_buffer_push_bytes(buffer, (const uint8_t *)"\\b", 2);
                 align += 2;
                 break;
             case 27:
-                janet_buffer_push_bytes(buffer, (const uint8_t *)"\\e", 2);
+                bender_buffer_push_bytes(buffer, (const uint8_t *)"\\e", 2);
                 align += 2;
                 break;
             case '\\':
-                janet_buffer_push_bytes(buffer, (const uint8_t *)"\\\\", 2);
+                bender_buffer_push_bytes(buffer, (const uint8_t *)"\\\\", 2);
                 align += 2;
                 break;
             case '\t':
-                janet_buffer_push_bytes(buffer, (const uint8_t *)"\\t", 2);
+                bender_buffer_push_bytes(buffer, (const uint8_t *)"\\t", 2);
                 align += 2;
                 break;
             default:
@@ -190,63 +190,63 @@ static int janet_escape_string_impl(JanetBuffer *buffer, const uint8_t *str, int
                     uint8_t buf[4];
                     buf[0] = '\\';
                     buf[1] = 'x';
-                    buf[2] = janet_base64[(c >> 4) & 0xF];
-                    buf[3] = janet_base64[c & 0xF];
-                    janet_buffer_push_bytes(buffer, buf, 4);
+                    buf[2] = bender_base64[(c >> 4) & 0xF];
+                    buf[3] = bender_base64[c & 0xF];
+                    bender_buffer_push_bytes(buffer, buf, 4);
                     align += 4;
                 } else {
-                    janet_buffer_push_u8(buffer, c);
+                    bender_buffer_push_u8(buffer, c);
                     align++;
                 }
                 break;
         }
     }
-    janet_buffer_push_u8(buffer, '"');
+    bender_buffer_push_u8(buffer, '"');
     return align + 1;
 }
 
-static void janet_escape_string_b(JanetBuffer *buffer, const uint8_t *str) {
-    janet_escape_string_impl(buffer, str, janet_string_length(str));
+static void bender_escape_string_b(BenderBuffer *buffer, const uint8_t *str) {
+    bender_escape_string_impl(buffer, str, bender_string_length(str));
 }
 
-static void janet_escape_buffer_b(JanetBuffer *buffer, JanetBuffer *bx) {
+static void bender_escape_buffer_b(BenderBuffer *buffer, BenderBuffer *bx) {
     if (bx == buffer) {
         /* Ensures buffer won't resize while escaping */
-        janet_buffer_ensure(bx, bx->count + 5 * bx->count + 3, 1);
+        bender_buffer_ensure(bx, bx->count + 5 * bx->count + 3, 1);
     }
-    janet_buffer_push_u8(buffer, '@');
-    janet_escape_string_impl(buffer, bx->data, bx->count);
+    bender_buffer_push_u8(buffer, '@');
+    bender_escape_string_impl(buffer, bx->data, bx->count);
 }
 
-void janet_to_string_b(JanetBuffer *buffer, Janet x) {
-    switch (janet_type(x)) {
-        case JANET_NIL:
-            janet_buffer_push_cstring(buffer, "");
+void bender_to_string_b(BenderBuffer *buffer, Bender x) {
+    switch (bender_type(x)) {
+        case BENDER_NIL:
+            bender_buffer_push_cstring(buffer, "");
             break;
-        case JANET_BOOLEAN:
-            janet_buffer_push_cstring(buffer,
-                                      janet_unwrap_boolean(x) ? "true" : "false");
+        case BENDER_BOOLEAN:
+            bender_buffer_push_cstring(buffer,
+                                      bender_unwrap_boolean(x) ? "true" : "false");
             break;
-        case JANET_NUMBER:
-            number_to_string_b(buffer, janet_unwrap_number(x));
+        case BENDER_NUMBER:
+            number_to_string_b(buffer, bender_unwrap_number(x));
             break;
-        case JANET_STRING:
-        case JANET_SYMBOL:
-        case JANET_KEYWORD:
-            janet_buffer_push_bytes(buffer,
-                                    janet_unwrap_string(x),
-                                    janet_string_length(janet_unwrap_string(x)));
+        case BENDER_STRING:
+        case BENDER_SYMBOL:
+        case BENDER_KEYWORD:
+            bender_buffer_push_bytes(buffer,
+                                    bender_unwrap_string(x),
+                                    bender_string_length(bender_unwrap_string(x)));
             break;
-        case JANET_BUFFER: {
-            JanetBuffer *to = janet_unwrap_buffer(x);
+        case BENDER_BUFFER: {
+            BenderBuffer *to = bender_unwrap_buffer(x);
             /* Prevent resizing buffer while appending */
-            if (buffer == to) janet_buffer_extra(buffer, to->count);
-            janet_buffer_push_bytes(buffer, to->data, to->count);
+            if (buffer == to) bender_buffer_extra(buffer, to->count);
+            bender_buffer_push_bytes(buffer, to->data, to->count);
             break;
         }
-        case JANET_ABSTRACT: {
-            JanetAbstract p = janet_unwrap_abstract(x);
-            const JanetAbstractType *t = janet_abstract_type(p);
+        case BENDER_ABSTRACT: {
+            BenderAbstract p = bender_unwrap_abstract(x);
+            const BenderAbstractType *t = bender_abstract_type(p);
             if (t->tostring != NULL) {
                 t->tostring(p, buffer);
             } else {
@@ -254,39 +254,39 @@ void janet_to_string_b(JanetBuffer *buffer, Janet x) {
             }
         }
         return;
-        case JANET_CFUNCTION: {
-            JanetCFunRegistry *reg = janet_registry_get(janet_unwrap_cfunction(x));
+        case BENDER_CFUNCTION: {
+            BenderCFunRegistry *reg = bender_registry_get(bender_unwrap_cfunction(x));
             if (NULL != reg) {
-                janet_buffer_push_cstring(buffer, "<cfunction ");
+                bender_buffer_push_cstring(buffer, "<cfunction ");
                 if (NULL != reg->name_prefix) {
-                    janet_buffer_push_cstring(buffer, reg->name_prefix);
-                    janet_buffer_push_u8(buffer, '/');
+                    bender_buffer_push_cstring(buffer, reg->name_prefix);
+                    bender_buffer_push_u8(buffer, '/');
                 }
-                janet_buffer_push_cstring(buffer, reg->name);
-                janet_buffer_push_u8(buffer, '>');
+                bender_buffer_push_cstring(buffer, reg->name);
+                bender_buffer_push_u8(buffer, '>');
                 break;
             }
             goto fallthrough;
         }
-        case JANET_FUNCTION: {
-            JanetFunction *fun = janet_unwrap_function(x);
-            JanetFuncDef *def = fun->def;
+        case BENDER_FUNCTION: {
+            BenderFunction *fun = bender_unwrap_function(x);
+            BenderFuncDef *def = fun->def;
             if (def == NULL) {
-                janet_buffer_push_cstring(buffer, "<incomplete function>");
+                bender_buffer_push_cstring(buffer, "<incomplete function>");
                 break;
             }
             if (def->name) {
                 const uint8_t *n = def->name;
-                janet_buffer_push_cstring(buffer, "<function ");
-                janet_buffer_push_bytes(buffer, n, janet_string_length(n));
-                janet_buffer_push_u8(buffer, '>');
+                bender_buffer_push_cstring(buffer, "<function ");
+                bender_buffer_push_bytes(buffer, n, bender_string_length(n));
+                bender_buffer_push_u8(buffer, '>');
                 break;
             }
             goto fallthrough;
         }
     fallthrough:
         default:
-            string_description_b(buffer, janet_type_names[janet_type(x)], janet_unwrap_pointer(x));
+            string_description_b(buffer, bender_type_names[bender_type(x)], bender_unwrap_pointer(x));
             break;
     }
 }
@@ -295,84 +295,84 @@ void janet_to_string_b(JanetBuffer *buffer, Janet x) {
 
 /* Check if a symbol or keyword contains no symbol characters */
 static int contains_bad_chars(const uint8_t *sym, int issym) {
-    int32_t len = janet_string_length(sym);
+    int32_t len = bender_string_length(sym);
     if (len && issym && sym[0] >= '0' && sym[0] <= '9') return 1;
-    if (!janet_valid_utf8(sym, len)) return 1;
+    if (!bender_valid_utf8(sym, len)) return 1;
     for (int32_t i = 0; i < len; i++) {
-        if (!janet_is_symbol_char(sym[i])) return 1;
+        if (!bender_is_symbol_char(sym[i])) return 1;
     }
     return 0;
 }
 
-void janet_description_b(JanetBuffer *buffer, Janet x) {
-    switch (janet_type(x)) {
+void bender_description_b(BenderBuffer *buffer, Bender x) {
+    switch (bender_type(x)) {
         default:
             break;
-        case JANET_NIL:
-            janet_buffer_push_cstring(buffer, "nil");
+        case BENDER_NIL:
+            bender_buffer_push_cstring(buffer, "nil");
             return;
-        case JANET_KEYWORD:
-            janet_buffer_push_u8(buffer, ':');
+        case BENDER_KEYWORD:
+            bender_buffer_push_u8(buffer, ':');
             break;
-        case JANET_STRING:
-            janet_escape_string_b(buffer, janet_unwrap_string(x));
+        case BENDER_STRING:
+            bender_escape_string_b(buffer, bender_unwrap_string(x));
             return;
-        case JANET_BUFFER: {
-            JanetBuffer *b = janet_unwrap_buffer(x);
-            janet_escape_buffer_b(buffer, b);
+        case BENDER_BUFFER: {
+            BenderBuffer *b = bender_unwrap_buffer(x);
+            bender_escape_buffer_b(buffer, b);
             return;
         }
-        case JANET_ABSTRACT: {
-            JanetAbstract p = janet_unwrap_abstract(x);
-            const JanetAbstractType *t = janet_abstract_type(p);
+        case BENDER_ABSTRACT: {
+            BenderAbstract p = bender_unwrap_abstract(x);
+            const BenderAbstractType *t = bender_abstract_type(p);
             if (t->tostring != NULL) {
-                janet_buffer_push_cstring(buffer, "<");
-                janet_buffer_push_cstring(buffer, t->name);
-                janet_buffer_push_cstring(buffer, " ");
+                bender_buffer_push_cstring(buffer, "<");
+                bender_buffer_push_cstring(buffer, t->name);
+                bender_buffer_push_cstring(buffer, " ");
                 t->tostring(p, buffer);
-                janet_buffer_push_cstring(buffer, ">");
+                bender_buffer_push_cstring(buffer, ">");
             } else {
                 string_description_b(buffer, t->name, p);
             }
             return;
         }
     }
-    janet_to_string_b(buffer, x);
+    bender_to_string_b(buffer, x);
 }
 
-const uint8_t *janet_description(Janet x) {
-    JanetBuffer b;
-    janet_buffer_init(&b, 10);
-    janet_description_b(&b, x);
-    const uint8_t *ret = janet_string(b.data, b.count);
-    janet_buffer_deinit(&b);
+const uint8_t *bender_description(Bender x) {
+    BenderBuffer b;
+    bender_buffer_init(&b, 10);
+    bender_description_b(&b, x);
+    const uint8_t *ret = bender_string(b.data, b.count);
+    bender_buffer_deinit(&b);
     return ret;
 }
 
-/* Convert any value to a janet string. Similar to description, but
+/* Convert any value to a bender string. Similar to description, but
  * strings, symbols, and buffers will return their content. */
-const uint8_t *janet_to_string(Janet x) {
-    switch (janet_type(x)) {
+const uint8_t *bender_to_string(Bender x) {
+    switch (bender_type(x)) {
         default: {
-            JanetBuffer b;
-            janet_buffer_init(&b, 10);
-            janet_to_string_b(&b, x);
-            const uint8_t *ret = janet_string(b.data, b.count);
-            janet_buffer_deinit(&b);
+            BenderBuffer b;
+            bender_buffer_init(&b, 10);
+            bender_to_string_b(&b, x);
+            const uint8_t *ret = bender_string(b.data, b.count);
+            bender_buffer_deinit(&b);
             return ret;
         }
-        case JANET_BUFFER:
-            return janet_string(janet_unwrap_buffer(x)->data, janet_unwrap_buffer(x)->count);
-        case JANET_STRING:
-        case JANET_SYMBOL:
-        case JANET_KEYWORD:
-            return janet_unwrap_string(x);
+        case BENDER_BUFFER:
+            return bender_string(bender_unwrap_buffer(x)->data, bender_unwrap_buffer(x)->count);
+        case BENDER_STRING:
+        case BENDER_SYMBOL:
+        case BENDER_KEYWORD:
+            return bender_unwrap_string(x);
     }
 }
 
 /* Hold state for pretty printer. */
 struct pretty {
-    JanetBuffer *buffer;
+    BenderBuffer *buffer;
     int depth;
     int width;
     int align;
@@ -383,84 +383,84 @@ struct pretty {
     int32_t *keysort_buffer;
     int32_t keysort_capacity;
     int32_t keysort_start;
-    JanetTable seen;
+    BenderTable seen;
 };
 
 /* Print jdn format */
-static int print_jdn_one(struct pretty *S, Janet x, int depth) {
+static int print_jdn_one(struct pretty *S, Bender x, int depth) {
     if (depth == 0) return 1;
-    switch (janet_type(x)) {
-        case JANET_NIL:
-        case JANET_BOOLEAN:
-        case JANET_BUFFER:
-        case JANET_STRING:
-            janet_description_b(S->buffer, x);
+    switch (bender_type(x)) {
+        case BENDER_NIL:
+        case BENDER_BOOLEAN:
+        case BENDER_BUFFER:
+        case BENDER_STRING:
+            bender_description_b(S->buffer, x);
             break;
-        case JANET_NUMBER:
-            janet_buffer_ensure(S->buffer, S->buffer->count + BUFSIZE, 2);
-            double num = janet_unwrap_number(x);
+        case BENDER_NUMBER:
+            bender_buffer_ensure(S->buffer, S->buffer->count + BUFSIZE, 2);
+            double num = bender_unwrap_number(x);
             if (isnan(num)) return 1;
             if (isinf(num)) return 1;
-            janet_buffer_dtostr(S->buffer, num);
+            bender_buffer_dtostr(S->buffer, num);
             break;
-        case JANET_SYMBOL:
-        case JANET_KEYWORD:
-            if (contains_bad_chars(janet_unwrap_keyword(x), janet_type(x) == JANET_SYMBOL)) return 1;
-            janet_description_b(S->buffer, x);
+        case BENDER_SYMBOL:
+        case BENDER_KEYWORD:
+            if (contains_bad_chars(bender_unwrap_keyword(x), bender_type(x) == BENDER_SYMBOL)) return 1;
+            bender_description_b(S->buffer, x);
             break;
-        case JANET_TUPLE: {
-            JanetTuple t = janet_unwrap_tuple(x);
-            int isb = janet_tuple_flag(t) & JANET_TUPLE_FLAG_BRACKETCTOR;
-            janet_buffer_push_u8(S->buffer, isb ? '[' : '(');
-            for (int32_t i = 0; i < janet_tuple_length(t); i++) {
-                if (i) janet_buffer_push_u8(S->buffer, ' ');
+        case BENDER_TUPLE: {
+            BenderTuple t = bender_unwrap_tuple(x);
+            int isb = bender_tuple_flag(t) & BENDER_TUPLE_FLAG_BRACKETCTOR;
+            bender_buffer_push_u8(S->buffer, isb ? '[' : '(');
+            for (int32_t i = 0; i < bender_tuple_length(t); i++) {
+                if (i) bender_buffer_push_u8(S->buffer, ' ');
                 if (print_jdn_one(S, t[i], depth - 1)) return 1;
             }
-            janet_buffer_push_u8(S->buffer, isb ? ']' : ')');
+            bender_buffer_push_u8(S->buffer, isb ? ']' : ')');
         }
         break;
-        case JANET_ARRAY: {
-            janet_table_put(&S->seen, x, janet_wrap_true());
-            JanetArray *a = janet_unwrap_array(x);
-            janet_buffer_push_cstring(S->buffer, "@[");
+        case BENDER_ARRAY: {
+            bender_table_put(&S->seen, x, bender_wrap_true());
+            BenderArray *a = bender_unwrap_array(x);
+            bender_buffer_push_cstring(S->buffer, "@[");
             for (int32_t i = 0; i < a->count; i++) {
-                if (i) janet_buffer_push_u8(S->buffer, ' ');
+                if (i) bender_buffer_push_u8(S->buffer, ' ');
                 if (print_jdn_one(S, a->data[i], depth - 1)) return 1;
             }
-            janet_buffer_push_u8(S->buffer, ']');
+            bender_buffer_push_u8(S->buffer, ']');
         }
         break;
-        case JANET_TABLE: {
-            janet_table_put(&S->seen, x, janet_wrap_true());
-            JanetTable *tab = janet_unwrap_table(x);
-            janet_buffer_push_cstring(S->buffer, "@{");
+        case BENDER_TABLE: {
+            bender_table_put(&S->seen, x, bender_wrap_true());
+            BenderTable *tab = bender_unwrap_table(x);
+            bender_buffer_push_cstring(S->buffer, "@{");
             int isFirst = 1;
             for (int32_t i = 0; i < tab->capacity; i++) {
-                const JanetKV *kv = tab->data + i;
-                if (janet_checktype(kv->key, JANET_NIL)) continue;
-                if (!isFirst) janet_buffer_push_u8(S->buffer, ' ');
+                const BenderKV *kv = tab->data + i;
+                if (bender_checktype(kv->key, BENDER_NIL)) continue;
+                if (!isFirst) bender_buffer_push_u8(S->buffer, ' ');
                 isFirst = 0;
                 if (print_jdn_one(S, kv->key, depth - 1)) return 1;
-                janet_buffer_push_u8(S->buffer, ' ');
+                bender_buffer_push_u8(S->buffer, ' ');
                 if (print_jdn_one(S, kv->value, depth - 1)) return 1;
             }
-            janet_buffer_push_u8(S->buffer, '}');
+            bender_buffer_push_u8(S->buffer, '}');
         }
         break;
-        case JANET_STRUCT: {
-            JanetStruct st = janet_unwrap_struct(x);
-            janet_buffer_push_u8(S->buffer, '{');
+        case BENDER_STRUCT: {
+            BenderStruct st = bender_unwrap_struct(x);
+            bender_buffer_push_u8(S->buffer, '{');
             int isFirst = 1;
-            for (int32_t i = 0; i < janet_struct_capacity(st); i++) {
-                const JanetKV *kv = st + i;
-                if (janet_checktype(kv->key, JANET_NIL)) continue;
-                if (!isFirst) janet_buffer_push_u8(S->buffer, ' ');
+            for (int32_t i = 0; i < bender_struct_capacity(st); i++) {
+                const BenderKV *kv = st + i;
+                if (bender_checktype(kv->key, BENDER_NIL)) continue;
+                if (!isFirst) bender_buffer_push_u8(S->buffer, ' ');
                 isFirst = 0;
                 if (print_jdn_one(S, kv->key, depth - 1)) return 1;
-                janet_buffer_push_u8(S->buffer, ' ');
+                bender_buffer_push_u8(S->buffer, ' ');
                 if (print_jdn_one(S, kv->value, depth - 1)) return 1;
             }
-            janet_buffer_push_u8(S->buffer, '}');
+            bender_buffer_push_u8(S->buffer, '}');
         }
         break;
         default:
@@ -470,7 +470,7 @@ static int print_jdn_one(struct pretty *S, Janet x, int depth) {
 }
 
 static void backtrack_newlines(const struct pretty *S) {
-    if (S->flags & JANET_PRETTY_ONELINE || S->buffer->count <= 0)
+    if (S->flags & BENDER_PRETTY_ONELINE || S->buffer->count <= 0)
         return;
     switch (S->buffer->data[S->buffer->count - 1]) {
         case ')':
@@ -500,7 +500,7 @@ static void backtrack_newlines(const struct pretty *S) {
         } else {
             align = 0;
             /* Don't count color sequences: \x1B(0|3\d)m */
-            if (S->flags & JANET_PRETTY_COLOR && *s == 'm') {
+            if (S->flags & BENDER_PRETTY_COLOR && *s == 'm') {
                 if (offset >= (3 + b0) && strncmp("\x1B[0m", s - 3, 4) == 0) {
                     offset -= 3;
                     columns++;
@@ -515,13 +515,13 @@ static void backtrack_newlines(const struct pretty *S) {
         }
     }
     offset++; /* Don't mess with the last newline we found */
-    janet_assert(offset >= b0, "bad buffer index");
+    bender_assert(offset >= b0, "bad buffer index");
     S->buffer->count -= removed;
     for (int32_t i = offset; i < S->buffer->count; i++) {
         if (S->buffer->data[offset] == '\n') {
             S->buffer->data[i] = ' ';
             while (S->buffer->data[++offset] == ' ') {
-                janet_assert(offset < old_count, "bad replacement of newline");
+                bender_assert(offset < old_count, "bad replacement of newline");
             }
         } else {
             S->buffer->data[i] = S->buffer->data[offset++];
@@ -531,22 +531,22 @@ static void backtrack_newlines(const struct pretty *S) {
 
 static void print_newline(struct pretty *S, int align) {
     int i;
-    if (S->flags & JANET_PRETTY_ONELINE) {
-        janet_buffer_push_u8(S->buffer, ' ');
+    if (S->flags & BENDER_PRETTY_ONELINE) {
+        bender_buffer_push_u8(S->buffer, ' ');
         return;
     }
     backtrack_newlines(S);
-    janet_buffer_push_u8(S->buffer, '\n');
+    bender_buffer_push_u8(S->buffer, '\n');
     S->leaf_align = S->align = align;
     for (i = 0; i < S->align; i++) {
-        janet_buffer_push_u8(S->buffer, ' ');
+        bender_buffer_push_u8(S->buffer, ' ');
     }
 }
 
 /* Color coding for types */
-static const char janet_cycle_color[] = "\x1B[36m";
-static const char janet_class_color[] = "\x1B[34m";
-static const char *janet_pretty_colors[] = {
+static const char bender_cycle_color[] = "\x1B[36m";
+static const char bender_class_color[] = "\x1B[34m";
+static const char *bender_pretty_colors[] = {
     "\x1B[32m",
     "\x1B[36m",
     "\x1B[36m",
@@ -565,178 +565,178 @@ static const char *janet_pretty_colors[] = {
     "\x1B[36m"
 };
 
-#define JANET_PRETTY_DICT_LIMIT 30
-#define JANET_PRETTY_DICT_KEYSORT_LIMIT 2000
-#define JANET_PRETTY_ARRAY_LIMIT 160
+#define BENDER_PRETTY_DICT_LIMIT 30
+#define BENDER_PRETTY_DICT_KEYSORT_LIMIT 2000
+#define BENDER_PRETTY_ARRAY_LIMIT 160
 
 /* Helper for pretty printing */
-static void janet_pretty_one(struct pretty *S, Janet x) {
+static void bender_pretty_one(struct pretty *S, Bender x) {
     /* Add to seen */
-    switch (janet_type(x)) {
-        case JANET_NIL:
-        case JANET_NUMBER:
-        case JANET_SYMBOL:
-        case JANET_BOOLEAN:
+    switch (bender_type(x)) {
+        case BENDER_NIL:
+        case BENDER_NUMBER:
+        case BENDER_SYMBOL:
+        case BENDER_BOOLEAN:
             break;
         default: {
-            Janet seenid = janet_table_get(&S->seen, x);
-            if (janet_checktype(seenid, JANET_NUMBER)) {
-                if (S->flags & JANET_PRETTY_COLOR) {
-                    janet_buffer_push_cstring(S->buffer, janet_cycle_color);
+            Bender seenid = bender_table_get(&S->seen, x);
+            if (bender_checktype(seenid, BENDER_NUMBER)) {
+                if (S->flags & BENDER_PRETTY_COLOR) {
+                    bender_buffer_push_cstring(S->buffer, bender_cycle_color);
                 }
-                janet_buffer_push_cstring(S->buffer, "<cycle ");
-                S->align += 8 + integer_to_string_b(S->buffer, janet_unwrap_integer(seenid));
-                janet_buffer_push_u8(S->buffer, '>');
-                if (S->flags & JANET_PRETTY_COLOR) {
-                    janet_buffer_push_cstring(S->buffer, "\x1B[0m");
+                bender_buffer_push_cstring(S->buffer, "<cycle ");
+                S->align += 8 + integer_to_string_b(S->buffer, bender_unwrap_integer(seenid));
+                bender_buffer_push_u8(S->buffer, '>');
+                if (S->flags & BENDER_PRETTY_COLOR) {
+                    bender_buffer_push_cstring(S->buffer, "\x1B[0m");
                 }
                 return;
             } else {
-                janet_table_put(&S->seen, x, janet_wrap_integer(S->seen.count));
+                bender_table_put(&S->seen, x, bender_wrap_integer(S->seen.count));
                 break;
             }
         }
     }
 
-    switch (janet_type(x)) {
+    switch (bender_type(x)) {
         default: {
-            const char *color = janet_pretty_colors[janet_type(x)];
-            if (color && (S->flags & JANET_PRETTY_COLOR)) {
-                janet_buffer_push_cstring(S->buffer, color);
+            const char *color = bender_pretty_colors[bender_type(x)];
+            if (color && (S->flags & BENDER_PRETTY_COLOR)) {
+                bender_buffer_push_cstring(S->buffer, color);
             }
-            if (janet_checktype(x, JANET_BUFFER) && janet_unwrap_buffer(x) == S->buffer) {
-                janet_buffer_ensure(S->buffer, S->buffer->count + S->bufstartlen * 4 + 3, 1);
-                janet_buffer_push_u8(S->buffer, '@');
+            if (bender_checktype(x, BENDER_BUFFER) && bender_unwrap_buffer(x) == S->buffer) {
+                bender_buffer_ensure(S->buffer, S->buffer->count + S->bufstartlen * 4 + 3, 1);
+                bender_buffer_push_u8(S->buffer, '@');
                 /* Use start len to print to self better */
-                S->align += 1 + janet_escape_string_impl(S->buffer, S->buffer->data, S->bufstartlen);
+                S->align += 1 + bender_escape_string_impl(S->buffer, S->buffer->data, S->bufstartlen);
             } else {
                 S->align -= S->buffer->count;
-                janet_description_b(S->buffer, x);
+                bender_description_b(S->buffer, x);
                 S->align += S->buffer->count;
             }
-            if (color && (S->flags & JANET_PRETTY_COLOR)) {
-                janet_buffer_push_cstring(S->buffer, "\x1B[0m");
+            if (color && (S->flags & BENDER_PRETTY_COLOR)) {
+                bender_buffer_push_cstring(S->buffer, "\x1B[0m");
             }
             break;
         }
-        case JANET_ARRAY:
-        case JANET_TUPLE: {
+        case BENDER_ARRAY:
+        case BENDER_TUPLE: {
             int32_t i = 0, len = 0;
-            const Janet *arr = NULL;
-            int isarray = janet_checktype(x, JANET_ARRAY);
-            janet_indexed_view(x, &arr, &len);
-            int hasbrackets = !isarray && (janet_tuple_flag(arr) & JANET_TUPLE_FLAG_BRACKETCTOR);
+            const Bender *arr = NULL;
+            int isarray = bender_checktype(x, BENDER_ARRAY);
+            bender_indexed_view(x, &arr, &len);
+            int hasbrackets = !isarray && (bender_tuple_flag(arr) & BENDER_TUPLE_FLAG_BRACKETCTOR);
             const char *startstr = isarray ? "@[" : hasbrackets ? "[" : "(";
             const char endchar = isarray ? ']' : hasbrackets ? ']' : ')';
-            janet_buffer_push_cstring(S->buffer, startstr);
+            bender_buffer_push_cstring(S->buffer, startstr);
             S->align += (int32_t) strlen(startstr);
             const int align = S->leaf_align = S->align;
             S->depth--;
             if (S->depth == 0) {
-                janet_buffer_push_cstring(S->buffer, "...");
+                bender_buffer_push_cstring(S->buffer, "...");
                 S->align += 3;
             } else {
-                if (len > JANET_PRETTY_ARRAY_LIMIT && !(S->flags & JANET_PRETTY_NOTRUNC)) {
+                if (len > BENDER_PRETTY_ARRAY_LIMIT && !(S->flags & BENDER_PRETTY_NOTRUNC)) {
                     for (i = 0; i < 3; i++) {
                         if (i) print_newline(S, align);
-                        janet_pretty_one(S, arr[i]);
+                        bender_pretty_one(S, arr[i]);
                     }
                     print_newline(S, align);
-                    janet_buffer_push_cstring(S->buffer, "...");
+                    bender_buffer_push_cstring(S->buffer, "...");
                     S->align += 3;
                     for (i = len - 3; i < len; i++) {
                         print_newline(S, align);
-                        janet_pretty_one(S, arr[i]);
+                        bender_pretty_one(S, arr[i]);
                     }
                 } else {
                     for (i = 0; i < len; i++) {
                         if (i) print_newline(S, align);
-                        janet_pretty_one(S, arr[i]);
+                        bender_pretty_one(S, arr[i]);
                     }
                 }
             }
             S->depth++;
-            janet_buffer_push_u8(S->buffer, endchar);
+            bender_buffer_push_u8(S->buffer, endchar);
             S->align++;
             break;
         }
-        case JANET_STRUCT:
-        case JANET_TABLE: {
-            int istable = janet_checktype(x, JANET_TABLE);
+        case BENDER_STRUCT:
+        case BENDER_TABLE: {
+            int istable = bender_checktype(x, BENDER_TABLE);
 
             /* For object-like tables, print class name */
             if (istable) {
-                JanetTable *t = janet_unwrap_table(x);
-                JanetTable *proto = t->proto;
+                BenderTable *t = bender_unwrap_table(x);
+                BenderTable *proto = t->proto;
                 S->align++;
-                janet_buffer_push_cstring(S->buffer, "@");
+                bender_buffer_push_cstring(S->buffer, "@");
                 if (NULL != proto) {
-                    Janet name = janet_table_get(proto, janet_ckeywordv("_name"));
+                    Bender name = bender_table_get(proto, bender_ckeywordv("_name"));
                     const uint8_t *n;
                     int32_t len;
-                    if (janet_bytes_view(name, &n, &len)) {
-                        if (S->flags & JANET_PRETTY_COLOR) {
-                            janet_buffer_push_cstring(S->buffer, janet_class_color);
+                    if (bender_bytes_view(name, &n, &len)) {
+                        if (S->flags & BENDER_PRETTY_COLOR) {
+                            bender_buffer_push_cstring(S->buffer, bender_class_color);
                         }
-                        janet_buffer_push_bytes(S->buffer, n, len);
+                        bender_buffer_push_bytes(S->buffer, n, len);
                         S->align += len;
-                        if (S->flags & JANET_PRETTY_COLOR) {
-                            janet_buffer_push_cstring(S->buffer, "\x1B[0m");
+                        if (S->flags & BENDER_PRETTY_COLOR) {
+                            bender_buffer_push_cstring(S->buffer, "\x1B[0m");
                         }
                     }
                 }
             } else {
-                JanetStruct st = janet_unwrap_struct(x);
-                JanetStruct proto = janet_struct_proto(st);
+                BenderStruct st = bender_unwrap_struct(x);
+                BenderStruct proto = bender_struct_proto(st);
                 if (NULL != proto) {
-                    Janet name = janet_struct_get(proto, janet_ckeywordv("_name"));
+                    Bender name = bender_struct_get(proto, bender_ckeywordv("_name"));
                     const uint8_t *n;
                     int32_t len;
-                    if (janet_bytes_view(name, &n, &len)) {
-                        if (S->flags & JANET_PRETTY_COLOR) {
-                            janet_buffer_push_cstring(S->buffer, janet_class_color);
+                    if (bender_bytes_view(name, &n, &len)) {
+                        if (S->flags & BENDER_PRETTY_COLOR) {
+                            bender_buffer_push_cstring(S->buffer, bender_class_color);
                         }
-                        janet_buffer_push_bytes(S->buffer, n, len);
+                        bender_buffer_push_bytes(S->buffer, n, len);
                         S->align += len;
-                        if (S->flags & JANET_PRETTY_COLOR) {
-                            janet_buffer_push_cstring(S->buffer, "\x1B[0m");
+                        if (S->flags & BENDER_PRETTY_COLOR) {
+                            bender_buffer_push_cstring(S->buffer, "\x1B[0m");
                         }
                     }
                 }
             }
-            janet_buffer_push_u8(S->buffer, '{');
+            bender_buffer_push_u8(S->buffer, '{');
             const int align = S->leaf_align = ++S->align;
 
             S->depth--;
             if (S->depth == 0) {
-                janet_buffer_push_cstring(S->buffer, "...");
+                bender_buffer_push_cstring(S->buffer, "...");
                 S->align += 3;
             } else {
                 int32_t len = 0, cap = 0;
-                const JanetKV *kvs = NULL;
-                janet_dictionary_view(x, &kvs, &len, &cap);
+                const BenderKV *kvs = NULL;
+                bender_dictionary_view(x, &kvs, &len, &cap);
                 int32_t ks_start = S->keysort_start;
                 int truncated = 0;
 
                 /* Shortcut for huge dictionaries, don't bother sorting keys */
-                if (len > JANET_PRETTY_DICT_KEYSORT_LIMIT) {
-                    if (!(S->flags & JANET_PRETTY_NOTRUNC)) {
-                        len = JANET_PRETTY_DICT_LIMIT;
+                if (len > BENDER_PRETTY_DICT_KEYSORT_LIMIT) {
+                    if (!(S->flags & BENDER_PRETTY_NOTRUNC)) {
+                        len = BENDER_PRETTY_DICT_LIMIT;
                         truncated = 1;
                     }
                     int32_t j = 0;
                     for (int32_t i = 0; i < len; i++) {
-                        while (janet_checktype(kvs[j].key, JANET_NIL)) j++;
+                        while (bender_checktype(kvs[j].key, BENDER_NIL)) j++;
                         if (i) print_newline(S, align);
-                        janet_pretty_one(S, kvs[j].key);
-                        janet_buffer_push_u8(S->buffer, ' ');
+                        bender_pretty_one(S, kvs[j].key);
+                        bender_buffer_push_u8(S->buffer, ' ');
                         S->align++;
-                        janet_pretty_one(S, kvs[j].value);
+                        bender_pretty_one(S, kvs[j].value);
                         j++;
                     }
                     if (truncated) {
                         print_newline(S, align);
-                        janet_buffer_push_cstring(S->buffer, "...");
+                        bender_buffer_push_cstring(S->buffer, "...");
                         S->align += 3;
                     }
                 } else {
@@ -756,31 +756,31 @@ static void janet_pretty_one(struct pretty *S, Janet x) {
                         } else {
                             S->keysort_capacity = (int32_t)(mincap * 2);
                         }
-                        S->keysort_buffer = janet_srealloc(S->keysort_buffer, sizeof(int32_t) * S->keysort_capacity);
+                        S->keysort_buffer = bender_srealloc(S->keysort_buffer, sizeof(int32_t) * S->keysort_capacity);
                         if (NULL == S->keysort_buffer) {
-                            JANET_OUT_OF_MEMORY;
+                            BENDER_OUT_OF_MEMORY;
                         }
                     }
 
-                    janet_sorted_keys(kvs, cap, S->keysort_buffer == NULL ? NULL : S->keysort_buffer + ks_start);
+                    bender_sorted_keys(kvs, cap, S->keysort_buffer == NULL ? NULL : S->keysort_buffer + ks_start);
                     S->keysort_start += len;
-                    if (!(S->flags & JANET_PRETTY_NOTRUNC) && (len > JANET_PRETTY_DICT_LIMIT)) {
-                        len = JANET_PRETTY_DICT_LIMIT;
+                    if (!(S->flags & BENDER_PRETTY_NOTRUNC) && (len > BENDER_PRETTY_DICT_LIMIT)) {
+                        len = BENDER_PRETTY_DICT_LIMIT;
                         truncated = 1;
                     }
 
                     for (int32_t i = 0; i < len; i++) {
                         if (i) print_newline(S, align);
                         int32_t j = S->keysort_buffer[i + ks_start];
-                        janet_pretty_one(S, kvs[j].key);
-                        janet_buffer_push_u8(S->buffer, ' ');
+                        bender_pretty_one(S, kvs[j].key);
+                        bender_buffer_push_u8(S->buffer, ' ');
                         S->align++;
-                        janet_pretty_one(S, kvs[j].value);
+                        bender_pretty_one(S, kvs[j].value);
                     }
 
                     if (truncated) {
                         print_newline(S, align);
-                        janet_buffer_push_cstring(S->buffer, "...");
+                        bender_buffer_push_cstring(S->buffer, "...");
                         S->align += 3;
                     }
 
@@ -788,23 +788,23 @@ static void janet_pretty_one(struct pretty *S, Janet x) {
                 S->keysort_start = ks_start;
             }
             S->depth++;
-            janet_buffer_push_u8(S->buffer, '}');
+            bender_buffer_push_u8(S->buffer, '}');
             S->align++;
             break;
         }
     }
     /* Remove from seen */
-    janet_table_remove(&S->seen, x);
+    bender_table_remove(&S->seen, x);
     return;
 }
 
-#define JANET_COLUMNS 80
+#define BENDER_COLUMNS 80
 
-static JanetBuffer *janet_pretty_(JanetBuffer *buffer, int depth, int width,
-                                  int flags, Janet x, int32_t startlen, int32_t lookback_barrier) {
+static BenderBuffer *bender_pretty_(BenderBuffer *buffer, int depth, int width,
+                                  int flags, Bender x, int32_t startlen, int32_t lookback_barrier) {
     struct pretty S;
     if (NULL == buffer) {
-        buffer = janet_buffer(0);
+        buffer = bender_buffer(0);
     }
     S.buffer = buffer;
     S.depth = depth;
@@ -816,24 +816,24 @@ static JanetBuffer *janet_pretty_(JanetBuffer *buffer, int depth, int width,
     S.keysort_capacity = 0;
     S.keysort_buffer = NULL;
     S.keysort_start = 0;
-    janet_table_init(&S.seen, 10);
-    janet_pretty_one(&S, x);
+    bender_table_init(&S.seen, 10);
+    bender_pretty_one(&S, x);
     backtrack_newlines(&S);
-    janet_table_deinit(&S.seen);
+    bender_table_deinit(&S.seen);
     return S.buffer;
 }
 
-/* Helper for printing a janet value in a pretty form. Not meant to be used
+/* Helper for printing a bender value in a pretty form. Not meant to be used
  * for serialization or anything like that. */
-JanetBuffer *janet_pretty(JanetBuffer *buffer, int depth, int flags, Janet x) {
-    return janet_pretty_(buffer, depth, JANET_COLUMNS, flags,
+BenderBuffer *bender_pretty(BenderBuffer *buffer, int depth, int flags, Bender x) {
+    return bender_pretty_(buffer, depth, BENDER_COLUMNS, flags,
                          x, buffer ? buffer->count : 0, buffer ? buffer->count : 0);
 }
 
-static JanetBuffer *janet_jdn_(JanetBuffer *buffer, int depth, Janet x, int32_t startlen, int32_t lookback_barrier) {
+static BenderBuffer *bender_jdn_(BenderBuffer *buffer, int depth, Bender x, int32_t startlen, int32_t lookback_barrier) {
     struct pretty S;
     if (NULL == buffer) {
-        buffer = janet_buffer(0);
+        buffer = bender_buffer(0);
     }
     S.buffer = buffer;
     S.depth = depth;
@@ -844,27 +844,27 @@ static JanetBuffer *janet_jdn_(JanetBuffer *buffer, int depth, Janet x, int32_t 
     S.keysort_capacity = 0;
     S.keysort_buffer = NULL;
     S.keysort_start = 0;
-    janet_table_init(&S.seen, 10);
+    bender_table_init(&S.seen, 10);
     int res = print_jdn_one(&S, x, depth);
-    janet_table_deinit(&S.seen);
+    bender_table_deinit(&S.seen);
     if (res) {
-        janet_panic("could not print to jdn format");
+        bender_panic("could not print to jdn format");
     }
     return S.buffer;
 }
 
-JanetBuffer *janet_jdn(JanetBuffer *buffer, int depth, Janet x) {
-    return janet_jdn_(buffer, depth, x, buffer ? buffer->count : 0, buffer ? buffer->count : 0);
+BenderBuffer *bender_jdn(BenderBuffer *buffer, int depth, Bender x) {
+    return bender_jdn_(buffer, depth, x, buffer ? buffer->count : 0, buffer ? buffer->count : 0);
 }
 
-static const char *typestr(Janet x) {
-    JanetType t = janet_type(x);
-    return (t == JANET_ABSTRACT)
-           ? janet_abstract_type(janet_unwrap_abstract(x))->name
-           : janet_type_names[t];
+static const char *typestr(Bender x) {
+    BenderType t = bender_type(x);
+    return (t == BENDER_ABSTRACT)
+           ? bender_abstract_type(bender_unwrap_abstract(x))->name
+           : bender_type_names[t];
 }
 
-static void pushtypes(JanetBuffer *buffer, int types) {
+static void pushtypes(BenderBuffer *buffer, int types) {
     int first = 1;
     int i = 0;
     while (types) {
@@ -872,9 +872,9 @@ static void pushtypes(JanetBuffer *buffer, int types) {
             if (first) {
                 first = 0;
             } else {
-                janet_buffer_push_cstring(buffer, (types == 1) ? " or " : ", ");
+                bender_buffer_push_cstring(buffer, (types == 1) ? " or " : ", ");
             }
-            janet_buffer_push_cstring(buffer, janet_type_names[i]);
+            bender_buffer_push_cstring(buffer, bender_type_names[i]);
         }
         i++;
         types >>= 1;
@@ -895,7 +895,7 @@ struct FmtMapping {
     const char *mapping;
 };
 
-/* Janet uses fixed width integer types for most things, so map
+/* Bender uses fixed width integer types for most things, so map
  * format specifiers to these fixed sizes */
 static const struct FmtMapping format_mappings[] = {
     {'D', PRId64},
@@ -913,7 +913,7 @@ static const char *get_fmt_mapping(char c) {
         if (format_mappings[i].c == c)
             return format_mappings[i].mapping;
     }
-    janet_assert(0, "bad format mapping");
+    bender_assert(0, "bad format mapping");
 }
 
 static const char *scanformat(
@@ -928,7 +928,7 @@ static const char *scanformat(
     memset(precision, '\0', 3);
     while (*p != '\0' && strchr(FMT_FLAGS, *p) != NULL)
         p++; /* skip flags */
-    if ((size_t)(p - strfrmt) >= sizeof(FMT_FLAGS)) janet_panic("invalid format (repeated flags)");
+    if ((size_t)(p - strfrmt) >= sizeof(FMT_FLAGS)) bender_panic("invalid format (repeated flags)");
     if (isdigit((int)(*p)))
         width[0] = *p++; /* skip width */
     if (isdigit((int)(*p)))
@@ -941,7 +941,7 @@ static const char *scanformat(
             precision[1] = *p++; /* (2 digits at most) */
     }
     if (isdigit((int)(*p)))
-        janet_panic("invalid format (width or precision too long)");
+        bender_panic("invalid format (width or precision too long)");
 
     /* Write to form - replace characters with fixed size stuff */
     *(form++) = '%';
@@ -962,15 +962,15 @@ static const char *scanformat(
     return p;
 }
 
-void janet_formatbv(JanetBuffer *b, const char *format, va_list args) {
+void bender_formatbv(BenderBuffer *b, const char *format, va_list args) {
     const char *format_end = format + strlen(format);
     const char *c = format;
     int32_t startlen = b->count;
     while (c < format_end) {
         if (*c != '%') {
-            janet_buffer_push_u8(b, (uint8_t) *c++);
+            bender_buffer_push_u8(b, (uint8_t) *c++);
         } else if (*++c == '%') {
-            janet_buffer_push_u8(b, (uint8_t) *c++);
+            bender_buffer_push_u8(b, (uint8_t) *c++);
         } else {
             char form[MAX_FORMAT], item[MAX_ITEM];
             char width[3], precision[3];
@@ -1018,14 +1018,14 @@ void janet_formatbv(JanetBuffer *b, const char *format, va_list args) {
                     const char *str = va_arg(args, const char *);
                     int32_t len = (c[-1] == 's')
                                   ? (int32_t) strlen(str)
-                                  : janet_string_length((JanetString) str);
+                                  : bender_string_length((BenderString) str);
                     if (form[2] == '\0')
-                        janet_buffer_push_bytes(b, (const uint8_t *) str, len);
+                        bender_buffer_push_bytes(b, (const uint8_t *) str, len);
                     else {
                         if (len != (int32_t) strlen((const char *) str))
-                            janet_panic("string contains zeros");
+                            bender_panic("string contains zeros");
                         if (!strchr(form, '.') && len >= 100) {
-                            janet_panic("no precision and string is too long to be formatted");
+                            bender_panic("no precision and string is too long to be formatted");
                         } else {
                             nb = snprintf(item, MAX_ITEM, form, str);
                         }
@@ -1033,13 +1033,13 @@ void janet_formatbv(JanetBuffer *b, const char *format, va_list args) {
                     break;
                 }
                 case 'V':
-                    janet_to_string_b(b, va_arg(args, Janet));
+                    bender_to_string_b(b, va_arg(args, Bender));
                     break;
                 case 'v':
-                    janet_description_b(b, va_arg(args, Janet));
+                    bender_description_b(b, va_arg(args, Bender));
                     break;
                 case 't':
-                    janet_buffer_push_cstring(b, typestr(va_arg(args, Janet)));
+                    bender_buffer_push_cstring(b, typestr(va_arg(args, Bender)));
                     break;
                 case 'T': {
                     int types = va_arg(args, int);
@@ -1053,127 +1053,127 @@ void janet_formatbv(JanetBuffer *b, const char *format, va_list args) {
                 case 'Q':
                 case 'q':
                 case 'P':
-                case 'p': { /* janet pretty , precision = depth */
+                case 'p': { /* bender pretty , precision = depth */
                     int depth = atoi(precision);
-                    if (depth < 1) depth = JANET_RECURSION_GUARD;
+                    if (depth < 1) depth = BENDER_RECURSION_GUARD;
                     char d = c[-1];
                     int has_color = (d == 'P') || (d == 'Q') || (d == 'M') || (d == 'N');
                     int has_oneline = (d == 'Q') || (d == 'q') || (d == 'N') || (d == 'n');
                     int has_notrunc = (d == 'M') || (d == 'm') || (d == 'N') || (d == 'n');
                     int columns = atoi(width);
                     if (columns == 0) {
-                        columns = JANET_COLUMNS;
+                        columns = BENDER_COLUMNS;
                     } else if (columns < 0) {
                         has_oneline = 1;
                     }
                     int flags = 0;
-                    flags |= has_color ? JANET_PRETTY_COLOR : 0;
-                    flags |= has_oneline ? JANET_PRETTY_ONELINE : 0;
-                    flags |= has_notrunc ? JANET_PRETTY_NOTRUNC : 0;
-                    janet_pretty_(b, depth, columns, flags,
-                                  va_arg(args, Janet), startlen, b->count);
+                    flags |= has_color ? BENDER_PRETTY_COLOR : 0;
+                    flags |= has_oneline ? BENDER_PRETTY_ONELINE : 0;
+                    flags |= has_notrunc ? BENDER_PRETTY_NOTRUNC : 0;
+                    bender_pretty_(b, depth, columns, flags,
+                                  va_arg(args, Bender), startlen, b->count);
                     break;
                 }
                 case 'j': {
                     int depth = atoi(precision);
                     if (depth < 1) {
-                        depth = JANET_RECURSION_GUARD;
+                        depth = BENDER_RECURSION_GUARD;
                     }
-                    janet_jdn_(b, depth, va_arg(args, Janet), startlen, b->count);
+                    bender_jdn_(b, depth, va_arg(args, Bender), startlen, b->count);
                     break;
                 }
                 default: {
                     /* also treat cases 'nLlh' */
-                    janet_panicf("invalid conversion '%s' to 'format'",
+                    bender_panicf("invalid conversion '%s' to 'format'",
                                  form);
                 }
             }
             if (nb >= MAX_ITEM)
-                janet_panic("format buffer overflow");
+                bender_panic("format buffer overflow");
             if (nb > 0)
-                janet_buffer_push_bytes(b, (uint8_t *) item, nb);
+                bender_buffer_push_bytes(b, (uint8_t *) item, nb);
         }
 
     }
 }
 
 /* Helper function for formatting strings. Useful for generating error messages and the like.
- * Similar to printf, but specialized for operating with janet. */
-const uint8_t *janet_formatc(const char *format, ...) {
+ * Similar to printf, but specialized for operating with bender. */
+const uint8_t *bender_formatc(const char *format, ...) {
     va_list args;
     const uint8_t *ret;
-    JanetBuffer buffer;
+    BenderBuffer buffer;
     int32_t len = 0;
 
     /* Calculate length, init buffer and args */
     while (format[len]) len++;
-    janet_buffer_init(&buffer, len);
+    bender_buffer_init(&buffer, len);
     va_start(args, format);
 
     /* Run format */
-    janet_formatbv(&buffer, format, args);
+    bender_formatbv(&buffer, format, args);
 
     /* Iterate length */
     va_end(args);
 
-    ret = janet_string(buffer.data, buffer.count);
-    janet_buffer_deinit(&buffer);
+    ret = bender_string(buffer.data, buffer.count);
+    bender_buffer_deinit(&buffer);
     return ret;
 }
 
-JanetBuffer *janet_formatb(JanetBuffer *buffer, const char *format, ...) {
+BenderBuffer *bender_formatb(BenderBuffer *buffer, const char *format, ...) {
     va_list args;
     va_start(args, format);
-    janet_formatbv(buffer, format, args);
+    bender_formatbv(buffer, format, args);
     va_end(args);
     return buffer;
 }
 
 /* Shared implementation between string/format and
  * buffer/format */
-void janet_buffer_format(
-    JanetBuffer *b,
+void bender_buffer_format(
+    BenderBuffer *b,
     const char *strfrmt,
     int32_t argstart,
     int32_t argc,
-    Janet *argv) {
+    Bender *argv) {
     size_t sfl = strlen(strfrmt);
     const char *strfrmt_end = strfrmt + sfl;
     int32_t arg = argstart;
     int32_t startlen = b->count;
     while (strfrmt < strfrmt_end) {
         if (*strfrmt != '%')
-            janet_buffer_push_u8(b, (uint8_t) * strfrmt++);
+            bender_buffer_push_u8(b, (uint8_t) * strfrmt++);
         else if (*++strfrmt == '%')
-            janet_buffer_push_u8(b, (uint8_t) * strfrmt++); /* %% */
+            bender_buffer_push_u8(b, (uint8_t) * strfrmt++); /* %% */
         else { /* format item */
             char form[MAX_FORMAT], item[MAX_ITEM];
             char width[3], precision[3];
             int nb = 0; /* number of bytes in added item */
-#ifdef JANET_PLAN9
+#ifdef BENDER_PLAN9
             if (*strfrmt == 'r') {
                 rerrstr(item, MAX_ITEM);
                 nb = strlen(item);
             } else
 #endif
                 if (++arg >= argc)
-                    janet_panic("not enough values for format");
+                    bender_panic("not enough values for format");
             strfrmt = scanformat(strfrmt, form, width, precision);
             switch (*strfrmt++) {
-#ifdef JANET_PLAN9
+#ifdef BENDER_PLAN9
                 case 'r':
                     break;
 #endif
                 case 'c': {
                     nb = snprintf(item, MAX_ITEM, form, (int)
-                                  janet_getinteger(argv, arg));
+                                  bender_getinteger(argv, arg));
                     break;
                 }
                 case 'D':
                 case 'I':
                 case 'd':
                 case 'i': {
-                    int64_t n = janet_getinteger64(argv, arg);
+                    int64_t n = bender_getinteger64(argv, arg);
                     nb = snprintf(item, MAX_ITEM, form, n);
                     break;
                 }
@@ -1181,7 +1181,7 @@ void janet_buffer_format(
                 case 'X':
                 case 'o':
                 case 'u': {
-                    uint64_t n = janet_getuinteger64(argv, arg);
+                    uint64_t n = bender_getuinteger64(argv, arg);
                     nb = snprintf(item, MAX_ITEM, form, n);
                     break;
                 }
@@ -1192,29 +1192,29 @@ void janet_buffer_format(
                 case 'f':
                 case 'g':
                 case 'G': {
-                    double d = janet_getnumber(argv, arg);
+                    double d = bender_getnumber(argv, arg);
                     nb = snprintf(item, MAX_ITEM, form, d);
                     break;
                 }
                 case 's': {
-                    const char *s = janet_getcbytes(argv, arg);
+                    const char *s = bender_getcbytes(argv, arg);
                     if (form[2] == '\0')
-                        janet_buffer_push_cstring(b, s);
+                        bender_buffer_push_cstring(b, s);
                     else {
                         nb = snprintf(item, MAX_ITEM, form, s);
                     }
                     break;
                 }
                 case 'V': {
-                    janet_to_string_b(b, argv[arg]);
+                    bender_to_string_b(b, argv[arg]);
                     break;
                 }
                 case 'v': {
-                    janet_description_b(b, argv[arg]);
+                    bender_description_b(b, argv[arg]);
                     break;
                 }
                 case 't':
-                    janet_buffer_push_cstring(b, typestr(argv[arg]));
+                    bender_buffer_push_cstring(b, typestr(argv[arg]));
                     break;
                 case 'M':
                 case 'm':
@@ -1223,43 +1223,43 @@ void janet_buffer_format(
                 case 'Q':
                 case 'q':
                 case 'P':
-                case 'p': { /* janet pretty , precision = depth */
+                case 'p': { /* bender pretty , precision = depth */
                     int depth = atoi(precision);
-                    if (depth < 1) depth = JANET_RECURSION_GUARD;
+                    if (depth < 1) depth = BENDER_RECURSION_GUARD;
                     char d = strfrmt[-1];
                     int has_color = (d == 'P') || (d == 'Q') || (d == 'M') || (d == 'N');
                     int has_oneline = (d == 'Q') || (d == 'q') || (d == 'N') || (d == 'n');
                     int has_notrunc = (d == 'M') || (d == 'm') || (d == 'N') || (d == 'n');
                     int columns = atoi(width);
                     if (columns == 0)
-                        columns = JANET_COLUMNS;
+                        columns = BENDER_COLUMNS;
                     else if (columns < 0)
                         has_oneline = 1;
                     int flags = 0;
-                    flags |= has_color ? JANET_PRETTY_COLOR : 0;
-                    flags |= has_oneline ? JANET_PRETTY_ONELINE : 0;
-                    flags |= has_notrunc ? JANET_PRETTY_NOTRUNC : 0;
-                    janet_pretty_(b, depth, columns, flags,
+                    flags |= has_color ? BENDER_PRETTY_COLOR : 0;
+                    flags |= has_oneline ? BENDER_PRETTY_ONELINE : 0;
+                    flags |= has_notrunc ? BENDER_PRETTY_NOTRUNC : 0;
+                    bender_pretty_(b, depth, columns, flags,
                                   argv[arg], startlen, b->count);
                     break;
                 }
                 case 'j': {
                     int depth = atoi(precision);
                     if (depth < 1)
-                        depth = JANET_RECURSION_GUARD;
-                    janet_jdn_(b, depth, argv[arg], startlen, b->count);
+                        depth = BENDER_RECURSION_GUARD;
+                    bender_jdn_(b, depth, argv[arg], startlen, b->count);
                     break;
                 }
                 default: {
                     /* also treat cases 'nLlh' */
-                    janet_panicf("invalid conversion '%s' to 'format'",
+                    bender_panicf("invalid conversion '%s' to 'format'",
                                  form);
                 }
             }
             if (nb >= MAX_ITEM)
-                janet_panic("format buffer overflow");
+                bender_panic("format buffer overflow");
             if (nb > 0)
-                janet_buffer_push_bytes(b, (uint8_t *) item, nb);
+                bender_buffer_push_bytes(b, (uint8_t *) item, nb);
         }
     }
 }

@@ -1,0 +1,224 @@
+###
+### Proc helpers (Step P1.2): selective receive, monitors, links over
+### the core/proc primitives. Tasklets stay untouched; this module is
+### the proc-side companion (same disciplines: at-most-once, stash
+### order, single-shot reapers, recorded exits for late monitors).
+###
+###   (proc/select pred)            # first matching message, stashing rest
+###   (proc/monitor watched w tag)  # [:down tag reason] to w on completion
+###   (proc/link a b &opt tag)      # symmetric fate
+###
+### Caveats (same as tasklets): nil messages are invisible to select
+### (nil = miss); raw bodies that protect everything can trap kills.
+###
+
+(import ./proc-lane :as lane)
+
+# Lane API re-exported here so (import :as procx) covers lanes too
+# (local aliases only — never marshalled, so the split stays clean).
+(def lane-spawn lane/lane-spawn)
+(def spawn-on lane/spawn-on)
+(def spawn-loop-on lane/spawn-loop-on)
+(def lane-stop lane/lane-stop)
+(def pool-spawn lane/pool-spawn)
+(def pool-pick lane/pool-pick)
+(def pool-spawn-on lane/pool-spawn-on)
+(def pool-spawn-loop-on lane/pool-spawn-loop-on)
+(def pool-stop lane/pool-stop)
+
+(defn select
+  "Selective receive on the calling process's mailbox: return the
+  first message satisfying `pred`, stashing the rest in arrival order
+  in the C stash (visible via proc/stash). Must be called inside a
+  process."
+  [pred]
+  (def me (proc/self))
+  (when (nil? me) (error "proc/select outside a process"))
+  (def st (proc/stash me))
+  # Stash scan (Bender-side: wake values bypass C, so matching lives
+  # here — see P1.2 notes).
+  (var found nil)
+  (var idx nil)
+  (eachp [i m] st
+    (when (and (nil? idx) (pred m))
+      (set idx i)
+      (set found m)))
+  # NOTE: (break val) discards val in this Bender — park in a cell.
+  (if (not (nil? idx))
+    (do (array/remove st idx)
+      found)
+    (do (while (nil? found)
+          (def m (proc/recv))
+          (if (pred m)
+            (set found m)
+            (array/push st m)))
+      found)))
+
+###
+### Monitors over supervisor completions (same shape as tasklets: a
+### single-shot reaper per watched proc pumps its sup channel once and
+### exits; the C monitor list holds [tag watcher] pairs; done/reason
+### are recorded for late monitors).
+###
+
+(var *reapers* @{})
+
+(defn- deliver-down
+  "P2.3: route a :down message to a watcher (proc object or channel).
+  Channels cover cross-lane monitor targets and same-lane taps."
+  [w msg]
+  (if (proc/pid? w)
+    (proc/send w msg)
+    (ev/give w msg)))
+
+(defn- ensure-reaper [watched]
+  (when (nil? (get *reapers* watched))
+    (put *reapers* watched true)
+    (def sup (proc/sup-of watched))
+    (ev/go
+      (fn []
+        (def [sig fib _] (ev/take sup))
+        (def reason (if (= sig :ok) :normal (fiber/last-value fib)))
+        (proc/record-exit watched reason)
+        (def mons (proc/monitors-of watched))
+        (var i 0)
+        (while (< i (length mons))
+          (def mtag (get mons i))
+          (def nch (get mons (+ i 1)))
+          (deliver-down nch [:down mtag reason])
+          (+= i 2))
+        (array/clear mons)))))
+
+(defn monitor
+  "Watch `watched` (proc object): when it completes, watcher `w`
+  (proc or channel) receives [:down tag reason]. Already-completed
+  processes deliver immediately from the recorded exit. Remote
+  watched tuples need monitor-chan (a proc watcher cannot receive
+  cross-lane — its mailbox copy would disconnect). Returns `w`."
+  [watched w tag]
+  (when (tuple? watched)
+    (if (= 0 (watched 1))
+      (error "local pid tuples need their proc object for monitor")
+      (error "cross-lane watched needs monitor-chan (proc watchers cannot receive cross-lane)")))
+  (if (proc/done? watched)
+    (deliver-down w [:down tag (proc/exit-reason watched)])
+    (do (proc/monitor watched w tag)
+      (ensure-reaper watched)))
+  w)
+
+(defn monitor-chan
+  "P2.3: watch `watched` (proc object or remote pid tuple) with
+  channel `ch`: `ch` receives [:down tag reason] on completion.
+  Remote watches RPC the lane (:proc-monitor); unknown/dead remote
+  serials answer [:down tag :noproc] from the lane. Returns `ch`."
+  [watched tag ch]
+  # proc/pid? accepts BOTH shapes now, so it cannot decide local-vs-remote.
+  # The discriminator is the node field: an object is always local, and a
+  # tuple is local only when its node is 0.
+  (def is-tuple (tuple? watched))
+  (if (and is-tuple (not= 0 (watched 1)))
+    (ev/give (watched 3) [:proc-monitor (watched 2) tag ch])
+    (if (proc/done? watched)
+      (ev/give ch [:down tag (proc/exit-reason watched)])
+      (do (proc/monitor watched ch tag)
+        (ensure-reaper watched))))
+  ch)
+
+(defn link
+  "Symmetric link between two procs: when either completes, the other
+  observes [:down [:link tag] reason] (trap enforcement lands with
+  loop processes in P1.4; raw bodies pattern-match it themselves).
+  Returns [a b]."
+  [a b &opt tag]
+  (default tag :link)
+  (monitor a b [:link tag])
+  (monitor b a [:link tag])
+  [a b])
+
+###
+### Loop processes (P1.4): spawn-loop runs a handler over [tag
+### payload reply] triples (same convention as tasklets, so the two
+### sides interoperate). Reserved tags: :down (monitor/link reports)
+### and :proc-quit (graceful stop). Reply channels must be thread
+### channels (isolated-channel replies arrive as disconnected copies
+### — the Step 1.4 lesson). Like everything else here: sends accept
+### pids, control ops (call/quit/monitor/kill) need objects.
+###
+
+(defn spawn-loop
+  "Spawn a loop process dispatching [tag payload] messages to
+  `handler` (see loop). Returns the proc."
+  [handler &opt capacity]
+  (default capacity 16)
+  (proc/spawn (fn [] (lane/dispatch (proc/self) handler)) capacity))
+
+(defn spawn-loop-isolated
+  "Strict loop: like spawn-loop, but the entry (handler included) is
+  marshal-copied and the fiber opts into the strict heap (P3.2). The
+  handler must close only over marshallable state (same rule as
+  spawn-isolated); callers reach it by pid/registry, replies route
+  through thread channels."
+  [handler &opt capacity]
+  (default capacity 16)
+  (proc/spawn-isolated
+    (fn [] (lane/dispatch (proc/self) handler)) capacity))
+
+(defn call
+  "Synchronous request/reply with a loop process (or its pid tuple).
+  Replies travel a thread channel (capability by reference; values
+  still copy). With `timeout`, raises 'proc call timed out'. Handler
+  errors re-raise."
+  [p tag payload &opt timeout]
+  (def rch (ev/thread-chan 1))
+  (proc/send p [tag payload rch])
+  (def raw
+    (if (nil? timeout)
+      (ev/take rch)
+      (do (def tch (ev/chan 1))
+        (ev/go (fn [] (ev/sleep timeout) (ev/give tch :proc-timed-out)))
+        (def sel (ev/select rch tch))
+        (if (= tch (sel 1))
+          (error "proc call timed out")
+          (sel 2)))))
+  (if (and (table? raw) (get raw :proc-error))
+    (error (raw :proc-error))
+    raw))
+
+(defn quit
+  "Gracefully stop a loop process (proc object only — tuples cannot
+  prove liveness, and an unread quit would hang). Dead fibers return
+  at once (alive? reads the struct — no reaper needed, so double-quit
+  is safe, unlike tasklet/quit's reaper race). Raw (proc/spawn) bodies
+  that never proc/recv cannot quit. Returns `p`."
+  [p]
+  (when (not (proc/pid? p)) (error "proc/quit needs a proc object"))
+  (if (not (proc/alive? p))
+    p
+    (do (def rch (ev/thread-chan 1))
+      (proc/send p [:proc-quit nil rch])
+      (ev/take rch)
+      p)))
+
+###
+### Same-VM name registry (proc-local: pids keep identity — like the
+### tasklet registry, separate namespace).
+###
+
+(var *proc-names* @{})
+
+(defn register
+  "Bind `name` to `p`'s pid tuple in the proc registry."
+  [p name]
+  (put *proc-names* name (if (proc/pid? p) (proc/pid p) p))
+  p)
+
+(defn whereis
+  "Resolve `name` to a pid tuple (or nil). Plugs into proc/send."
+  [name]
+  (get *proc-names* name))
+
+(defn unregister
+  "Remove `name` from the proc registry."
+  [name]
+  (put *proc-names* name nil))
+

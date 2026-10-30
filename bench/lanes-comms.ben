@@ -1,0 +1,109 @@
+# bench/lanes-comms.ben — cross-lane vs same-lane messaging speed.
+#
+# Measures three shapes:
+#   1. same-lane ping-pong:  two procs on ONE VM, R round trips
+#   2. cross-lane ping-pong: lane0 proc <-> lane1 proc via pid tuples
+#      (every hop marshals through the lane control channels)
+#   3. partitioned fan-out:  N actors spread across lanes, ticked like
+#      bench/agents.ben — throughput comparison vs single-VM
+#
+# Usage: bender bench/lanes-comms.ben [rounds] [actors]
+
+(def args (dyn :args))
+(def rounds (if (> (length args) 1) (parse (get args 1)) 20000))
+(def actors (if (> (length args) 2) (parse (get args 2)) 20000))
+
+(proc/lanes-start 4)
+
+# --- 1. same-lane ping-pong -------------------------------------------------
+(do
+  (def ready1 (ev/thread-chan 1))
+  (def ponger
+    (proc/spawn-local
+      (fn []
+        (def peer (proc/recv))
+        (var n 0)
+        (while (< n rounds)
+          (def m (proc/recv))
+          (proc/send peer m)
+          (++ n))
+        (proc/recv))))
+  (def pinger
+    (proc/spawn-local
+      (fn []
+        (proc/send ponger (proc/self-pid))
+        (var n 0)
+        (def t0 (os/clock))
+        (while (< n rounds)
+          (proc/send ponger n)
+          (proc/recv)
+          (++ n))
+        (eprint "same-lane:  " rounds " round trips ("
+                (* 2 rounds) " sends) in " (- (os/clock) t0) "s = "
+                (math/floor (/ (* 2 rounds) (- (os/clock) t0))) " msgs/s")
+        (proc/send ponger :bye)
+        (ev/give ready1 :s1))))
+  (ev/take ready1))
+
+# --- 2. cross-lane ping-pong ------------------------------------------------
+(do
+  (def ready2 (ev/thread-chan 1))
+  (def ponger
+    (proc/spawn  # routed -> a worker lane
+      (fn []
+        (def peer (proc/recv))
+        (var n 0)
+        (while (< n rounds)
+          (def m (proc/recv))
+          (proc/send peer m)
+          (++ n))
+        (proc/recv))))
+  (def pinger
+    (proc/spawn  # routed -> another worker lane (round-robin)
+      (fn []
+        (proc/send ponger (proc/self-pid))
+        (var n 0)
+        (def t0 (os/clock))
+        (while (< n rounds)
+          (proc/send ponger n)
+          (proc/recv)
+          (++ n))
+        (eprint "cross-lane: " rounds " round trips ("
+                (* 2 rounds) " sends) in " (- (os/clock) t0) "s = "
+                (math/floor (/ (* 2 rounds) (- (os/clock) t0))) " msgs/s")
+        (proc/send ponger :bye)
+        (ev/give ready2 :s2))))
+  (ev/take ready2))
+
+# --- 3. partitioned fan-out -------------------------------------------------
+(do
+  (def result (ev/thread-chan 16))
+  (def ready3 (ev/thread-chan 1))
+  (def collector
+    (proc/spawn-local
+      (fn []
+        (def rpid (proc/self-pid))
+        (ev/give ready3 rpid)
+        (var acc 0)
+        (var got 0)
+        (while (< got actors)
+          (def m (proc/recv))
+          (set acc (+ acc m))
+          (++ got))
+        (ev/give result acc)
+        (proc/recv))))
+  (def rpid (ev/take ready3))
+  (def t0 (os/clock))
+  (var i 0)
+  (while (< i actors)
+    (proc/spawn (fn [] (proc/send rpid 1)))
+    (++ i))
+  (def acc (ev/take result))
+  (def dt (- (os/clock) t0))
+  (eprint "fan-out:    " actors " actors across 4 lanes -> collector in "
+          dt "s (" (math/floor (/ actors dt)) " msgs/s, sum=" acc ")")
+  (proc/send collector :bye))
+
+(proc/lanes-stop)
+(eprint "LANES-COMMS-DONE")
+(os/exit 0)

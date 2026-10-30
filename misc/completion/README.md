@@ -1,25 +1,25 @@
-# Shell completions for Janet
+# Shell completions for Bender
 
-This directory contains shell completion scripts for the `janet` interpreter.
+This directory contains shell completion scripts for the `bender` interpreter.
 
 ## Bash
 
 ```sh
 # Temporary (current session only)
-source /path/to/janet.bash
+source /path/to/bender.bash
 
 # Permanent (system-wide)
-sudo cp janet.bash /etc/bash_completion.d/janet
+sudo cp bender.bash /etc/bash_completion.d/bender
 
 # Permanent (user only)
-cp janet.bash ~/.local/share/bash-completion/completions/janet
+cp bender.bash ~/.local/share/bash-completion/completions/bender
 ```
 
 ## Zsh
 
 ```sh
 # Copy to a directory in your $fpath, e.g.:
-cp janet.zsh ~/.zsh/completions/_janet
+cp bender.zsh ~/.zsh/completions/_bender
 
 # Ensure the directory is in $fpath (add to ~/.zshrc if needed):
 # fpath=(~/.zsh/completions $fpath)
@@ -29,5 +29,5 @@ cp janet.zsh ~/.zsh/completions/_janet
 ## Fish
 
 ```sh
-cp janet.fish ~/.config/fish/completions/janet.fish
+cp bender.fish ~/.config/fish/completions/bender.fish
 ```

@@ -20,17 +20,17 @@
 * IN THE SOFTWARE.
 */
 
-#ifndef JANET_SYMCACHE_H_defined
-#define JANET_SYMCACHE_H_defined
+#ifndef BENDER_SYMCACHE_H_defined
+#define BENDER_SYMCACHE_H_defined
 
-#ifndef JANET_AMALG
+#ifndef BENDER_AMALG
 #include "features.h"
-#include <janet.h>
+#include <bender.h>
 #endif
 
 /* Initialize the cache (allocate cache memory) */
-void janet_symcache_init(void);
-void janet_symcache_deinit(void);
-void janet_symbol_deinit(const uint8_t *sym);
+void bender_symcache_init(void);
+void bender_symcache_deinit(void);
+void bender_symbol_deinit(const uint8_t *sym);
 
 #endif

@@ -1,29 +1,29 @@
 {
-  "schema": "janet/benchmark-capture/1",
+  "schema": "bender/benchmark-capture/1",
   "label": "interp-6000",
   "complete": true,
-  "evidence_dir": "/Users/pankajdoharey/Development/Projects/janet/bench/results/current-game-aot-pgo-66192cee/interp-6000",
+  "evidence_dir": "/Users/pankajdoharey/Development/Projects/bender/bench/results/current-game-aot-pgo-66192cee/interp-6000",
   "command": {
     "argv": [
-      "/Users/pankajdoharey/Development/Projects/janet/build/current-game-aot-pgo-66192cee/runtime/build/bender",
-      "/Users/pankajdoharey/Development/Projects/janet/build/current-game-aot-pgo-66192cee/game-source/main.janet",
+      "/Users/pankajdoharey/Development/Projects/bender/build/current-game-aot-pgo-66192cee/runtime/build/bender",
+      "/Users/pankajdoharey/Development/Projects/bender/build/current-game-aot-pgo-66192cee/game-source/main.ben",
       "--frames",
       "6000",
       "--uncapped",
       "--world-slot",
       "15f2268da8ec2a4105ef2deaf6ae0b19",
       "--world-root",
-      "/Users/pankajdoharey/Development/Projects/janet/build/current-game-aot-pgo-66192cee/game-source/worlds-v1"
+      "/Users/pankajdoharey/Development/Projects/bender/build/current-game-aot-pgo-66192cee/game-source/worlds-v1"
     ],
-    "cwd": "/Users/pankajdoharey/Development/Projects/janet/build/current-game-aot-pgo-66192cee/game-source",
+    "cwd": "/Users/pankajdoharey/Development/Projects/bender/build/current-game-aot-pgo-66192cee/game-source",
     "stdin": "devnull",
     "env_overrides": {
-      "JANET_LANES": "0",
-      "XDG_CACHE_HOME": "/Users/pankajdoharey/Development/Projects/janet/build/current-game-aot-pgo-66192cee/cache-interp-6000",
-      "JANET_NO_PROFILE": "1"
+      "BENDER_LANES": "0",
+      "XDG_CACHE_HOME": "/Users/pankajdoharey/Development/Projects/bender/build/current-game-aot-pgo-66192cee/cache-interp-6000",
+      "BENDER_NO_PROFILE": "1"
     },
     "executable": {
-      "path": "/Users/pankajdoharey/Development/Projects/janet/build/current-game-aot-pgo-66192cee/runtime/build/bender",
+      "path": "/Users/pankajdoharey/Development/Projects/bender/build/current-game-aot-pgo-66192cee/runtime/build/bender",
       "sha256": "6e5639fdaf08e49dafeb61a08170e2c9db3a48447465fcb5a49c8b5afe50c436",
       "bytes": 1392776,
       "error": null

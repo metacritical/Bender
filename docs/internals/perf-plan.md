@@ -1,13 +1,13 @@
-# Janet performance plan — compiler work, ttfx as the sample workload
+# Bender performance plan — compiler work, ttfx as the sample workload
 
-`ttfx` (`janet-port/` in the ttfx repo) is the benchmark vehicle, not
+`ttfx` (`bender-port/` in the ttfx repo) is the benchmark vehicle, not
 the product. The product is this compiler: widening inference +
 optional `{:hint}` contracts → C kernels, hybrid boxed/native runtime,
 Erlang-style actors. Goal (2026-10-07): beat the original Rust ttfx on
 throughput (pacing disabled; e.g. decrypt 5,506 frames in 11.7 ms),
 proving the model that an easy dynamic language can squeeze the machine
 through smart compilation. Workload-side plan (bench table, ports):
-`janet-port/docs/perf-plan.md` in the ttfx repo.
+`bender-port/docs/perf-plan.md` in the ttfx repo.
 
 ## Standing gates (must stay green through all of this)
 
@@ -19,7 +19,7 @@ byte-identical to Ruby (decrypt + wipe, seed 42) · GUI renders
 ## Shipped enablers (done)
 
 - Generational slab GC + promotion barrier (`cde44a37`): dirty pages
-  at young→old transition; `JANET_GC_VERIFY` blind spot closed.
+  at young→old transition; `BENDER_GC_VERIFY` blind spot closed.
 - FFI AAPCS64 HFA fix: all-float struct args one FP register per
   element; HFA returns parsed element-wise. `DrawTextEx`/`MeasureTextEx`
   now render byte-identically to C — users bind libraries, write no C.
@@ -39,14 +39,14 @@ from evidence, not just from `:unknown`.
 ### Collection (boxed tier, dev/interpreter runs)
 
 The VM already tags every value — recording is a side table, not a
-tax on semantics. Instrument, behind a flag/env (`JANET_PROFILE=T`):
+tax on semantics. Instrument, behind a flag/env (`BENDER_PROFILE=T`):
 
 - function entry: parameter type vector per defn id;
 - call sites: argument types per caller-pc (validates candidates);
 - hot stores: slot types in counted loops (optional, phase 2);
 - returns: observed return-type lattice per defn id.
 
-Emit a profile file per project (e.g. `.janet-profile`), keyed by
+Emit a profile file per project (e.g. `.ben-profile`), keyed by
 `content-hash(defnsource) → {params, returns, counts}`. Stale on code
 change by construction (hash mismatch → entry ignored).
 
@@ -74,7 +74,7 @@ profile behave exactly as today.
 
 ### Phases
 
-1. Collector: param/return type table behind `JANET_PROFILE`,
+1. Collector: param/return type table behind `BENDER_PROFILE`,
    file format + hash invalidation. No compiler changes. SHIPPED
    2026-10-08 (debug/profile-start|stop|reset|dump, deinit auto-dump;
    378-row deterministic ttfx profile verified).
@@ -82,7 +82,7 @@ profile behave exactly as today.
    reports `profile-seed` vs `profile-conflict` per defn. SHIPPED
    2026-10-09 (unanimous seeding + `profile-seed`/`profile-conflict`
    lines with home/worker provenance; worker rows merge via
-   tools/profile-merge.janet).
+   tools/profile-merge.ben).
 3. Hot-store profiling + invalidation UX (stale-profile warnings).
 4. Evaluate: does PGO move any ttfx bench row? Keep only what
    measures. Long-term interplay with Phase 3 value types below.

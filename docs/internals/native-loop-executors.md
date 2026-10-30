@@ -1,8 +1,8 @@
 # Generated VM-frame numeric executors (stage 1 and stage 2)
 
 This tier is **off by default**, independent of scalar native wrappers. Build
-the runtime with `-DJANET_NATIVE_EXECUTORS` in CFLAGS; set the environment variable
-`JANET_NATIVE_EXECUTORS=1` when running callgraph or the `--aot --native` driver
+the runtime with `-DBENDER_NATIVE_EXECUTORS` in CFLAGS; set the environment variable
+`BENDER_NATIVE_EXECUTORS=1` when running callgraph or the `--aot --native` driver
 to request emission. Both opt-ins are necessary. A runtime built without the
 macro refuses registration and has no native-entry checks in its dispatch path.
 Do not use fast-math. Generated code disables FP contraction (including GCC's
@@ -10,13 +10,13 @@ nonstandard contraction control) and rejects `__FAST_MATH__`.
 
 ## ABI, ownership, and registration
 
-`JanetNativeCode` is linked, immutable, executable-lifetime storage containing
+`BenderNativeCode` is linked, immutable, executable-lifetime storage containing
 an entry function, exact original words, primitive constant descriptions, and
 the exact flags/arity/slot shape. It contains no GC references. The definition's
 `native_code` association is non-owning; unloading the linked code while any
 definition retains the association is outside this ABI.
 
-`janet_native_register(actual_function, descriptor)` checks all words (including
+`bender_native_register(actual_function, descriptor)` checks all words (including
 debug bits), primitive constant types and numeric bits, flags, shape, the opcode
 allowlist, and the normal bytecode verifier's operands/branch bounds. Failure
 clears the association. At native entry/re-entry the exact structural compare
@@ -26,7 +26,7 @@ amortized per (definition, descriptor) pair — see stage 2. It is not called on
 generated internal label transitions.
 
 All original slots remain boxed and GC scanned. C temporaries live only within
-one operation. Executors cannot call arbitrary Janet or invoke overloaded
+one operation. Executors cannot call arbitrary Bender or invoke overloaded
 operations. The one direct-call exception is an installed FFI alias wrapper
 (stage 2). Its arguments remain on the GC-scanned fiber stack; it uses exactly
 `JOP_CALL`'s C-frame discipline even when the C signature has no callback
@@ -59,17 +59,17 @@ resume there. Resume/cancel signals and longjmp recovery run before native
 entry. There is no batching.
 
 `quantum` is an enable flag, not the budget. Each resume resets remaining polls
-to `JANET_QUANTUM_BUDGET` (default remains 200). This compile-time constant is now
+to `BENDER_QUANTUM_BUDGET` (default remains 200). This compile-time constant is now
 overrideable for deterministic budget-1/2 tests. Budget 1 repeatedly interrupts
 the same edge without progress, preserving the existing interpreter policy.
 
 Any breakpoint in the definition prevents native entry. First-opcode breakpoint
-bypass stays boxed. `janet_step` suppresses all native entries for its dynamic
+bypass stays boxed. `bender_step` suppresses all native entries for its dynamic
 extent. Generated labels never replace original PCs or debugger metadata.
 
 ## Images and emission
 
-`tools/loop-executor.janet` lowers generic disassembled instructions directly to
+`tools/loop-executor.ben` lowers generic disassembled instructions directly to
 C labels, independently of scalar type inference and PGO. Stage 1 allows
 primitive loads, moves, numeric guarded add/subtract/multiply and comparisons,
 jumps, and VM returns. Calls, allocations, fields, closures, environments,
@@ -102,7 +102,7 @@ back to their original PC before effects:
 
 - pushes append to the live fiber argument stack after capacity/max-stack
   checks;
-- `call` uses `janet_native_alias_cfun` to recognize only the installed FFI
+- `call` uses `bender_native_alias_cfun` to recognize only the installed FFI
   alias shape the VM's own fast path accepts, polls once, and calls through a
   GC-scanned C frame. After storing the result and checking GC, it exits at
   the **next** PC for revalidation. A non-alias call exits before effects at
@@ -111,7 +111,7 @@ back to their original PC before effects:
   capacity; first allocation/growth exits to the VM;
 - `next` handles arrays, tuples, strings, and buffers with nil/integral keys;
   tables, structs, abstracts, fibers, and non-integral keys exit to
-  `janet_next_impl`;
+  `bender_next_impl`;
 - `geti` handles arrays, tuples, string-like values, and buffers with the
   out-of-range nil rule;
 - primitive equality handles numbers and same-typed primitive values;
@@ -120,8 +120,8 @@ back to their original PC before effects:
 Explicit VM boundaries remain `tcall`, `get`, `put`, `len`, `in` (boxed
 exception path), `mkarr`, `mkbuf`, `mktup`, and the whole divide/modulo family
 (`div`, `divim`, `divf`, `mod`, `rem`). Boundary words are still compared
-exactly in `janet_native_matches`; generated code never executes them. Each
-region exits with `JANET_NATIVE_VM` at the boundary's original unexecuted PC
+exactly in `bender_native_matches`; generated code never executes them. Each
+region exits with `BENDER_NATIVE_VM` at the boundary's original unexecuted PC
 and ordinary dispatch performs the effect exactly once. No native local pointer
 or cached value survives the exit. `PUSH` state is on the live scanned fiber
 stack, so a fallback after pushes is ordinary VM state.
@@ -130,7 +130,7 @@ Constants use an explicit **opaque runtime load** policy. Primitive
 (nil/boolean/finite-number) constants keep exact bit matching.
 Everything else — functions, cfunctions, keywords, strings, tables,
 arrays, buffers, non-finite numbers — is described as
-`JANET_NATIVE_OPAQUE`: the generated `ldc` reads the current pool value
+`BENDER_NATIVE_OPAQUE`: the generated `ldc` reads the current pool value
 into a scanned frame slot at execution time and the descriptor assumes
 nothing about identity or contents. Descriptors therefore contain no GC
 pointers, and mutating or swapping an opaque constant is observed live.
@@ -153,12 +153,12 @@ bit, a raw constant/bytecode edit while parked) forces the compare
 again at the next region entry. At every epoch the exact structural
 compare runs in full — scalars, every bytecode word (including debug
 bits), primitive constant bits and the opcode allowlist. The
-`janet_verify` well-formedness gate is amortized to the first
+`bender_verify` well-formedness gate is amortized to the first
 validation of a (definition, descriptor) pair: verify is deterministic
 over exactly the fields the structural compare already checks, with
 only debug symbolmap data falling outside them, and no supported path
 mutates a definition after creation. Registration and lazy attachment
-always run the full `janet_native_matches` (structure plus verify).
+always run the full `bender_native_matches` (structure plus verify).
 The cache never replaces the compare; it only skips re-proving a
 verdict that nothing could have invalidated. Concurrent unsynchronized
 C mutation during a resume remains unsupported, as before.
@@ -167,7 +167,7 @@ C mutation during a resume remains unsupported, as before.
 process registry at `native_init`. The registry is indexed by a cheap
 exact key — the scalar shape fields plus a rolling hash over every
 bytecode word, computed once at publication. An attach attempt hashes
-the definition once and runs the full `janet_native_matches` compare
+the definition once and runs the full `bender_native_matches` compare
 only on a key hit; definitions with no key hit do zero verify work. A
 64-bit key collision costs one wasted exact compare (the key is a
 filter, never proof); the exact word compare decides. Constant entries
@@ -198,8 +198,8 @@ per VM attach attempts/attached/ambiguous/nomatch, total VM exits, and
 exits by opcode (the opcode at each native-to-VM region exit; boundary
 ops reached only via boxed dispatch after another boundary are not
 region exits). Counter increments are compiled only when
-`JANET_NATIVE_TELEMETRY` is nonzero; `--release` passes
-`-DJANET_NATIVE_TELEMETRY=0`, while ordinary profiling/AOT builds default
+`BENDER_NATIVE_TELEMETRY` is nonzero; `--release` passes
+`-DBENDER_NATIVE_TELEMETRY=0`, while ordinary profiling/AOT builds default
 it to 1 so counters remain diagnostic. The stat readers still exist and
 report zero when disabled.
 
@@ -232,7 +232,7 @@ refuse attachment as structurally ambiguous; they stay boxed. No
 timing claim is made.
 
 After an enabled build, run `sh test/suite-native-executor.sh` from the repository
-root with private `JANET_AOT_TEST_ROOT` and `XDG_CACHE_HOME` set. It uses unique
+root with private `BENDER_AOT_TEST_ROOT` and `XDG_CACHE_HOME` set. It uses unique
 scratch roots, emits genuine sum/nested/fractional executors, proves image-time
 registration and entry/backedge counters through a boxed caller, and builds:
 
@@ -258,7 +258,7 @@ without sleeps or timing assertions.
 Existing PGO multiseed/release/autopgo, array-result, joint-dispatch, hinted-export,
 hinted-callgraph, AOT quantum, and UBSan quantum suites passed in the integration
 worktree. The existing event-loop quantum suite's ASan run aborts in shared-stack
-re-priming (`janet_fiber_ctx_prime`, fiber.c:417), reproducing with executors
+re-priming (`bender_fiber_ctx_prime`, fiber.c:417), reproducing with executors
 compiled out. The native executor harness's ASan run passes, but reports ASan's
 alternate-stack warning. This is not a clean full shared-stack ASan validation.
 No benchmark or application-specific lowering is part of this stage.
@@ -266,7 +266,7 @@ No benchmark or application-specific lowering is part of this stage.
 ## 2026-10-21 release CLI A/B: historical, not a shipping win
 
 The expanded executor prototype (`ttfx-cli-rel6`) was built with
-`JANET_NATIVE_EXECUTORS`, two isolated PGO collections and verified
+`BENDER_NATIVE_EXECUTORS`, two isolated PGO collections and verified
 `--release`; executor telemetry was compiled out. It generated 76 frame
 executor descriptors alongside nine scalar native helpers. A same-sitting,
 seven-round paired A/B against the already-shipped `ttfx-cli-rel2` used the
@@ -330,7 +330,7 @@ attach. It passes with ASan/UBSan; no assertion was removed.
 
 The enabled runtime also has a cheap *no-descriptor* dispatch gate: it
 starts dormant, activates on explicit registration or descriptor publication,
-and accounts for linked registrations surviving `janet_deinit`/`janet_init`.
+and accounts for linked registrations surviving `bender_deinit`/`bender_init`.
 The same-compiler macro-enabled **default-off** CLI baseline gained
 **1.067×** geometric-mean throughput across five effects in seven paired
 release rounds. This reduces the cost of compiling executor support into

@@ -9,7 +9,7 @@
 %%
 %% Build: erlc wave.erl
 %% Run:   erl -noshell +P 8000000 -pa . -eval 'wave:main(["1000000"]),halt().'
-%% Emits one machine-readable line, mirrored by wave.janet and wave.go.
+%% Emits one machine-readable line, mirrored by wave.ben and wave.go.
 -module(wave).
 -export([main/1]).
 

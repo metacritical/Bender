@@ -1,15 +1,15 @@
 {
   "tag": "baseline",
   "argv": [
-    "/tmp/janet-current-game-ab-6a4f008b/build/bender",
-    "/tmp/janet-current-game-ab-evidence/game-source/main.janet",
+    "/tmp/bender-current-game-ab-6a4f008b/build/bender",
+    "/tmp/bender-current-game-ab-evidence/game-source/main.ben",
     "--frames",
     "6000",
     "--uncapped",
     "--world-slot",
     "15f2268da8ec2a4105ef2deaf6ae0b19",
     "--world-root",
-    "/tmp/janet-current-game-ab-evidence/game-source/worlds-v1"
+    "/tmp/bender-current-game-ab-evidence/game-source/worlds-v1"
   ],
   "exit": 0,
   "termination_reason": null,

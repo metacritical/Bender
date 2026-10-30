@@ -20,7 +20,7 @@
 * IN THE SOFTWARE.
 */
 
-#include <janet.h>
+#include <bender.h>
 #include <assert.h>
 
 #include "tests.h"
@@ -28,37 +28,37 @@
 int array_test() {
 
     int i;
-    JanetArray *array1, *array2;
+    BenderArray *array1, *array2;
 
-    array1 = janet_array(10);
-    array2 = janet_array(0);
+    array1 = bender_array(10);
+    array2 = bender_array(0);
 
-    janet_array_push(array1, janet_cstringv("one"));
-    janet_array_push(array1, janet_cstringv("two"));
-    janet_array_push(array1, janet_cstringv("three"));
-    janet_array_push(array1, janet_cstringv("four"));
-    janet_array_push(array1, janet_cstringv("five"));
-    janet_array_push(array1, janet_cstringv("six"));
-    janet_array_push(array1, janet_cstringv("seven"));
+    bender_array_push(array1, bender_cstringv("one"));
+    bender_array_push(array1, bender_cstringv("two"));
+    bender_array_push(array1, bender_cstringv("three"));
+    bender_array_push(array1, bender_cstringv("four"));
+    bender_array_push(array1, bender_cstringv("five"));
+    bender_array_push(array1, bender_cstringv("six"));
+    bender_array_push(array1, bender_cstringv("seven"));
 
     assert(array1->count == 7);
     assert(array1->capacity >= 7);
-    assert(janet_equals(array1->data[0], janet_cstringv("one")));
+    assert(bender_equals(array1->data[0], bender_cstringv("one")));
 
-    janet_array_push(array2, janet_cstringv("one"));
-    janet_array_push(array2, janet_cstringv("two"));
-    janet_array_push(array2, janet_cstringv("three"));
-    janet_array_push(array2, janet_cstringv("four"));
-    janet_array_push(array2, janet_cstringv("five"));
-    janet_array_push(array2, janet_cstringv("six"));
-    janet_array_push(array2, janet_cstringv("seven"));
+    bender_array_push(array2, bender_cstringv("one"));
+    bender_array_push(array2, bender_cstringv("two"));
+    bender_array_push(array2, bender_cstringv("three"));
+    bender_array_push(array2, bender_cstringv("four"));
+    bender_array_push(array2, bender_cstringv("five"));
+    bender_array_push(array2, bender_cstringv("six"));
+    bender_array_push(array2, bender_cstringv("seven"));
 
     for (i = 0; i < array2->count; i++) {
-        assert(janet_equals(array1->data[i], array2->data[i]));
+        assert(bender_equals(array1->data[i], array2->data[i]));
     }
 
-    janet_array_pop(array1);
-    janet_array_pop(array1);
+    bender_array_pop(array1);
+    bender_array_pop(array1);
 
     assert(array1->count == 5);
 

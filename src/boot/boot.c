@@ -20,23 +20,23 @@
 * IN THE SOFTWARE.
 */
 
-#include <janet.h>
+#include <bender.h>
 #include "tests.h"
 
-#ifdef JANET_WINDOWS
+#ifdef BENDER_WINDOWS
 #include <direct.h>
 #define chdir(x) _chdir(x)
 #else
 #include <unistd.h>
 #endif
 
-extern const unsigned char *janet_gen_boot;
-extern int32_t janet_gen_boot_size;
+extern const unsigned char *bender_gen_boot;
+extern int32_t bender_gen_boot_size;
 
 int main(int argc, const char **argv) {
 
-    /* Init janet */
-    janet_init();
+    /* Init bender */
+    bender_init();
 
     /* Run tests */
     array_test();
@@ -49,32 +49,32 @@ int main(int argc, const char **argv) {
 
     /* Set up VM */
     int status;
-    JanetTable *env;
+    BenderTable *env;
 
-    env = janet_core_env(NULL);
+    env = bender_core_env(NULL);
 
     /* Create args tuple */
-    JanetArray *args = janet_array(argc);
+    BenderArray *args = bender_array(argc);
     for (int i = 0; i < argc; i++)
-        janet_array_push(args, janet_cstringv(argv[i]));
-    janet_def(env, "boot/args", janet_wrap_array(args), "Command line arguments.");
+        bender_array_push(args, bender_cstringv(argv[i]));
+    bender_def(env, "boot/args", bender_wrap_array(args), "Command line arguments.");
 
-    /* Add in options from janetconf.h so boot.janet can configure the image as needed. */
-    JanetTable *opts = janet_table(0);
-#ifdef JANET_NO_DOCSTRINGS
-    janet_table_put(opts, janet_ckeywordv("no-docstrings"), janet_wrap_true());
+    /* Add in options from benderconf.h so boot.ben can configure the image as needed. */
+    BenderTable *opts = bender_table(0);
+#ifdef BENDER_NO_DOCSTRINGS
+    bender_table_put(opts, bender_ckeywordv("no-docstrings"), bender_wrap_true());
 #endif
-#ifdef JANET_NO_SOURCEMAPS
-    janet_table_put(opts, janet_ckeywordv("no-sourcemaps"), janet_wrap_true());
+#ifdef BENDER_NO_SOURCEMAPS
+    bender_table_put(opts, bender_ckeywordv("no-sourcemaps"), bender_wrap_true());
 #endif
-    janet_def(env, "boot/config", janet_wrap_table(opts), "Boot options");
+    bender_def(env, "boot/config", bender_wrap_table(opts), "Boot options");
 
     /* Run bootstrap script to generate core image */
     const char *boot_filename;
-#ifdef JANET_NO_SOURCEMAPS
+#ifdef BENDER_NO_SOURCEMAPS
     boot_filename = NULL;
 #else
-    boot_filename = "boot.janet";
+    boot_filename = "boot.ben";
 #endif
 
     int chdir_status = chdir(argv[1]);
@@ -83,9 +83,9 @@ int main(int argc, const char **argv) {
         exit(1);
     }
 
-    FILE *boot_file = fopen("src/boot/boot.janet", "rb");
+    FILE *boot_file = fopen("src/boot/boot.ben", "rb");
     if (NULL == boot_file) {
-        fprintf(stderr, "Could not open src/boot/boot.janet\n");
+        fprintf(stderr, "Could not open src/boot/boot.ben\n");
         exit(1);
     }
 
@@ -93,7 +93,7 @@ int main(int argc, const char **argv) {
     fseek(boot_file, 0, SEEK_END);
     size_t boot_size = ftell(boot_file);
     fseek(boot_file, 0, SEEK_SET);
-    unsigned char *boot_buffer = janet_malloc(boot_size);
+    unsigned char *boot_buffer = bender_malloc(boot_size);
     if (NULL == boot_buffer) {
         fprintf(stderr, "Failed to allocate boot buffer\n");
         exit(1);
@@ -104,15 +104,15 @@ int main(int argc, const char **argv) {
     }
     fclose(boot_file);
 
-    status = janet_dobytes(env, boot_buffer, (int32_t) boot_size, boot_filename, NULL);
-    janet_free(boot_buffer);
+    status = bender_dobytes(env, boot_buffer, (int32_t) boot_size, boot_filename, NULL);
+    bender_free(boot_buffer);
 
     fprintf(stderr, "total bytecode instructions created: %" PRIi64 "\n", total_instruction_count);
     fprintf(stderr, "total function definitions optimized: %" PRIi64 "\n", total_funcdefs_optimized);
     fprintf(stderr, "total optimization loops executed: %" PRIi64 "\n", total_optimize_fixpoint_loops);
 
     /* Deinitialize vm */
-    janet_deinit();
+    bender_deinit();
 
     return status;
 }

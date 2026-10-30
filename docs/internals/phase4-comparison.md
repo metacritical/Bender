@@ -1,4 +1,4 @@
-# Phase 4: Janet vs Go vs Erlang on nominally identical work
+# Phase 4: Bender vs Go vs Erlang on nominally identical work
 
 > **Correction notice (docs audit).** An earlier revision of this file stated
 > several things as established that the preserved evidence does not support.
@@ -20,7 +20,7 @@ process adds 1 and forwards, the last reports.
 
 Sources actually present in the tree:
 
-- Janet: `bench/wave.janet` (also the parity variant `bench/cross-runtime/wave.janet`)
+- Bender: `bench/wave.ben` (also the parity variant `bench/cross-runtime/wave.ben`)
 - Go: `bench/wave-go.go` (also `bench/cross-runtime/wave.go`)
 - Erlang: `bench/wave.erl`
 
@@ -35,15 +35,15 @@ This matters for reading the table, and it is visible in the source:
   `total` that is `spawn + wave`.
 - `bench/wave.erl:10-18` prints the same three phases from
   `erlang:monotonic_time`.
-- `bench/wave.janet:9-29` prints the same three phases to **stderr** via
+- `bench/wave.ben:9-29` prints the same three phases to **stderr** via
   `eprintf` (line 27), and prints nothing to stdout.
 
 Two asymmetries are structural, not measurement noise:
 
-1. **Verification.** The retained `bench/wave.janet` never asserts. It computes
+1. **Verification.** The retained `bench/wave.ben` never asserts. It computes
    `result` and prints it (lines 24, 27-28). The `assert (= result n "...")` that
    an earlier revision of this doc described ("`result == N` in all runs below")
-   exists only in `bench/cross-runtime/wave.janet:37`, which is a different
+   exists only in `bench/cross-runtime/wave.ben:37`, which is a different
    file with a different output format (`spawn_ms=`/`wave_ms=`). So the phase-4
    table cannot have been checked by the assertion it claimed.
 2. **Erlang timeout is indistinguishable from success by number alone.**
@@ -55,36 +55,36 @@ Two asymmetries are structural, not measurement noise:
 ## Results (reported, no retained artifact)
 
 These are the numbers the phase-4 run printed. They are not reproducible from
-anything committed, and the Janet numbers are not cross-checked by an
+anything committed, and the Bender numbers are not cross-checked by an
 assertion (see above).
 
-| N | Go | Erlang | Janet |
+| N | Go | Erlang | Bender |
 |---|---|---|---|
 | 100,000 | **131 ms** | 182 ms | **1,538 ms** |
 | 200,000 | — | — | 4,051 ms |
 | 400,000 | — | — | 9,357 ms |
 | 1,000,000 | **2,430 ms** | **1,869 ms** | no retained result |
 
-The Janet 1M cell previously read "not completed in 600 s". That claim rests on
+The Bender 1M cell previously read "not completed in 600 s". That claim rests on
 a session transcript, not on an artifact: no timeout record, no killed-process
 status, and no partial output for that arm survive in the repository. The
 transcript also indicates the run was terminated by the operator's own later
 `pkill` and that a shell pipeline returned `0` regardless of the child's
 failure, so even the transcript does not establish 600 s of elapsed work. Treat
-the 1M Janet arm as **no retained measurement**, not as a timeout.
+the 1M Bender arm as **no retained measurement**, not as a timeout.
 
-## The answer to "does Janet beat Go on the wave?"
+## The answer to "does Bender beat Go on the wave?"
 
-On the reported numbers, Janet is far slower per hop at 100k: ~12x slower than
+On the reported numbers, Bender is far slower per hop at 100k: ~12x slower than
 Go, ~8x slower than Erlang. The retained controlled evidence below has no Go
 or Erlang arm and cannot verify these ratios. The *shape* of the growth is where the earlier
 revision overreached.
 
-The earlier revision claimed Janet is superlinear while "both others are
+The earlier revision claimed Bender is superlinear while "both others are
 linear". Its own reported numbers contradict that:
 
 ```
-Janet:   100k 15.4 us/hop   200k 20.3 us/hop   400k 23.4 us/hop
+Bender:   100k 15.4 us/hop   200k 20.3 us/hop   400k 23.4 us/hop
          2x N -> 2.3-2.6x time
 Go:      100k -> 1M is 18.5x for 10x N   <- labelled "(linear)"
 Erlang:  100k -> 1M is 10.3x for 10x N   <- labelled "(linear)"
@@ -96,7 +96,7 @@ proven scaling law. Neither pair establishes a general curve. The harness also
 prints total time including spawn (`bench/wave-go.go:25-28`); without the raw
 phase records, the table cannot partition build and traversal costs.
 
-Per-hop, the reported split is Janet ~15 us, Go ~1.3 us, Erlang ~1.9 us at 100k.
+Per-hop, the reported split is Bender ~15 us, Go ~1.3 us, Erlang ~1.9 us at 100k.
 Those three figures come from dividing single reported totals by N; they are
 not independently measured per-hop costs.
 
@@ -107,7 +107,7 @@ one, so no amount of lanes can parallelise the traversal. It measures
 per-message latency through a process chain, not parallel throughput.
 
 One caveat the earlier revision omitted: the reported `total` includes the
-**spawn/build phase** (`bench/wave.janet:12-22`, `bench/wave-go.go:12-21`,
+**spawn/build phase** (`bench/wave.ben:12-22`, `bench/wave-go.go:12-21`,
 `bench/wave.erl:10-13`). A 1M arm therefore reports build cost plus traversal
 cost, and the two are not separated in the summary table. `spawn` and `wave` are
 printed separately by all three harnesses, but the phase-4 doc kept only the
@@ -116,7 +116,7 @@ totals.
 The earlier revision's comparison table mixed this benchmark with unrelated
 claims:
 
-| workload | Janet | notes |
+| workload | Bender | notes |
 |---|---|---|
 | chain of N (this benchmark) | ~12x slower than Go | latency-bound, single chain |
 | independent fan-out (earlier phase) | 6.6-7.4x faster than sequential | uses all lanes |
@@ -125,18 +125,18 @@ claims:
 The fan-out and "trivial units" rows are **not** comparisons against Go and are
 not reproduced here; the 6.6x figure traces to
 `docs/internals/concurrency-visual-guide.md:416` ("34 ms parallel vs 223 ms
-sequential -- 6.6x on 11 lanes"), which is Janet against Janet. A throughput
+sequential -- 6.6x on 11 lanes"), which is Bender against Bender. A throughput
 number divided over a sequential baseline is not a Go comparison. Quoting the
 three rows side by side invited exactly that misreading.
 
-## Retained controlled evidence (the only reproducible Janet data)
+## Retained controlled evidence (the only reproducible Bender data)
 
 `bench/results/phase4-controlled-35671ede/` holds the pinned-revision scaling
 run, with `legacy-scale.jsonl` carrying all trials (no selected minima) at
 source `35671ede`. Wave phase, three fresh subprocesses per arm, all
 `returncode=0` and `correct=true`:
 
-| forwarding actors | `JANET_LANES=0` wave ms (median [min,max]) | `JANET_LANES=2` wave ms |
+| forwarding actors | `BENDER_LANES=0` wave ms (median [min,max]) | `BENDER_LANES=2` wave ms |
 |---:|---:|---:|
 | 1,000 | 95 [95, 101] | 6 [5, 8] |
 | 2,000 | 380 [377, 385] | 12 [11, 14] |
@@ -181,24 +181,24 @@ The reported micro-table was:
 
 - No script in `bench/` produces the 0.12/0.14 us marshal rows, and no retained
   output records them. They are reported only.
-- `bench/lane-rt.janet` does not measure a rendezvous hop. `bench/lane-rt.janet:13-14`
+- `bench/lane-rt.ben` does not measure a rendezvous hop. `bench/lane-rt.ben:13-14`
   creates `ev/thread-chan 64` — a **buffered** channel — for both directions, so
   the sender need not wait for the receiver to rendezvous, and the loop at
   line 18 measures one request followed by one reply, not streaming throughput. Its same-VM arm
   (line 6, `ev/chan 1`) is also buffered. Its cross-lane echo proc is itself
   lane-routed (`proc/spawn`, line 15); its placement and channel operations are
   part of the measured path.
-- `bench/hops.janet:14-29` spawns idle filler procs and hammers a 2-proc echo
+- `bench/hops.ben:14-29` spawns idle filler procs and hammers a 2-proc echo
   chain. It varies live-set size only; the chain length is fixed at two. It
   cannot separate chain length from live-set growth because the N-chain runs were
   never re-run under this harness.
 - A `sample` capture during a run does show the main thread parked in
-  `janet_loop1 -> kevent`
+  `bender_loop1 -> kevent`
   (`bench/results/phase4-controlled-35671ede/lanes2-100k.sample.txt`: 1212 of
-  the 1739 main-thread samples sit under `start -> main -> janet_loop1 ->
-  kevent`, with most of the remainder under `janet_fiber_shared_prime`; the
-  second thread, `janet_lane_thread_body`, is 1344 of 1739 in `kevent` and shows
-  only ~15 samples in `janet_thread_chan_cb`/`janet_unmarshal`). But that process
+  the 1739 main-thread samples sit under `start -> main -> bender_loop1 ->
+  kevent`, with most of the remainder under `bender_fiber_shared_prime`; the
+  second thread, `bender_lane_thread_body`, is 1344 of 1739 in `kevent` and shows
+  only ~15 samples in `bender_thread_chan_cb`/`bender_unmarshal`). But that process
   was **killed by the runner** (`lanes2-100k-profile.json`, `returncode: -9`), so
   those samples are overwhelmingly of idle event loops waiting for a chain that
   never finished — the sample shows the loops are parked, not what a hop costs.
@@ -206,7 +206,7 @@ The reported micro-table was:
 - The other retained sample,
   `bench/results/phase4-controlled-35671ede/local8000.sample.txt`, has **zero**
   `kevent` frames and puts 4,148 of 4,151 main-thread samples under
-  `janet_collect_fiber_minor`. So the one profile that is dense enough to see
+  `bender_collect_fiber_minor`. So the one profile that is dense enough to see
   work sees GC, not poll wakeup — in the lane-off placement.
 
 The retained data establishes placement-sensitive wall time, not a partition
@@ -223,7 +223,7 @@ conclusion claims:
    7.99 us/hop at 0 / 50k / 100k / 200k idle live procs. Reported flat across live-set
    size, a limited observation for *that* harness. But the flat arm is
    a `proc/spawn` (lane-routed) 2-proc echo chain
-   (`bench/hops.janet:21-29`; the trailing `8` is the mailbox **capacity**
+   (`bench/hops.ben:21-29`; the trailing `8` is the mailbox **capacity**
    argument, `src/core/proc.c:1245-1248`, not a lane index), while the
    superlinear curve came from the lane-off N-chain. The two arms are not the
    same placement, so the flat result does not transfer to the lane-off curve.
@@ -255,7 +255,7 @@ collection (which `local8000.sample.txt` independently points at).
    retained trials, and there the lane-off arm does grow steeply
    (95 → 380 → 1515 ms for 1k → 2k → 4k, i.e. 4x per doubling — steeper than
    the reported 2.3-2.6x). No cause is isolated. `local8000.sample.txt` (4,148
-   of 4,151 samples in `janet_collect_fiber_minor`) makes completion-time
+   of 4,151 samples in `bender_collect_fiber_minor`) makes completion-time
    collection the leading suspect for the lane-off placement specifically.
 3. **1M does not finish.** No retained artifact exists in either direction. The
    memory argument below is an inference, not a measurement.
@@ -277,9 +277,9 @@ establish that the wave would fit; residency and traversal working set differ.
   samples retained, no selected minima"
   (`bench/results/phase4-controlled-35671ede/README.md`). The phase-4 table
   itself has one number per cell with no repeat count recorded.
-- **`result == N` was claimed on every run; the retained `bench/wave.janet`
+- **`result == N` was claimed on every run; the retained `bench/wave.ben`
   never asserts it** (lines 24, 27-28 only print). Assertion exists only in
-  `bench/cross-runtime/wave.janet:37`. For the phase-4 table, verification is
+  `bench/cross-runtime/wave.ben:37`. For the phase-4 table, verification is
   unverified.
 - Machine state was reported as unclean: load average ~4.5 and swap in use
   throughout. If true, the Go and Erlang arms are inflated too, but neither ratios nor

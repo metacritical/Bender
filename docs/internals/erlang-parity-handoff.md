@@ -4,7 +4,7 @@
 Written to be revived in a fresh session with no prior context. Every claim
 here is backed by a commit, a measurement, or an explicit "not verified" label.
 
-**Repo**: `/Users/pankajdoharey/Development/Projects/janet`
+**Repo**: `/Users/pankajdoharey/Development/Projects/bender`
 **Session date**: 2026-10-16
 **HEAD at handoff**: `9961fc12`
 **Branch**: `master` (277+ commits ahead of `origin/master`)
@@ -14,14 +14,14 @@ here is backed by a commit, a measurement, or an explicit "not verified" label.
 ## 0. TL;DR for whoever picks this up
 
 - **Messaging/spawn scaling: FIXED.** Four real O(n²) mechanisms found and
-  fixed. `bench/agents.janet` went from hanging at N=20000 to completing
+  fixed. `bench/agents.ben` went from hanging at N=20000 to completing
   through N=1,000,000. All dual-target verified.
 - **Erlang gap quantified honestly**: Erlang still beats us 9x–200x. Root
   cause is architectural (M:N scheduler), **not** GC — proven by same-machine
   measurement, see §3.
 - **One real bug UNSOLVED and PARKED**: intermittent `lanes=8` crash (§5.1).
   Root-caused via ASAN, two fix attempts failed verification, both reverted.
-- **M4b "true preemption" was re-scoped by measurement** (§4.2): Janet-level
+- **M4b "true preemption" was re-scoped by measurement** (§4.2): Bender-level
   preemption already works and is ON by default. Only narrow C-code-preemption
   and task-migration remain. **Not** a prerequisite for actor workloads.
 - **Recommended next item**: ⚠️ **finish Phase 2b first — it is NOT complete.**
@@ -60,9 +60,9 @@ All four were verified with the full discipline described in §7.
 - **Status**: SHIPPED, verified. This was the big one.
 - **Files**: `src/core/gc.c` (+64), `src/core/gc.h` (+14),
   `src/core/ev.c` (+46), `src/core/util.h` (+5), `docs/internals/proc-lanes.md`
-- **Root cause**: `janet_sweep_fiber_owned` (`gc.c` ~1740) called
-  `janet_sweep_kind(..., walk_fibers=1)`, which loops over **every fiber in
-  the global census** on every call. `janet_collect_fiber_minor` calls it once
+- **Root cause**: `bender_sweep_fiber_owned` (`gc.c` ~1740) called
+  `bender_sweep_kind(..., walk_fibers=1)`, which loops over **every fiber in
+  the global census** on every call. `bender_collect_fiber_minor` calls it once
   per actor per minor → a loop over N called N times → **O(n²) by direct code
   inspection**, no profiling ambiguity.
 - **Historical context (found via `git log`)**: commit `a739009e` (P3.5b)
@@ -73,11 +73,11 @@ All four were verified with the full discipline described in §7.
   `heap_strict == 0`, so they fell into the wide path purely from that
   conjunction. A known, acknowledged, never-closed gap — not a new bug.
 - **Fix**: route any `f->proc != NULL` fiber (strict or plain) to the
-  already-existing, already-proven `janet_sweep_proc_owned` (narrow, O(own)).
-- **Also in this commit**: `janet_gc_mark_fiber_shallow` (`gc.c:576`, declared
-  `gc.h:148`) and `janet_ev_mark_shallow` (`ev.c:777`, declared `util.h:297`).
+  already-existing, already-proven `bender_sweep_proc_owned` (narrow, O(own)).
+- **Also in this commit**: `bender_gc_mark_fiber_shallow` (`gc.c:576`, declared
+  `gc.h:148`) and `bender_ev_mark_shallow` (`ev.c:777`, declared `util.h:297`).
   A scoped fiber-minor only needs to protect a queued fiber's own block from
-  being swept, not deep-walk its entire stack. `janet_mark_roots` (global
+  being swept, not deep-walk its entire stack. `bender_mark_roots` (global
   minor/major) unchanged — still fully deep.
 
 ### 1.3 `69e40dc9` → `a03f07bd` → `2e0e4a45` — the `xfb` remembered set (3 iterations)
@@ -98,20 +98,20 @@ All four were verified with the full discipline described in §7.
 - **Iteration 3 (`2e0e4a45`) — the committed form**: **true owner-bucketing at
   insert time.** Fixed 4096-slot chained hash table keyed by owner, populated
   at the same single insert site (owner already computed there).
-  - Symbols: `JANET_XFB_NBUCKETS` (`gc.c:1013`), `struct JanetXfbBucketNode`
+  - Symbols: `BENDER_XFB_NBUCKETS` (`gc.c:1013`), `struct BenderXfbBucketNode`
     (`gc.c:1014`), `ss->xfb_buckets` (`gc.c:1107`),
-    `janet_xfb_bucket_append` (`gc.c:1124`), `janet_xfb_buckets_free`
-    (`gc.c:1126`), `janet_xfb_mark_owned`.
+    `bender_xfb_bucket_append` (`gc.c:1124`), `bender_xfb_buckets_free`
+    (`gc.c:1126`), `bender_xfb_mark_owned`.
   - O(1) amortized insert, O(1) hash lookup + O(own entries) scan, no sort.
   - Verified via lldb: chain length ~25 (4096 slots / ~100k owners), per-owner
     entries ~2 — performing exactly as designed.
   - Safety argument: `page->owner` has exactly ONE write site (fresh page
     allocation) and is never reassigned; the only transition is
     `owner=K → mixed/0`, and a mixed-page object is already immune to any
-    single-owner scoped sweep (traced `janet_sweep_list`'s own filter). So a
+    single-owner scoped sweep (traced `bender_sweep_list`'s own filter). So a
     stale cached owner can never cause a premature free.
   - The main `ss->xfb` array, its insertion order, and
-    `janet_slab_owner_stats`' rollback truncation are **untouched** — buckets
+    `bender_slab_owner_stats`' rollback truncation are **untouched** — buckets
     are a parallel additive dual-write, freed (not rolled back) at
     major-reset and VM clear.
 
@@ -124,18 +124,18 @@ All four were verified with the full discipline described in §7.
   path on every one of its own (frequent) minors.
 - **Critical prerequisite checked, not assumed**: the P3.5b-era warning
   ("full narrowing crashes boot image generation deterministically") was
-  **re-tested against the exact historical scenario** — `build/janet_boot`'s
+  **re-tested against the exact historical scenario** — `build/bender_boot`'s
   actual bootstrap image generation, 3/3 runs, producing **byte-identical**
-  `janet.c` each time. Plus all 60 `test/suite-*.janet` files individually,
+  `bender.c` each time. Plus all 60 `test/suite-*.ben` files individually,
   and `suite-lanes`' 640k-density join (8.02s, matching historical baseline).
   Zero behavioral difference. Whatever caused the historical crash was fixed
   by other work in the interim.
-- **Fix**: `janet_sweep_proc_owned` is now the universal default for **every**
+- **Fix**: `bender_sweep_proc_owned` is now the universal default for **every**
   fiber. The wide path is kept as dead code behind `#if 0` in
-  `janet_sweep_fiber_owned` (`gc.c` ~1740) **for bisection** if the historical
+  `bender_sweep_fiber_owned` (`gc.c` ~1740) **for bisection** if the historical
   failure mode ever resurfaces.
 
-### 1.5 Measured outcome (`bench/agents.janet`, interpreter, `JANET_NO_PROFILE=1`)
+### 1.5 Measured outcome (`bench/agents.ben`, interpreter, `BENDER_NO_PROFILE=1`)
 
 | N | before | after |
 |---|---|---|
@@ -149,15 +149,15 @@ All four were verified with the full discipline described in §7.
 
 ## 2. FINISHED — Multi-thread scaling validation
 
-### 2.1 `79a0135c` — new benchmark: `bench/agents-multithread.janet`
+### 2.1 `79a0135c` — new benchmark: `bench/agents-multithread.ben`
 - **Status**: SHIPPED, verified (interpreter + AOT).
-- **File**: `bench/agents-multithread.janet` (new, 86 lines)
+- **File**: `bench/agents-multithread.ben` (new, 86 lines)
 - **What**: spawns N independent `thread/new` workers (share-nothing isolated
   VMs, true multi-core), each running its own self-contained copy of the
-  `bench/agents.janet` actor-burst kernel, then `thread/join` aggregates.
-  Distinct from `bench/agents-lanes.janet`, which splits ONE workload across
+  `bench/agents.ben` actor-burst kernel, then `thread/join` aggregates.
+  Distinct from `bench/agents-lanes.ben`, which splits ONE workload across
   lane workers via `proc/spawn` routing.
-- **Usage**: `bender bench/agents-multithread.janet [N] [T] [THREADS]`
+- **Usage**: `bender bench/agents-multithread.ben [N] [T] [THREADS]`
   (N = actors **per thread**, default 100/4/20)
 
 ### 2.2 Escalation series (`72fb07a4`, `4e0662f7`, `8fdb873d`) — all PASS
@@ -177,8 +177,8 @@ All four were verified with the full discipline described in §7.
   fix what happens inside one.
 - Rising sys/user ratio (1.5x→19.7x) = real OS thread/VM-creation contention
   as a separate, growing cost layer.
-- Also verified: `bench/agents.janet` at N=50/100 and
-  `test/scale-proc-chain.janet` at N=50/100 all PASS; `bench/concurrency.janet`
+- Also verified: `bench/agents.ben` at N=50/100 and
+  `test/scale-proc-chain.ben` at N=50/100 all PASS; `bench/concurrency.ben`
   all 9 micro-benches complete.
 
 ---
@@ -189,7 +189,7 @@ All four were verified with the full discipline described in §7.
 - **Build/run**: `cd bench && erlc agents_erl.erl && erl -noshell -run agents_erl main N T -s init stop`
 - **Erlang/OTP 29** (`/opt/homebrew/bin/erl`), same machine, same actor kernel shape.
 
-| N | Janet (single VM) | Erlang (one node) | Erlang advantage |
+| N | Bender (single VM) | Erlang (one node) | Erlang advantage |
 |---|---|---|---|
 | 2,000 | 14,573 msgs/s | 1,000,000 msgs/s | ~69x |
 | 5,000 | 103,477 msgs/s | 952,380 msgs/s | ~9.2x |
@@ -214,35 +214,35 @@ All four were verified with the full discipline described in §7.
 ## 4. FINISHED — M4b investigation (re-scoped, not implemented)
 
 ### 4.1 `0d90e346` — re-verified already-shipped preemption machinery
-- `test/suite-interrupt.janet` 15/15 PASS, `test/suite-quantum.janet` 16/16 PASS
+- `test/suite-interrupt.ben` 15/15 PASS, `test/suite-quantum.ben` 16/16 PASS
   on current HEAD. The shipped `ev/interrupt` + `ev/timeslice` mechanisms
   (M4b-1, M4b-2 per `aot-plan.md`) are solid.
 
 ### 4.2 `9961fc12` — **M4b re-scoped by measurement** (important)
 - **Finding 1**: the "missing" hard C primitive **already exists and is
-  already public**. `janet_loop1_interrupt(JanetVM *vm)` (`ev.c` ~2461,
-  declared `src/include/janet.h` ~1621) already cross-thread-interrupts a
-  target VM by handle (`janet_interpreter_interrupt`, atomic inc on
+  already public**. `bender_loop1_interrupt(BenderVM *vm)` (`ev.c` ~2461,
+  declared `src/include/bender.h` ~1621) already cross-thread-interrupts a
+  target VM by handle (`bender_interpreter_interrupt`, atomic inc on
   `vm->auto_suspend`, `state.c:63`) **and** breaks it out of a blocking
-  event-loop wait via self-pipe post. `janet.h` explicitly documents it as
+  event-loop wait via self-pipe post. `bender.h` explicitly documents it as
   callable from "library code, **a signal handler, or another thread**", with
   a documented usage pattern. The timeout path already uses it in production
   (`ev.c:966`).
-- **Finding 2 (A/B measured, not assumed)**: Janet-level CPU-hog preemption
+- **Finding 2 (A/B measured, not assumed)**: Bender-level CPU-hog preemption
   **already works and is ON by default**. Probe: one 80M-iteration zero-yield
   CPU-bound fiber racing one light fiber (5× `ev/sleep 0.01`):
 
   | config | light-done | hog-done | verdict |
   |---|---|---|---|
-  | `JANET_TIMESLICE=0` (quanta OFF) | 1.278s | 1.224s | **STARVED** |
+  | `BENDER_TIMESLICE=0` (quanta OFF) | 1.278s | 1.224s | **STARVED** |
   | default (quanta ON) | **0.049s** | 1.276s | **PREEMPTED** |
 
   The off-case reproducing starvation exactly is what makes this conclusive.
 - **What actually remains in M4b** (per `ev/timeslice`'s docstring, quanta
-  "never land inside C calls or pcall regions — poll points are Janet ops
+  "never land inside C calls or pcall regions — poll points are Bender ops
   only"):
   1. Async preemption of **non-cooperating C code** (FFI/blocking C calls).
-     `janet_loop1_interrupt` is already the signal-safe primitive — the work
+     `bender_loop1_interrupt` is already the signal-safe primitive — the work
      is a signal handler + policy, **not** new core scheduler plumbing.
   2. **Running-task migration** (suspended stack + VM-local waits: channels,
      timeouts, supervisors — the semantics surface is the work).
@@ -258,21 +258,21 @@ All four were verified with the full discipline described in §7.
 **Status**: root-caused, two fix attempts FAILED verification, both REVERTED.
 `src/core/ev.c` is confirmed back to its unmodified committed state.
 
-- **Repro (fast)**: `JANET_NO_PROFILE=1 ./build/bender bench/agents-lanes.janet 5000 4 8`
+- **Repro (fast)**: `BENDER_NO_PROFILE=1 ./build/bender bench/agents-lanes.ben 5000 4 8`
   — crashes ~75–100% of attempts, ~0.06–0.1s per non-crashing run. (N=20000
   crashes at the same rate but is much slower; use N=5000.)
-- **Crash signature**: always `janet_chan_pack` → `janet_malloc` (`ev.c:1001`),
-  reached via `cfun_proc_send` → `janet_channel_push` →
-  `janet_channel_push_with_lock`. macOS malloc freelist-corruption detector
+- **Crash signature**: always `bender_chan_pack` → `bender_malloc` (`ev.c:1001`),
+  reached via `cfun_proc_send` → `bender_channel_push` →
+  `bender_channel_push_with_lock`. macOS malloc freelist-corruption detector
   (`EXC_BREAKPOINT` in `_xzm_xzone_malloc_freelist_outlined`), i.e. the
   classic signature of an **earlier** heap overrun discovered later.
 - **ASAN-confirmed real bug** (2/2 identical reproductions):
-  heap-use-after-free at `janet_chanat_mark` (`ev.c:1325/1330`, the channel
-  abstract's `gcmark` callback) → `janet_mark` → `janet_mark_tuple`/
-  `janet_mark_array`. A 32-byte region **allocated by one lane thread, freed
+  heap-use-after-free at `bender_chanat_mark` (`ev.c:1325/1330`, the channel
+  abstract's `gcmark` callback) → `bender_mark` → `bender_mark_tuple`/
+  `bender_mark_array`. A 32-byte region **allocated by one lane thread, freed
   by another, read by a third**.
-- **Confirmed defect by code reading**: `janet_chanat_mark` **never calls
-  `janet_chan_lock`**, while every other access to the same
+- **Confirmed defect by code reading**: `bender_chanat_mark` **never calls
+  `bender_chan_lock`**, while every other access to the same
   `read_pending`/`write_pending`/`items` queues does.
 - **Fix attempt 1 — lock held across the whole mark**: 20/20 clean at N=5000,
   **but** N=20000 showed a NEW failure mode absent from baseline — severe
@@ -282,7 +282,7 @@ All four were verified with the full discipline described in §7.
 - **Fix attempt 2 — snapshot under lock, release, then mark from the copy**:
   did **not** fix the crash (15/15 crashed at N=5000), and the crash moved to
   the snapshot code's **own new allocation**, meaning the heap was already
-  corrupted before `janet_chanat_mark` ran in that instance. This undermines
+  corrupted before `bender_chanat_mark` ran in that instance. This undermines
   confidence that the missing lock is the sole (or real) cause. REVERTED.
 - **Baseline re-confirmed**: unmodified code crashes 8/8 at N=20000, always
   within 0–1s, **never hangs** — so attempt 1's hang was genuinely new.
@@ -299,14 +299,14 @@ All four were verified with the full discipline described in §7.
   `d5a1a421`, `14b426fb`, `f62eabf3`, `f5fd36a6`, `9ac90672`, `925fd117`.
 
 ### 5.2 ⚠️ UNSOLVED: `lanes=0` baseline-path hang
-- `bench/agents-lanes.janet 5000 4 0` hangs/times out (exit 124), while
+- `bench/agents-lanes.ben 5000 4 0` hangs/times out (exit 124), while
   `lanes=4`/`lanes=8` work. Pre-existing bug in that script's single-VM
   baseline path. **Not investigated at all.** Lower priority.
 
-### 5.3 ⚠️ FILED NOT FIXED: `janet_profile_call` use-after-free
-- ASAN: `READ of size 8` at `vm.c:607`, inside `janet_profile_call`
+### 5.3 ⚠️ FILED NOT FIXED: `bender_profile_call` use-after-free
+- ASAN: `READ of size 8` at `vm.c:607`, inside `bender_profile_call`
   (function starts `vm.c:576`), during ordinary **single-threaded** PGO
-  auto-profiling — triggered just by running `tools/patch-header.janet`
+  auto-profiling — triggered just by running `tools/patch-header.ben`
   during a normal build with profiling left on.
 - Freed region was 1072 bytes, freed by `realloc` on the SAME thread (T0)
   that later reads it. The loop at `vm.c:605-610` reads `argv[i]` (:607) and
@@ -317,46 +317,46 @@ All four were verified with the full discipline described in §7.
   needs to happen before `pa` is captured. Not confirmed — but the fix
   location is narrow and the read/write sites are only 5 lines apart.
 - Found incidentally under ASAN. Unrelated to lanes. Not investigated further.
-- **Workaround when debugging other things**: `JANET_NO_PROFILE=1`.
+- **Workaround when debugging other things**: `BENDER_NO_PROFILE=1`.
 
 ### 5.4 ⚠️ FILED NOT FIXED: teardown-order use-after-free
-- `janet_clear_memory` (`gc.c:3131`) → `janet_deinit_block` (`gc.c:687`) →
-  `janet_table_put`/`janet_table_remove` (`table.c:114/211`) → `janet_equals`
+- `bender_clear_memory` (`gc.c:3131`) → `bender_deinit_block` (`gc.c:687`) →
+  `bender_table_put`/`bender_table_remove` (`table.c:114/211`) → `bender_equals`
   (`value.c:244`) reads freed memory, after
-  `janet_abstract_decref_maybe_free` freed it earlier in the SAME
-  `janet_clear_memory` call (`gc.c:3093`). During
-  `janet_thread_new_run`'s `janet_try_init`/`janet_deinit` (thread shutdown).
-- Found under ASAN on `test/suite-proc.janet`. Not investigated.
+  `bender_abstract_decref_maybe_free` freed it earlier in the SAME
+  `bender_clear_memory` call (`gc.c:3093`). During
+  `bender_thread_new_run`'s `bender_try_init`/`bender_deinit` (thread shutdown).
+- Found under ASAN on `test/suite-proc.ben`. Not investigated.
 
 ### 5.5 ✅ RESOLVED (2026-10-17 session): residual O(n)-per-minor cost
 - N=20000 → N=100000 was 4.0s → 98s; per-minor cost ~0.2ms → ~0.9ms (a ~4.5x
   per-call increase for 5x N) → something still scaled ~O(n) per minor call.
   Minor count confirmed ≈ N (one per actor), nurseries correctly tiny.
-- **Root cause FOUND and FIXED — it was NOT `janet_sweep_drain_pending`.**
+- **Root cause FOUND and FIXED — it was NOT `bender_sweep_drain_pending`.**
   The handoff's sweep_pending tail-walk hypothesis is DISPROVED: the drain
   runs after every minor and empties the list, so its cost is amortized
   O(deaths since last drain), which stays tiny. (Found by code inspection
   before profiling; confirmed by not appearing in the profile at all.)
 - **Actual root cause** (macOS `sample`, clean non-ASAN rebuild, N=100000
-  mid-run: **97% of all samples** in `janet_collect_fiber_minor` at the
-  `janet_reset_threaded_visited_minor()` call, gc.c:2582 in the pre-fix
-  tree): that function walks the ENTIRE `janet_vm.threaded_abstracts`
+  mid-run: **97% of all samples** in `bender_collect_fiber_minor` at the
+  `bender_reset_threaded_visited_minor()` call, gc.c:2582 in the pre-fix
+  tree): that function walks the ENTIRE `bender_vm.threaded_abstracts`
   registry table — a capacity-sized loop over every channel/abstract ever
   registered (~2 per proc, so ≈O(N), and capacity never shrinks) — after
   EVERY fiber minor. Minors ≈ N → **O(N²) total**, exactly the measured
   ~O(n)-per-minor shape.
 - **Fix**: replaced the registry's boolean "visited this cycle" marker with
-  a per-collection **cycle stamp** (`JanetVM.gc_visit_cycle`, uint32,
-  bumped inside `janet_gc_epoch_next` which already runs exactly once at
+  a per-collection **cycle stamp** (`BenderVM.gc_visit_cycle`, uint32,
+  bumped inside `bender_gc_epoch_next` which already runs exactly once at
   the start of every collection). "Visited this collection" =
-  `value == cycle` (helper `janet_threaded_visited`, gc.c). Deleted the
+  `value == cycle` (helper `bender_threaded_visited`, gc.c). Deleted the
   whole-registry reset pass and its three call sites; updated the mark-site
-  flip (gc.c ~200) and `janet_sweep`'s unvisited test (gc.c ~956).
+  flip (gc.c ~200) and `bender_sweep`'s unvisited test (gc.c ~956).
   Writers of `false` (abstract.c registration/re-arm, marsh.c transfer,
-  janet_sweep's post-major reset, tombstones) remain valid — false and
+  bender_sweep's post-major reset, tombstones) remain valid — false and
   stale stamps both read as "not visited"; the nil→incref single-claim
   semantics are preserved exactly.
-- **Numbers** (`bench/agents.janet`, interpreter, `JANET_NO_PROFILE=1`,
+- **Numbers** (`bench/agents.ben`, interpreter, `BENDER_NO_PROFILE=1`,
   clean rebuild, same machine): N=20000 ticks 4.49s → **1.43s** (3.1x);
   N=100000 ticks 113.4s → **26.5s** (4.3x). 20k→100k is now 18.5x wall
   for 5x N — better but still superlinear; a further residual term
@@ -365,11 +365,11 @@ All four were verified with the full discipline described in §7.
 - **Verification**: full battery per §8 — proc/thread/ev/marsh/mailbox/
   pool/gc-minor suites (proc 98/99 pre-existing flake "both land",
   reproduced 3/3 on stashed clean baseline; AOT proc is 99/99), AOT
-  dual-target green, `JANET_GC_VERIFY`/`JANET_HEAP_VERIFY`/`JANET_PROC_VERIFY`
+  dual-target green, `BENDER_GC_VERIFY`/`BENDER_HEAP_VERIFY`/`BENDER_PROC_VERIFY`
   runs green, gcsetinterval 65536 stress on suite-boot/ev green, C
   regressions: threaded-abstract-mark-claim PASS, ev-selfpipe x2 PASS,
   gc-pcall fail = known pre-existing.
-- Secondary candidates from the old §5.5 text (`janet_slab_page_for`
+- Secondary candidates from the old §5.5 text (`bender_slab_page_for`
   binary search; per-minor `getenv` calls) are real but were noise-level
   in this profile; the reset pass was ~97% of the story.
 
@@ -379,9 +379,9 @@ but unverified in this tree):
 1. Two channels per proc (mailbox cap 16 + supervisor cap 8) allocated
    eagerly whether or not anyone monitors → lazy-allocate both.
    **B6 finding (code-verified + implemented, uncommitted)**: the mbox is
-   now LAZY (NULL at birth, `janet_proc_ensure_mbox` materializes it on
+   now LAZY (NULL at birth, `bender_proc_ensure_mbox` materializes it on
    first send/try-send/recv/pid; capacity kept in a new
-   `JanetProcess.mbox_cap`). Safe because every cross-file consumer already
+   `BenderProcess.mbox_cap`). Safe because every cross-file consumer already
    null-guards (ev.c retire at ~2371, gc.c mark at ~2797, proc.c kill) and
    the core/proc abstract never leaves its home VM (marshal refuses), so
    ensure-on-first-use has no cross-thread race; pid tuples carry the
@@ -394,7 +394,7 @@ but unverified in this tree):
    drop late-registered reapers' events. Measured (isolated clean builds,
    alternating runs, quiet machine): spawn-only path (procs that never
    touch their mailbox) 3.22 → 3.03 µs/spawn median (~6%, ≈ the threaded
-   channel's malloc+mutex+cond cost); `bench/agents.janet` spawn-rate
+   channel's malloc+mutex+cond cost); `bench/agents.ben` spawn-rate
    unchanged (~230k/s both — every actor recv's immediately, so the alloc
    just moves to first recv; net zero there, real win only for
    never-messaged procs). Full battery dual-target identical (98/99 proc —
@@ -407,7 +407,7 @@ but unverified in this tree):
    **B6 finding: the copy IS the P3.2 isolation semantic** — captured
    values arrive by value; the P3.3 export-rule tests depend on it. Erlang
    can skip the copy because module code is globally shared and immutable;
-   a Janet closure's funcdef/funcenv are parent-heap GC objects, so passing
+   a Bender closure's funcdef/funcenv are parent-heap GC objects, so passing
    the entry by reference would hang the strict child's heap attribution
    off the parent's heap (exactly what per-proc sweeps and the strict bit
    exist to prevent). A capture-free-closure carve-out is conceivable but
@@ -421,16 +421,16 @@ but unverified in this tree):
 4. Per-spawn GC bookkeeping: census insert, handle rooting, owner-id
    assignment, nursery accounting → "registration-free liveness".
    **B6 finding: all of these live in gc.c** (census insert at fiber
-   birth, slab owner filing in `janet_gcalloc`/`janet_slab_alloc`) — not
+   birth, slab owner filing in `bender_gcalloc`/`bender_slab_alloc`) — not
    editable under B6's constraints. Read-only analysis: the census insert
    IS the fiber-liveness mechanism ("registration-free liveness" already
    exists in the sense that the census replaces explicit rooting for
-   fibers); the `janet_gcroot(proc_j)`/`gcunroot` pair in proc.c covers
+   fibers); the `bender_gcroot(proc_j)`/`gcunroot` pair in proc.c covers
    the handle across the attributed-construction try block and cannot be
    dropped without reordering allocation so the abstract is born last —
    a gc.c-coupled refactor for ~two hash ops. Design note only.
 5. Scheduler enqueue + supervisor wiring. **B6 finding: already minimal.**
-   `janet_schedule` = flag check + one `active_tasks` table put (first
+   `bender_schedule` = flag check + one `active_tasks` table put (first
    schedule only) + one ring-buffer queue push (ev.c ~695); supervisor
    wiring is a single pointer store. Nothing avoidable or sensibly
    deferrable.
@@ -472,23 +472,23 @@ Both low priority, neither on the critical path.
 ### Working ASAN recipe (CRITICAL — plain ASAN does NOT work on this codebase)
 Plain `-fsanitize=address` produces **false-positive `stack-buffer-overflow`**
 reports on ordinary, correct, single-threaded code (confirmed on
-`test/suite-proc.janet`) — Janet's user-space fiber stack switching confuses
+`test/suite-proc.ben`) — Bender's user-space fiber stack switching confuses
 ASan's shadow-stack tracking. Adding `-mllvm -asan-stack=0` disables ONLY the
 stack instrumentation, keeps heap/global instrumentation fully active, and
 eliminates the false positive while still catching real heap bugs:
 
 ```sh
 make clean
-JANET_NO_PROFILE=1 make \
+BENDER_NO_PROFILE=1 make \
   CFLAGS="-O1 -g -fsanitize=address -fno-omit-frame-pointer -mllvm -asan-stack=0" \
   LDFLAGS="-fsanitize=address" -j4
-JANET_NO_PROFILE=1 ./build/bender <script>
+BENDER_NO_PROFILE=1 ./build/bender <script>
 ```
-(`JANET_NO_PROFILE=1` avoids conflating with §5.3's profiling UAF. `-O1`, not
+(`BENDER_NO_PROFILE=1` avoids conflating with §5.3's profiling UAF. `-O1`, not
 `-O0`: readable traces without the slowdown.)
 
 **This single discovery unblocks ASAN-based debugging for this codebase
-generally.** Remember to `make clean && JANET_NO_PROFILE=1 make -j4` afterward
+generally.** Remember to `make clean && BENDER_NO_PROFILE=1 make -j4` afterward
 to restore a normal build.
 
 ### Other tools used
@@ -498,15 +498,15 @@ to restore a normal build.
 - **lldb repeated-run capture** for intermittent crashes:
   ```sh
   cat > /tmp/l.txt <<'EOF'
-  run bench/agents-lanes.janet 5000 4 8
+  run bench/agents-lanes.ben 5000 4 8
   bt all
   quit
   EOF
   for i in 1 2 3; do timeout 15 lldb -b -s /tmp/l.txt ./build/bender 2>&1 | grep -A8 "stop reason"; done
   ```
-- **Built-in instrumentation**: `JANET_ROOT_TRACE=1` (prints `[CFM2]` per
-  fiber-minor: count, fiber, owner, nursery, xfb size), `JANET_GC_VERIFY=1`,
-  `JANET_HEAP_VERIFY=1`, `JANET_PROC_VERIFY=1`, `JANET_GC_COUNT` (compile-time).
+- **Built-in instrumentation**: `BENDER_ROOT_TRACE=1` (prints `[CFM2]` per
+  fiber-minor: count, fiber, owner, nursery, xfb size), `BENDER_GC_VERIFY=1`,
+  `BENDER_HEAP_VERIFY=1`, `BENDER_PROC_VERIFY=1`, `BENDER_GC_COUNT` (compile-time).
 - **`sample`** (macOS) for profiles — but note its inlined call graphs are
   ambiguous at `-O2`; lldb `bt` is authoritative. Several wrong turns this
   session came from over-reading `sample` output.
@@ -518,30 +518,30 @@ to restore a normal build.
 Every shipped commit in §1–§3 passed ALL of:
 1. **Interpreter suites**: `proc`(99) `thread`(30) `ev`(776) `marsh`(73)
    `mailbox`(76) `pool`(56) — all green.
-2. **AOT dual-target**: `./build/bender --aot test/suite-X.janet -o build/aot/suite-X-aot`
+2. **AOT dual-target**: `./build/bender --aot test/suite-X.ben -o build/aot/suite-X-aot`
    then run the binary. Identical counts both targets. This also exercises
-   `tools/mkimage.janet`'s image-generation path.
-3. **Instrumented runs**: `JANET_GC_VERIFY`, `JANET_HEAP_VERIFY`,
-   `JANET_PROC_VERIFY`.
+   `tools/mkimage.ben`'s image-generation path.
+3. **Instrumented runs**: `BENDER_GC_VERIFY`, `BENDER_HEAP_VERIFY`,
+   `BENDER_PROC_VERIFY`.
 4. **Baseline comparison for every anomaly**: any flagged failure was checked
    against a clean `git stash` baseline before being accepted as pre-existing.
    Several were (and are genuinely pre-existing — see below).
 5. **C regressions**: `test/c/test-threaded-abstract-mark-claim.c`,
    `test-ev-selfpipe-interrupt.c`, `test-ev-selfpipe-saturation.c`,
-   `test-gc-pcall.c` — compiled fresh against `build/janet.o` and run.
-6. **Re-benchmarked** `bench/agents.janet` at multiple N after each fix.
+   `test-gc-pcall.c` — compiled fresh against `build/bender.o` and run.
+6. **Re-benchmarked** `bench/agents.ben` at multiple N after each fix.
 
 ### Known pre-existing failures (NOT regressions — confirmed on clean baseline)
 - `test/c/test-gc-pcall.c` — fails on clean baseline too.
-- `JANET_GC_VERIFY=1` + `test/suite-ev.janet` — "young unmarked … minor mark
+- `BENDER_GC_VERIFY=1` + `test/suite-ev.ben` — "young unmarked … minor mark
   incomplete" aborts; byte-identical on clean pre-session baseline. Matches
   commit `a739009e`'s own note ("GC_VERIFY-over-boot abort is pre-existing").
-- `JANET_PROC_VERIFY=1` + `test/suite-proc.janet` — "foreign fiber field holds
+- `BENDER_PROC_VERIFY=1` + `test/suite-proc.ben` — "foreign fiber field holds
   swept candidate"; reproduces identically on baseline.
-- `test/suite-lanes.janet` needs >30s (passes fully at 120s: "640k-park stop
+- `test/suite-lanes.ben` needs >30s (passes fully at 120s: "640k-park stop
   in 8.02s").
-- `test/suite-shared.janet` SKIPs without `JANET_SHARED_STACKS=1`.
-- `test/scale-proc-chain.janet 100000` does not finish in 140s — also on the
+- `test/suite-shared.ben` SKIPs without `BENDER_SHARED_STACKS=1`.
+- `test/scale-proc-chain.ben 100000` does not finish in 140s — also on the
   clean pre-session baseline (historical "19-24s" claim is stale).
 - Transient `"failed to write event to self-pipe"` aborts under heavy parallel
   system load — non-deterministic, not a regression.
@@ -567,9 +567,9 @@ Do not jump phases. The corrected order is §9.3.
 |---|---|---|
 | **Phase 1** | Revival + completion on muse-spark-1.3 | **DONE** |
 | **Phase 2b — collector swap** (`aot-plan.md` §"Phase 2b", line 184: *"NEXT; not started"* header is itself now stale — slices landed individually) | three ordered slices, see below | ⚠️ **INCOMPLETE** |
-| ↳ 2b-i | scoped roots for generated/C code (`janet_gcshadow_push/mark/pop_to`) | **DONE** |
-| ↳ 2b-ii | immutable-string heap split (`JanetVM.string_blocks`) | **DONE** |
-| ↳ 2b-iii | slab/size-class allocator + generations | **DONE, including policy** — storage (16 KiB pages, 8 size classes 32–512B) AND the generational/sweep policy both landed: per-page age (young 0–1, old 2+), dirty flags, write barriers in table/array store primitives, minors skipping old-clean containers, `test/suite-gc-minor.janet` torture gate, `JANET_GC_VERIFY` minor-edge verifier. The earlier "policy open" row here was doc drift vs aot-plan.md's "Policy done (this checkout)" — corrected 2026-10-17 after code inspection + gate runs (gc-minor 12/12, gcsetinterval 65536 stress on boot/ev, GC_VERIFY green) |
+| ↳ 2b-i | scoped roots for generated/C code (`bender_gcshadow_push/mark/pop_to`) | **DONE** |
+| ↳ 2b-ii | immutable-string heap split (`BenderVM.string_blocks`) | **DONE** |
+| ↳ 2b-iii | slab/size-class allocator + generations | **DONE, including policy** — storage (16 KiB pages, 8 size classes 32–512B) AND the generational/sweep policy both landed: per-page age (young 0–1, old 2+), dirty flags, write barriers in table/array store primitives, minors skipping old-clean containers, `test/suite-gc-minor.ben` torture gate, `BENDER_GC_VERIFY` minor-edge verifier. The earlier "policy open" row here was doc drift vs aot-plan.md's "Policy done (this checkout)" — corrected 2026-10-17 after code inspection + gate runs (gc-minor 12/12, gcsetinterval 65536 stress on boot/ev, GC_VERIFY green) |
 | ↳ "GC hardening" steps 1–5 | separate hardening pass (not the collector swap) | **DONE** |
 | ↳ **per-proc GC independence** | the full collector swap goal | ⚠️ **DESIGN NOTE WRITTEN** — `docs/internals/per-proc-gc-independence.md` (scoped 5-slice plan reusing owner attribution, per-fiber heap_lists, xfb buckets, narrow sweeps; first milestone = per-owner slab arenas). Not implemented |
 | **Phase 3** | named registry; supervision-tree library; M:N scheduler core / resident-proc migration | ⚠️ **NOT STARTED** (see §9.4) |
@@ -581,14 +581,14 @@ Do not jump phases. The corrected order is §9.3.
 1. **Finish Phase 2b first.**
    a. **2b-iii policy work** — the generational/sweep policy left open after
       storage landed. Note this session's four messaging fixes (§1) all live
-      in exactly this machinery (`janet_sweep_proc_owned`, the `xfb`
-      buckets, `janet_gc_mark_fiber_shallow`), so the area is freshly
+      in exactly this machinery (`bender_sweep_proc_owned`, the `xfb`
+      buckets, `bender_gc_mark_fiber_shallow`), so the area is freshly
       understood — good time to close it.
    b. **Per-proc GC independence** (§5.8) — the actual Phase 2b collector-swap
       goal, and the gap table's own "NEXT after Phase 1" item.
    c. **Residual O(n)-per-minor cost** (§5.5) — belongs here too: it IS
       per-minor collector policy, with a specific untested candidate
-      (`janet_sweep_drain_pending`'s global tail-walk, `gc.c:1702`) and a
+      (`bender_sweep_drain_pending`'s global tail-walk, `gc.c:1702`) and a
       likely-simple fix (incremental tail pointer).
 2. **`lanes=8` crash** (§5.1) — blocks trusting the lanes/M:N path, which
    Phase 3's M:N-scheduler-core item builds on. Fix before depending on lanes.

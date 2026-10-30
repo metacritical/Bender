@@ -1,5 +1,5 @@
 #include <stdlib.h>
-#include <janet.h>
+#include <bender.h>
 
 typedef struct {
     double *data;
@@ -7,13 +7,13 @@ typedef struct {
 } num_array;
 
 static num_array *num_array_init(num_array *array, size_t size) {
-    array->data = (double *)janet_calloc(size, sizeof(double));
+    array->data = (double *)bender_calloc(size, sizeof(double));
     array->size = size;
     return array;
 }
 
 static void num_array_deinit(num_array *array) {
-    janet_free(array->data);
+    bender_free(array->data);
 }
 
 static int num_array_gc(void *p, size_t s) {
@@ -23,30 +23,30 @@ static int num_array_gc(void *p, size_t s) {
     return 0;
 }
 
-int num_array_get(void *p, Janet key, Janet *out);
-void num_array_put(void *p, Janet key, Janet value);
+int num_array_get(void *p, Bender key, Bender *out);
+void num_array_put(void *p, Bender key, Bender value);
 
-static const JanetAbstractType num_array_type = {
+static const BenderAbstractType num_array_type = {
     "numarray",
     num_array_gc,
     NULL,
     num_array_get,
     num_array_put,
-    JANET_ATEND_PUT
+    BENDER_ATEND_PUT
 };
 
-static Janet num_array_new(int32_t argc, Janet *argv) {
-    janet_fixarity(argc, 1);
-    int32_t size = janet_getinteger(argv, 0);
-    num_array *array = (num_array *)janet_abstract(&num_array_type, sizeof(num_array));
+static Bender num_array_new(int32_t argc, Bender *argv) {
+    bender_fixarity(argc, 1);
+    int32_t size = bender_getinteger(argv, 0);
+    num_array *array = (num_array *)bender_abstract(&num_array_type, sizeof(num_array));
     num_array_init(array, size);
-    return janet_wrap_abstract(array);
+    return bender_wrap_abstract(array);
 }
 
-static Janet num_array_scale(int32_t argc, Janet *argv) {
-    janet_fixarity(argc, 2);
-    num_array *array = (num_array *)janet_getabstract(argv, 0, &num_array_type);
-    double factor = janet_getnumber(argv, 1);
+static Bender num_array_scale(int32_t argc, Bender *argv) {
+    bender_fixarity(argc, 2);
+    num_array *array = (num_array *)bender_getabstract(argv, 0, &num_array_type);
+    double factor = bender_getnumber(argv, 1);
     size_t i;
     for (i = 0; i < array->size; i++) {
         array->data[i] *= factor;
@@ -54,58 +54,58 @@ static Janet num_array_scale(int32_t argc, Janet *argv) {
     return argv[0];
 }
 
-static Janet num_array_sum(int32_t argc, Janet *argv) {
-    janet_fixarity(argc, 1);
-    num_array *array = (num_array *)janet_getabstract(argv, 0, &num_array_type);
+static Bender num_array_sum(int32_t argc, Bender *argv) {
+    bender_fixarity(argc, 1);
+    num_array *array = (num_array *)bender_getabstract(argv, 0, &num_array_type);
     double sum = 0;
     for (size_t i = 0; i < array->size; i++) sum += array->data[i];
-    return janet_wrap_number(sum);
+    return bender_wrap_number(sum);
 }
 
-void num_array_put(void *p, Janet key, Janet value) {
+void num_array_put(void *p, Bender key, Bender value) {
     size_t index;
     num_array *array = (num_array *)p;
-    if (!janet_checkint(key))
-        janet_panic("expected integer key");
-    if (!janet_checktype(value, JANET_NUMBER))
-        janet_panic("expected number value");
+    if (!bender_checkint(key))
+        bender_panic("expected integer key");
+    if (!bender_checktype(value, BENDER_NUMBER))
+        bender_panic("expected number value");
 
-    index = (size_t)janet_unwrap_integer(key);
+    index = (size_t)bender_unwrap_integer(key);
     if (index < array->size) {
-        array->data[index] = janet_unwrap_number(value);
+        array->data[index] = bender_unwrap_number(value);
     }
 }
 
-static Janet num_array_length(int32_t argc, Janet *argv) {
-    janet_fixarity(argc, 1);
-    num_array *array = (num_array *)janet_getabstract(argv, 0, &num_array_type);
-    return janet_wrap_number(array->size);
+static Bender num_array_length(int32_t argc, Bender *argv) {
+    bender_fixarity(argc, 1);
+    num_array *array = (num_array *)bender_getabstract(argv, 0, &num_array_type);
+    return bender_wrap_number(array->size);
 }
 
-static const JanetMethod methods[] = {
+static const BenderMethod methods[] = {
     {"scale", num_array_scale},
     {"sum", num_array_sum},
     {"length", num_array_length},
     {NULL, NULL}
 };
 
-int num_array_get(void *p, Janet key, Janet *out) {
+int num_array_get(void *p, Bender key, Bender *out) {
     size_t index;
     num_array *array = (num_array *)p;
-    if (janet_checktype(key, JANET_KEYWORD))
-        return janet_getmethod(janet_unwrap_keyword(key), methods, out);
-    if (!janet_checkint(key))
-        janet_panic("expected integer key");
-    index = (size_t)janet_unwrap_integer(key);
+    if (bender_checktype(key, BENDER_KEYWORD))
+        return bender_getmethod(bender_unwrap_keyword(key), methods, out);
+    if (!bender_checkint(key))
+        bender_panic("expected integer key");
+    index = (size_t)bender_unwrap_integer(key);
     if (index >= array->size) {
         return 0;
     } else {
-        *out = janet_wrap_number(array->data[index]);
+        *out = bender_wrap_number(array->data[index]);
     }
     return 1;
 }
 
-static const JanetReg cfuns[] = {
+static const BenderReg cfuns[] = {
     {
         "new", num_array_new,
         "(numarray/new size)\n\n"
@@ -124,6 +124,6 @@ static const JanetReg cfuns[] = {
     {NULL, NULL, NULL}
 };
 
-JANET_MODULE_ENTRY(JanetTable *env) {
-    janet_cfuns(env, "numarray", cfuns);
+BENDER_MODULE_ENTRY(BenderTable *env) {
+    bender_cfuns(env, "numarray", cfuns);
 }

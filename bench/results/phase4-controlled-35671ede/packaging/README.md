@@ -6,13 +6,13 @@ Script execution compiles/evaluates individual top-level forms; `mkimage` compil
 
 ## Discriminating experiment
 
-Run the original `bench/cross-runtime/wave.janet` and a source with the same forms grouped inside one top-level `do`, using the **same interpreter executable**. N forwarding actors and the sink, receive/increment/send operations, completion assertion, and result output remain. `do` changes lexical compilation scope by design; this is a test of top-level compilation shape, not an identical object-graph control.
+Run the original `bench/cross-runtime/wave.ben` and a source with the same forms grouped inside one top-level `do`, using the **same interpreter executable**. N forwarding actors and the sink, receive/increment/send operations, completion assertion, and result output remain. `do` changes lexical compilation scope by design; this is a test of top-level compilation shape, not an identical object-graph control.
 
 All36 subprocesses exited0 with result=N:
 - `packaging-control.jsonl`:24 rotated normal/grouped trials, three repetitions, N1000/2000, baseline and post-fix binaries. Grouped source uses three-decimal phase timing; all raw values retained.
 - `packaging-exact-control.jsonl`:12 confirming grouped-source trials with the **original integer-ms format**, removing output-format/constant differences as an explanation.
 
-Baseline interpreter: `/tmp/janet-wave-controlled-35671ede/build/bender`, SHA07e766fb28ab15eb78d563bbdc2e7c9a9b2adf86e187df0d6b705c7d6648151c. Post-fix interpreter: clean-helper candidate at `/tmp/janet-wave-candidate-35671ede/build/bender`, measured collector patch archived in `../candidate/collector-candidate.patch`; same source base/runtime flags with collector change. No new compiler-profile flags.
+Baseline interpreter: `/tmp/bender-wave-controlled-35671ede/build/bender`, SHA07e766fb28ab15eb78d563bbdc2e7c9a9b2adf86e187df0d6b705c7d6648151c. Post-fix interpreter: clean-helper candidate at `/tmp/bender-wave-candidate-35671ede/build/bender`, measured collector patch archived in `../candidate/collector-candidate.patch`; same source base/runtime flags with collector change. No new compiler-profile flags.
 
 ## Results
 

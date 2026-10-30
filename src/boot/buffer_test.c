@@ -20,7 +20,7 @@
 * IN THE SOFTWARE.
 */
 
-#include <janet.h>
+#include <bender.h>
 #include <assert.h>
 
 #include "tests.h"
@@ -28,27 +28,27 @@
 int buffer_test() {
 
     int i;
-    JanetBuffer *buffer1, *buffer2;
+    BenderBuffer *buffer1, *buffer2;
 
-    buffer1 = janet_buffer(100);
-    buffer2 = janet_buffer(0);
+    buffer1 = bender_buffer(100);
+    buffer2 = bender_buffer(0);
 
-    janet_buffer_push_cstring(buffer1, "hello, world!\n");
+    bender_buffer_push_cstring(buffer1, "hello, world!\n");
 
-    janet_buffer_push_u8(buffer2, 'h');
-    janet_buffer_push_u8(buffer2, 'e');
-    janet_buffer_push_u8(buffer2, 'l');
-    janet_buffer_push_u8(buffer2, 'l');
-    janet_buffer_push_u8(buffer2, 'o');
-    janet_buffer_push_u8(buffer2, ',');
-    janet_buffer_push_u8(buffer2, ' ');
-    janet_buffer_push_u8(buffer2, 'w');
-    janet_buffer_push_u8(buffer2, 'o');
-    janet_buffer_push_u8(buffer2, 'r');
-    janet_buffer_push_u8(buffer2, 'l');
-    janet_buffer_push_u8(buffer2, 'd');
-    janet_buffer_push_u8(buffer2, '!');
-    janet_buffer_push_u8(buffer2, '\n');
+    bender_buffer_push_u8(buffer2, 'h');
+    bender_buffer_push_u8(buffer2, 'e');
+    bender_buffer_push_u8(buffer2, 'l');
+    bender_buffer_push_u8(buffer2, 'l');
+    bender_buffer_push_u8(buffer2, 'o');
+    bender_buffer_push_u8(buffer2, ',');
+    bender_buffer_push_u8(buffer2, ' ');
+    bender_buffer_push_u8(buffer2, 'w');
+    bender_buffer_push_u8(buffer2, 'o');
+    bender_buffer_push_u8(buffer2, 'r');
+    bender_buffer_push_u8(buffer2, 'l');
+    bender_buffer_push_u8(buffer2, 'd');
+    bender_buffer_push_u8(buffer2, '!');
+    bender_buffer_push_u8(buffer2, '\n');
 
     assert(buffer1->count == buffer2->count);
     assert(buffer1->capacity >= buffer1->count);

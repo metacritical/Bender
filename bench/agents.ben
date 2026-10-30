@@ -1,0 +1,71 @@
+# bench/agents.ben — the agents/second north-star benchmark (Phase 1.7).
+#
+# N long-lived actors, each parked in its mailbox; a driver sends every
+# actor T tick messages; each tick runs a small arithmetic kernel and
+# either re-parks or exits. Exercises spawn density, wake cost, a tick
+# kernel, and mailbox churn in one number.
+#
+# Usage: bender bench/agents.ben [N] [T]
+#   N = actor count (default 100000)
+#   T = ticks per actor (default 8)
+#
+# Recorded baselines (this machine, master 84c7a149 + 520cd378):
+#   N=100k T=8:  spawn 11.6 s (~116 us/proc)  — see the density notes
+#   chain-100k:  9.3 s / 92.7 us per hop (scale-proc-chain.ben)
+#   10k spawn+park: 0.163 s (16.3 us/proc)
+# The spawn+park path's current cost split (~53 us spawn-side
+# construction, ~71 us first-dispatch park) is recorded in the todo
+# tree; targets: 100k spawn+park <= 5 s, spawn <= 1 us/proc.
+
+(def args (dyn :args))
+(def n (if (> (length args) 1) (parse (get args 1)) 100000))
+(def ticks (if (> (length args) 2) (parse (get args 2)) 8))
+
+# The actor kernel: recv a tick, run a small fixed-cost computation,
+# park again until the tick quota is spent, then exit (teardown under
+# load is part of the measurement).
+(def actor
+  (fn []
+    (var acc 0)
+    (var remaining ticks)
+    (while (pos? remaining)
+      (def msg (proc/recv))
+      # Small kernel: a few integer ops + a table hit.
+      (set acc (+ acc (* 3 (if (number? msg) msg 1))))
+      (set acc (mod acc 1000003))
+      (-- remaining))
+    acc))
+
+(var spawned 0)
+(def procs @[])
+(def t0 (os/clock))
+(while (< spawned n)
+  (array/push procs (proc/spawn actor 16))
+  (++ spawned))
+(def spawn-time (- (os/clock) t0))
+
+(ev/sleep 0.1) # let every actor reach its recv park
+
+(def t1 (os/clock))
+(var sent 0)
+(var round 0)
+(while (< round ticks)
+  (var i 0)
+  (while (< i n)
+    (proc/send (get procs i) 1)
+    (++ i))
+  (++ round)
+  (set sent (+ sent n))
+  # Yield so actors drain their mailboxes between rounds.
+  (ev/sleep 0))
+(def tick-time (- (os/clock) t1))
+
+(def spawn-rate (if (> spawn-time 0) (/ spawned spawn-time) 0))
+(def msg-rate (if (> tick-time 0) (/ sent tick-time) 0))
+
+(eprint (string "agents=" n
+                " ticks-per-actor=" ticks
+                " spawn=" spawn-time "s (" (math/floor spawn-rate) " spawns/s)"))
+(eprint (string "ticks=" sent
+                " in " tick-time "s (" (math/floor msg-rate) " msgs/s)"))
+(eprint "PASS")

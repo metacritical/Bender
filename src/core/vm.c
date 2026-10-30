@@ -20,9 +20,9 @@
 * IN THE SOFTWARE.
 */
 
-#ifndef JANET_AMALG
+#ifndef BENDER_AMALG
 #include "features.h"
-#include <janet.h>
+#include <bender.h>
 #include "state.h"
 #include "fiber.h"
 #include "gc.h"
@@ -67,86 +67,86 @@
 /* Branch prediction for hot interpreter paths. Numbers are the common
  * case in ALU ops; GC thresholds rarely trip; errors are cold. */
 #if defined(__GNUC__) || defined(__clang__)
-#define JANET_LIKELY(x) __builtin_expect(!!(x), 1)
-#define JANET_UNLIKELY(x) __builtin_expect(!!(x), 0)
+#define BENDER_LIKELY(x) __builtin_expect(!!(x), 1)
+#define BENDER_UNLIKELY(x) __builtin_expect(!!(x), 0)
 #else
-#define JANET_LIKELY(x) (x)
-#define JANET_UNLIKELY(x) (x)
+#define BENDER_LIKELY(x) (x)
+#define BENDER_UNLIKELY(x) (x)
 #endif
 
 /* How we dispatch instructions. By default, we use
  * a switch inside an infinite loop. For GCC/clang, we use
  * computed gotos. */
-#if defined(__GNUC__) && !defined(__EMSCRIPTEN__) && !defined(JANET_NO_COMPUTED_GOTOS)
-#define JANET_USE_COMPUTED_GOTOS
+#if defined(__GNUC__) && !defined(__EMSCRIPTEN__) && !defined(BENDER_NO_COMPUTED_GOTOS)
+#define BENDER_USE_COMPUTED_GOTOS
 #endif
 
-/* Opcode histogram (diagnostic only, -DJANET_OPCODE_HISTOGRAM). Counts
+/* Opcode histogram (diagnostic only, -DBENDER_OPCODE_HISTOGRAM). Counts
  * dispatches per opcode and PAIRS of consecutive opcodes, so fusion /
  * superinstruction candidates can be chosen from data rather than
  * guessed. Dumped at exit. Adds two increments per dispatch, so it is
  * never on in a normal build. */
-#ifdef JANET_OPCODE_HISTOGRAM
-extern uint64_t janet_oph[256];
-extern uint64_t janet_ophp[256][256];
-extern int janet_oph_prev;
-#define JANET_OPH_TICK() do { int o_ = (int)(*pc & 0xFF); janet_oph[o_]++;     if (janet_oph_prev >= 0) janet_ophp[janet_oph_prev][o_]++; janet_oph_prev = o_; } while (0)
+#ifdef BENDER_OPCODE_HISTOGRAM
+extern uint64_t bender_oph[256];
+extern uint64_t bender_ophp[256][256];
+extern int bender_oph_prev;
+#define BENDER_OPH_TICK() do { int o_ = (int)(*pc & 0xFF); bender_oph[o_]++;     if (bender_oph_prev >= 0) bender_ophp[bender_oph_prev][o_]++; bender_oph_prev = o_; } while (0)
 #else
-#define JANET_OPH_TICK() ((void)0)
+#define BENDER_OPH_TICK() ((void)0)
 #endif
 
-#ifndef JANET_NATIVE_TELEMETRY
-#define JANET_NATIVE_TELEMETRY 1
+#ifndef BENDER_NATIVE_TELEMETRY
+#define BENDER_NATIVE_TELEMETRY 1
 #endif
-#if defined(JANET_NATIVE_EXECUTORS) && JANET_NATIVE_TELEMETRY
-#define JANET_DISPATCH_TICK() (++janet_vm.native_interp_dispatches)
+#if defined(BENDER_NATIVE_EXECUTORS) && BENDER_NATIVE_TELEMETRY
+#define BENDER_DISPATCH_TICK() (++bender_vm.native_interp_dispatches)
 #else
-#define JANET_DISPATCH_TICK() ((void)0)
+#define BENDER_DISPATCH_TICK() ((void)0)
 #endif
 
-#ifdef JANET_USE_COMPUTED_GOTOS
-#define VM_START() { JANET_DISPATCH_TICK(); JANET_SITE_TICK(first_opcode); goto *op_lookup[first_opcode];
+#ifdef BENDER_USE_COMPUTED_GOTOS
+#define VM_START() { BENDER_DISPATCH_TICK(); BENDER_SITE_TICK(first_opcode); goto *op_lookup[first_opcode];
 #define VM_END() }
 #define VM_OP(op) label_##op :
 #define VM_DEFAULT() label_unknown_op:
-#define vm_next() do { vm_native(); JANET_DISPATCH_TICK(); JANET_OPH_TICK(); JANET_SITE_TICK(*pc & 0xFF); goto *op_lookup[*pc & 0xFF]; } while (0)
+#define vm_next() do { vm_native(); BENDER_DISPATCH_TICK(); BENDER_OPH_TICK(); BENDER_SITE_TICK(*pc & 0xFF); goto *op_lookup[*pc & 0xFF]; } while (0)
 #define opcode (*pc & 0xFF)
 #else
-#define VM_START() uint8_t opcode = first_opcode; for (;;) {JANET_DISPATCH_TICK(); JANET_SITE_TICK(opcode); switch(opcode) {
+#define VM_START() uint8_t opcode = first_opcode; for (;;) {BENDER_DISPATCH_TICK(); BENDER_SITE_TICK(opcode); switch(opcode) {
 #define VM_END() }}
 #define VM_OP(op) case op :
 #define VM_DEFAULT() default:
 #define vm_next() vm_native(); opcode = *pc & 0xFF; continue
 #endif
 
-#ifdef JANET_OPCODE_HISTOGRAM
-uint64_t janet_oph[256];
-uint64_t janet_ophp[256][256];
-int janet_oph_prev = -1;
-static void janet_oph_dump(void) {
+#ifdef BENDER_OPCODE_HISTOGRAM
+uint64_t bender_oph[256];
+uint64_t bender_ophp[256][256];
+int bender_oph_prev = -1;
+static void bender_oph_dump(void) {
     uint64_t total = 0;
-    for (int i = 0; i < 256; i++) total += janet_oph[i];
+    for (int i = 0; i < 256; i++) total += bender_oph[i];
     if (!total) return;
     fprintf(stderr, "opcode-histogram total=%llu\n", (unsigned long long) total);
     /* singles, descending, top 24 */
     for (int rank = 0; rank < 24; rank++) {
         int best = -1; uint64_t bv = 0;
-        for (int i = 0; i < 256; i++) if (janet_oph[i] > bv) { bv = janet_oph[i]; best = i; }
+        for (int i = 0; i < 256; i++) if (bender_oph[i] > bv) { bv = bender_oph[i]; best = i; }
         if (best < 0 || !bv) break;
         fprintf(stderr, "op %d count=%llu pct=%.2f\n", best,
                 (unsigned long long) bv, 100.0 * (double) bv / (double) total);
-        janet_oph[best] = 0;
+        bender_oph[best] = 0;
     }
     /* consecutive PAIRS, descending, top 24 -- fusion candidates */
     for (int rank = 0; rank < 24; rank++) {
         int ba = -1, bb = -1; uint64_t bv = 0;
         for (int a = 0; a < 256; a++)
             for (int b = 0; b < 256; b++)
-                if (janet_ophp[a][b] > bv) { bv = janet_ophp[a][b]; ba = a; bb = b; }
+                if (bender_ophp[a][b] > bv) { bv = bender_ophp[a][b]; ba = a; bb = b; }
         if (ba < 0 || !bv) break;
         fprintf(stderr, "pair %d,%d count=%llu pct=%.2f\n", ba, bb,
                 (unsigned long long) bv, 100.0 * (double) bv / (double) total);
-        janet_ophp[ba][bb] = 0;
+        bender_ophp[ba][bb] = 0;
     }
 }
 #endif
@@ -154,57 +154,57 @@ static void janet_oph_dump(void) {
 /* Diagnostic-only per-original-PC VM dispatch counts, separate from PGO.
  * Use an interpreter-only binary: native executor instructions are NOT
  * counted. Compile-disabled builds remove every hook; compile-enabled builds
- * additionally require JANET_TTFX_SITE_PROFILE in the environment. The
+ * additionally require BENDER_TTFX_SITE_PROFILE in the environment. The
  * bounded fixed table avoids allocations and GC at dispatch. State is
  * per-thread: workers have separate VM-local dumps, never a shared counter
  * stream. Out-of-range PCs and capacity overflow report dropped events. */
-#ifdef JANET_TTFX_SITE_PROFILE
-#define JANET_SITE_MAX_DEFS 4096
-#define JANET_SITE_MAX_PC 1024
-#define JANET_SITE_NAME_BYTES 192
-#ifndef JANET_SITE_COUNTER_MAX
-#define JANET_SITE_COUNTER_MAX UINT64_MAX
+#ifdef BENDER_TTFX_SITE_PROFILE
+#define BENDER_SITE_MAX_DEFS 4096
+#define BENDER_SITE_MAX_PC 1024
+#define BENDER_SITE_NAME_BYTES 192
+#ifndef BENDER_SITE_COUNTER_MAX
+#define BENDER_SITE_COUNTER_MAX UINT64_MAX
 #endif
 #include <inttypes.h>
 typedef struct {
     uint64_t id;
     uint64_t fingerprint;
     int32_t words;
-    uint8_t op[JANET_SITE_MAX_PC];
-    char source[JANET_SITE_NAME_BYTES];
-    char name[JANET_SITE_NAME_BYTES];
+    uint8_t op[BENDER_SITE_MAX_PC];
+    char source[BENDER_SITE_NAME_BYTES];
+    char name[BENDER_SITE_NAME_BYTES];
     uint64_t total;
-    uint64_t pc[JANET_SITE_MAX_PC];
-    uint64_t call[JANET_SITE_MAX_PC];
-} JanetSiteRow;
-static JANET_THREAD_LOCAL JanetSiteRow janet_site_rows[JANET_SITE_MAX_DEFS];
-static JANET_THREAD_LOCAL size_t janet_site_count;
-static JANET_THREAD_LOCAL uint64_t janet_site_dropped;
-static JANET_THREAD_LOCAL int janet_site_enabled;
-static JANET_THREAD_LOCAL JanetSiteRow *janet_site_last;
-static JANET_THREAD_LOCAL uint64_t janet_site_last_id;
-static JANET_THREAD_LOCAL uint64_t janet_site_next_id;
-uint64_t janet_site_profile_new_id(void) {
-    if (janet_site_next_id == UINT64_MAX) return 0;
-    return ++janet_site_next_id;
+    uint64_t pc[BENDER_SITE_MAX_PC];
+    uint64_t call[BENDER_SITE_MAX_PC];
+} BenderSiteRow;
+static BENDER_THREAD_LOCAL BenderSiteRow bender_site_rows[BENDER_SITE_MAX_DEFS];
+static BENDER_THREAD_LOCAL size_t bender_site_count;
+static BENDER_THREAD_LOCAL uint64_t bender_site_dropped;
+static BENDER_THREAD_LOCAL int bender_site_enabled;
+static BENDER_THREAD_LOCAL BenderSiteRow *bender_site_last;
+static BENDER_THREAD_LOCAL uint64_t bender_site_last_id;
+static BENDER_THREAD_LOCAL uint64_t bender_site_next_id;
+uint64_t bender_site_profile_new_id(void) {
+    if (bender_site_next_id == UINT64_MAX) return 0;
+    return ++bender_site_next_id;
 }
-static void janet_site_saturate(uint64_t *counter) {
-    if (*counter >= JANET_SITE_COUNTER_MAX) {
-        if (&janet_site_dropped != counter && janet_site_dropped < UINT64_MAX)
-            ++janet_site_dropped;
+static void bender_site_saturate(uint64_t *counter) {
+    if (*counter >= BENDER_SITE_COUNTER_MAX) {
+        if (&bender_site_dropped != counter && bender_site_dropped < UINT64_MAX)
+            ++bender_site_dropped;
     } else ++*counter;
 }
-static void janet_site_name(char *out, JanetString name) {
+static void bender_site_name(char *out, BenderString name) {
     if (!name) { out[0] = 0; return; }
-    int32_t n = janet_string_length(name);
-    if (n >= JANET_SITE_NAME_BYTES) n = JANET_SITE_NAME_BYTES - 1;
+    int32_t n = bender_string_length(name);
+    if (n >= BENDER_SITE_NAME_BYTES) n = BENDER_SITE_NAME_BYTES - 1;
     for (int32_t i = 0; i < n; ++i) {
         unsigned char ch = name[i];
         out[i] = (ch >= 32 && ch < 127 && ch != ',' && ch != '\\') ? (char)ch : '_';
     }
     out[n] = 0;
 }
-static uint64_t janet_site_fingerprint(JanetFuncDef *def) {
+static uint64_t bender_site_fingerprint(BenderFuncDef *def) {
     uint64_t hash = UINT64_C(14695981039346656037);
     for (int32_t i = 0; i < def->bytecode_length; ++i) {
         uint32_t word = def->bytecode[i];
@@ -216,139 +216,139 @@ static uint64_t janet_site_fingerprint(JanetFuncDef *def) {
     }
     return hash;
 }
-static JanetSiteRow *janet_site_row(JanetFuncDef *def) {
+static BenderSiteRow *bender_site_row(BenderFuncDef *def) {
     uint64_t id = def->site_profile_id;
-    /* Boot-image and unmarshaled defs bypass janet_funcdef_alloc. Assign
+    /* Boot-image and unmarshaled defs bypass bender_funcdef_alloc. Assign
      * their identity at first execution; this thread owns the VM heap. */
     if (!id) {
-        id = janet_site_profile_new_id();
-        if (!id) { janet_site_saturate(&janet_site_dropped); return NULL; }
+        id = bender_site_profile_new_id();
+        if (!id) { bender_site_saturate(&bender_site_dropped); return NULL; }
         def->site_profile_id = id;
     }
-    if (id == janet_site_last_id) return janet_site_last;
-    for (size_t i = 0; i < janet_site_count; ++i)
-        if (janet_site_rows[i].id == id) {
-            janet_site_last_id = id;
-            return janet_site_last = &janet_site_rows[i];
+    if (id == bender_site_last_id) return bender_site_last;
+    for (size_t i = 0; i < bender_site_count; ++i)
+        if (bender_site_rows[i].id == id) {
+            bender_site_last_id = id;
+            return bender_site_last = &bender_site_rows[i];
         }
-    if (janet_site_count == JANET_SITE_MAX_DEFS) {
-        janet_site_saturate(&janet_site_dropped);
-        janet_site_last_id = id;
-        return janet_site_last = NULL;
+    if (bender_site_count == BENDER_SITE_MAX_DEFS) {
+        bender_site_saturate(&bender_site_dropped);
+        bender_site_last_id = id;
+        return bender_site_last = NULL;
     }
-    JanetSiteRow *row = &janet_site_rows[janet_site_count++];
+    BenderSiteRow *row = &bender_site_rows[bender_site_count++];
     row->id = id;
     row->words = def->bytecode_length;
-    row->fingerprint = janet_site_fingerprint(def);
-    for (int32_t i = 0; i < row->words && i < JANET_SITE_MAX_PC; ++i)
+    row->fingerprint = bender_site_fingerprint(def);
+    for (int32_t i = 0; i < row->words && i < BENDER_SITE_MAX_PC; ++i)
         row->op[i] = (uint8_t)def->bytecode[i];
-    janet_site_name(row->source, def->source);
-    janet_site_name(row->name, def->name);
-    janet_site_last_id = id;
-    return janet_site_last = row;
+    bender_site_name(row->source, def->source);
+    bender_site_name(row->name, def->name);
+    bender_site_last_id = id;
+    return bender_site_last = row;
 }
-static void janet_site_tick(JanetFunction *func, uint32_t *pc, int op_id) {
-    if (!janet_site_enabled || !func || !func->def || !func->def->bytecode || op_id > 255) return;
-    JanetFuncDef *def = func->def;
+static void bender_site_tick(BenderFunction *func, uint32_t *pc, int op_id) {
+    if (!bender_site_enabled || !func || !func->def || !func->def->bytecode || op_id > 255) return;
+    BenderFuncDef *def = func->def;
     ptrdiff_t offset = pc - def->bytecode;
-    if (offset < 0 || offset >= def->bytecode_length || offset >= JANET_SITE_MAX_PC) {
-        janet_site_saturate(&janet_site_dropped);
+    if (offset < 0 || offset >= def->bytecode_length || offset >= BENDER_SITE_MAX_PC) {
+        bender_site_saturate(&bender_site_dropped);
         return;
     }
-    JanetSiteRow *row = janet_site_row(def);
+    BenderSiteRow *row = bender_site_row(def);
     if (!row) return;
-    janet_site_saturate(&row->total);
-    janet_site_saturate(&row->pc[offset]);
+    bender_site_saturate(&row->total);
+    bender_site_saturate(&row->pc[offset]);
     if (op_id == JOP_CALL || op_id == JOP_TAILCALL)
-        janet_site_saturate(&row->call[offset]);
+        bender_site_saturate(&row->call[offset]);
 }
-#define JANET_SITE_TICK(op) janet_site_tick(func, pc, (op))
-static void janet_site_dump(void) {
-    if (!janet_site_enabled) return;
-    fprintf(stderr, "ttfx-site-profile defs=%zu dropped=%" PRIu64 "\n", janet_site_count, janet_site_dropped);
-    for (size_t i = 0; i < janet_site_count; ++i) {
-        JanetSiteRow *row = &janet_site_rows[i];
+#define BENDER_SITE_TICK(op) bender_site_tick(func, pc, (op))
+static void bender_site_dump(void) {
+    if (!bender_site_enabled) return;
+    fprintf(stderr, "ttfx-site-profile defs=%zu dropped=%" PRIu64 "\n", bender_site_count, bender_site_dropped);
+    for (size_t i = 0; i < bender_site_count; ++i) {
+        BenderSiteRow *row = &bender_site_rows[i];
         if (!row->total) continue;
         fprintf(stderr, "site-def=%zu source=%s name=%s words=%d hash=%016" PRIx64 " total=%" PRIu64 "\n",
                 i, row->source, row->name, row->words, row->fingerprint, row->total);
-        for (int pc = 0; pc < row->words && pc < JANET_SITE_MAX_PC; ++pc) {
+        for (int pc = 0; pc < row->words && pc < BENDER_SITE_MAX_PC; ++pc) {
             if (row->pc[pc]) fprintf(stderr, "site=%zu pc=%d op=%u count=%" PRIu64 " calls=%" PRIu64 "\n",
                 i, pc, row->op[pc], row->pc[pc], row->call[pc]);
         }
     }
 }
 #else
-#define JANET_SITE_TICK(op) ((void)0)
+#define BENDER_SITE_TICK(op) ((void)0)
 #endif
 
 /* Commit and restore VM state before possible longjmp */
-#define vm_commit() do { janet_stack_frame(stack)->pc = pc; } while (0)
+#define vm_commit() do { bender_stack_frame(stack)->pc = pc; } while (0)
 #define vm_restore() do { \
     stack = fiber->data + fiber->frame; \
-    pc = janet_stack_frame(stack)->pc; \
-    func = janet_stack_frame(stack)->func; \
+    pc = bender_stack_frame(stack)->pc; \
+    func = bender_stack_frame(stack)->func; \
 } while (0)
 #define vm_return(sig, val) do { \
-    janet_vm.return_reg[0] = (val); \
+    bender_vm.return_reg[0] = (val); \
     vm_commit(); \
     return (sig); \
 } while (0)
 #define vm_return_no_restore(sig, val) do { \
-    janet_vm.return_reg[0] = (val); \
+    bender_vm.return_reg[0] = (val); \
     return (sig); \
 } while (0)
 
 /* Next instruction variations */
-#define JANET_FIBER_MINOR_SCALE 256
-#define JANET_FIBER_MINOR_CAP (16 * 1024 * 1024)
-#define JANET_FULL_SCALE 1024
+#define BENDER_FIBER_MINOR_SCALE 256
+#define BENDER_FIBER_MINOR_CAP (16 * 1024 * 1024)
+#define BENDER_FULL_SCALE 1024
 #define maybe_collect() do {\
-    JanetFiber *mcf_ = janet_vm.fiber; \
+    BenderFiber *mcf_ = bender_vm.fiber; \
     /* Check global major pressure before the scaled nursery branches. */ \
-    if (JANET_UNLIKELY(janet_vm.next_collection >= janet_vm.gc_interval \
-            + janet_vm.gc_major_live_blocks * JANET_FULL_SCALE)) janet_collect(); \
-    else if (JANET_UNLIKELY(NULL != mcf_ && mcf_->gc_nursery_bytes >= janet_vm.gc_minor_threshold)) { \
-        size_t fth_ = janet_vm.gc_minor_threshold; \
+    if (BENDER_UNLIKELY(bender_vm.next_collection >= bender_vm.gc_interval \
+            + bender_vm.gc_major_live_blocks * BENDER_FULL_SCALE)) bender_collect(); \
+    else if (BENDER_UNLIKELY(NULL != mcf_ && mcf_->gc_nursery_bytes >= bender_vm.gc_minor_threshold)) { \
+        size_t fth_ = bender_vm.gc_minor_threshold; \
         if (!(mcf_->heap_strict && NULL != mcf_->proc)) { \
-            fth_ += (size_t) janet_vm.block_count * JANET_FIBER_MINOR_SCALE; \
-            if (fth_ > JANET_FIBER_MINOR_CAP) fth_ = JANET_FIBER_MINOR_CAP; } \
+            fth_ += (size_t) bender_vm.block_count * BENDER_FIBER_MINOR_SCALE; \
+            if (fth_ > BENDER_FIBER_MINOR_CAP) fth_ = BENDER_FIBER_MINOR_CAP; } \
         if (mcf_->gc_nursery_bytes >= fth_) { \
-            if (mcf_->heap_strict && NULL != mcf_->proc) janet_collect_process(mcf_->proc); \
-            else janet_collect_fiber_minor(mcf_); } } \
-    else if (JANET_UNLIKELY(janet_vm.gc_young_bytes >= janet_vm.gc_minor_threshold \
-            + (size_t) janet_vm.block_count * JANET_FIBER_MINOR_SCALE)) janet_collect_minor(); } while (0)
+            if (mcf_->heap_strict && NULL != mcf_->proc) bender_collect_process(mcf_->proc); \
+            else bender_collect_fiber_minor(mcf_); } } \
+    else if (BENDER_UNLIKELY(bender_vm.gc_young_bytes >= bender_vm.gc_minor_threshold \
+            + (size_t) bender_vm.block_count * BENDER_FIBER_MINOR_SCALE)) bender_collect_minor(); } while (0)
 #define vm_checkgc_next() maybe_collect(); vm_next()
 #define vm_pcnext() pc++; vm_next()
 #define vm_checkgc_pcnext() maybe_collect(); vm_pcnext()
 
 /* Handle certain errors in main vm loop */
-#define vm_throw(e) do { vm_commit(); janet_panic(e); } while (0)
+#define vm_throw(e) do { vm_commit(); bender_panic(e); } while (0)
 #define vm_assert(cond, e) do {if (!(cond)) vm_throw((e)); } while (0)
 #define vm_assert_type(X, T) do { \
-    if (!(janet_checktype((X), (T)))) { \
+    if (!(bender_checktype((X), (T)))) { \
         vm_commit(); \
-        janet_panicf("expected %T, got %v", (1 << (T)), (X)); \
+        bender_panicf("expected %T, got %v", (1 << (T)), (X)); \
     } \
 } while (0)
 #define vm_assert_types(X, TS) do { \
-    if (!(janet_checktypes((X), (TS)))) { \
+    if (!(bender_checktypes((X), (TS)))) { \
         vm_commit(); \
-        janet_panicf("expected %T, got %v", (TS), (X)); \
+        bender_panicf("expected %T, got %v", (TS), (X)); \
     } \
 } while (0)
-#ifdef JANET_NATIVE_EXECUTORS
-static JANET_THREAD_LOCAL int native_stepping;
+#ifdef BENDER_NATIVE_EXECUTORS
+static BENDER_THREAD_LOCAL int native_stepping;
 /* Flat native-to-native trampoline (defined below, next to the call-enter
  * and native-return primitives it drives). It runs executors back to back
  * across pushed and popped FIBER frames without ever recursing in C, so a
  * chain of native calls still occupies exactly one C frame: no new
- * stack-overflow class, no janet_vm.stackn pressure, no pinned C frame
+ * stack-overflow class, no bender_vm.stackn pressure, no pinned C frame
  * across a yield. On return, the current frame may be a different one than
  * on entry, which is why vm_native() below reloads `func` as well as
  * `stack` and `pc`. */
-static JanetNativeStep janet_native_trampoline(JanetFiber *f, JanetFuncDef *d, uint32_t **pc);
+static BenderNativeStep bender_native_trampoline(BenderFiber *f, BenderFuncDef *d, uint32_t **pc);
 /* Region gating and lazy structural attachment. Whole-definition
- * validation (janet_native_matches) runs at useful native region
+ * validation (bender_native_matches) runs at useful native region
  * starts recorded in the descriptor mask; consecutive VM-only
  * instructions after a boundary exit cost one bitmap check. The
  * verdict is cached per definition at the current validation epoch
@@ -358,35 +358,35 @@ static JanetNativeStep janet_native_trampoline(JanetFiber *f, JanetFuncDef *d, u
  * Lazy attachment tries the unique key-matching registered descriptor
  * once per registry generation per definition. */
 #define vm_native() do { \
-    if (JANET_UNLIKELY(janet_vm.native_possible) && !native_stepping) { \
-        JanetFuncDef *ndef_ = func->def; \
+    if (BENDER_UNLIKELY(bender_vm.native_possible) && !native_stepping) { \
+        BenderFuncDef *ndef_ = func->def; \
         if (NULL != ndef_->native_code) { \
-            if (janet_native_region_allowed(ndef_->native_code, (uint32_t)(pc - ndef_->bytecode))) { \
+            if (bender_native_region_allowed(ndef_->native_code, (uint32_t)(pc - ndef_->bytecode))) { \
                 if ((ndef_->native_verified != ndef_->native_code || \
-                        ndef_->native_verified_epoch != janet_vm.native_epoch) && \
-                        !janet_native_revalidate(ndef_)) break; \
+                        ndef_->native_verified_epoch != bender_vm.native_epoch) && \
+                        !bender_native_revalidate(ndef_)) break; \
                 uint32_t *npc = pc; \
                 vm_commit(); \
-                JanetNativeStep result = janet_native_trampoline(fiber, ndef_, &npc); \
+                BenderNativeStep result = bender_native_trampoline(fiber, ndef_, &npc); \
                 pc = npc; \
                 stack = fiber->data + fiber->frame; \
                 /* The trampoline can leave us in a DIFFERENT frame (it \
                  * chains calls and returns). `func` must be reloaded or \
                  * the interpreter would run the new frame's bytecode \
                  * against the old definition's constants. */ \
-                func = janet_stack_frame(stack)->func; \
+                func = bender_stack_frame(stack)->func; \
                 vm_commit(); \
-                if (result == JANET_NATIVE_VM) { \
-                    janet_vm.native_vm_exits++; \
-                    janet_vm.native_exit_opcodes[*pc & 0xFF]++; \
+                if (result == BENDER_NATIVE_VM) { \
+                    bender_vm.native_vm_exits++; \
+                    bender_vm.native_exit_opcodes[*pc & 0xFF]++; \
                 } else { \
-                    fiber->flags |= JANET_FIBER_RESUME_NO_USEVAL | JANET_FIBER_RESUME_NO_SKIP; \
-                    vm_return(JANET_SIGNAL_INTERRUPT, janet_wrap_nil()); \
+                    fiber->flags |= BENDER_FIBER_RESUME_NO_USEVAL | BENDER_FIBER_RESUME_NO_SKIP; \
+                    vm_return(BENDER_SIGNAL_INTERRUPT, bender_wrap_nil()); \
                 } \
             } \
-        } else if (janet_native_registry_count() && \
-                ndef_->native_attach_gen != janet_native_registry_generation()) { \
-            janet_native_try_attach(ndef_); \
+        } else if (bender_native_registry_count() && \
+                ndef_->native_attach_gen != bender_native_registry_generation()) { \
+            bender_native_try_attach(ndef_); \
         } \
     } \
 } while (0)
@@ -396,10 +396,10 @@ static JanetNativeStep janet_native_trampoline(JanetFiber *f, JanetFuncDef *d, u
 
 /* Keep the disabled interpreter path inline and unchanged. Both paths use
  * exactly this expression, including auto_suspend's short circuit. */
-#define vm_poll_condition(COND) ((COND) && (janet_atomic_load_relaxed(&janet_vm.auto_suspend) || \
-            (janet_vm.quantum && --janet_vm.quantum_remaining <= 0)))
-int janet_native_poll(int condition) {
-#ifdef JANET_NO_INTERPRETER_INTERRUPT
+#define vm_poll_condition(COND) ((COND) && (bender_atomic_load_relaxed(&bender_vm.auto_suspend) || \
+            (bender_vm.quantum && --bender_vm.quantum_remaining <= 0)))
+int bender_native_poll(int condition) {
+#ifdef BENDER_NO_INTERPRETER_INTERRUPT
     (void)condition;
     return 0;
 #else
@@ -412,81 +412,81 @@ int janet_native_poll(int condition) {
  * runtime alias marker, no trace hook, no active profiler, matching argc,
  * and a one-constant cfunction body. Return NULL for every other callee so
  * the executor exits at the call PC and ordinary JOP_CALL owns it. */
-JANET_API JanetCFunction janet_native_alias_cfun(Janet callee, int32_t argc) {
-    if (!janet_checktype(callee, JANET_FUNCTION)) return NULL;
-    JanetFunction *func = janet_unwrap_function(callee);
-    JanetFuncDef *def = func->def;
-    if (func->gc.flags & JANET_FUNCFLAG_TRACE) return NULL;
-    if (NULL != janet_vm.profile_table) return NULL;
-    if (!(def->flags & JANET_FUNCDEF_FLAG_FFI_ALIAS)) return NULL;
+BENDER_API BenderCFunction bender_native_alias_cfun(Bender callee, int32_t argc) {
+    if (!bender_checktype(callee, BENDER_FUNCTION)) return NULL;
+    BenderFunction *func = bender_unwrap_function(callee);
+    BenderFuncDef *def = func->def;
+    if (func->gc.flags & BENDER_FUNCFLAG_TRACE) return NULL;
+    if (NULL != bender_vm.profile_table) return NULL;
+    if (!(def->flags & BENDER_FUNCDEF_FLAG_FFI_ALIAS)) return NULL;
     if (def->arity != argc) return NULL;
     if (def->constants_length != 1) return NULL;
-    if (!janet_checktype(def->constants[0], JANET_CFUNCTION)) return NULL;
-    return janet_unwrap_cfunction(def->constants[0]);
+    if (!bender_checktype(def->constants[0], BENDER_CFUNCTION)) return NULL;
+    return bender_unwrap_cfunction(def->constants[0]);
 }
 
 /* Enter an already-validated alias wrapper with JOP_CALL's C-frame
  * discipline. The argument stack remains GC-scanned until the wrapper
  * returns; a signature without function arguments does NOT prove that
- * a C function cannot allocate or call back into Janet. */
-JANET_API Janet janet_native_alias_call(JanetFiber *fiber, JanetCFunction cfun,
+ * a C function cannot allocate or call back into Bender. */
+BENDER_API Bender bender_native_alias_call(BenderFiber *fiber, BenderCFunction cfun,
                                         int32_t argc, uint32_t *pc) {
-    janet_stack_frame(fiber->data + fiber->frame)->pc = pc;
-    janet_fiber_cframe(fiber, cfun);
-    Janet ret = cfun(argc, fiber->data + fiber->frame);
-    janet_fiber_popframe(fiber);
+    bender_stack_frame(fiber->data + fiber->frame)->pc = pc;
+    bender_fiber_cframe(fiber, cfun);
+    Bender ret = cfun(argc, fiber->data + fiber->frame);
+    bender_fiber_popframe(fiber);
     return ret;
 }
 
 /* Keep error/panic locations exact when a fast executor operation can
  * raise (notably the generational barrier's strict-heap checks). */
-JANET_API void janet_native_set_pc(JanetFiber *fiber, uint32_t *pc) {
-    janet_stack_frame(fiber->data + fiber->frame)->pc = pc;
+BENDER_API void bender_native_set_pc(BenderFiber *fiber, uint32_t *pc) {
+    bender_stack_frame(fiber->data + fiber->frame)->pc = pc;
 }
 
 /* The caller has already stored the result in a scanned frame slot. Do the
  * same GC check as JOP_CALL before leaving the effectful native region.
  * Collection/finalizers and arbitrary C callbacks can invalidate a cached
  * structural verdict, so the next native entry must revalidate all words. */
-JANET_API void janet_native_alias_after_call(void) {
+BENDER_API void bender_native_alias_after_call(void) {
     maybe_collect();
-    janet_vm.native_epoch++;
+    bender_vm.native_epoch++;
 }
 
 /* ---- Native-to-native continuation (v1): call-enter and native return ----
  *
- * The contract is stated in janet.h. Everything below exists to make
- * `janet_native_call_enter` ALL-OR-NOTHING: every refusal returns before the
+ * The contract is stated in bender.h. Everything below exists to make
+ * `bender_native_call_enter` ALL-OR-NOTHING: every refusal returns before the
  * first byte of fiber state changes, so the executor's ordinary exit at the
  * call PC leaves the interpreter to perform the call exactly once. */
 
-JANET_API int janet_native_call_enter(JanetFiber *fiber, Janet callee, int32_t argc,
+BENDER_API int bender_native_call_enter(BenderFiber *fiber, Bender callee, int32_t argc,
                                       uint32_t *callpc, uint32_t **out_npc) {
-#ifdef JANET_NATIVE_EXECUTORS
+#ifdef BENDER_NATIVE_EXECUTORS
     /* Runtime off-switch first: one load, and it makes the whole feature
      * disappear without rebuilding. */
-    if (!janet_vm.native_continuation) goto refuse;
+    if (!bender_vm.native_continuation) goto refuse;
     /* The debugger bypasses executors entirely (see the resume entry);
      * a chained frame must not be able to step around a breakpoint. */
-    if (fiber->flags & JANET_FIBER_BREAKPOINT) goto refuse;
+    if (fiber->flags & BENDER_FIBER_BREAKPOINT) goto refuse;
     /* Callee identity: keywords resolve through resolve_method, cfunctions
      * and non-functions take their own JOP_CALL branches. */
-    if (!janet_checktype(callee, JANET_FUNCTION)) goto refuse;
+    if (!bender_checktype(callee, BENDER_FUNCTION)) goto refuse;
     {
-        JanetFunction *callee_func = janet_unwrap_function(callee);
-        JanetFuncDef *def = callee_func->def;
+        BenderFunction *callee_func = bender_unwrap_function(callee);
+        BenderFuncDef *def = callee_func->def;
         /* Trace and profile hooks must observe every call. A profiling build
          * therefore never takes this path, which is also what keeps
          * auto-PGO evidence (and :calls) exact. */
-        if (callee_func->gc.flags & JANET_FUNCFLAG_TRACE) goto refuse;
-        if (NULL != janet_vm.profile_table) goto refuse;
+        if (callee_func->gc.flags & BENDER_FUNCFLAG_TRACE) goto refuse;
+        if (NULL != bender_vm.profile_table) goto refuse;
         /* No vararg tuple construction, no environment capture, no struct or
          * named argument rewriting: funcframe's remaining work is then a
          * capacity check, a nil fill and the frame header. */
-        if (def->flags & (JANET_FUNCDEF_FLAG_VARARG |
-                          JANET_FUNCDEF_FLAG_NEEDSENV |
-                          JANET_FUNCDEF_FLAG_STRUCTARG |
-                          JANET_FUNCDEF_FLAG_NAMEDARGS)) goto refuse;
+        if (def->flags & (BENDER_FUNCDEF_FLAG_VARARG |
+                          BENDER_FUNCDEF_FLAG_NEEDSENV |
+                          BENDER_FUNCDEF_FLAG_STRUCTARG |
+                          BENDER_FUNCDEF_FLAG_NAMEDARGS)) goto refuse;
         if (def->environments_length != 0) goto refuse;
         /* funcframe's arity gate, pre-checked so it cannot fail after we
          * commit. `&opt` parameters give min_arity < max_arity with no
@@ -494,14 +494,14 @@ JANET_API int janet_native_call_enter(JanetFiber *fiber, Janet callee, int32_t a
          * exactly as JOP_CALL does -- so this must NOT demand fixed arity. */
         if (argc < def->min_arity || argc > def->max_arity) goto refuse;
         /* The callee must have a descriptor that is enterable at PC 0 and
-         * proven for the current validation epoch. janet_native_revalidate
+         * proven for the current validation epoch. bender_native_revalidate
          * stays the sole authority; the cache only skips re-proving while
          * nothing can have changed. */
         if (NULL == def->native_code) goto refuse;
-        if (!janet_native_region_allowed(def->native_code, 0)) goto refuse;
+        if (!bender_native_region_allowed(def->native_code, 0)) goto refuse;
         if ((def->native_verified != def->native_code ||
-                def->native_verified_epoch != janet_vm.native_epoch) &&
-                !janet_native_revalidate(def)) goto refuse;
+                def->native_verified_epoch != bender_vm.native_epoch) &&
+                !bender_native_revalidate(def)) goto refuse;
         /* Depth, exactly as JOP_CALL checks it (vm_maybe_overflow and the
          * maxstack throw). Both are VM-owned error paths: refuse and let the
          * interpreter raise them in its own place. */
@@ -512,18 +512,18 @@ JANET_API int janet_native_call_enter(JanetFiber *fiber, Janet callee, int32_t a
          * replaces, and it is skipped on this path. Nothing has been
          * mutated yet, so an interrupt leaves the argument stack intact and
          * the VM re-executes the call at its own PC. */
-        if (janet_native_poll(1)) return 2;
-        /* Commit the caller's PC before the push: janet_native_ret_pop and
+        if (bender_native_poll(1)) return 2;
+        /* Commit the caller's PC before the push: bender_native_ret_pop and
          * every stack trace read it from the frame, and a panic inside the
          * callee must report the call site, not a stale PC. */
-        janet_stack_frame(fiber->data + fiber->frame)->pc = callpc;
-        if (janet_fiber_funcframe(fiber, callee_func)) {
+        bender_stack_frame(fiber->data + fiber->frame)->pc = callpc;
+        if (bender_fiber_funcframe(fiber, callee_func)) {
             /* Unreachable: the arity gate above is funcframe's own test and
              * funcframe checks arity before mutating any state. Treat it as
              * a refusal anyway rather than trusting the comment. */
             goto refuse;
         }
-        janet_vm.native_continuations++;
+        bender_vm.native_continuations++;
         *out_npc = def->bytecode;
         /* JOP_CALL's vm_checkgc_next(). Without it a long native chain is an
          * unbounded nursery-growth window. */
@@ -531,7 +531,7 @@ JANET_API int janet_native_call_enter(JanetFiber *fiber, Janet callee, int32_t a
         return 1;
     }
 refuse:
-    janet_vm.native_continuation_refusals++;
+    bender_vm.native_continuation_refusals++;
     return 0;
 #else
     (void) fiber;
@@ -543,40 +543,40 @@ refuse:
 #endif
 }
 
-JANET_API int janet_native_ret_pop(JanetFiber *fiber, uint32_t **pc) {
-#ifdef JANET_NATIVE_EXECUTORS
-    if (!janet_vm.native_continuation) return 0;
-    if (fiber->flags & JANET_FIBER_BREAKPOINT) return 0;
-    /* janet_profile_return must run inside the VM. */
-    if (NULL != janet_vm.profile_table) return 0;
+BENDER_API int bender_native_ret_pop(BenderFiber *fiber, uint32_t **pc) {
+#ifdef BENDER_NATIVE_EXECUTORS
+    if (!bender_vm.native_continuation) return 0;
+    if (fiber->flags & BENDER_FIBER_BREAKPOINT) return 0;
+    /* bender_profile_return must run inside the VM. */
+    if (NULL != bender_vm.profile_table) return 0;
     {
         uint32_t word = **pc;
-        Janet retval;
+        Bender retval;
         if ((word & 0xFF) == JOP_RETURN) {
             retval = (fiber->data + fiber->frame)[(word >> 8) & 0xFFFFFF];
         } else if ((word & 0xFF) == JOP_RETURN_NIL) {
-            retval = janet_wrap_nil();
+            retval = bender_wrap_nil();
         } else {
             return 0;
         }
         {
-            Janet *s = fiber->data + fiber->frame;
-            JanetStackFrame *frame = janet_stack_frame(s);
+            Bender *s = fiber->data + fiber->frame;
+            BenderStackFrame *frame = bender_stack_frame(s);
             /* Everything is decided BEFORE the pop, so a refusal leaves the
              * fiber untouched and JOP_RETURN performs the return itself.
              *
-             * An ENTRANCE frame belongs to janet_call: returning from it is a
+             * An ENTRANCE frame belongs to bender_call: returning from it is a
              * signal out of run_vm, not a frame pop. A TAILCALL frame's
              * caller word is a JOP_TAILCALL and its own caller frame is not
              * the one this return unwinds to. The root frame has no caller. */
-            if (frame->flags & (JANET_STACKFRAME_ENTRANCE | JANET_STACKFRAME_TAILCALL)) return 0;
+            if (frame->flags & (BENDER_STACKFRAME_ENTRANCE | BENDER_STACKFRAME_TAILCALL)) return 0;
             if (fiber->frame == 0) return 0;
             /* prevframe 0 is "no caller frame": its header would sit at a
-             * negative stack index. Valid frame bases are >= JANET_FRAME_SIZE. */
-            if (frame->prevframe < JANET_FRAME_SIZE) return 0;
+             * negative stack index. Valid frame bases are >= BENDER_FRAME_SIZE. */
+            if (frame->prevframe < BENDER_FRAME_SIZE) return 0;
             {
-                JanetStackFrame *cframe =
-                    (JanetStackFrame *)(fiber->data + frame->prevframe - JANET_FRAME_SIZE);
+                BenderStackFrame *cframe =
+                    (BenderStackFrame *)(fiber->data + frame->prevframe - BENDER_FRAME_SIZE);
                 uint32_t *cpc = cframe->pc;
                 /* A C frame has no bytecode to resume into. */
                 if (NULL == cframe->func || NULL == cpc) return 0;
@@ -584,13 +584,13 @@ JANET_API int janet_native_ret_pop(JanetFiber *fiber, uint32_t **pc) {
                  * anything that is not a plain JOP_CALL -- a breakpoint bit,
                  * a resumed signal op, an unexpected shape: the VM owns it. */
                 if ((*cpc & 0xFF) != JOP_CALL) return 0;
-                janet_fiber_popframe(fiber);
+                bender_fiber_popframe(fiber);
                 (fiber->data + fiber->frame)[(*cpc >> 8) & 0xFF] = retval;
                 cframe->pc = cpc + 1;
                 *pc = cpc + 1;
             }
         }
-        janet_vm.native_returns++;
+        bender_vm.native_returns++;
         return 1;
     }
 #else
@@ -600,12 +600,12 @@ JANET_API int janet_native_ret_pop(JanetFiber *fiber, uint32_t **pc) {
 #endif
 }
 
-#ifdef JANET_NATIVE_EXECUTORS
+#ifdef BENDER_NATIVE_EXECUTORS
 /* Bound on frames chained inside one trampoline entry. A native recursion
  * must not be able to monopolize the quantum or build an unbounded chain
  * between interpreter dispatches; on exhaustion we simply return at the
  * current unexecuted PC in a real frame, which run_vm already accepts. */
-#define JANET_NATIVE_CHAIN_BUDGET 64
+#define BENDER_NATIVE_CHAIN_BUDGET 64
 
 /* The loop referenced by vm_native(). Preconditions, established by the
  * caller: `d` is the current frame's definition, it has a descriptor, the
@@ -613,45 +613,45 @@ JANET_API int janet_native_ret_pop(JanetFiber *fiber, uint32_t **pc) {
  * the current epoch. It holds NO state across an executor call that a
  * longjmp would have to unwind (no gcroot, no lock, no counter needing a
  * decrement), so a panic inside a chained callee unwinds through this one C
- * frame as an ordinary two-frame Janet chain. */
-static JanetNativeStep janet_native_trampoline(JanetFiber *f, JanetFuncDef *d, uint32_t **pc) {
-    int budget = JANET_NATIVE_CHAIN_BUDGET;
+ * frame as an ordinary two-frame Bender chain. */
+static BenderNativeStep bender_native_trampoline(BenderFiber *f, BenderFuncDef *d, uint32_t **pc) {
+    int budget = BENDER_NATIVE_CHAIN_BUDGET;
     for (;;) {
-        JanetNativeStep step = d->native_code->execute(f, d, pc);
-        if (step == JANET_NATIVE_INTERRUPT) return step;
-        if (step == JANET_NATIVE_FRAME) {
-            /* Chain DOWN: janet_native_call_enter already pushed the callee
+        BenderNativeStep step = d->native_code->execute(f, d, pc);
+        if (step == BENDER_NATIVE_INTERRUPT) return step;
+        if (step == BENDER_NATIVE_FRAME) {
+            /* Chain DOWN: bender_native_call_enter already pushed the callee
              * frame and did JOP_CALL's GC check. */
         } else {
             /* Chain UP: the executor stopped at an unexecuted ret/retn.
              * ret_pop refuses (touching nothing) for anything the VM must
              * own, in which case this is an ordinary boundary exit. */
-            if (!janet_native_ret_pop(f, pc)) return JANET_NATIVE_VM;
+            if (!bender_native_ret_pop(f, pc)) return BENDER_NATIVE_VM;
             /* JOP_RETURN's vm_checkgc_pcnext(). */
             maybe_collect();
         }
-        if (--budget <= 0) return JANET_NATIVE_VM;
+        if (--budget <= 0) return BENDER_NATIVE_VM;
         /* Re-gate for the new current frame. The verdict cache makes this
          * two comparisons unless the epoch moved -- and if a collection or
          * finalizer moved it, re-proving is exactly what must happen. */
-        d = janet_stack_frame(f->data + f->frame)->func->def;
-        if (NULL == d->native_code) return JANET_NATIVE_VM;
-        if (!janet_native_region_allowed(d->native_code, (uint32_t)(*pc - d->bytecode)))
-            return JANET_NATIVE_VM;
+        d = bender_stack_frame(f->data + f->frame)->func->def;
+        if (NULL == d->native_code) return BENDER_NATIVE_VM;
+        if (!bender_native_region_allowed(d->native_code, (uint32_t)(*pc - d->bytecode)))
+            return BENDER_NATIVE_VM;
         if ((d->native_verified != d->native_code ||
-                d->native_verified_epoch != janet_vm.native_epoch) &&
-                !janet_native_revalidate(d)) return JANET_NATIVE_VM;
+                d->native_verified_epoch != bender_vm.native_epoch) &&
+                !bender_native_revalidate(d)) return BENDER_NATIVE_VM;
     }
 }
 #endif
 
-#ifdef JANET_NO_INTERPRETER_INTERRUPT
+#ifdef BENDER_NO_INTERPRETER_INTERRUPT
 #define vm_maybe_auto_suspend(COND)
 #else
 #define vm_maybe_auto_suspend(COND) do { \
     if (vm_poll_condition(COND)) { \
-        fiber->flags |= (JANET_FIBER_RESUME_NO_USEVAL | JANET_FIBER_RESUME_NO_SKIP); \
-        vm_return(JANET_SIGNAL_INTERRUPT, janet_wrap_nil()); \
+        fiber->flags |= (BENDER_FIBER_RESUME_NO_USEVAL | BENDER_FIBER_RESUME_NO_SKIP); \
+        vm_return(BENDER_SIGNAL_INTERRUPT, bender_wrap_nil()); \
     } \
 } while (0)
 #endif
@@ -665,125 +665,125 @@ static JanetNativeStep janet_native_trampoline(JanetFiber *f, JanetFuncDef *d, u
 #define vm_maybe_overflow() do { \
     if (fiber->stack_overflowed) { \
         fiber->stack_overflowed = 0; \
-        janet_panic("fiber native stack overflow"); \
+        bender_panic("fiber native stack overflow"); \
     } \
 } while (0)
 
 /* Templates for certain patterns in opcodes */
 #define vm_binop_immediate(op)\
     {\
-        Janet op1 = stack[B];\
-        if (JANET_UNLIKELY(!janet_checktype(op1, JANET_NUMBER))) {\
+        Bender op1 = stack[B];\
+        if (BENDER_UNLIKELY(!bender_checktype(op1, BENDER_NUMBER))) {\
             vm_commit();\
-            Janet _argv[2] = { op1, janet_wrap_number(CS) };\
-            Janet a = janet_mcall(#op, 2, _argv);\
+            Bender _argv[2] = { op1, bender_wrap_number(CS) };\
+            Bender a = bender_mcall(#op, 2, _argv);\
             stack = fiber->data + fiber->frame;\
             stack[A] = a;\
             vm_checkgc_pcnext();\
         } else {\
-            double x1 = janet_unwrap_number(op1);\
-            stack[A] = janet_wrap_number(x1 op CS);\
+            double x1 = bender_unwrap_number(op1);\
+            stack[A] = bender_wrap_number(x1 op CS);\
             vm_pcnext();\
         }\
     }
 #define _vm_bitop_immediate(op, type1, rangecheck, msg)\
     {\
-        Janet op1 = stack[B];\
-        if (JANET_UNLIKELY(!janet_checktype(op1, JANET_NUMBER))) {\
+        Bender op1 = stack[B];\
+        if (BENDER_UNLIKELY(!bender_checktype(op1, BENDER_NUMBER))) {\
             vm_commit();\
-            Janet _argv[2] = { op1, janet_wrap_number(CS) };\
-            Janet a = janet_mcall(#op, 2, _argv);\
+            Bender _argv[2] = { op1, bender_wrap_number(CS) };\
+            Bender a = bender_mcall(#op, 2, _argv);\
             stack = fiber->data + fiber->frame;\
             stack[A] = a;\
             vm_checkgc_pcnext();\
         } else {\
-            double y1 = janet_unwrap_number(op1);\
-            if (!rangecheck(y1)) { vm_commit(); janet_panicf("value %v out of range for " msg, op1); }\
+            double y1 = bender_unwrap_number(op1);\
+            if (!rangecheck(y1)) { vm_commit(); bender_panicf("value %v out of range for " msg, op1); }\
             type1 x1 = (type1) y1;\
-            stack[A] = janet_wrap_number((type1) (x1 op CS));\
+            stack[A] = bender_wrap_number((type1) (x1 op CS));\
             vm_pcnext();\
         }\
     }
 /* Unsigned-immediate bitop (JINT_SSU). Identical to
  * _vm_bitop_immediate except the immediate is read via CU (0..255)
  * instead of the sign-extended CS, so masks above 127 work. The
- * non-number path still goes through janet_mcall with the same wrapped
+ * non-number path still goes through bender_mcall with the same wrapped
  * immediate, so a non-numeric operand behaves exactly as the register
  * form does. */
 #define _vm_bitop_uimmediate(op, type1, rangecheck, msg)\
     {\
-        Janet op1 = stack[B];\
-        if (JANET_UNLIKELY(!janet_checktype(op1, JANET_NUMBER))) {\
+        Bender op1 = stack[B];\
+        if (BENDER_UNLIKELY(!bender_checktype(op1, BENDER_NUMBER))) {\
             vm_commit();\
-            Janet _argv[2] = { op1, janet_wrap_number(CU) };\
-            Janet a = janet_mcall(#op, 2, _argv);\
+            Bender _argv[2] = { op1, bender_wrap_number(CU) };\
+            Bender a = bender_mcall(#op, 2, _argv);\
             stack = fiber->data + fiber->frame;\
             stack[A] = a;\
             vm_checkgc_pcnext();\
         } else {\
-            double y1 = janet_unwrap_number(op1);\
-            if (!rangecheck(y1)) { vm_commit(); janet_panicf("value %v out of range for " msg, op1); }\
+            double y1 = bender_unwrap_number(op1);\
+            if (!rangecheck(y1)) { vm_commit(); bender_panicf("value %v out of range for " msg, op1); }\
             type1 x1 = (type1) y1;\
-            stack[A] = janet_wrap_number((type1) (x1 op (type1) CU));\
+            stack[A] = bender_wrap_number((type1) (x1 op (type1) CU));\
             vm_pcnext();\
         }\
     }
-#define vm_bitop_uimmediate(op) _vm_bitop_uimmediate(op, int32_t, janet_checkintrange, "32-bit signed integers");
-#define vm_bitop_immediate(op) _vm_bitop_immediate(op, int32_t, janet_checkintrange, "32-bit signed integers");
-#define vm_bitopu_immediate(op) _vm_bitop_immediate(op, uint32_t, janet_checkuintrange, "32-bit unsigned integers");
+#define vm_bitop_uimmediate(op) _vm_bitop_uimmediate(op, int32_t, bender_checkintrange, "32-bit signed integers");
+#define vm_bitop_immediate(op) _vm_bitop_immediate(op, int32_t, bender_checkintrange, "32-bit signed integers");
+#define vm_bitopu_immediate(op) _vm_bitop_immediate(op, uint32_t, bender_checkuintrange, "32-bit unsigned integers");
 #define _vm_binop(op, wrap)\
     {\
-        Janet op1 = stack[B];\
-        Janet op2 = stack[C];\
-        if (JANET_LIKELY(janet_checktype(op1, JANET_NUMBER) && janet_checktype(op2, JANET_NUMBER))) {\
-            double x1 = janet_unwrap_number(op1);\
-            double x2 = janet_unwrap_number(op2);\
+        Bender op1 = stack[B];\
+        Bender op2 = stack[C];\
+        if (BENDER_LIKELY(bender_checktype(op1, BENDER_NUMBER) && bender_checktype(op2, BENDER_NUMBER))) {\
+            double x1 = bender_unwrap_number(op1);\
+            double x2 = bender_unwrap_number(op2);\
             stack[A] = wrap(x1 op x2);\
             vm_pcnext();\
         } else {\
             vm_commit();\
-            Janet a = janet_binop_call(#op, "r" #op, op1, op2);\
+            Bender a = bender_binop_call(#op, "r" #op, op1, op2);\
             stack = fiber->data + fiber->frame;\
             stack[A] = a;\
             vm_checkgc_pcnext();\
         }\
     }
-#define vm_binop(op) _vm_binop(op, janet_wrap_number)
+#define vm_binop(op) _vm_binop(op, bender_wrap_number)
 #define _vm_bitop(op, type1, rangecheck, msg)\
     {\
-        Janet op1 = stack[B];\
-        Janet op2 = stack[C];\
-        if (JANET_LIKELY(janet_checktype(op1, JANET_NUMBER) && janet_checktype(op2, JANET_NUMBER))) {\
-            double y1 = janet_unwrap_number(op1);\
-            double y2 = janet_unwrap_number(op2);\
-            if (!rangecheck(y1)) { vm_commit(); janet_panicf("value %v out of range for " msg, op1); }\
-            if (!janet_checkintrange(y2)) { vm_commit(); janet_panicf("rhs must be valid 32-bit signed integer, got %f", op2); }\
+        Bender op1 = stack[B];\
+        Bender op2 = stack[C];\
+        if (BENDER_LIKELY(bender_checktype(op1, BENDER_NUMBER) && bender_checktype(op2, BENDER_NUMBER))) {\
+            double y1 = bender_unwrap_number(op1);\
+            double y2 = bender_unwrap_number(op2);\
+            if (!rangecheck(y1)) { vm_commit(); bender_panicf("value %v out of range for " msg, op1); }\
+            if (!bender_checkintrange(y2)) { vm_commit(); bender_panicf("rhs must be valid 32-bit signed integer, got %f", op2); }\
             type1 x1 = (type1) y1;\
             int32_t x2 = (int32_t) y2;\
-            stack[A] = janet_wrap_number((type1) (x1 op x2));\
+            stack[A] = bender_wrap_number((type1) (x1 op x2));\
             vm_pcnext();\
         } else {\
             vm_commit();\
-            Janet a = janet_binop_call(#op, "r" #op, op1, op2);\
+            Bender a = bender_binop_call(#op, "r" #op, op1, op2);\
             stack = fiber->data + fiber->frame;\
             stack[A] = a;\
             vm_checkgc_pcnext();\
         }\
     }
-#define vm_bitop(op) _vm_bitop(op, int32_t, janet_checkintrange, "32-bit signed integers")
-#define vm_bitopu(op) _vm_bitop(op, uint32_t, janet_checkuintrange, "32-bit unsigned integers")
+#define vm_bitop(op) _vm_bitop(op, int32_t, bender_checkintrange, "32-bit signed integers")
+#define vm_bitopu(op) _vm_bitop(op, uint32_t, bender_checkuintrange, "32-bit unsigned integers")
 #define vm_compop(op) \
     {\
-        Janet op1 = stack[B];\
-        Janet op2 = stack[C];\
-        if (JANET_LIKELY(janet_checktype(op1, JANET_NUMBER) && janet_checktype(op2, JANET_NUMBER))) {\
-            double x1 = janet_unwrap_number(op1);\
-            double x2 = janet_unwrap_number(op2);\
-            stack[A] = janet_wrap_boolean(x1 op x2);\
+        Bender op1 = stack[B];\
+        Bender op2 = stack[C];\
+        if (BENDER_LIKELY(bender_checktype(op1, BENDER_NUMBER) && bender_checktype(op2, BENDER_NUMBER))) {\
+            double x1 = bender_unwrap_number(op1);\
+            double x2 = bender_unwrap_number(op2);\
+            stack[A] = bender_wrap_boolean(x1 op x2);\
             vm_pcnext();\
         } else {\
             vm_commit();\
-            Janet a = janet_wrap_boolean(janet_compare(op1, op2) op 0);\
+            Bender a = bender_wrap_boolean(bender_compare(op1, op2) op 0);\
             stack = fiber->data + fiber->frame;\
             stack[A] = a;\
             vm_checkgc_pcnext();\
@@ -791,15 +791,15 @@ static JanetNativeStep janet_native_trampoline(JanetFiber *f, JanetFuncDef *d, u
     }
 #define vm_compop_imm(op) \
     {\
-        Janet op1 = stack[B];\
-        if (janet_checktype(op1, JANET_NUMBER)) {\
-            double x1 = janet_unwrap_number(op1);\
+        Bender op1 = stack[B];\
+        if (bender_checktype(op1, BENDER_NUMBER)) {\
+            double x1 = bender_unwrap_number(op1);\
             double x2 = (double) CS; \
-            stack[A] = janet_wrap_boolean(x1 op x2);\
+            stack[A] = bender_wrap_boolean(x1 op x2);\
             vm_pcnext();\
         } else {\
             vm_commit();\
-            Janet a = janet_wrap_boolean(janet_compare(op1, janet_wrap_integer(CS)) op 0);\
+            Bender a = bender_wrap_boolean(bender_compare(op1, bender_wrap_integer(CS)) op 0);\
             stack = fiber->data + fiber->frame;\
             stack[A] = a;\
             vm_checkgc_pcnext();\
@@ -807,154 +807,154 @@ static JanetNativeStep janet_native_trampoline(JanetFiber *f, JanetFuncDef *d, u
     }
 
 /* Trace a function call.
- * This is a macro to avoid stale argv if janet_eprintf resizes the stack
+ * This is a macro to avoid stale argv if bender_eprintf resizes the stack
  */
 #define vm_do_trace(func, argc, argv) do { \
-    JanetFunction* _func = (func);\
+    BenderFunction* _func = (func);\
     if (_func->def->name) {\
-        janet_eprintf("trace (%S", _func->def->name);\
+        bender_eprintf("trace (%S", _func->def->name);\
     } else {\
-        janet_eprintf("trace (%p", janet_wrap_function(_func));\
+        bender_eprintf("trace (%p", bender_wrap_function(_func));\
     }\
     int32_t _argc = (argc);\
     for (int32_t i = 0; i < _argc; i++) {\
-        janet_eprintf(" %p", (argv)[i]);\
+        bender_eprintf(" %p", (argv)[i]);\
     }\
-    janet_eprintf(")\n");\
+    bender_eprintf(")\n");\
 } while (0)
 
 /* Invoke a method once we have looked it up */
-static Janet janet_method_invoke(Janet method, int32_t argc, Janet *argv) {
-    switch (janet_type(method)) {
-        case JANET_CFUNCTION:
-            return (janet_unwrap_cfunction(method))(argc, argv);
-        case JANET_FUNCTION: {
-            JanetFunction *fun = janet_unwrap_function(method);
-            return janet_call(fun, argc, argv);
+static Bender bender_method_invoke(Bender method, int32_t argc, Bender *argv) {
+    switch (bender_type(method)) {
+        case BENDER_CFUNCTION:
+            return (bender_unwrap_cfunction(method))(argc, argv);
+        case BENDER_FUNCTION: {
+            BenderFunction *fun = bender_unwrap_function(method);
+            return bender_call(fun, argc, argv);
         }
-        case JANET_ABSTRACT: {
-            JanetAbstract abst = janet_unwrap_abstract(method);
-            const JanetAbstractType *at = janet_abstract_type(abst);
+        case BENDER_ABSTRACT: {
+            BenderAbstract abst = bender_unwrap_abstract(method);
+            const BenderAbstractType *at = bender_abstract_type(abst);
             if (NULL != at->call) {
                 return at->call(abst, argc, argv);
             }
         }
         /* fallthrough */
-        case JANET_STRING:
-        case JANET_BUFFER:
-        case JANET_TABLE:
-        case JANET_STRUCT:
-        case JANET_ARRAY:
-        case JANET_TUPLE: {
+        case BENDER_STRING:
+        case BENDER_BUFFER:
+        case BENDER_TABLE:
+        case BENDER_STRUCT:
+        case BENDER_ARRAY:
+        case BENDER_TUPLE: {
             if (argc != 1) {
-                janet_panicf("%v called with %d arguments, possibly expected 1", method, argc);
+                bender_panicf("%v called with %d arguments, possibly expected 1", method, argc);
             }
-            return janet_in(method, argv[0]);
+            return bender_in(method, argv[0]);
         }
         default: {
             if (argc != 1) {
-                janet_panicf("%v called with %d arguments, possibly expected 1", method, argc);
+                bender_panicf("%v called with %d arguments, possibly expected 1", method, argc);
             }
-            return janet_in(argv[0], method);
+            return bender_in(argv[0], method);
         }
     }
 }
 
 /* Call a non function type from a JOP_CALL or JOP_TAILCALL instruction.
  * Assumes that the arguments are on the fiber stack. */
-static Janet call_nonfn(JanetFiber *fiber, Janet callee) {
+static Bender call_nonfn(BenderFiber *fiber, Bender callee) {
     int32_t argc = fiber->stacktop - fiber->stackstart;
     fiber->stacktop = fiber->stackstart;
-    return janet_method_invoke(callee, argc, fiber->data + fiber->stacktop);
+    return bender_method_invoke(callee, argc, fiber->data + fiber->stacktop);
 }
 
 /* Method lookup could potentially handle tables specially... */
-static Janet method_to_fun(Janet method, Janet obj) {
-    return janet_get(obj, method);
+static Bender method_to_fun(Bender method, Bender obj) {
+    return bender_get(obj, method);
 }
 
 /* Get a callable from a keyword method name and ensure that it is valid. */
-static Janet resolve_method(Janet name, JanetFiber *fiber) {
+static Bender resolve_method(Bender name, BenderFiber *fiber) {
     int32_t argc = fiber->stacktop - fiber->stackstart;
-    if (argc < 1) janet_panicf("method call (%v) takes at least 1 argument, got 0", name);
-    Janet callee = method_to_fun(name, fiber->data[fiber->stackstart]);
-    if (janet_checktype(callee, JANET_NIL))
-        janet_panicf("unknown method %v invoked on %v", name, fiber->data[fiber->stackstart]);
+    if (argc < 1) bender_panicf("method call (%v) takes at least 1 argument, got 0", name);
+    Bender callee = method_to_fun(name, fiber->data[fiber->stackstart]);
+    if (bender_checktype(callee, BENDER_NIL))
+        bender_panicf("unknown method %v invoked on %v", name, fiber->data[fiber->stackstart]);
     return callee;
 }
 
 /* Lookup method on value x */
-static Janet janet_method_lookup(Janet x, const char *name) {
-    return method_to_fun(janet_ckeywordv(name), x);
+static Bender bender_method_lookup(Bender x, const char *name) {
+    return method_to_fun(bender_ckeywordv(name), x);
 }
 
-static Janet janet_unary_call(const char *method, Janet arg) {
-    Janet m = janet_method_lookup(arg, method);
-    if (janet_checktype(m, JANET_NIL)) {
-        janet_panicf("could not find method :%s for %v", method, arg);
+static Bender bender_unary_call(const char *method, Bender arg) {
+    Bender m = bender_method_lookup(arg, method);
+    if (bender_checktype(m, BENDER_NIL)) {
+        bender_panicf("could not find method :%s for %v", method, arg);
     } else {
-        Janet argv[1] = { arg };
-        return janet_method_invoke(m, 1, argv);
+        Bender argv[1] = { arg };
+        return bender_method_invoke(m, 1, argv);
     }
 }
 
 /* Call a method first on the righthand side, and then on the left hand side with a prefix */
-static Janet janet_binop_call(const char *lmethod, const char *rmethod, Janet lhs, Janet rhs) {
-    Janet lm = janet_method_lookup(lhs, lmethod);
-    if (janet_checktype(lm, JANET_NIL)) {
+static Bender bender_binop_call(const char *lmethod, const char *rmethod, Bender lhs, Bender rhs) {
+    Bender lm = bender_method_lookup(lhs, lmethod);
+    if (bender_checktype(lm, BENDER_NIL)) {
         /* Invert order for rmethod */
-        Janet lr = janet_method_lookup(rhs, rmethod);
-        Janet argv[2] = { rhs, lhs };
-        if (janet_checktype(lr, JANET_NIL)) {
-            janet_panicf("could not find method :%s for %v or :%s for %v",
+        Bender lr = bender_method_lookup(rhs, rmethod);
+        Bender argv[2] = { rhs, lhs };
+        if (bender_checktype(lr, BENDER_NIL)) {
+            bender_panicf("could not find method :%s for %v or :%s for %v",
                          lmethod, lhs,
                          rmethod, rhs);
         }
-        return janet_method_invoke(lr, 2, argv);
+        return bender_method_invoke(lr, 2, argv);
     } else {
-        Janet argv[2] = { lhs, rhs };
-        return janet_method_invoke(lm, 2, argv);
+        Bender argv[2] = { lhs, rhs };
+        return bender_method_invoke(lm, 2, argv);
     }
 }
 
 /* Forward declaration */
-static JanetSignal janet_check_can_resume(JanetFiber *fiber, Janet *out, int is_cancel);
+static BenderSignal bender_check_can_resume(BenderFiber *fiber, Bender *out, int is_cancel);
 /* P3.6: walk the resume chain for shared-stack fibers parked mid-C
  * (child links verified intact — a stale link means that ancestor
  * already unwound normally). Self excluded (the suspender abandons
  * cleanly and re-primes). Bounded. */
-static int janet_fiber_chain_has_shared(JanetFiber *fiber);static JanetSignal janet_continue_no_check(JanetFiber *fiber, Janet in, Janet *out);
-static void janet_suspend_swap(JanetFiber *fiber, JanetSignal sig, Janet payload);
+static int bender_fiber_chain_has_shared(BenderFiber *fiber);static BenderSignal bender_continue_no_check(BenderFiber *fiber, Bender in, Bender *out);
+static void bender_suspend_swap(BenderFiber *fiber, BenderSignal sig, Bender payload);
 
 /* PGO type-profile collector (Phase 1). Records observed param/return
- * types per function while janet_vm.profile_table is non-NULL. Keyed by
- * JanetFuncDef* identity; each entry holds a strong function reference so
- * profiled defs survive. Masks are uint32 bit sets over JanetType (16
+ * types per function while bender_vm.profile_table is non-NULL. Keyed by
+ * BenderFuncDef* identity; each entry holds a strong function reference so
+ * profiled defs survive. Masks are uint32 bit sets over BenderType (16
  * types fit). Zero cost when off: callers guard on the NULL table. */
-#define JANET_PROFILE_MAXPARAMS 8
-#define JANET_PROFILE_ELEMSAMPLE 8
+#define BENDER_PROFILE_MAXPARAMS 8
+#define BENDER_PROFILE_ELEMSAMPLE 8
 /* Phase 4B: distinct observed VALUES per scalar atom param slot. A
  * slot observing more distinct values than this is marked open (the
  * consumer must refuse closed-set reasoning for it), never a huge
  * set. */
-#define JANET_PROFILE_VALSAMPLE 8
-#define JANET_PROFILE_SIGSAMPLE 8
+#define BENDER_PROFILE_VALSAMPLE 8
+#define BENDER_PROFILE_SIGSAMPLE 8
 /* Stream D step A: distinct observed table/struct KEY SETS per param
  * slot ("shapes"). ttfx-style record passing means most unprovable
  * params are tables carrying a fixed key set -- a struct wearing a
  * hash table's clothing. Recording the observed key sets lets the
  * build emit a real C struct with offset field access instead of
- * janet_table_get hash probes. Same discipline as VALSAMPLE above: a
+ * bender_table_get hash probes. Same discipline as VALSAMPLE above: a
  * slot observing more distinct shapes than this is marked OPEN and the
- * consumer must keep it a boxed JanetTable* -- exactly the correct
+ * consumer must keep it a boxed BenderTable* -- exactly the correct
  * outcome for a genuine dictionary (dynamic keys), so real
  * dictionaries disqualify themselves automatically. */
-#define JANET_PROFILE_SHAPESAMPLE 4
+#define BENDER_PROFILE_SHAPESAMPLE 4
 /* Guard against pathological records: a key set wider than this is
  * treated as open rather than flattened (struct layout churn stops
  * being worth it, and it signals the value is used as a map). ttfx's
  * widest real record (canvas) is ~18 keys. */
-#define JANET_PROFILE_SHAPEMAXKEYS 24
+#define BENDER_PROFILE_SHAPEMAXKEYS 24
 
 /* Direct-mapped entry cache (auto-PGO): real programs alternate
  * between functions, so a last-entry cache thrashes (16x slowdown
@@ -965,117 +965,117 @@ static void janet_suspend_swap(JanetFiber *fiber, JanetSignal sig, Janet payload
  * reads the table (stop, reset, rows), so counts are never lost. The
  * non-moving collector keeps cached pointers valid while their table
  * is current, which the pt-identity check enforces. */
-#define JANET_PROFILE_CACHELINES 64
+#define BENDER_PROFILE_CACHELINES 64
 /* Bounded diagnostic branch evidence: no allocation or collection in a jump. */
-#define JANET_PROFILE_EDGE_MAXPC 256
+#define BENDER_PROFILE_EDGE_MAXPC 256
 typedef struct {
-    JanetTable *pt;
-    JanetFuncDef *def;
-    JanetTable *e;
+    BenderTable *pt;
+    BenderFuncDef *def;
+    BenderTable *e;
     int64_t calls;
     uint32_t rets;
     uint32_t tick;
     int live;
-    JanetArray *pa;
-    JanetArray *ea;
-    JanetArray *mn;
-    JanetArray *mx;
-    JanetArray *va;
-    JanetArray *sh;
-    Janet sig;
-    JanetArray *edges;
-    JanetArray *receivers;
-    JanetArray *pce;
-} JanetProfileCache;
+    BenderArray *pa;
+    BenderArray *ea;
+    BenderArray *mn;
+    BenderArray *mx;
+    BenderArray *va;
+    BenderArray *sh;
+    Bender sig;
+    BenderArray *edges;
+    BenderArray *receivers;
+    BenderArray *pce;
+} BenderProfileCache;
 /* Phase C: the fast-path cache is per-thread. Worker VMs share this
  * translation unit across OS threads; a single global would let two
  * workers fill/use it concurrently (params landing in the wrong
  * function's arrays). Thread-local keeps every VM disjoint. Static
  * storage is zero-initialized. */
-static JANET_THREAD_LOCAL JanetProfileCache janet_profile_cache[JANET_PROFILE_CACHELINES];
+static BENDER_THREAD_LOCAL BenderProfileCache bender_profile_cache[BENDER_PROFILE_CACHELINES];
 
-static uint32_t janet_profile_line(JanetFuncDef *def) {
+static uint32_t bender_profile_line(BenderFuncDef *def) {
     uintptr_t h = (uintptr_t) def;
     h ^= h >> 12;
-    return (h >> 4) % JANET_PROFILE_CACHELINES;
+    return (h >> 4) % BENDER_PROFILE_CACHELINES;
 }
 
-static void janet_profile_flush_line(uint32_t ln) {
-    JanetProfileCache *c = &janet_profile_cache[ln];
+static void bender_profile_flush_line(uint32_t ln) {
+    BenderProfileCache *c = &bender_profile_cache[ln];
     if (c->live) {
-        janet_table_put(c->e, janet_ckeywordv("calls"),
-                        janet_wrap_integer(c->calls));
-        janet_table_put(c->e, janet_ckeywordv("rets"),
-                        janet_wrap_integer((int64_t) c->rets));
+        bender_table_put(c->e, bender_ckeywordv("calls"),
+                        bender_wrap_integer(c->calls));
+        bender_table_put(c->e, bender_ckeywordv("rets"),
+                        bender_wrap_integer((int64_t) c->rets));
         c->live = 0;
     }
 }
 
-static void janet_profile_flush(void) {
+static void bender_profile_flush(void) {
     uint32_t ln;
-    for (ln = 0; ln < JANET_PROFILE_CACHELINES; ln++)
-        janet_profile_flush_line(ln);
+    for (ln = 0; ln < BENDER_PROFILE_CACHELINES; ln++)
+        bender_profile_flush_line(ln);
 }
 
-static void janet_profile_cache_fill(JanetTable *pt, JanetFuncDef *def, JanetTable *e) {
+static void bender_profile_cache_fill(BenderTable *pt, BenderFuncDef *def, BenderTable *e) {
     /* Miss path flushes first (per the collector contract): the live
      * entry's C-side calls/rets would otherwise be lost on eviction. */
-    uint32_t ln = janet_profile_line(def);
-    JanetProfileCache *c = &janet_profile_cache[ln];
-    janet_profile_flush_line(ln);
+    uint32_t ln = bender_profile_line(def);
+    BenderProfileCache *c = &bender_profile_cache[ln];
+    bender_profile_flush_line(ln);
     c->pt = pt;
     c->def = def;
     c->e = e;
     c->calls =
-        janet_unwrap_integer(janet_table_get(e, janet_ckeywordv("calls")));
+        bender_unwrap_integer(bender_table_get(e, bender_ckeywordv("calls")));
     c->rets =
-        (uint32_t) janet_unwrap_integer(janet_table_get(e, janet_ckeywordv("rets")));
-    c->pa = janet_unwrap_array(janet_table_get(e, janet_ckeywordv("params")));
-    c->ea = janet_unwrap_array(janet_table_get(e, janet_ckeywordv("elems")));
-    c->mn = janet_unwrap_array(janet_table_get(e, janet_ckeywordv("mins")));
-    c->mx = janet_unwrap_array(janet_table_get(e, janet_ckeywordv("maxs")));
-    c->va = janet_unwrap_array(janet_table_get(e, janet_ckeywordv("vals")));
-    c->sh = janet_unwrap_array(janet_table_get(e, janet_ckeywordv("shapes")));
-    c->sig = janet_table_get(e, janet_ckeywordv("signatures"));
+        (uint32_t) bender_unwrap_integer(bender_table_get(e, bender_ckeywordv("rets")));
+    c->pa = bender_unwrap_array(bender_table_get(e, bender_ckeywordv("params")));
+    c->ea = bender_unwrap_array(bender_table_get(e, bender_ckeywordv("elems")));
+    c->mn = bender_unwrap_array(bender_table_get(e, bender_ckeywordv("mins")));
+    c->mx = bender_unwrap_array(bender_table_get(e, bender_ckeywordv("maxs")));
+    c->va = bender_unwrap_array(bender_table_get(e, bender_ckeywordv("vals")));
+    c->sh = bender_unwrap_array(bender_table_get(e, bender_ckeywordv("shapes")));
+    c->sig = bender_table_get(e, bender_ckeywordv("signatures"));
     {
-        Janet edge = janet_table_get(e, janet_ckeywordv("edges"));
-        c->edges = janet_checktype(edge, JANET_ARRAY) ? janet_unwrap_array(edge) : NULL;
-        edge = janet_table_get(e, janet_ckeywordv("receivers"));
-        c->receivers = janet_checktype(edge, JANET_ARRAY) ? janet_unwrap_array(edge) : NULL;
-        edge = janet_table_get(e, janet_ckeywordv("calledges"));
-        c->pce = janet_checktype(edge, JANET_ARRAY) ? janet_unwrap_array(edge) : NULL;
+        Bender edge = bender_table_get(e, bender_ckeywordv("edges"));
+        c->edges = bender_checktype(edge, BENDER_ARRAY) ? bender_unwrap_array(edge) : NULL;
+        edge = bender_table_get(e, bender_ckeywordv("receivers"));
+        c->receivers = bender_checktype(edge, BENDER_ARRAY) ? bender_unwrap_array(edge) : NULL;
+        edge = bender_table_get(e, bender_ckeywordv("calledges"));
+        c->pce = bender_checktype(edge, BENDER_ARRAY) ? bender_unwrap_array(edge) : NULL;
     }
     c->live = 1;
 }
 
-static JANET_THREAD_LOCAL unsigned long long janet_profile_hits;
-static JANET_THREAD_LOCAL unsigned long long janet_profile_misses;
+static BENDER_THREAD_LOCAL unsigned long long bender_profile_hits;
+static BENDER_THREAD_LOCAL unsigned long long bender_profile_misses;
 
-static JanetProfileCache *janet_profile_hit(JanetFunction *func) {
-    JanetProfileCache *c = &janet_profile_cache[janet_profile_line(func->def)];
-    if (c->live && c->pt == janet_vm.profile_table && c->def == func->def) {
-        janet_profile_hits++;
+static BenderProfileCache *bender_profile_hit(BenderFunction *func) {
+    BenderProfileCache *c = &bender_profile_cache[bender_profile_line(func->def)];
+    if (c->live && c->pt == bender_vm.profile_table && c->def == func->def) {
+        bender_profile_hits++;
         return c;
     }
-    janet_profile_misses++;
+    bender_profile_misses++;
     return NULL;
 }
 
-static JanetTable *janet_profile_entry(JanetFunction *func) {
-    JanetTable *pt = janet_vm.profile_table;
-    Janet key = janet_wrap_pointer(func->def);
-    Janet v = janet_table_get(pt, key);
-    if (janet_checktype(v, JANET_NIL)) {
+static BenderTable *bender_profile_entry(BenderFunction *func) {
+    BenderTable *pt = bender_vm.profile_table;
+    Bender key = bender_wrap_pointer(func->def);
+    Bender v = bender_table_get(pt, key);
+    if (bender_checktype(v, BENDER_NIL)) {
         int i;
-        JanetTable *e = janet_table(4);
-        JanetArray *pa;
-        Janet eroot;
+        BenderTable *e = bender_table(4);
+        BenderArray *pa;
+        Bender eroot;
         /* Root until inserted: table_put can trigger a collection that
          * would otherwise sweep the still-floating entry. */
-        eroot = janet_wrap_table(e);
-        janet_gcroot(eroot);
-        pa = janet_array(JANET_PROFILE_MAXPARAMS);
-        janet_gcroot(janet_wrap_array(pa));
+        eroot = bender_wrap_table(e);
+        bender_gcroot(eroot);
+        pa = bender_array(BENDER_PROFILE_MAXPARAMS);
+        bender_gcroot(bender_wrap_array(pa));
         /* P3.4 bookkeeping puts: the profiler's entry table is
          * observation bookkeeping, not value-graph ownership — the
          * same class as pt itself (marshal memo, threaded registry).
@@ -1086,92 +1086,92 @@ static JanetTable *janet_profile_entry(JanetFunction *func) {
          * barrier panicked there, killing strict procs in AOT
          * binaries (auto-PGO instruments every call). put_raw keeps
          * generational-dirty marking and skips the export panic. */
-        janet_table_put_raw(e, janet_ckeywordv("func"), janet_wrap_function(func));
-        janet_table_put_raw(e, janet_ckeywordv("calls"), janet_wrap_integer(0));
-        for (i = 0; i < JANET_PROFILE_MAXPARAMS; i++)
-            janet_array_push(pa, janet_wrap_integer(0));
-        janet_table_put_raw(e, janet_ckeywordv("params"), janet_wrap_array(pa));
+        bender_table_put_raw(e, bender_ckeywordv("func"), bender_wrap_function(func));
+        bender_table_put_raw(e, bender_ckeywordv("calls"), bender_wrap_integer(0));
+        for (i = 0; i < BENDER_PROFILE_MAXPARAMS; i++)
+            bender_array_push(pa, bender_wrap_integer(0));
+        bender_table_put_raw(e, bender_ckeywordv("params"), bender_wrap_array(pa));
         {
             /* Parallel element-type masks: for array params, the OR of
              * the first elements' types (heuristic sample, see call
              * path). Zero for non-arrays. Evidence for SoA-kernel
              * shaping, not proof. */
-            JanetArray *ea = janet_array(JANET_PROFILE_ELEMSAMPLE);
-            janet_gcroot(janet_wrap_array(ea));
-            for (i = 0; i < JANET_PROFILE_ELEMSAMPLE; i++)
-                janet_array_push(ea, janet_wrap_integer(0));
-            janet_table_put_raw(e, janet_ckeywordv("elems"), janet_wrap_array(ea));
-            janet_gcunroot(janet_wrap_array(ea));
+            BenderArray *ea = bender_array(BENDER_PROFILE_ELEMSAMPLE);
+            bender_gcroot(bender_wrap_array(ea));
+            for (i = 0; i < BENDER_PROFILE_ELEMSAMPLE; i++)
+                bender_array_push(ea, bender_wrap_integer(0));
+            bender_table_put_raw(e, bender_ckeywordv("elems"), bender_wrap_array(ea));
+            bender_gcunroot(bender_wrap_array(ea));
         }
         {
             /* Parallel min/max for number params (PGO range evidence:
              * unanimous min >= 0 seeds nonneg int-division shaping).
              * +inf/-inf sentinels mean unobserved (dumped as nil). */
-            JanetArray *mn = janet_array(JANET_PROFILE_MAXPARAMS);
-            JanetArray *mx = janet_array(JANET_PROFILE_MAXPARAMS);
-            janet_gcroot(janet_wrap_array(mn));
-            janet_gcroot(janet_wrap_array(mx));
-            for (i = 0; i < JANET_PROFILE_MAXPARAMS; i++) {
-                janet_array_push(mn, janet_wrap_number(INFINITY));
-                janet_array_push(mx, janet_wrap_number(-INFINITY));
+            BenderArray *mn = bender_array(BENDER_PROFILE_MAXPARAMS);
+            BenderArray *mx = bender_array(BENDER_PROFILE_MAXPARAMS);
+            bender_gcroot(bender_wrap_array(mn));
+            bender_gcroot(bender_wrap_array(mx));
+            for (i = 0; i < BENDER_PROFILE_MAXPARAMS; i++) {
+                bender_array_push(mn, bender_wrap_number(INFINITY));
+                bender_array_push(mx, bender_wrap_number(-INFINITY));
             }
-            janet_table_put_raw(e, janet_ckeywordv("mins"), janet_wrap_array(mn));
-            janet_table_put_raw(e, janet_ckeywordv("maxs"), janet_wrap_array(mx));
-            janet_gcunroot(janet_wrap_array(mn));
-            janet_gcunroot(janet_wrap_array(mx));
+            bender_table_put_raw(e, bender_ckeywordv("mins"), bender_wrap_array(mn));
+            bender_table_put_raw(e, bender_ckeywordv("maxs"), bender_wrap_array(mx));
+            bender_gcunroot(bender_wrap_array(mn));
+            bender_gcunroot(bender_wrap_array(mx));
         }
         {
             /* Phase 4B: closed-value-set evidence for scalar atom
              * (string/keyword/symbol) param slots. Per slot: nil =
              * unobserved, array = observed distinct values (bounded by
-             * JANET_PROFILE_VALSAMPLE), true = open (too many distinct
+             * BENDER_PROFILE_VALSAMPLE), true = open (too many distinct
              * values observed -- closed-set reasoning must refuse).
              * Booleans can never be a recorded atom value, so `true`
              * is an unambiguous marker. Values stay alive through the
              * entry table exactly like the mask arrays. */
-            JanetArray *va = janet_array(JANET_PROFILE_MAXPARAMS);
-            janet_gcroot(janet_wrap_array(va));
-            for (i = 0; i < JANET_PROFILE_MAXPARAMS; i++)
-                janet_array_push(va, janet_wrap_nil());
-            janet_table_put_raw(e, janet_ckeywordv("vals"), janet_wrap_array(va));
-            janet_gcunroot(janet_wrap_array(va));
+            BenderArray *va = bender_array(BENDER_PROFILE_MAXPARAMS);
+            bender_gcroot(bender_wrap_array(va));
+            for (i = 0; i < BENDER_PROFILE_MAXPARAMS; i++)
+                bender_array_push(va, bender_wrap_nil());
+            bender_table_put_raw(e, bender_ckeywordv("vals"), bender_wrap_array(va));
+            bender_gcunroot(bender_wrap_array(va));
         }
         {
             /* Stream D step A: observed table/struct KEY SETS per slot.
              * Per slot: nil = unobserved, array of key-arrays = the
              * distinct observed shapes (bounded by
-             * JANET_PROFILE_SHAPESAMPLE), true = open (too many
+             * BENDER_PROFILE_SHAPESAMPLE), true = open (too many
              * distinct shapes, or a key set wider than
-             * JANET_PROFILE_SHAPEMAXKEYS, or a non-keyword key --
+             * BENDER_PROFILE_SHAPEMAXKEYS, or a non-keyword key --
              * consumers must keep the slot a boxed table). Booleans can
              * never be a recorded shape, so `true` is unambiguous, the
              * same marker discipline as :vals above. */
-            JanetArray *sh = janet_array(JANET_PROFILE_MAXPARAMS);
-            janet_gcroot(janet_wrap_array(sh));
-            for (i = 0; i < JANET_PROFILE_MAXPARAMS; i++)
-                janet_array_push(sh, janet_wrap_nil());
-            janet_table_put_raw(e, janet_ckeywordv("shapes"), janet_wrap_array(sh));
-            janet_gcunroot(janet_wrap_array(sh));
+            BenderArray *sh = bender_array(BENDER_PROFILE_MAXPARAMS);
+            bender_gcroot(bender_wrap_array(sh));
+            for (i = 0; i < BENDER_PROFILE_MAXPARAMS; i++)
+                bender_array_push(sh, bender_wrap_nil());
+            bender_table_put_raw(e, bender_ckeywordv("shapes"), bender_wrap_array(sh));
+            bender_gcunroot(bender_wrap_array(sh));
         }
-        janet_table_put_raw(e, janet_ckeywordv("rets"), janet_wrap_integer(0));
+        bender_table_put_raw(e, bender_ckeywordv("rets"), bender_wrap_integer(0));
         /* Allocate once per profiled definition, never at a branch or poll.
          * Large definitions remain explicitly unobserved rather than having
          * their PCs aliased to unrelated sites. */
-        if (func->def->bytecode_length <= JANET_PROFILE_EDGE_MAXPC) {
-            JanetArray *edges = janet_array(func->def->bytecode_length * 2);
-            janet_gcroot(janet_wrap_array(edges));
+        if (func->def->bytecode_length <= BENDER_PROFILE_EDGE_MAXPC) {
+            BenderArray *edges = bender_array(func->def->bytecode_length * 2);
+            bender_gcroot(bender_wrap_array(edges));
             for (i = 0; i < func->def->bytecode_length * 2; i++)
-                janet_array_push(edges, janet_wrap_integer(0));
-            janet_table_put_raw(e, janet_ckeywordv("edges"), janet_wrap_array(edges));
-            janet_gcunroot(janet_wrap_array(edges));
+                bender_array_push(edges, bender_wrap_integer(0));
+            bender_table_put_raw(e, bender_ckeywordv("edges"), bender_wrap_array(edges));
+            bender_gcunroot(bender_wrap_array(edges));
             /* One type-mask slot per original bytecode PC. This does not
              * infer a shape or authorize a specialization on its own. */
-            JanetArray *receivers = janet_array(func->def->bytecode_length);
-            janet_gcroot(janet_wrap_array(receivers));
+            BenderArray *receivers = bender_array(func->def->bytecode_length);
+            bender_gcroot(bender_wrap_array(receivers));
             for (i = 0; i < func->def->bytecode_length; i++)
-                janet_array_push(receivers, janet_wrap_integer(0));
-            janet_table_put_raw(e, janet_ckeywordv("receivers"), janet_wrap_array(receivers));
-            janet_gcunroot(janet_wrap_array(receivers));
+                bender_array_push(receivers, bender_wrap_integer(0));
+            bender_table_put_raw(e, bender_ckeywordv("receivers"), bender_wrap_array(receivers));
+            bender_gcunroot(bender_wrap_array(receivers));
             /* One call-edge attribution slot per original bytecode PC:
              * nil = unobserved, [calleeName total native] = exactly one
              * callee NAME observed at this PC, true = open (a second
@@ -1181,21 +1181,21 @@ static JanetTable *janet_profile_entry(JanetFunction *func) {
              * skip. It is NOT a type or identity proof: a name is not a
              * FuncDef, and the slot can be rebound between the profiled
              * run and the build. Consumers must still verify the callee
-             * at run time (janet_native_call_enter does). */
-            JanetArray *calledges = janet_array(func->def->bytecode_length);
-            janet_gcroot(janet_wrap_array(calledges));
+             * at run time (bender_native_call_enter does). */
+            BenderArray *calledges = bender_array(func->def->bytecode_length);
+            bender_gcroot(bender_wrap_array(calledges));
             for (i = 0; i < func->def->bytecode_length; i++)
-                janet_array_push(calledges, janet_wrap_nil());
-            janet_table_put_raw(e, janet_ckeywordv("calledges"), janet_wrap_array(calledges));
-            janet_gcunroot(janet_wrap_array(calledges));
+                bender_array_push(calledges, bender_wrap_nil());
+            bender_table_put_raw(e, bender_ckeywordv("calledges"), bender_wrap_array(calledges));
+            bender_gcunroot(bender_wrap_array(calledges));
         }
         /* Joint, full-arity tag vectors; true denotes OPEN. The entry
          * owns this array and every nested vector across GC. */
         {
-            JanetArray *hist = janet_array(0);
-            janet_gcroot(janet_wrap_array(hist));
-            janet_table_put_raw(e, janet_ckeywordv("signatures"), janet_wrap_array(hist));
-            janet_gcunroot(janet_wrap_array(hist));
+            BenderArray *hist = bender_array(0);
+            bender_gcroot(bender_wrap_array(hist));
+            bender_table_put_raw(e, bender_ckeywordv("signatures"), bender_wrap_array(hist));
+            bender_gcunroot(bender_wrap_array(hist));
         }
         /* P3.4 bookkeeping put: pt is the profiler's identity map
          * (function-pointer keyed), the same class as the marshal
@@ -1205,20 +1205,20 @@ static JanetTable *janet_profile_entry(JanetFunction *func) {
          * binaries, which auto-PGO instruments. put_raw keeps
          * generational-dirty marking (minors stay sound) and skips
          * the barrier/export panic. */
-        janet_table_put_raw(pt, key, janet_wrap_table(e));
-        janet_gcunroot(janet_wrap_array(pa));
-        janet_gcunroot(eroot);
-        janet_profile_cache_fill(pt, func->def, e);
+        bender_table_put_raw(pt, key, bender_wrap_table(e));
+        bender_gcunroot(bender_wrap_array(pa));
+        bender_gcunroot(eroot);
+        bender_profile_cache_fill(pt, func->def, e);
         return e;
     }
-    janet_profile_cache_fill(pt, func->def, janet_unwrap_table(v));
-    return janet_unwrap_table(v);
+    bender_profile_cache_fill(pt, func->def, bender_unwrap_table(v));
+    return bender_unwrap_table(v);
 }
 
-static void janet_profile_call(JanetFunction *func, const Janet *argv, int32_t argc) {
+static void bender_profile_call(BenderFunction *func, const Bender *argv, int32_t argc) {
     int32_t n, i;
-    JanetArray *pa, *ea, *mn, *mx, *va, *sh;
-    JanetProfileCache *hit = janet_profile_hit(func);
+    BenderArray *pa, *ea, *mn, *mx, *va, *sh;
+    BenderProfileCache *hit = bender_profile_hit(func);
     if (NULL != hit) {
         pa = hit->pa;
         ea = hit->ea;
@@ -1228,9 +1228,9 @@ static void janet_profile_call(JanetFunction *func, const Janet *argv, int32_t a
         sh = hit->sh;
         hit->calls++;
     } else {
-        JanetTable *e = janet_profile_entry(func);
+        BenderTable *e = bender_profile_entry(func);
         (void) e;
-        hit = janet_profile_hit(func);
+        hit = bender_profile_hit(func);
         pa = hit->pa;
         ea = hit->ea;
         mn = hit->mn;
@@ -1239,45 +1239,45 @@ static void janet_profile_call(JanetFunction *func, const Janet *argv, int32_t a
         sh = hit->sh;
         hit->calls++;
     }
-    n = argc < JANET_PROFILE_MAXPARAMS ? argc : JANET_PROFILE_MAXPARAMS;
-    if (!janet_checktype(hit->sig, JANET_BOOLEAN)) {
-        if (argc < 0 || argc > JANET_PROFILE_MAXPARAMS) {
-            hit->sig = janet_wrap_true();
-            janet_table_put_raw(hit->e, janet_ckeywordv("signatures"), hit->sig);
+    n = argc < BENDER_PROFILE_MAXPARAMS ? argc : BENDER_PROFILE_MAXPARAMS;
+    if (!bender_checktype(hit->sig, BENDER_BOOLEAN)) {
+        if (argc < 0 || argc > BENDER_PROFILE_MAXPARAMS) {
+            hit->sig = bender_wrap_true();
+            bender_table_put_raw(hit->e, bender_ckeywordv("signatures"), hit->sig);
         } else {
-            JanetArray *hist = janet_unwrap_array(hit->sig);
+            BenderArray *hist = bender_unwrap_array(hit->sig);
             int32_t k, found = 0;
             for (k = 0; k < hist->count; k++) {
-                JanetArray *entry = janet_unwrap_array(hist->data[k]);
-                JanetArray *tags = janet_unwrap_array(entry->data[0]);
+                BenderArray *entry = bender_unwrap_array(hist->data[k]);
+                BenderArray *tags = bender_unwrap_array(entry->data[0]);
                 int32_t j;
                 if (tags->count != argc) continue;
                 for (j = 0; j < argc; j++)
-                    if ((uint32_t) janet_unwrap_integer(tags->data[j]) !=
-                        (uint32_t) janet_type(argv[j])) break;
+                    if ((uint32_t) bender_unwrap_integer(tags->data[j]) !=
+                        (uint32_t) bender_type(argv[j])) break;
                 if (j == argc) {
-                    entry->data[1] = janet_wrap_integer(janet_unwrap_integer(entry->data[1]) + 1);
+                    entry->data[1] = bender_wrap_integer(bender_unwrap_integer(entry->data[1]) + 1);
                     found = 1;
                     break;
                 }
             }
             if (!found) {
-                if (hist->count >= JANET_PROFILE_SIGSAMPLE) {
-                    hit->sig = janet_wrap_true();
-                    janet_table_put_raw(hit->e, janet_ckeywordv("signatures"), hit->sig);
+                if (hist->count >= BENDER_PROFILE_SIGSAMPLE) {
+                    hit->sig = bender_wrap_true();
+                    bender_table_put_raw(hit->e, bender_ckeywordv("signatures"), hit->sig);
                 } else {
-                    JanetArray *entry = janet_array(2);
-                    JanetArray *tags;
-                    janet_gcroot(janet_wrap_array(entry));
-                    tags = janet_array(argc);
-                    janet_gcroot(janet_wrap_array(tags));
+                    BenderArray *entry = bender_array(2);
+                    BenderArray *tags;
+                    bender_gcroot(bender_wrap_array(entry));
+                    tags = bender_array(argc);
+                    bender_gcroot(bender_wrap_array(tags));
                     for (k = 0; k < argc; k++)
-                        janet_array_push(tags, janet_wrap_integer(janet_type(argv[k])));
-                    janet_array_push(entry, janet_wrap_array(tags));
-                    janet_array_push(entry, janet_wrap_integer(1));
-                    janet_array_push(hist, janet_wrap_array(entry));
-                    janet_gcunroot(janet_wrap_array(tags));
-                    janet_gcunroot(janet_wrap_array(entry));
+                        bender_array_push(tags, bender_wrap_integer(bender_type(argv[k])));
+                    bender_array_push(entry, bender_wrap_array(tags));
+                    bender_array_push(entry, bender_wrap_integer(1));
+                    bender_array_push(hist, bender_wrap_array(entry));
+                    bender_gcunroot(bender_wrap_array(tags));
+                    bender_gcunroot(bender_wrap_array(entry));
                 }
             }
         }
@@ -1292,64 +1292,64 @@ static void janet_profile_call(JanetFunction *func, const Janet *argv, int32_t a
     int full = (hit->calls < 16) || ((hit->tick & 7) == 0);
     for (i = 0; i < n; i++) {
         /* One type computation per arg (checktype would recompute). */
-        uint32_t at = (uint32_t) janet_type(argv[i]);
-        uint32_t m = (uint32_t) janet_unwrap_integer(pa->data[i]);
+        uint32_t at = (uint32_t) bender_type(argv[i]);
+        uint32_t m = (uint32_t) bender_unwrap_integer(pa->data[i]);
         m |= (1u << at);
-        pa->data[i] = janet_wrap_integer((int64_t) m);
-        if (full && at == (uint32_t) JANET_NUMBER) {
-            double v = janet_unwrap_number(argv[i]);
-            if (v < janet_unwrap_number(mn->data[i])) mn->data[i] = janet_wrap_number(v);
-            if (v > janet_unwrap_number(mx->data[i])) mx->data[i] = janet_wrap_number(v);
+        pa->data[i] = bender_wrap_integer((int64_t) m);
+        if (full && at == (uint32_t) BENDER_NUMBER) {
+            double v = bender_unwrap_number(argv[i]);
+            if (v < bender_unwrap_number(mn->data[i])) mn->data[i] = bender_wrap_number(v);
+            if (v > bender_unwrap_number(mx->data[i])) mx->data[i] = bender_wrap_number(v);
         }
-        if (full && at == (uint32_t) JANET_ARRAY) {
-            JanetArray *av = janet_unwrap_array(argv[i]);
-            int32_t k, nk = av->count < JANET_PROFILE_ELEMSAMPLE ? av->count : JANET_PROFILE_ELEMSAMPLE;
-            uint32_t em = (uint32_t) janet_unwrap_integer(ea->data[i]);
+        if (full && at == (uint32_t) BENDER_ARRAY) {
+            BenderArray *av = bender_unwrap_array(argv[i]);
+            int32_t k, nk = av->count < BENDER_PROFILE_ELEMSAMPLE ? av->count : BENDER_PROFILE_ELEMSAMPLE;
+            uint32_t em = (uint32_t) bender_unwrap_integer(ea->data[i]);
             for (k = 0; k < nk; k++)
-                em |= (1u << (uint32_t) janet_type(av->data[k]));
-            ea->data[i] = janet_wrap_integer((int64_t) em);
+                em |= (1u << (uint32_t) bender_type(av->data[k]));
+            ea->data[i] = bender_wrap_integer((int64_t) em);
         }
-        if (full && (at == (uint32_t) JANET_STRING ||
-                     at == (uint32_t) JANET_SYMBOL ||
-                     at == (uint32_t) JANET_KEYWORD)) {
+        if (full && (at == (uint32_t) BENDER_STRING ||
+                     at == (uint32_t) BENDER_SYMBOL ||
+                     at == (uint32_t) BENDER_KEYWORD)) {
             /* Phase 4B: sample the concrete VALUE for scalar atom
              * params (same 16-exact-then-1-in-8 discipline as the
-             * element/min-max evidence). janet_equals is content
+             * element/min-max evidence). bender_equals is content
              * equality for strings and pointer equality for interned
-             * keywords/symbols -- exactly Janet's own equality. The
+             * keywords/symbols -- exactly Bender's own equality. The
              * freshly built vs array is rooted across its pushes and
              * becomes reachable through the entry table on store. */
-            Janet slotv = va->data[i];
-            if (!janet_checktype(slotv, JANET_BOOLEAN)) {
-                JanetArray *vs = janet_checktype(slotv, JANET_ARRAY)
-                    ? janet_unwrap_array(slotv) : NULL;
+            Bender slotv = va->data[i];
+            if (!bender_checktype(slotv, BENDER_BOOLEAN)) {
+                BenderArray *vs = bender_checktype(slotv, BENDER_ARRAY)
+                    ? bender_unwrap_array(slotv) : NULL;
                 int32_t k, found = 0;
                 if (NULL != vs)
                     for (k = 0; k < vs->count; k++)
-                        if (janet_equals(vs->data[k], argv[i])) {
+                        if (bender_equals(vs->data[k], argv[i])) {
                             found = 1;
                             break;
                         }
                 if (!found) {
                     if (NULL == vs) {
-                        vs = janet_array(JANET_PROFILE_VALSAMPLE);
-                        janet_gcroot(janet_wrap_array(vs));
-                        janet_array_push(vs, argv[i]);
-                        va->data[i] = janet_wrap_array(vs);
-                        janet_gcunroot(janet_wrap_array(vs));
-                    } else if (vs->count < JANET_PROFILE_VALSAMPLE) {
-                        janet_array_push(vs, argv[i]);
+                        vs = bender_array(BENDER_PROFILE_VALSAMPLE);
+                        bender_gcroot(bender_wrap_array(vs));
+                        bender_array_push(vs, argv[i]);
+                        va->data[i] = bender_wrap_array(vs);
+                        bender_gcunroot(bender_wrap_array(vs));
+                    } else if (vs->count < BENDER_PROFILE_VALSAMPLE) {
+                        bender_array_push(vs, argv[i]);
                     } else {
                         /* Over the cap: the slot is open, not closed.
                          * Drop the set and mark it; consumers must
                          * fall back to boxed, never emit a huge set. */
-                        va->data[i] = janet_wrap_true();
+                        va->data[i] = bender_wrap_true();
                     }
                 }
             }
         }
         if (full && NULL != sh && i < sh->count &&
-                (at == (uint32_t) JANET_TABLE || at == (uint32_t) JANET_STRUCT)) {
+                (at == (uint32_t) BENDER_TABLE || at == (uint32_t) BENDER_STRUCT)) {
             /* Stream D step A: record this table's KEY SET. Only
              * all-keyword key sets are recordable: a struct field needs
              * a stable C identifier, and a non-keyword key (number,
@@ -1357,74 +1357,74 @@ static void janet_profile_call(JanetFunction *func, const Janet *argv, int32_t a
              * dictionary, which must stay boxed. Any such key marks the
              * slot open immediately rather than recording a partial
              * shape. */
-            Janet slotsh = sh->data[i];
-            if (!janet_checktype(slotsh, JANET_BOOLEAN)) {
-                const JanetKV *kvs = NULL;
+            Bender slotsh = sh->data[i];
+            if (!bender_checktype(slotsh, BENDER_BOOLEAN)) {
+                const BenderKV *kvs = NULL;
                 int32_t cap = 0, cnt = 0;
-                if (at == (uint32_t) JANET_TABLE) {
-                    JanetTable *t = janet_unwrap_table(argv[i]);
+                if (at == (uint32_t) BENDER_TABLE) {
+                    BenderTable *t = bender_unwrap_table(argv[i]);
                     kvs = t->data;
                     cap = t->capacity;
                     cnt = t->count;
                 } else {
-                    const JanetKV *st = janet_unwrap_struct(argv[i]);
+                    const BenderKV *st = bender_unwrap_struct(argv[i]);
                     kvs = st;
-                    cap = janet_struct_capacity(st);
-                    cnt = janet_struct_length(st);
+                    cap = bender_struct_capacity(st);
+                    cnt = bender_struct_length(st);
                 }
-                if (cnt > JANET_PROFILE_SHAPEMAXKEYS) {
-                    sh->data[i] = janet_wrap_true();
+                if (cnt > BENDER_PROFILE_SHAPEMAXKEYS) {
+                    sh->data[i] = bender_wrap_true();
                 } else {
                     /* Collect keys in the table's own slot order, then
                      * compare order-insensitively below: two tables with
                      * the same keys can hash them into different slots,
                      * so raw order is not canonical. */
-                    Janet keybuf[JANET_PROFILE_SHAPEMAXKEYS];
+                    Bender keybuf[BENDER_PROFILE_SHAPEMAXKEYS];
                     int32_t nk = 0, j;
                     int bad = 0;
-                    for (j = 0; j < cap && nk <= JANET_PROFILE_SHAPEMAXKEYS; j++) {
-                        if (janet_checktype(kvs[j].key, JANET_NIL)) continue;
-                        if (!janet_checktype(kvs[j].key, JANET_KEYWORD)) { bad = 1; break; }
-                        if (nk == JANET_PROFILE_SHAPEMAXKEYS) { bad = 1; break; }
+                    for (j = 0; j < cap && nk <= BENDER_PROFILE_SHAPEMAXKEYS; j++) {
+                        if (bender_checktype(kvs[j].key, BENDER_NIL)) continue;
+                        if (!bender_checktype(kvs[j].key, BENDER_KEYWORD)) { bad = 1; break; }
+                        if (nk == BENDER_PROFILE_SHAPEMAXKEYS) { bad = 1; break; }
                         keybuf[nk++] = kvs[j].key;
                     }
                     if (bad) {
-                        sh->data[i] = janet_wrap_true();
+                        sh->data[i] = bender_wrap_true();
                     } else {
-                        JanetArray *shapes = janet_checktype(slotsh, JANET_ARRAY)
-                            ? janet_unwrap_array(slotsh) : NULL;
+                        BenderArray *shapes = bender_checktype(slotsh, BENDER_ARRAY)
+                            ? bender_unwrap_array(slotsh) : NULL;
                         int found = 0;
                         int32_t si;
                         if (NULL != shapes) {
                             for (si = 0; si < shapes->count && !found; si++) {
-                                JanetArray *cand = janet_unwrap_array(shapes->data[si]);
+                                BenderArray *cand = bender_unwrap_array(shapes->data[si]);
                                 if (cand->count != nk) continue;
                                 /* order-insensitive set compare */
                                 int32_t a2, b2, matched = 0;
                                 for (a2 = 0; a2 < nk; a2++) {
                                     for (b2 = 0; b2 < cand->count; b2++)
-                                        if (janet_equals(keybuf[a2], cand->data[b2])) { matched++; break; }
+                                        if (bender_equals(keybuf[a2], cand->data[b2])) { matched++; break; }
                                 }
                                 if (matched == nk) found = 1;
                             }
                         }
                         if (!found) {
-                            if (NULL != shapes && shapes->count >= JANET_PROFILE_SHAPESAMPLE) {
-                                sh->data[i] = janet_wrap_true();
+                            if (NULL != shapes && shapes->count >= BENDER_PROFILE_SHAPESAMPLE) {
+                                sh->data[i] = bender_wrap_true();
                             } else {
-                                JanetArray *ks = janet_array(nk);
-                                janet_gcroot(janet_wrap_array(ks));
-                                for (j = 0; j < nk; j++) janet_array_push(ks, keybuf[j]);
+                                BenderArray *ks = bender_array(nk);
+                                bender_gcroot(bender_wrap_array(ks));
+                                for (j = 0; j < nk; j++) bender_array_push(ks, keybuf[j]);
                                 if (NULL == shapes) {
-                                    shapes = janet_array(JANET_PROFILE_SHAPESAMPLE);
-                                    janet_gcroot(janet_wrap_array(shapes));
-                                    janet_array_push(shapes, janet_wrap_array(ks));
-                                    sh->data[i] = janet_wrap_array(shapes);
-                                    janet_gcunroot(janet_wrap_array(shapes));
+                                    shapes = bender_array(BENDER_PROFILE_SHAPESAMPLE);
+                                    bender_gcroot(bender_wrap_array(shapes));
+                                    bender_array_push(shapes, bender_wrap_array(ks));
+                                    sh->data[i] = bender_wrap_array(shapes);
+                                    bender_gcunroot(bender_wrap_array(shapes));
                                 } else {
-                                    janet_array_push(shapes, janet_wrap_array(ks));
+                                    bender_array_push(shapes, bender_wrap_array(ks));
                                 }
-                                janet_gcunroot(janet_wrap_array(ks));
+                                bender_gcunroot(bender_wrap_array(ks));
                             }
                         }
                     }
@@ -1435,73 +1435,73 @@ static void janet_profile_call(JanetFunction *func, const Janet *argv, int32_t a
 }
 
 /* Phase C: record a task-root invocation that bypasses CALL opcodes
- * (worker fibers are primed directly via janet_fiber, never through
+ * (worker fibers are primed directly via bender_fiber, never through
  * JOP_CALL, so without this their rows show calls=0 and no params).
  * Mirrors the opcode hook exactly. Fiber-root tasks keep return-only
  * records (a resume is not a call). */
-void janet_profile_task_call(JanetFunction *func, const Janet *argv, int32_t argc) {
-    if (NULL != janet_vm.profile_table)
-        janet_profile_call(func, argv, argc);
+void bender_profile_task_call(BenderFunction *func, const Bender *argv, int32_t argc) {
+    if (NULL != bender_vm.profile_table)
+        bender_profile_call(func, argv, argc);
 }
 
 /* Record the executed successor after the original quantum poll. The frame
  * already has a profile entry from its call; cache misses only look up that
  * entry and never allocate or trigger a collection at the branch. */
-static void janet_profile_edge(JanetFunction *func, int32_t pc, int taken) {
-    if (pc < 0 || pc >= JANET_PROFILE_EDGE_MAXPC ||
-        func->def->bytecode_length > JANET_PROFILE_EDGE_MAXPC) return;
-    JanetProfileCache *hit = janet_profile_hit(func);
-    JanetArray *edges = NULL;
+static void bender_profile_edge(BenderFunction *func, int32_t pc, int taken) {
+    if (pc < 0 || pc >= BENDER_PROFILE_EDGE_MAXPC ||
+        func->def->bytecode_length > BENDER_PROFILE_EDGE_MAXPC) return;
+    BenderProfileCache *hit = bender_profile_hit(func);
+    BenderArray *edges = NULL;
     if (NULL != hit) {
         edges = hit->edges;
     } else {
-        Janet value = janet_table_get(janet_vm.profile_table, janet_wrap_pointer(func->def));
-        if (janet_checktype(value, JANET_TABLE)) {
-            Janet edge = janet_table_get(janet_unwrap_table(value), janet_ckeywordv("edges"));
-            if (janet_checktype(edge, JANET_ARRAY)) edges = janet_unwrap_array(edge);
+        Bender value = bender_table_get(bender_vm.profile_table, bender_wrap_pointer(func->def));
+        if (bender_checktype(value, BENDER_TABLE)) {
+            Bender edge = bender_table_get(bender_unwrap_table(value), bender_ckeywordv("edges"));
+            if (bender_checktype(edge, BENDER_ARRAY)) edges = bender_unwrap_array(edge);
         }
     }
     if (NULL != edges && pc < func->def->bytecode_length &&
         edges->count == func->def->bytecode_length * 2) {
         int32_t index = pc * 2 + !!taken;
-        int64_t count = janet_unwrap_integer(edges->data[index]);
+        int64_t count = bender_unwrap_integer(edges->data[index]);
         if (count < INT32_MAX)
-            edges->data[index] = janet_wrap_integer(count + 1);
+            edges->data[index] = bender_wrap_integer(count + 1);
     }
 }
 
 #define vm_profile_edge(taken) do { \
-    if (JANET_UNLIKELY(NULL != janet_vm.profile_table)) \
-        janet_profile_edge(func, (int32_t)(pc - func->def->bytecode), (taken)); \
+    if (BENDER_UNLIKELY(NULL != bender_vm.profile_table)) \
+        bender_profile_edge(func, (int32_t)(pc - func->def->bytecode), (taken)); \
 } while (0)
 
-/* Observe the receiver BEFORE a potentially effectful read: janet_in/get
+/* Observe the receiver BEFORE a potentially effectful read: bender_in/get
  * may raise or invoke user code. The observation itself is allocation-free,
  * uses only type bits (no raw GC pointer), and does not change the VM PC. */
-static void janet_profile_receiver(JanetFunction *func, int32_t pc, Janet receiver) {
-    if (pc < 0 || pc >= JANET_PROFILE_EDGE_MAXPC ||
-        func->def->bytecode_length > JANET_PROFILE_EDGE_MAXPC) return;
-    JanetProfileCache *hit = janet_profile_hit(func);
-    JanetArray *sites = NULL;
+static void bender_profile_receiver(BenderFunction *func, int32_t pc, Bender receiver) {
+    if (pc < 0 || pc >= BENDER_PROFILE_EDGE_MAXPC ||
+        func->def->bytecode_length > BENDER_PROFILE_EDGE_MAXPC) return;
+    BenderProfileCache *hit = bender_profile_hit(func);
+    BenderArray *sites = NULL;
     if (NULL != hit) {
         sites = hit->receivers;
     } else {
-        Janet entry = janet_table_get(janet_vm.profile_table, janet_wrap_pointer(func->def));
-        if (janet_checktype(entry, JANET_TABLE)) {
-            Janet field = janet_table_get(janet_unwrap_table(entry), janet_ckeywordv("receivers"));
-            if (janet_checktype(field, JANET_ARRAY)) sites = janet_unwrap_array(field);
+        Bender entry = bender_table_get(bender_vm.profile_table, bender_wrap_pointer(func->def));
+        if (bender_checktype(entry, BENDER_TABLE)) {
+            Bender field = bender_table_get(bender_unwrap_table(entry), bender_ckeywordv("receivers"));
+            if (bender_checktype(field, BENDER_ARRAY)) sites = bender_unwrap_array(field);
         }
     }
     if (NULL != sites && sites->count == func->def->bytecode_length) {
-        uint32_t mask = (uint32_t) janet_unwrap_integer(sites->data[pc]);
-        mask |= 1u << (uint32_t) janet_type(receiver);
-        sites->data[pc] = janet_wrap_integer((int64_t) mask);
+        uint32_t mask = (uint32_t) bender_unwrap_integer(sites->data[pc]);
+        mask |= 1u << (uint32_t) bender_type(receiver);
+        sites->data[pc] = bender_wrap_integer((int64_t) mask);
     }
 }
 
 #define vm_profile_receiver(receiver) do { \
-    if (JANET_UNLIKELY(NULL != janet_vm.profile_table)) \
-        janet_profile_receiver(func, (int32_t)(pc - func->def->bytecode), (receiver)); \
+    if (BENDER_UNLIKELY(NULL != bender_vm.profile_table)) \
+        bender_profile_receiver(func, (int32_t)(pc - func->def->bytecode), (receiver)); \
 } while (0)
 
 /* Record (callerDef, callPC) -> callee NAME attribution for the caller's
@@ -1511,268 +1511,268 @@ static void janet_profile_receiver(JanetFunction *func, int32_t pc, Janet receiv
  * (§3 of docs/internals/native-continuation-design.md), so a stale or wrong
  * slot can only cost performance, never correctness.
  *
- * Bounded exactly like :edges/:receivers (JANET_PROFILE_EDGE_MAXPC), and
+ * Bounded exactly like :edges/:receivers (BENDER_PROFILE_EDGE_MAXPC), and
  * lookup-only: it never creates a profile entry. A caller that has not been
  * profiled yet simply records nothing. The one allocation is the 3-element
  * monomorphic record, created at most once per PC. */
-static void janet_profile_calledge(JanetFunction *func, int32_t pc, JanetFunction *callee) {
-    if (pc < 0 || pc >= JANET_PROFILE_EDGE_MAXPC ||
-        func->def->bytecode_length > JANET_PROFILE_EDGE_MAXPC) return;
-    JanetProfileCache *hit = janet_profile_hit(func);
-    JanetArray *sites = NULL;
+static void bender_profile_calledge(BenderFunction *func, int32_t pc, BenderFunction *callee) {
+    if (pc < 0 || pc >= BENDER_PROFILE_EDGE_MAXPC ||
+        func->def->bytecode_length > BENDER_PROFILE_EDGE_MAXPC) return;
+    BenderProfileCache *hit = bender_profile_hit(func);
+    BenderArray *sites = NULL;
     if (NULL != hit) {
         sites = hit->pce;
     } else {
-        Janet entry = janet_table_get(janet_vm.profile_table, janet_wrap_pointer(func->def));
-        if (janet_checktype(entry, JANET_TABLE)) {
-            Janet field = janet_table_get(janet_unwrap_table(entry), janet_ckeywordv("calledges"));
-            if (janet_checktype(field, JANET_ARRAY)) sites = janet_unwrap_array(field);
+        Bender entry = bender_table_get(bender_vm.profile_table, bender_wrap_pointer(func->def));
+        if (bender_checktype(entry, BENDER_TABLE)) {
+            Bender field = bender_table_get(bender_unwrap_table(entry), bender_ckeywordv("calledges"));
+            if (bender_checktype(field, BENDER_ARRAY)) sites = bender_unwrap_array(field);
         }
     }
     if (NULL == sites || sites->count != func->def->bytecode_length) return;
-    Janet slot = sites->data[pc];
+    Bender slot = sites->data[pc];
     /* Already open: nothing more to learn at this PC. Booleans can never be
      * a recorded record, so `true` is an unambiguous marker (the same
      * discipline as :vals / :shapes). */
-    if (janet_checktype(slot, JANET_BOOLEAN)) return;
+    if (bender_checktype(slot, BENDER_BOOLEAN)) return;
     /* An unnamed callee cannot be resolved by the build's name-keyed
      * selection, so it opens the slot rather than being recorded. */
     const uint8_t *name = callee->def->name;
     if (NULL == name) {
-        sites->data[pc] = janet_wrap_true();
+        sites->data[pc] = bender_wrap_true();
         return;
     }
-    if (janet_checktype(slot, JANET_ARRAY)) {
-        JanetArray *rec = janet_unwrap_array(slot);
+    if (bender_checktype(slot, BENDER_ARRAY)) {
+        BenderArray *rec = bender_unwrap_array(slot);
         if (rec->count != 3) return;
-        if (janet_unwrap_string(rec->data[0]) != name &&
-                !janet_string_equal(janet_unwrap_string(rec->data[0]), name)) {
-            sites->data[pc] = janet_wrap_true();
+        if (bender_unwrap_string(rec->data[0]) != name &&
+                !bender_string_equal(bender_unwrap_string(rec->data[0]), name)) {
+            sites->data[pc] = bender_wrap_true();
             return;
         }
-        int64_t total = janet_unwrap_integer(rec->data[1]);
-        if (total < INT32_MAX) rec->data[1] = janet_wrap_integer(total + 1);
+        int64_t total = bender_unwrap_integer(rec->data[1]);
+        if (total < INT32_MAX) rec->data[1] = bender_wrap_integer(total + 1);
         if (NULL != callee->def->native_code) {
-            int64_t nat = janet_unwrap_integer(rec->data[2]);
-            if (nat < INT32_MAX) rec->data[2] = janet_wrap_integer(nat + 1);
+            int64_t nat = bender_unwrap_integer(rec->data[2]);
+            if (nat < INT32_MAX) rec->data[2] = bender_wrap_integer(nat + 1);
         }
         return;
     }
     /* First observation at this PC. Root the floating record: the pushes
      * below can collect, and the slot store happens only afterwards. */
-    JanetArray *rec = janet_array(3);
-    janet_gcroot(janet_wrap_array(rec));
-    janet_array_push(rec, janet_wrap_string(name));
-    janet_array_push(rec, janet_wrap_integer(1));
-    janet_array_push(rec, janet_wrap_integer(NULL != callee->def->native_code ? 1 : 0));
-    sites->data[pc] = janet_wrap_array(rec);
-    janet_gcunroot(janet_wrap_array(rec));
+    BenderArray *rec = bender_array(3);
+    bender_gcroot(bender_wrap_array(rec));
+    bender_array_push(rec, bender_wrap_string(name));
+    bender_array_push(rec, bender_wrap_integer(1));
+    bender_array_push(rec, bender_wrap_integer(NULL != callee->def->native_code ? 1 : 0));
+    sites->data[pc] = bender_wrap_array(rec);
+    bender_gcunroot(bender_wrap_array(rec));
 }
 
-static void janet_profile_return(JanetFunction *func, Janet retval) {
-    JanetProfileCache *hit = janet_profile_hit(func);
+static void bender_profile_return(BenderFunction *func, Bender retval) {
+    BenderProfileCache *hit = bender_profile_hit(func);
     if (NULL == hit) {
-        janet_profile_entry(func);
-        hit = janet_profile_hit(func);
+        bender_profile_entry(func);
+        hit = bender_profile_hit(func);
     }
-    hit->rets |= (1u << (uint32_t) janet_type(retval));
+    hit->rets |= (1u << (uint32_t) bender_type(retval));
 }
 
-void janet_profile_start(void) {
-    janet_profile_flush();
-    janet_vm.profile_table = janet_table(0);
-    memset(janet_profile_cache, 0, sizeof(janet_profile_cache));
+void bender_profile_start(void) {
+    bender_profile_flush();
+    bender_vm.profile_table = bender_table(0);
+    memset(bender_profile_cache, 0, sizeof(bender_profile_cache));
 }
 
-static void janet_profile_maybe_stats(void) {
-    if (NULL != getenv("JANET_PROFILE_STATS")) {
+static void bender_profile_maybe_stats(void) {
+    if (NULL != getenv("BENDER_PROFILE_STATS")) {
         fprintf(stderr, "profile cache: %llu hits %llu misses (%.1f%% hit)\n",
-                janet_profile_hits, janet_profile_misses,
-                100.0 * janet_profile_hits /
-                    (janet_profile_hits + janet_profile_misses + 1e-9));
-        janet_profile_hits = janet_profile_misses = 0;
+                bender_profile_hits, bender_profile_misses,
+                100.0 * bender_profile_hits /
+                    (bender_profile_hits + bender_profile_misses + 1e-9));
+        bender_profile_hits = bender_profile_misses = 0;
     }
 }
 
-Janet janet_profile_stop(void) {
-    JanetTable *pt = janet_vm.profile_table;
-    janet_profile_flush();
-    janet_vm.profile_table = NULL;
-    memset(janet_profile_cache, 0, sizeof(janet_profile_cache));
-    janet_profile_maybe_stats();
-    return NULL == pt ? janet_wrap_nil() : janet_wrap_table(pt);
+Bender bender_profile_stop(void) {
+    BenderTable *pt = bender_vm.profile_table;
+    bender_profile_flush();
+    bender_vm.profile_table = NULL;
+    memset(bender_profile_cache, 0, sizeof(bender_profile_cache));
+    bender_profile_maybe_stats();
+    return NULL == pt ? bender_wrap_nil() : bender_wrap_table(pt);
 }
 
-void janet_profile_reset(void) {
-    if (NULL != janet_vm.profile_table) {
-        janet_profile_flush();
-        janet_vm.profile_table = janet_table(0);
-        memset(janet_profile_cache, 0, sizeof(janet_profile_cache));
+void bender_profile_reset(void) {
+    if (NULL != bender_vm.profile_table) {
+        bender_profile_flush();
+        bender_vm.profile_table = bender_table(0);
+        memset(bender_profile_cache, 0, sizeof(bender_profile_cache));
     }
 }
 
-/* Serialize the profile as Janet data: @[[source line name]
+/* Serialize the profile as Bender data: @[[source line name]
  * {:calls n :params [[:number :string] ...] :rets [...] :mins [...]
  * :maxs [...]}], with one entry per observed function. Type sets
  * decode to keyword lists; mins/maxs carry observed number ranges
  * (nil where unobserved). */
-static Janet janet_profile_mask_types(uint32_t m) {
-    JanetArray *a = janet_array(4);
+static Bender bender_profile_mask_types(uint32_t m) {
+    BenderArray *a = bender_array(4);
     int t;
     for (t = 0; t < 16; t++) {
         if (m & (1u << (uint32_t) t)) {
-            janet_array_push(a, janet_ckeywordv(janet_type_names[t]));
+            bender_array_push(a, bender_ckeywordv(bender_type_names[t]));
         }
     }
-    return janet_wrap_array(a);
+    return bender_wrap_array(a);
 }
 
 /* Build the dump row array for this VM's live profile table (empty
  * when inactive). Caller roots the result across further allocation.
- * Shared by janet_profile_dump and cross-thread harvest (Phase C). */
-JanetArray *janet_profile_rows(void) {
-    JanetTable *pt = janet_vm.profile_table;
-    JanetArray *out = janet_array(0);
-    janet_profile_flush();
+ * Shared by bender_profile_dump and cross-thread harvest (Phase C). */
+BenderArray *bender_profile_rows(void) {
+    BenderTable *pt = bender_vm.profile_table;
+    BenderArray *out = bender_array(0);
+    bender_profile_flush();
     if (NULL == pt) return out;
-    janet_gcroot(janet_wrap_array(out));
+    bender_gcroot(bender_wrap_array(out));
     {
-        const JanetKV *kvs;
+        const BenderKV *kvs;
         int32_t cap, count, i;
-        janet_dictionary_view(janet_wrap_table(pt), &kvs, &count, &cap);
+        bender_dictionary_view(bender_wrap_table(pt), &kvs, &count, &cap);
         for (i = 0; i < cap; i++) {
-            const JanetKV *kv = kvs + i;
-            JanetTable *e;
-            JanetFunction *func;
-            JanetFuncDef *def;
-            JanetArray *row, *params;
-            JanetArray *pa;
+            const BenderKV *kv = kvs + i;
+            BenderTable *e;
+            BenderFunction *func;
+            BenderFuncDef *def;
+            BenderArray *row, *params;
+            BenderArray *pa;
             int32_t j, n;
-            if (janet_checktype(kv->key, JANET_NIL)) continue;
-            e = janet_unwrap_table(kv->value);
-            func = janet_unwrap_function(janet_table_get(e, janet_ckeywordv("func")));
+            if (bender_checktype(kv->key, BENDER_NIL)) continue;
+            e = bender_unwrap_table(kv->value);
+            func = bender_unwrap_function(bender_table_get(e, bender_ckeywordv("func")));
             def = func->def;
-            row = janet_array(2);
-            janet_gcroot(janet_wrap_array(row));
+            row = bender_array(2);
+            bender_gcroot(bender_wrap_array(row));
             {
-                JanetArray *id = janet_array(3);
+                BenderArray *id = bender_array(3);
                 int32_t defline = -1;
-                janet_gcroot(janet_wrap_array(id));
-                janet_array_push(id, NULL == def->source
-                    ? janet_wrap_nil() : janet_wrap_string(def->source));
+                bender_gcroot(bender_wrap_array(id));
+                bender_array_push(id, NULL == def->source
+                    ? bender_wrap_nil() : bender_wrap_string(def->source));
                 if (NULL != def->sourcemap && def->bytecode_length > 0)
                     defline = def->sourcemap[0].line;
-                janet_array_push(id, janet_wrap_integer((int64_t) defline));
-                janet_array_push(id, NULL == def->name
-                    ? janet_wrap_nil() : janet_wrap_string(def->name));
-                janet_array_push(row, janet_wrap_array(id));
-                janet_gcunroot(janet_wrap_array(id));
+                bender_array_push(id, bender_wrap_integer((int64_t) defline));
+                bender_array_push(id, NULL == def->name
+                    ? bender_wrap_nil() : bender_wrap_string(def->name));
+                bender_array_push(row, bender_wrap_array(id));
+                bender_gcunroot(bender_wrap_array(id));
             }
             {
-                JanetTable *info = janet_table(3);
-                int64_t calls = janet_unwrap_integer(janet_table_get(e, janet_ckeywordv("calls")));
-                uint32_t rm = (uint32_t) janet_unwrap_integer(janet_table_get(e, janet_ckeywordv("rets")));
-                janet_gcroot(janet_wrap_table(info));
-                janet_table_put(info, janet_ckeywordv("calls"), janet_wrap_integer(calls));
+                BenderTable *info = bender_table(3);
+                int64_t calls = bender_unwrap_integer(bender_table_get(e, bender_ckeywordv("calls")));
+                uint32_t rm = (uint32_t) bender_unwrap_integer(bender_table_get(e, bender_ckeywordv("rets")));
+                bender_gcroot(bender_wrap_table(info));
+                bender_table_put(info, bender_ckeywordv("calls"), bender_wrap_integer(calls));
                 {
-                    Janet edges = janet_table_get(e, janet_ckeywordv("edges"));
-                    if (janet_checktype(edges, JANET_ARRAY))
-                        janet_table_put(info, janet_ckeywordv("edges"), edges);
-                    Janet receiver = janet_table_get(e, janet_ckeywordv("receivers"));
-                    if (janet_checktype(receiver, JANET_ARRAY)) {
-                        JanetArray *raw = janet_unwrap_array(receiver);
-                        JanetArray *decoded = janet_array(raw->count);
-                        janet_gcroot(janet_wrap_array(decoded));
+                    Bender edges = bender_table_get(e, bender_ckeywordv("edges"));
+                    if (bender_checktype(edges, BENDER_ARRAY))
+                        bender_table_put(info, bender_ckeywordv("edges"), edges);
+                    Bender receiver = bender_table_get(e, bender_ckeywordv("receivers"));
+                    if (bender_checktype(receiver, BENDER_ARRAY)) {
+                        BenderArray *raw = bender_unwrap_array(receiver);
+                        BenderArray *decoded = bender_array(raw->count);
+                        bender_gcroot(bender_wrap_array(decoded));
                         for (int32_t ri = 0; ri < raw->count; ri++) {
-                            uint32_t mask = (uint32_t) janet_unwrap_integer(raw->data[ri]);
-                            janet_array_push(decoded, mask ? janet_profile_mask_types(mask) : janet_wrap_nil());
+                            uint32_t mask = (uint32_t) bender_unwrap_integer(raw->data[ri]);
+                            bender_array_push(decoded, mask ? bender_profile_mask_types(mask) : bender_wrap_nil());
                         }
-                        janet_table_put(info, janet_ckeywordv("receivers"), janet_wrap_array(decoded));
-                        janet_gcunroot(janet_wrap_array(decoded));
+                        bender_table_put(info, bender_ckeywordv("receivers"), bender_wrap_array(decoded));
+                        bender_gcunroot(bender_wrap_array(decoded));
                     }
                     /* Call-edge attribution per original bytecode PC:
                      * nil = unobserved, [name total native] = the single
                      * observed callee name, :open = polymorphic/unnamed.
                      * Same dump discipline as :vals / :shapes. */
-                    Janet ce = janet_table_get(e, janet_ckeywordv("calledges"));
-                    if (janet_checktype(ce, JANET_ARRAY)) {
-                        JanetArray *raw = janet_unwrap_array(ce);
-                        JanetArray *decoded = janet_array(raw->count);
-                        janet_gcroot(janet_wrap_array(decoded));
+                    Bender ce = bender_table_get(e, bender_ckeywordv("calledges"));
+                    if (bender_checktype(ce, BENDER_ARRAY)) {
+                        BenderArray *raw = bender_unwrap_array(ce);
+                        BenderArray *decoded = bender_array(raw->count);
+                        bender_gcroot(bender_wrap_array(decoded));
                         for (int32_t ci = 0; ci < raw->count; ci++) {
-                            Janet slot = raw->data[ci];
-                            if (janet_checktype(slot, JANET_BOOLEAN))
-                                janet_array_push(decoded, janet_ckeywordv("open"));
+                            Bender slot = raw->data[ci];
+                            if (bender_checktype(slot, BENDER_BOOLEAN))
+                                bender_array_push(decoded, bender_ckeywordv("open"));
                             else
-                                janet_array_push(decoded, slot);
+                                bender_array_push(decoded, slot);
                         }
-                        janet_table_put(info, janet_ckeywordv("calledges"), janet_wrap_array(decoded));
-                        janet_gcunroot(janet_wrap_array(decoded));
+                        bender_table_put(info, bender_ckeywordv("calledges"), bender_wrap_array(decoded));
+                        bender_gcunroot(bender_wrap_array(decoded));
                     }
                 }
                 {
-                    Janet sig = janet_table_get(e, janet_ckeywordv("signatures"));
-                    if (janet_checktype(sig, JANET_BOOLEAN)) {
-                        janet_table_put(info, janet_ckeywordv("signatures"), janet_ckeywordv("open"));
+                    Bender sig = bender_table_get(e, bender_ckeywordv("signatures"));
+                    if (bender_checktype(sig, BENDER_BOOLEAN)) {
+                        bender_table_put(info, bender_ckeywordv("signatures"), bender_ckeywordv("open"));
                     } else {
-                        JanetArray *hist = janet_unwrap_array(sig);
-                        JanetArray *decoded = janet_array(hist->count);
+                        BenderArray *hist = bender_unwrap_array(sig);
+                        BenderArray *decoded = bender_array(hist->count);
                         int32_t si;
-                        janet_gcroot(janet_wrap_array(decoded));
+                        bender_gcroot(bender_wrap_array(decoded));
                         for (si = 0; si < hist->count; si++) {
-                            JanetArray *raw = janet_unwrap_array(hist->data[si]);
-                            JanetArray *tags = janet_unwrap_array(raw->data[0]);
-                            JanetArray *types = janet_array(tags->count);
-                            JanetArray *pair;
+                            BenderArray *raw = bender_unwrap_array(hist->data[si]);
+                            BenderArray *tags = bender_unwrap_array(raw->data[0]);
+                            BenderArray *types = bender_array(tags->count);
+                            BenderArray *pair;
                             int32_t ti;
-                            janet_gcroot(janet_wrap_array(types));
-                            pair = janet_array(2);
-                            janet_gcroot(janet_wrap_array(pair));
+                            bender_gcroot(bender_wrap_array(types));
+                            pair = bender_array(2);
+                            bender_gcroot(bender_wrap_array(pair));
                             for (ti = 0; ti < tags->count; ti++)
-                                janet_array_push(types, janet_ckeywordv(
-                                    janet_type_names[janet_unwrap_integer(tags->data[ti])]));
-                            janet_array_push(pair, janet_wrap_array(types));
-                            janet_array_push(pair, raw->data[1]);
-                            janet_array_push(decoded, janet_wrap_array(pair));
-                            janet_gcunroot(janet_wrap_array(pair));
-                            janet_gcunroot(janet_wrap_array(types));
+                                bender_array_push(types, bender_ckeywordv(
+                                    bender_type_names[bender_unwrap_integer(tags->data[ti])]));
+                            bender_array_push(pair, bender_wrap_array(types));
+                            bender_array_push(pair, raw->data[1]);
+                            bender_array_push(decoded, bender_wrap_array(pair));
+                            bender_gcunroot(bender_wrap_array(pair));
+                            bender_gcunroot(bender_wrap_array(types));
                         }
-                        janet_table_put(info, janet_ckeywordv("signatures"), janet_wrap_array(decoded));
-                        janet_gcunroot(janet_wrap_array(decoded));
+                        bender_table_put(info, bender_ckeywordv("signatures"), bender_wrap_array(decoded));
+                        bender_gcunroot(bender_wrap_array(decoded));
                     }
                 }
-                params = janet_array(0);
-                janet_gcroot(janet_wrap_array(params));
-                pa = janet_unwrap_array(janet_table_get(e, janet_ckeywordv("params")));
+                params = bender_array(0);
+                bender_gcroot(bender_wrap_array(params));
+                pa = bender_unwrap_array(bender_table_get(e, bender_ckeywordv("params")));
                 n = pa->count;
                 for (j = 0; j < n; j++) {
-                    uint32_t m = (uint32_t) janet_unwrap_integer(pa->data[j]);
-                    if (m) janet_array_push(params, janet_profile_mask_types(m));
+                    uint32_t m = (uint32_t) bender_unwrap_integer(pa->data[j]);
+                    if (m) bender_array_push(params, bender_profile_mask_types(m));
                 }
-                janet_table_put(info, janet_ckeywordv("params"), janet_wrap_array(params));
-                janet_gcunroot(janet_wrap_array(params));
+                bender_table_put(info, bender_ckeywordv("params"), bender_wrap_array(params));
+                bender_gcunroot(bender_wrap_array(params));
                 {
-                    JanetArray *elems = janet_array(0);
-                    JanetArray *ea = janet_unwrap_array(janet_table_get(e, janet_ckeywordv("elems")));
+                    BenderArray *elems = bender_array(0);
+                    BenderArray *ea = bender_unwrap_array(bender_table_get(e, bender_ckeywordv("elems")));
                     n = ea->count;
                     for (j = 0; j < n; j++) {
-                        uint32_t m = (uint32_t) janet_unwrap_integer(ea->data[j]);
-                        if (m) janet_array_push(elems, janet_profile_mask_types(m));
-                        else janet_array_push(elems, janet_wrap_nil());
+                        uint32_t m = (uint32_t) bender_unwrap_integer(ea->data[j]);
+                        if (m) bender_array_push(elems, bender_profile_mask_types(m));
+                        else bender_array_push(elems, bender_wrap_nil());
                     }
-                    janet_table_put(info, janet_ckeywordv("elems"), janet_wrap_array(elems));
+                    bender_table_put(info, bender_ckeywordv("elems"), bender_wrap_array(elems));
                 }
                 {
                     /* Range evidence: observed min/max per param slot;
                      * unobserved slots serialize as nil (sentinels). */
-                    JanetArray *mins = janet_array(0);
-                    JanetArray *maxs = janet_array(0);
-                    JanetArray *mn = janet_unwrap_array(janet_table_get(e, janet_ckeywordv("mins")));
-                    JanetArray *mx = janet_unwrap_array(janet_table_get(e, janet_ckeywordv("maxs")));
+                    BenderArray *mins = bender_array(0);
+                    BenderArray *maxs = bender_array(0);
+                    BenderArray *mn = bender_unwrap_array(bender_table_get(e, bender_ckeywordv("mins")));
+                    BenderArray *mx = bender_unwrap_array(bender_table_get(e, bender_ckeywordv("maxs")));
                     n = mn->count;
                     for (j = 0; j < n; j++) {
-                        double lo = janet_unwrap_number(mn->data[j]);
-                        double hi = janet_unwrap_number(mx->data[j]);
+                        double lo = bender_unwrap_number(mn->data[j]);
+                        double hi = bender_unwrap_number(mx->data[j]);
                         if (lo <= hi) {
                             /* Non-finite bounds serialize as tagged
                              * strings: the printer emits bare inf/-inf,
@@ -1782,43 +1782,43 @@ JanetArray *janet_profile_rows(void) {
                              * back to float infinities. NaN never
                              * reaches here (lo <= hi fails -> nil). */
                             if (isinf(lo)) {
-                                janet_array_push(mins,
-                                    janet_cstringv(lo < 0 ? "-inf" : "inf"));
+                                bender_array_push(mins,
+                                    bender_cstringv(lo < 0 ? "-inf" : "inf"));
                             } else {
-                                janet_array_push(mins, janet_wrap_number(lo));
+                                bender_array_push(mins, bender_wrap_number(lo));
                             }
                             if (isinf(hi)) {
-                                janet_array_push(maxs,
-                                    janet_cstringv(hi < 0 ? "-inf" : "inf"));
+                                bender_array_push(maxs,
+                                    bender_cstringv(hi < 0 ? "-inf" : "inf"));
                             } else {
-                                janet_array_push(maxs, janet_wrap_number(hi));
+                                bender_array_push(maxs, bender_wrap_number(hi));
                             }
                         } else {
-                            janet_array_push(mins, janet_wrap_nil());
-                            janet_array_push(maxs, janet_wrap_nil());
+                            bender_array_push(mins, bender_wrap_nil());
+                            bender_array_push(maxs, bender_wrap_nil());
                         }
                     }
-                    janet_table_put(info, janet_ckeywordv("mins"), janet_wrap_array(mins));
-                    janet_table_put(info, janet_ckeywordv("maxs"), janet_wrap_array(maxs));
+                    bender_table_put(info, bender_ckeywordv("mins"), bender_wrap_array(mins));
+                    bender_table_put(info, bender_ckeywordv("maxs"), bender_wrap_array(maxs));
                 }
                 {
                     /* Phase 4B value evidence: nil = unobserved, the
                      * value array itself (strings/keywords/symbols
                      * pretty-print cleanly), true = open (dumped as
                      * :open for readability). */
-                    JanetArray *valsv = janet_array(0);
-                    JanetArray *va = janet_unwrap_array(janet_table_get(e, janet_ckeywordv("vals")));
+                    BenderArray *valsv = bender_array(0);
+                    BenderArray *va = bender_unwrap_array(bender_table_get(e, bender_ckeywordv("vals")));
                     n = va->count;
                     for (j = 0; j < n; j++) {
-                        Janet vv = va->data[j];
-                        if (janet_checktype(vv, JANET_NIL))
-                            janet_array_push(valsv, janet_wrap_nil());
-                        else if (janet_checktype(vv, JANET_BOOLEAN))
-                            janet_array_push(valsv, janet_ckeywordv("open"));
+                        Bender vv = va->data[j];
+                        if (bender_checktype(vv, BENDER_NIL))
+                            bender_array_push(valsv, bender_wrap_nil());
+                        else if (bender_checktype(vv, BENDER_BOOLEAN))
+                            bender_array_push(valsv, bender_ckeywordv("open"));
                         else
-                            janet_array_push(valsv, vv);
+                            bender_array_push(valsv, vv);
                     }
-                    janet_table_put(info, janet_ckeywordv("vals"), janet_wrap_array(valsv));
+                    bender_table_put(info, bender_ckeywordv("vals"), bender_wrap_array(valsv));
                 }
                 {
                     /* Stream D step A shape evidence: nil = unobserved,
@@ -1826,63 +1826,63 @@ JanetArray *janet_profile_rows(void) {
                      * key sets, :open = too many shapes / too wide /
                      * non-keyword keys (consumer must keep it boxed).
                      * Same dump discipline as :vals above. */
-                    JanetArray *shv = janet_array(0);
-                    JanetArray *sh = janet_unwrap_array(janet_table_get(e, janet_ckeywordv("shapes")));
+                    BenderArray *shv = bender_array(0);
+                    BenderArray *sh = bender_unwrap_array(bender_table_get(e, bender_ckeywordv("shapes")));
                     n = sh->count;
                     for (j = 0; j < n; j++) {
-                        Janet vv = sh->data[j];
-                        if (janet_checktype(vv, JANET_NIL))
-                            janet_array_push(shv, janet_wrap_nil());
-                        else if (janet_checktype(vv, JANET_BOOLEAN))
-                            janet_array_push(shv, janet_ckeywordv("open"));
+                        Bender vv = sh->data[j];
+                        if (bender_checktype(vv, BENDER_NIL))
+                            bender_array_push(shv, bender_wrap_nil());
+                        else if (bender_checktype(vv, BENDER_BOOLEAN))
+                            bender_array_push(shv, bender_ckeywordv("open"));
                         else
-                            janet_array_push(shv, vv);
+                            bender_array_push(shv, vv);
                     }
-                    janet_table_put(info, janet_ckeywordv("shapes"), janet_wrap_array(shv));
+                    bender_table_put(info, bender_ckeywordv("shapes"), bender_wrap_array(shv));
                 }
-                janet_table_put(info, janet_ckeywordv("rets"), janet_profile_mask_types(rm));
-                janet_array_push(row, janet_wrap_table(info));
-                janet_gcunroot(janet_wrap_table(info));
+                bender_table_put(info, bender_ckeywordv("rets"), bender_profile_mask_types(rm));
+                bender_array_push(row, bender_wrap_table(info));
+                bender_gcunroot(bender_wrap_table(info));
             }
-            janet_array_push(out, janet_wrap_array(row));
-            janet_gcunroot(janet_wrap_array(row));
+            bender_array_push(out, bender_wrap_array(row));
+            bender_gcunroot(bender_wrap_array(row));
         }
     }
-    janet_gcunroot(janet_wrap_array(out));
+    bender_gcunroot(bender_wrap_array(out));
     return out;
 }
 
-void janet_profile_dump(const char *path) {
-    JanetArray *out;
-    JanetBuffer *buf;
+void bender_profile_dump(const char *path) {
+    BenderArray *out;
+    BenderBuffer *buf;
     FILE *f;
-    if (NULL == janet_vm.profile_table) janet_panic("profiling not active");
-    out = janet_profile_rows();
-    janet_gcroot(janet_wrap_array(out));
-    buf = janet_buffer(0);
-    janet_gcroot(janet_wrap_buffer(buf));
-    janet_pretty(buf, 8, JANET_PRETTY_NOTRUNC, janet_wrap_array(out));
+    if (NULL == bender_vm.profile_table) bender_panic("profiling not active");
+    out = bender_profile_rows();
+    bender_gcroot(bender_wrap_array(out));
+    buf = bender_buffer(0);
+    bender_gcroot(bender_wrap_buffer(buf));
+    bender_pretty(buf, 8, BENDER_PRETTY_NOTRUNC, bender_wrap_array(out));
     f = fopen(path, "wb");
-    if (NULL == f) janet_panicf("could not open profile output %s", path);
+    if (NULL == f) bender_panicf("could not open profile output %s", path);
     fwrite(buf->data, 1, (size_t) buf->count, f);
     fputc('\n', f);
     fclose(f);
-    janet_gcunroot(janet_wrap_buffer(buf));
-    janet_gcunroot(janet_wrap_array(out));
+    bender_gcunroot(bender_wrap_buffer(buf));
+    bender_gcunroot(bender_wrap_array(out));
 }
 
 /* Interpreter main loop */
-static JanetSignal run_vm(JanetFiber *fiber, Janet in) {
-#ifdef JANET_NATIVE_EXECUTORS
+static BenderSignal run_vm(BenderFiber *fiber, Bender in) {
+#ifdef BENDER_NATIVE_EXECUTORS
     /* New resume: invalidate cached whole-definition validation verdicts.
      * Any change to a definition made between resumes (debugger
      * breakpoints, raw C edits while parked) is re-detected by the full
      * exact compare at this resume's first native region entry. */
-    janet_vm.native_epoch++;
+    bender_vm.native_epoch++;
 #endif
 
     /* opcode -> label lookup if using clang/GCC */
-#ifdef JANET_USE_COMPUTED_GOTOS
+#ifdef BENDER_USE_COMPUTED_GOTOS
     static void *op_lookup[255] = {
         &&label_JOP_NOOP,
         &&label_JOP_ERROR,
@@ -2144,52 +2144,52 @@ static JanetSignal run_vm(JanetFiber *fiber, Janet in) {
 #endif
 
     /* Interpreter state */
-    register Janet *stack;
+    register Bender *stack;
     register uint32_t *pc;
-    register JanetFunction *func;
+    register BenderFunction *func;
 
     /* NOTE: Flag smuggling! We "smuggle" the fiber sigal in the gc.flags field instead of the usual flags field */
-    if (fiber->flags & JANET_FIBER_RESUME_SIGNAL) {
+    if (fiber->flags & BENDER_FIBER_RESUME_SIGNAL) {
         /* Get the signal */
-        JanetSignal sig = (fiber->gc.flags & JANET_FIBER_STATUS_MASK) >> JANET_FIBER_STATUS_OFFSET;
+        BenderSignal sig = (fiber->gc.flags & BENDER_FIBER_STATUS_MASK) >> BENDER_FIBER_STATUS_OFFSET;
         /* Clear the signal */
-        fiber->gc.flags &= ~JANET_FIBER_STATUS_MASK;
-        fiber->flags &= ~JANET_FIBER_RESUME_SIGNAL;
-        janet_vm.return_reg[0] = in;
+        fiber->gc.flags &= ~BENDER_FIBER_STATUS_MASK;
+        fiber->flags &= ~BENDER_FIBER_RESUME_SIGNAL;
+        bender_vm.return_reg[0] = in;
         return sig;
     }
 
     vm_restore();
 
-    if (fiber->flags & JANET_FIBER_DID_LONGJUMP) {
-        if (janet_fiber_frame(fiber)->func == NULL) {
+    if (fiber->flags & BENDER_FIBER_DID_LONGJUMP) {
+        if (bender_fiber_frame(fiber)->func == NULL) {
             /* Inside a c function */
-            janet_fiber_popframe(fiber);
+            bender_fiber_popframe(fiber);
             vm_restore();
         }
         /* Check if we were at a tail call instruction. If so, do implicit return */
         if ((*pc & 0xFF) == JOP_TAILCALL) {
             /* Tail call resume */
-            int entrance_frame = janet_stack_frame(stack)->flags & JANET_STACKFRAME_ENTRANCE;
-            janet_fiber_popframe(fiber);
+            int entrance_frame = bender_stack_frame(stack)->flags & BENDER_STACKFRAME_ENTRANCE;
+            bender_fiber_popframe(fiber);
             if (entrance_frame) {
-                fiber->flags &= ~JANET_FIBER_FLAG_MASK;
-                vm_return(JANET_SIGNAL_OK, in);
+                fiber->flags &= ~BENDER_FIBER_FLAG_MASK;
+                vm_return(BENDER_SIGNAL_OK, in);
             }
             vm_restore();
         }
     }
 
-    if (!(fiber->flags & JANET_FIBER_RESUME_NO_USEVAL)) stack[A] = in;
-    if (!(fiber->flags & JANET_FIBER_RESUME_NO_SKIP)) pc++;
+    if (!(fiber->flags & BENDER_FIBER_RESUME_NO_USEVAL)) stack[A] = in;
+    if (!(fiber->flags & BENDER_FIBER_RESUME_NO_SKIP)) pc++;
 
-    uint8_t first_opcode = *pc & ((fiber->flags & JANET_FIBER_BREAKPOINT) ? 0x7F : 0xFF);
+    uint8_t first_opcode = *pc & ((fiber->flags & BENDER_FIBER_BREAKPOINT) ? 0x7F : 0xFF);
 
-#ifdef JANET_NATIVE_EXECUTORS
-    int native_debug_bypass = fiber->flags & JANET_FIBER_BREAKPOINT;
+#ifdef BENDER_NATIVE_EXECUTORS
+    int native_debug_bypass = fiber->flags & BENDER_FIBER_BREAKPOINT;
 #endif
-    fiber->flags &= ~JANET_FIBER_FLAG_MASK;
-#ifdef JANET_NATIVE_EXECUTORS
+    fiber->flags &= ~BENDER_FIBER_FLAG_MASK;
+#ifdef BENDER_NATIVE_EXECUTORS
     if (!native_debug_bypass) {
         vm_native();
         first_opcode = *pc & 0xFF;
@@ -2201,40 +2201,40 @@ static JanetSignal run_vm(JanetFiber *fiber, Janet in) {
     VM_START();
 
     VM_DEFAULT();
-    fiber->flags |= JANET_FIBER_BREAKPOINT | JANET_FIBER_RESUME_NO_USEVAL | JANET_FIBER_RESUME_NO_SKIP;
-    vm_return(JANET_SIGNAL_DEBUG, janet_wrap_nil());
+    fiber->flags |= BENDER_FIBER_BREAKPOINT | BENDER_FIBER_RESUME_NO_USEVAL | BENDER_FIBER_RESUME_NO_SKIP;
+    vm_return(BENDER_SIGNAL_DEBUG, bender_wrap_nil());
 
     VM_OP(JOP_NOOP)
     vm_pcnext();
 
     VM_OP(JOP_ERROR)
-    vm_return(JANET_SIGNAL_ERROR, stack[D]);
+    vm_return(BENDER_SIGNAL_ERROR, stack[D]);
 
     VM_OP(JOP_TYPECHECK)
     vm_assert_types(stack[A], E);
     vm_pcnext();
 
     VM_OP(JOP_RETURN) {
-        Janet retval = stack[D];
-        int entrance_frame = janet_stack_frame(stack)->flags & JANET_STACKFRAME_ENTRANCE;
-        JanetFunction *retfunc = janet_stack_frame(stack)->func;
-        janet_fiber_popframe(fiber);
-        if (NULL != janet_vm.profile_table)
-            janet_profile_return(retfunc, retval);
-        if (entrance_frame) vm_return_no_restore(JANET_SIGNAL_OK, retval);
+        Bender retval = stack[D];
+        int entrance_frame = bender_stack_frame(stack)->flags & BENDER_STACKFRAME_ENTRANCE;
+        BenderFunction *retfunc = bender_stack_frame(stack)->func;
+        bender_fiber_popframe(fiber);
+        if (NULL != bender_vm.profile_table)
+            bender_profile_return(retfunc, retval);
+        if (entrance_frame) vm_return_no_restore(BENDER_SIGNAL_OK, retval);
         vm_restore();
         stack[A] = retval;
         vm_checkgc_pcnext();
     }
 
     VM_OP(JOP_RETURN_NIL) {
-        Janet retval = janet_wrap_nil();
-        int entrance_frame = janet_stack_frame(stack)->flags & JANET_STACKFRAME_ENTRANCE;
-        JanetFunction *retfunc = janet_stack_frame(stack)->func;
-        janet_fiber_popframe(fiber);
-        if (NULL != janet_vm.profile_table)
-            janet_profile_return(retfunc, retval);
-        if (entrance_frame) vm_return_no_restore(JANET_SIGNAL_OK, retval);
+        Bender retval = bender_wrap_nil();
+        int entrance_frame = bender_stack_frame(stack)->flags & BENDER_STACKFRAME_ENTRANCE;
+        BenderFunction *retfunc = bender_stack_frame(stack)->func;
+        bender_fiber_popframe(fiber);
+        if (NULL != bender_vm.profile_table)
+            bender_profile_return(retfunc, retval);
+        if (entrance_frame) vm_return_no_restore(BENDER_SIGNAL_OK, retval);
         vm_restore();
         stack[A] = retval;
         vm_checkgc_pcnext();
@@ -2265,16 +2265,16 @@ static JanetSignal run_vm(JanetFiber *fiber, Janet in) {
     vm_binop( /);
 
     VM_OP(JOP_DIVIDE_FLOOR) {
-        Janet op1 = stack[B];
-        Janet op2 = stack[C];
-        if (janet_checktype(op1, JANET_NUMBER) && janet_checktype(op2, JANET_NUMBER)) {
-            double x1 = janet_unwrap_number(op1);
-            double x2 = janet_unwrap_number(op2);
-            stack[A] = janet_wrap_number(floor(x1 / x2));
+        Bender op1 = stack[B];
+        Bender op2 = stack[C];
+        if (bender_checktype(op1, BENDER_NUMBER) && bender_checktype(op2, BENDER_NUMBER)) {
+            double x1 = bender_unwrap_number(op1);
+            double x2 = bender_unwrap_number(op2);
+            stack[A] = bender_wrap_number(floor(x1 / x2));
             vm_pcnext();
         } else {
             vm_commit();
-            Janet a = janet_binop_call("div", "rdiv", op1, op2);
+            Bender a = bender_binop_call("div", "rdiv", op1, op2);
             stack = fiber->data + fiber->frame;
             stack[A] = a;
             vm_checkgc_pcnext();
@@ -2282,21 +2282,21 @@ static JanetSignal run_vm(JanetFiber *fiber, Janet in) {
     }
 
     VM_OP(JOP_MODULO) {
-        Janet op1 = stack[B];
-        Janet op2 = stack[C];
-        if (janet_checktype(op1, JANET_NUMBER) && janet_checktype(op2, JANET_NUMBER)) {
-            double x1 = janet_unwrap_number(op1);
-            double x2 = janet_unwrap_number(op2);
+        Bender op1 = stack[B];
+        Bender op2 = stack[C];
+        if (bender_checktype(op1, BENDER_NUMBER) && bender_checktype(op2, BENDER_NUMBER)) {
+            double x1 = bender_unwrap_number(op1);
+            double x2 = bender_unwrap_number(op2);
             if (x2 == 0) {
-                stack[A] = janet_wrap_number(x1);
+                stack[A] = bender_wrap_number(x1);
             } else {
                 double intres = x2 * floor(x1 / x2);
-                stack[A] = janet_wrap_number(x1 - intres);
+                stack[A] = bender_wrap_number(x1 - intres);
             }
             vm_pcnext();
         } else {
             vm_commit();
-            Janet a = janet_binop_call("mod", "rmod", op1, op2);
+            Bender a = bender_binop_call("mod", "rmod", op1, op2);
             stack = fiber->data + fiber->frame;
             stack[A] = a;
             vm_checkgc_pcnext();
@@ -2304,16 +2304,16 @@ static JanetSignal run_vm(JanetFiber *fiber, Janet in) {
     }
 
     VM_OP(JOP_REMAINDER) {
-        Janet op1 = stack[B];
-        Janet op2 = stack[C];
-        if (janet_checktype(op1, JANET_NUMBER) && janet_checktype(op2, JANET_NUMBER)) {
-            double x1 = janet_unwrap_number(op1);
-            double x2 = janet_unwrap_number(op2);
-            stack[A] = janet_wrap_number(fmod(x1, x2));
+        Bender op1 = stack[B];
+        Bender op2 = stack[C];
+        if (bender_checktype(op1, BENDER_NUMBER) && bender_checktype(op2, BENDER_NUMBER)) {
+            double x1 = bender_unwrap_number(op1);
+            double x2 = bender_unwrap_number(op2);
+            stack[A] = bender_wrap_number(fmod(x1, x2));
             vm_pcnext();
         } else {
             vm_commit();
-            Janet a = janet_binop_call("%", "r%", op1, op2);
+            Bender a = bender_binop_call("%", "r%", op1, op2);
             stack = fiber->data + fiber->frame;
             stack[A] = a;
             vm_checkgc_pcnext();
@@ -2324,7 +2324,7 @@ static JanetSignal run_vm(JanetFiber *fiber, Janet in) {
     vm_bitop(&);
 
     /* Fused (band x <const 0..255>). Mirrors JOP_BAND exactly, including
-     * the int32-range check and the janet_mcall path for a non-numeric
+     * the int32-range check and the bender_mcall path for a non-numeric
      * operand, with the mask taken from the unsigned immediate. */
     VM_OP(JOP_BAND_IMMEDIATE)
     vm_bitop_uimmediate(&);
@@ -2342,13 +2342,13 @@ static JanetSignal run_vm(JanetFiber *fiber, Janet in) {
     vm_bitop(^);
 
     VM_OP(JOP_BNOT) {
-        Janet op = stack[E];
-        if (janet_checktype(op, JANET_NUMBER)) {
-            stack[A] = janet_wrap_integer(~janet_unwrap_integer(op));
+        Bender op = stack[E];
+        if (bender_checktype(op, BENDER_NUMBER)) {
+            stack[A] = bender_wrap_integer(~bender_unwrap_integer(op));
             vm_pcnext();
         } else {
             vm_commit();
-            Janet a = janet_unary_call("~", op);
+            Bender a = bender_unary_call("~", op);
             stack = fiber->data + fiber->frame;
             stack[A] = a;
             vm_checkgc_pcnext();
@@ -2388,7 +2388,7 @@ static JanetSignal run_vm(JanetFiber *fiber, Janet in) {
     vm_next();
 
     VM_OP(JOP_JUMP_IF)
-    if (janet_truthy(stack[A])) {
+    if (bender_truthy(stack[A])) {
         vm_maybe_auto_suspend(ES <= 0);
         vm_profile_edge(1);
         pc += ES;
@@ -2399,7 +2399,7 @@ static JanetSignal run_vm(JanetFiber *fiber, Janet in) {
     vm_next();
 
     VM_OP(JOP_JUMP_IF_NOT)
-    if (janet_truthy(stack[A])) {
+    if (bender_truthy(stack[A])) {
         vm_profile_edge(0);
         pc++;
     } else {
@@ -2410,7 +2410,7 @@ static JanetSignal run_vm(JanetFiber *fiber, Janet in) {
     vm_next();
 
     VM_OP(JOP_JUMP_IF_NIL)
-    if (janet_checktype(stack[A], JANET_NIL)) {
+    if (bender_checktype(stack[A], BENDER_NIL)) {
         vm_maybe_auto_suspend(ES <= 0);
         vm_profile_edge(1);
         pc += ES;
@@ -2421,7 +2421,7 @@ static JanetSignal run_vm(JanetFiber *fiber, Janet in) {
     vm_next();
 
     VM_OP(JOP_JUMP_IF_NOT_NIL)
-    if (janet_checktype(stack[A], JANET_NIL)) {
+    if (bender_checktype(stack[A], BENDER_NIL)) {
         vm_profile_edge(0);
         pc++;
     } else {
@@ -2450,23 +2450,23 @@ static JanetSignal run_vm(JanetFiber *fiber, Janet in) {
     vm_compop_imm( >);
 
     VM_OP(JOP_EQUALS)
-    stack[A] = janet_wrap_boolean(janet_equals(stack[B], stack[C]));
+    stack[A] = bender_wrap_boolean(bender_equals(stack[B], stack[C]));
     vm_pcnext();
 
     VM_OP(JOP_EQUALS_IMMEDIATE)
-    stack[A] = janet_wrap_boolean(janet_checktype(stack[B], JANET_NUMBER) && (janet_unwrap_number(stack[B]) == (double) CS));
+    stack[A] = bender_wrap_boolean(bender_checktype(stack[B], BENDER_NUMBER) && (bender_unwrap_number(stack[B]) == (double) CS));
     vm_pcnext();
 
     VM_OP(JOP_NOT_EQUALS)
-    stack[A] = janet_wrap_boolean(!janet_equals(stack[B], stack[C]));
+    stack[A] = bender_wrap_boolean(!bender_equals(stack[B], stack[C]));
     vm_pcnext();
 
     VM_OP(JOP_NOT_EQUALS_IMMEDIATE)
-    stack[A] = janet_wrap_boolean(!janet_checktype(stack[B], JANET_NUMBER) || (janet_unwrap_number(stack[B]) != (double) CS));
+    stack[A] = bender_wrap_boolean(!bender_checktype(stack[B], BENDER_NUMBER) || (bender_unwrap_number(stack[B]) != (double) CS));
     vm_pcnext();
 
     VM_OP(JOP_COMPARE) {
-        Janet a = janet_wrap_integer(janet_compare(stack[B], stack[C]));
+        Bender a = bender_wrap_integer(bender_compare(stack[B], stack[C]));
         stack = fiber->data + fiber->frame;
         stack[A] = a;
     }
@@ -2475,26 +2475,26 @@ static JanetSignal run_vm(JanetFiber *fiber, Janet in) {
     VM_OP(JOP_NEXT)
     vm_commit();
     {
-        Janet temp = janet_next_impl(stack[B], stack[C], 1);
+        Bender temp = bender_next_impl(stack[B], stack[C], 1);
         vm_restore();
         stack[A] = temp;
     }
     vm_pcnext();
 
     VM_OP(JOP_LOAD_NIL)
-    stack[D] = janet_wrap_nil();
+    stack[D] = bender_wrap_nil();
     vm_pcnext();
 
     VM_OP(JOP_LOAD_TRUE)
-    stack[D] = janet_wrap_true();
+    stack[D] = bender_wrap_true();
     vm_pcnext();
 
     VM_OP(JOP_LOAD_FALSE)
-    stack[D] = janet_wrap_false();
+    stack[D] = bender_wrap_false();
     vm_pcnext();
 
     VM_OP(JOP_LOAD_INTEGER)
-    stack[A] = janet_wrap_integer(ES);
+    stack[A] = bender_wrap_integer(ES);
     vm_pcnext();
 
     VM_OP(JOP_LOAD_CONSTANT) {
@@ -2505,17 +2505,17 @@ static JanetSignal run_vm(JanetFiber *fiber, Janet in) {
     }
 
     VM_OP(JOP_LOAD_SELF)
-    stack[D] = janet_wrap_function(func);
+    stack[D] = bender_wrap_function(func);
     vm_pcnext();
 
     VM_OP(JOP_LOAD_UPVALUE) {
         int32_t eindex = B;
         int32_t vindex = C;
-        JanetFuncEnv *env;
+        BenderFuncEnv *env;
         vm_assert(func->def->environments_length > eindex, "invalid upvalue environment");
         env = func->envs[eindex];
         vm_assert(env->length > vindex, "invalid upvalue index");
-        vm_assert(janet_env_valid(env), "invalid upvalue environment");
+        vm_assert(bender_env_valid(env), "invalid upvalue environment");
         if (env->offset > 0) {
             /* On stack */
             stack[A] = env->as.fiber->data[env->offset + vindex];
@@ -2529,11 +2529,11 @@ static JanetSignal run_vm(JanetFiber *fiber, Janet in) {
     VM_OP(JOP_SET_UPVALUE) {
         int32_t eindex = B;
         int32_t vindex = C;
-        JanetFuncEnv *env;
+        BenderFuncEnv *env;
         vm_assert(func->def->environments_length > eindex, "invalid upvalue environment");
         env = func->envs[eindex];
         vm_assert(env->length > vindex, "invalid upvalue index");
-        vm_assert(janet_env_valid(env), "invalid upvalue environment");
+        vm_assert(bender_env_valid(env), "invalid upvalue environment");
         if (env->offset > 0) {
             env->as.fiber->data[env->offset + vindex] = stack[A];
         } else {
@@ -2543,24 +2543,24 @@ static JanetSignal run_vm(JanetFiber *fiber, Janet in) {
     }
 
     VM_OP(JOP_CLOSURE) {
-        JanetFuncDef *fd;
-        JanetFunction *fn;
+        BenderFuncDef *fd;
+        BenderFunction *fn;
         int32_t elen;
         int32_t defindex = (int32_t)E;
         vm_assert(defindex < func->def->defs_length, "invalid funcdef");
         fd = func->def->defs[defindex];
         elen = fd->environments_length;
-        fn = janet_gcalloc(JANET_MEMORY_FUNCTION, sizeof(JanetFunction) + ((size_t) elen * sizeof(JanetFuncEnv *)));
+        fn = bender_gcalloc(BENDER_MEMORY_FUNCTION, sizeof(BenderFunction) + ((size_t) elen * sizeof(BenderFuncEnv *)));
         fn->def = fd;
         {
             int32_t i;
             for (i = 0; i < elen; ++i) {
                 int32_t inherit = fd->environments[i];
                 if (inherit == -1 || inherit >= func->def->environments_length) {
-                    JanetStackFrame *frame = janet_stack_frame(stack);
+                    BenderStackFrame *frame = bender_stack_frame(stack);
                     if (!frame->env) {
                         /* Lazy capture of current stack frame */
-                        JanetFuncEnv *env = janet_gcalloc(JANET_MEMORY_FUNCENV, sizeof(JanetFuncEnv));
+                        BenderFuncEnv *env = bender_gcalloc(BENDER_MEMORY_FUNCENV, sizeof(BenderFuncEnv));
                         env->offset = fiber->frame;
                         env->as.fiber = fiber;
                         env->length = func->def->slotcount;
@@ -2572,32 +2572,32 @@ static JanetSignal run_vm(JanetFiber *fiber, Janet in) {
                 }
             }
         }
-        stack[A] = janet_wrap_function(fn);
+        stack[A] = bender_wrap_function(fn);
         vm_checkgc_pcnext();
     }
 
     VM_OP(JOP_PUSH)
-    janet_fiber_push(fiber, stack[D]);
+    bender_fiber_push(fiber, stack[D]);
     stack = fiber->data + fiber->frame;
     vm_checkgc_pcnext();
 
     VM_OP(JOP_PUSH_2)
-    janet_fiber_push2(fiber, stack[A], stack[E]);
+    bender_fiber_push2(fiber, stack[A], stack[E]);
     stack = fiber->data + fiber->frame;
     vm_checkgc_pcnext();
 
     VM_OP(JOP_PUSH_3)
-    janet_fiber_push3(fiber, stack[A], stack[B], stack[C]);
+    bender_fiber_push3(fiber, stack[A], stack[B], stack[C]);
     stack = fiber->data + fiber->frame;
     vm_checkgc_pcnext();
 
     VM_OP(JOP_PUSH_ARRAY) {
-        const Janet *vals;
+        const Bender *vals;
         int32_t len;
-        if (janet_indexed_view(stack[D], &vals, &len)) {
-            janet_fiber_pushn(fiber, vals, len);
+        if (bender_indexed_view(stack[D], &vals, &len)) {
+            bender_fiber_pushn(fiber, vals, len);
         } else {
-            janet_panicf("expected %T, got %v", JANET_TFLAG_INDEXED, stack[D]);
+            bender_panicf("expected %T, got %v", BENDER_TFLAG_INDEXED, stack[D]);
         }
     }
     stack = fiber->data + fiber->frame;
@@ -2606,17 +2606,17 @@ static JanetSignal run_vm(JanetFiber *fiber, Janet in) {
     VM_OP(JOP_CALL) {
         vm_maybe_overflow();
         vm_maybe_auto_suspend(1);
-        Janet callee = stack[E];
+        Bender callee = stack[E];
         if (fiber->stacktop > fiber->maxstack) {
             vm_throw("stack overflow");
         }
-        if (janet_checktype(callee, JANET_KEYWORD)) {
+        if (bender_checktype(callee, BENDER_KEYWORD)) {
             vm_commit();
             callee = resolve_method(callee, fiber);
         }
-        if (janet_checktype(callee, JANET_FUNCTION)) {
-            JanetFunction *callee_func = janet_unwrap_function(callee);
-            /* FFI alias shim fast path (janet_ffi_alias_install): the
+        if (bender_checktype(callee, BENDER_FUNCTION)) {
+            BenderFunction *callee_func = bender_unwrap_function(callee);
+            /* FFI alias shim fast path (bender_ffi_alias_install): the
              * installed body is exactly `push args; ldc wrapper; tcall`,
              * so calling the wrapper directly is the same call minus the
              * intermediate frame and tailcall. Only the exact installed
@@ -2625,18 +2625,18 @@ static JanetSignal run_vm(JanetFiber *fiber, Janet in) {
              * path. The generated wrapper never mutates argv, so passing
              * the caller's argument slots is equivalent to the shim's
              * pushes. */
-            if ((callee_func->def->flags & JANET_FUNCDEF_FLAG_FFI_ALIAS) &&
-                    (NULL == janet_vm.profile_table) &&
-                    !(callee_func->gc.flags & JANET_FUNCFLAG_TRACE) &&
+            if ((callee_func->def->flags & BENDER_FUNCDEF_FLAG_FFI_ALIAS) &&
+                    (NULL == bender_vm.profile_table) &&
+                    !(callee_func->gc.flags & BENDER_FUNCFLAG_TRACE) &&
                     ((fiber->stacktop - fiber->stackstart) == callee_func->def->arity) &&
                     (callee_func->def->constants_length == 1) &&
-                    janet_checktype(callee_func->def->constants[0], JANET_CFUNCTION)) {
-                JanetCFunction alias_cfun = janet_unwrap_cfunction(callee_func->def->constants[0]);
+                    bender_checktype(callee_func->def->constants[0], BENDER_CFUNCTION)) {
+                BenderCFunction alias_cfun = bender_unwrap_cfunction(callee_func->def->constants[0]);
                 int32_t alias_argc = fiber->stacktop - fiber->stackstart;
                 vm_commit();
-                janet_fiber_cframe(fiber, alias_cfun);
-                Janet ret = alias_cfun(alias_argc, fiber->data + fiber->frame);
-                janet_fiber_popframe(fiber);
+                bender_fiber_cframe(fiber, alias_cfun);
+                Bender ret = alias_cfun(alias_argc, fiber->data + fiber->frame);
+                bender_fiber_popframe(fiber);
                 /* `func` still names the CALLER here; the ordinary
                  * function path is what rebinds it to the callee. */
                 stack = fiber->data + fiber->frame;
@@ -2647,48 +2647,48 @@ static JanetSignal run_vm(JanetFiber *fiber, Janet in) {
              * BEFORE `func` is rebound to the callee. `pc` still points at
              * this call word and is not moved by the frame push below, so
              * the slot index stays the caller's call PC. */
-            JanetFunction *calledge_caller = func;
+            BenderFunction *calledge_caller = func;
             int32_t calledge_pc = (int32_t)(pc - func->def->bytecode);
             func = callee_func;
-            /* Counter-identity half: every Janet-function call the
-             * interpreter dispatches here. janet_vm.native_continuations
+            /* Counter-identity half: every Bender-function call the
+             * interpreter dispatches here. bender_vm.native_continuations
              * counts the ones a native executor took instead, and the sum
              * must not change when continuation is enabled or disabled. */
-            janet_vm.native_interp_calls++;
-            if (func->gc.flags & JANET_FUNCFLAG_TRACE) {
+            bender_vm.native_interp_calls++;
+            if (func->gc.flags & BENDER_FUNCFLAG_TRACE) {
                 vm_do_trace(func, fiber->stacktop - fiber->stackstart, fiber->data + fiber->stackstart);
             }
             vm_commit();
             {
                 int32_t callargc = fiber->stacktop - fiber->stackstart;
-                if (janet_fiber_funcframe(fiber, func)) {
+                if (bender_fiber_funcframe(fiber, func)) {
                     int32_t n = fiber->stacktop - fiber->stackstart;
-                    janet_panicf("%v called with %d argument%s, expected %d",
+                    bender_panicf("%v called with %d argument%s, expected %d",
                                  callee, n, n == 1 ? "" : "s", func->def->arity);
                 }
                 /* UAF fix (Phase 4A): capture argv AFTER the frame push.
-                 * janet_fiber_funcframe may realloc fiber->data (capacity
+                 * bender_fiber_funcframe may realloc fiber->data (capacity
                  * growth), so a pointer captured before it dangles; the
                  * args live at fiber->data + fiber->frame afterwards.
                  * For vararg defs the trailing spread args are consolidated
                  * into one tuple at index def->arity, so sample arity+1. */
-                if (NULL != janet_vm.profile_table) {
-                    janet_profile_call(func, fiber->data + fiber->frame,
-                                       (func->def->flags & JANET_FUNCDEF_FLAG_VARARG)
+                if (NULL != bender_vm.profile_table) {
+                    bender_profile_call(func, fiber->data + fiber->frame,
+                                       (func->def->flags & BENDER_FUNCDEF_FLAG_VARARG)
                                        ? func->def->arity + 1
                                        : callargc);
-                    janet_profile_calledge(calledge_caller, calledge_pc, func);
+                    bender_profile_calledge(calledge_caller, calledge_pc, func);
                 }
             }
             stack = fiber->data + fiber->frame;
             pc = func->def->bytecode;
             vm_checkgc_next();
-        } else if (janet_checktype(callee, JANET_CFUNCTION)) {
+        } else if (bender_checktype(callee, BENDER_CFUNCTION)) {
             vm_commit();
             int32_t argc = fiber->stacktop - fiber->stackstart;
-            janet_fiber_cframe(fiber, janet_unwrap_cfunction(callee));
-            Janet ret = janet_unwrap_cfunction(callee)(argc, fiber->data + fiber->frame);
-            janet_fiber_popframe(fiber);
+            bender_fiber_cframe(fiber, bender_unwrap_cfunction(callee));
+            Bender ret = bender_unwrap_cfunction(callee)(argc, fiber->data + fiber->frame);
+            bender_fiber_popframe(fiber);
             stack = fiber->data + fiber->frame;
             stack[A] = ret;
             vm_checkgc_pcnext();
@@ -2702,34 +2702,34 @@ static JanetSignal run_vm(JanetFiber *fiber, Janet in) {
     VM_OP(JOP_TAILCALL) {
         vm_maybe_overflow();
         vm_maybe_auto_suspend(1);
-        Janet callee = stack[D];
+        Bender callee = stack[D];
         if (fiber->stacktop > fiber->maxstack) {
             vm_throw("stack overflow");
         }
-        if (janet_checktype(callee, JANET_KEYWORD)) {
+        if (bender_checktype(callee, BENDER_KEYWORD)) {
             vm_commit();
             callee = resolve_method(callee, fiber);
         }
-        if (janet_checktype(callee, JANET_FUNCTION)) {
-            func = janet_unwrap_function(callee);
-            if (func->gc.flags & JANET_FUNCFLAG_TRACE) {
+        if (bender_checktype(callee, BENDER_FUNCTION)) {
+            func = bender_unwrap_function(callee);
+            if (func->gc.flags & BENDER_FUNCFLAG_TRACE) {
                 vm_do_trace(func, fiber->stacktop - fiber->stackstart, fiber->data + fiber->stackstart);
             }
             {
                 int32_t callargc = fiber->stacktop - fiber->stackstart;
-                if (janet_fiber_funcframe_tail(fiber, func)) {
-                    janet_stack_frame(fiber->data + fiber->frame)->pc = pc;
+                if (bender_fiber_funcframe_tail(fiber, func)) {
+                    bender_stack_frame(fiber->data + fiber->frame)->pc = pc;
                     int32_t n = fiber->stacktop - fiber->stackstart;
-                    janet_panicf("%v called with %d argument%s, expected %d",
+                    bender_panicf("%v called with %d argument%s, expected %d",
                                  callee, n, n == 1 ? "" : "s", func->def->arity);
                 }
                 /* UAF fix (Phase 4A): same as JOP_CALL — funcframe_tail
                  * reallocs fiber->data on growth and additionally MEMMOVES
                  * the args down to fiber->data + fiber->frame, so both the
                  * old pointer and the old stackstart location are invalid. */
-                if (NULL != janet_vm.profile_table)
-                    janet_profile_call(func, fiber->data + fiber->frame,
-                                       (func->def->flags & JANET_FUNCDEF_FLAG_VARARG)
+                if (NULL != bender_vm.profile_table)
+                    bender_profile_call(func, fiber->data + fiber->frame,
+                                       (func->def->flags & BENDER_FUNCDEF_FLAG_VARARG)
                                        ? func->def->arity + 1
                                        : callargc);
             }
@@ -2737,20 +2737,20 @@ static JanetSignal run_vm(JanetFiber *fiber, Janet in) {
             pc = func->def->bytecode;
             vm_checkgc_next();
         } else {
-            Janet retreg;
-            int entrance_frame = janet_stack_frame(stack)->flags & JANET_STACKFRAME_ENTRANCE;
+            Bender retreg;
+            int entrance_frame = bender_stack_frame(stack)->flags & BENDER_STACKFRAME_ENTRANCE;
             vm_commit();
-            if (janet_checktype(callee, JANET_CFUNCTION)) {
+            if (bender_checktype(callee, BENDER_CFUNCTION)) {
                 int32_t argc = fiber->stacktop - fiber->stackstart;
-                janet_fiber_cframe(fiber, janet_unwrap_cfunction(callee));
-                retreg = janet_unwrap_cfunction(callee)(argc, fiber->data + fiber->frame);
-                janet_fiber_popframe(fiber);
+                bender_fiber_cframe(fiber, bender_unwrap_cfunction(callee));
+                retreg = bender_unwrap_cfunction(callee)(argc, fiber->data + fiber->frame);
+                bender_fiber_popframe(fiber);
             } else {
                 retreg = call_nonfn(fiber, callee);
             }
-            janet_fiber_popframe(fiber);
+            bender_fiber_popframe(fiber);
             if (entrance_frame) {
-                vm_return_no_restore(JANET_SIGNAL_OK, retreg);
+                vm_return_no_restore(BENDER_SIGNAL_OK, retreg);
             }
             vm_restore();
             stack[A] = retreg;
@@ -2759,26 +2759,26 @@ static JanetSignal run_vm(JanetFiber *fiber, Janet in) {
     }
 
     VM_OP(JOP_RESUME) {
-        Janet retreg;
+        Bender retreg;
         vm_maybe_overflow();
         vm_maybe_auto_suspend(1);
-        vm_assert_type(stack[B], JANET_FIBER);
-        JanetFiber *child = janet_unwrap_fiber(stack[B]);
-        if (janet_check_can_resume(child, &retreg, 0)) {
+        vm_assert_type(stack[B], BENDER_FIBER);
+        BenderFiber *child = bender_unwrap_fiber(stack[B]);
+        if (bender_check_can_resume(child, &retreg, 0)) {
             vm_commit();
-            janet_panicv(retreg);
+            bender_panicv(retreg);
         }
         fiber->child = child;
-        JanetSignal sig = janet_continue_no_check(child, stack[C], &retreg);
+        BenderSignal sig = bender_continue_no_check(child, stack[C], &retreg);
         stack = fiber->data + fiber->frame;
-        if (sig != JANET_SIGNAL_OK && !(child->flags & (1 << sig))) {
+        if (sig != BENDER_SIGNAL_OK && !(child->flags & (1 << sig))) {
             /* P3.6: nested child suspended (not completed): parking
              * here would strand live C frames for others to clobber
              * if any parked party is shared. Fail loud instead
              * (nested-complete flows through untouched). */
-            if ((sig == JANET_SIGNAL_EVENT || sig == JANET_SIGNAL_YIELD ||
-                    sig == JANET_SIGNAL_INTERRUPT) &&
-                    janet_fiber_chain_has_shared(fiber)) {
+            if ((sig == BENDER_SIGNAL_EVENT || sig == BENDER_SIGNAL_YIELD ||
+                    sig == BENDER_SIGNAL_INTERRUPT) &&
+                    bender_fiber_chain_has_shared(fiber)) {
                 vm_throw("nested fiber suspended under a shared-stack "
                          "ancestor (await outside protect, or use private "
                          "fibers for coroutines)");
@@ -2792,41 +2792,41 @@ static JanetSignal run_vm(JanetFiber *fiber, Janet in) {
 
     VM_OP(JOP_SIGNAL) {
         int32_t s = C;
-        if (s > JANET_SIGNAL_USER9) s = JANET_SIGNAL_USER9;
+        if (s > BENDER_SIGNAL_USER9) s = BENDER_SIGNAL_USER9;
         if (s < 0) s = 0;
         vm_return(s, stack[B]);
     }
 
     VM_OP(JOP_PROPAGATE) {
-        Janet fv = stack[C];
-        vm_assert_type(fv, JANET_FIBER);
-        JanetFiber *f = janet_unwrap_fiber(fv);
-        JanetFiberStatus sub_status = janet_fiber_status(f);
-        if (sub_status > JANET_STATUS_USER9) {
+        Bender fv = stack[C];
+        vm_assert_type(fv, BENDER_FIBER);
+        BenderFiber *f = bender_unwrap_fiber(fv);
+        BenderFiberStatus sub_status = bender_fiber_status(f);
+        if (sub_status > BENDER_STATUS_USER9) {
             vm_commit();
-            janet_panicf("cannot propagate from fiber with status :%s",
-                         janet_status_names[sub_status]);
+            bender_panicf("cannot propagate from fiber with status :%s",
+                         bender_status_names[sub_status]);
         }
         fiber->child = f;
         vm_return((int) sub_status, stack[B]);
     }
 
     VM_OP(JOP_CANCEL) {
-        Janet retreg;
-        vm_assert_type(stack[B], JANET_FIBER);
-        JanetFiber *child = janet_unwrap_fiber(stack[B]);
-        if (janet_check_can_resume(child, &retreg, 1)) {
+        Bender retreg;
+        vm_assert_type(stack[B], BENDER_FIBER);
+        BenderFiber *child = bender_unwrap_fiber(stack[B]);
+        if (bender_check_can_resume(child, &retreg, 1)) {
             vm_commit();
-            janet_panicv(retreg);
+            bender_panicv(retreg);
         }
         fiber->child = child;
-        JanetSignal sig = janet_continue_signal(child, stack[C], &retreg, JANET_SIGNAL_ERROR);
-        if (sig != JANET_SIGNAL_OK && !(child->flags & (1 << sig))) {
+        BenderSignal sig = bender_continue_signal(child, stack[C], &retreg, BENDER_SIGNAL_ERROR);
+        if (sig != BENDER_SIGNAL_OK && !(child->flags & (1 << sig))) {
             /* P3.6: same nested-suspend hazard as JOP_RESUME (a
              * cancelled child may catch and keep running). */
-            if ((sig == JANET_SIGNAL_EVENT || sig == JANET_SIGNAL_YIELD ||
-                    sig == JANET_SIGNAL_INTERRUPT) &&
-                    janet_fiber_chain_has_shared(fiber)) {
+            if ((sig == BENDER_SIGNAL_EVENT || sig == BENDER_SIGNAL_YIELD ||
+                    sig == BENDER_SIGNAL_INTERRUPT) &&
+                    bender_fiber_chain_has_shared(fiber)) {
                 vm_throw("nested fiber suspended under a shared-stack "
                          "ancestor (await outside protect, or use private "
                          "fibers for coroutines)");
@@ -2841,25 +2841,25 @@ static JanetSignal run_vm(JanetFiber *fiber, Janet in) {
 
     VM_OP(JOP_PUT)
     vm_commit();
-    fiber->flags |= JANET_FIBER_RESUME_NO_USEVAL;
-    janet_put(stack[A], stack[B], stack[C]);
+    fiber->flags |= BENDER_FIBER_RESUME_NO_USEVAL;
+    bender_put(stack[A], stack[B], stack[C]);
     stack = fiber->data + fiber->frame;
-    fiber->flags &= ~JANET_FIBER_RESUME_NO_USEVAL;
+    fiber->flags &= ~BENDER_FIBER_RESUME_NO_USEVAL;
     vm_checkgc_pcnext();
 
     VM_OP(JOP_PUT_INDEX)
     vm_commit();
-    fiber->flags |= JANET_FIBER_RESUME_NO_USEVAL;
-    janet_putindex(stack[A], C, stack[B]);
+    fiber->flags |= BENDER_FIBER_RESUME_NO_USEVAL;
+    bender_putindex(stack[A], C, stack[B]);
     stack = fiber->data + fiber->frame;
-    fiber->flags &= ~JANET_FIBER_RESUME_NO_USEVAL;
+    fiber->flags &= ~BENDER_FIBER_RESUME_NO_USEVAL;
     vm_checkgc_pcnext();
 
     VM_OP(JOP_IN)
     vm_profile_receiver(stack[B]);
     vm_commit();
     {
-        Janet a = janet_in(stack[B], stack[C]);
+        Bender a = bender_in(stack[B], stack[C]);
         stack = fiber->data + fiber->frame;
         stack[A] = a;
     }
@@ -2867,15 +2867,15 @@ static JanetSignal run_vm(JanetFiber *fiber, Janet in) {
 
     /* Fused (in ds <const small int>): key comes from the UNSIGNED
      * immediate rather than a preceding load_integer into a slot.
-     * Calls janet_in -- the SAME entry point as JOP_IN above -- so
+     * Calls bender_in -- the SAME entry point as JOP_IN above -- so
      * behavior is identical in every case, including the raise on an
-     * out-of-range string/symbol/keyword index where janet_getindex
+     * out-of-range string/symbol/keyword index where bender_getindex
      * (and therefore JOP_GET_INDEX) would instead yield nil. */
     VM_OP(JOP_IN_IMMEDIATE)
     vm_profile_receiver(stack[B]);
     vm_commit();
     {
-        Janet a = janet_in(stack[B], janet_wrap_integer((int32_t)(uint8_t) C));
+        Bender a = bender_in(stack[B], bender_wrap_integer((int32_t)(uint8_t) C));
         stack = fiber->data + fiber->frame;
         stack[A] = a;
     }
@@ -2885,7 +2885,7 @@ static JanetSignal run_vm(JanetFiber *fiber, Janet in) {
     vm_profile_receiver(stack[B]);
     vm_commit();
     {
-        Janet a = janet_get(stack[B], stack[C]);
+        Bender a = bender_get(stack[B], stack[C]);
         stack = fiber->data + fiber->frame;
         stack[A] = a;
     }
@@ -2895,7 +2895,7 @@ static JanetSignal run_vm(JanetFiber *fiber, Janet in) {
     vm_profile_receiver(stack[B]);
     vm_commit();
     {
-        Janet a = janet_getindex(stack[B], C);
+        Bender a = bender_getindex(stack[B], C);
         stack = fiber->data + fiber->frame;
         stack[A] = a;
     }
@@ -2904,7 +2904,7 @@ static JanetSignal run_vm(JanetFiber *fiber, Janet in) {
     VM_OP(JOP_LENGTH)
     vm_commit();
     {
-        Janet a = janet_lengthv(stack[E]);
+        Bender a = bender_lengthv(stack[E]);
         stack = fiber->data + fiber->frame;
         stack[A] = a;
     }
@@ -2912,8 +2912,8 @@ static JanetSignal run_vm(JanetFiber *fiber, Janet in) {
 
     VM_OP(JOP_MAKE_ARRAY) {
         int32_t count = fiber->stacktop - fiber->stackstart;
-        Janet *mem = fiber->data + fiber->stackstart;
-        stack[D] = janet_wrap_array(janet_array_n(mem, count));
+        Bender *mem = fiber->data + fiber->stackstart;
+        stack[D] = bender_wrap_array(bender_array_n(mem, count));
         fiber->stacktop = fiber->stackstart;
         vm_checkgc_pcnext();
     }
@@ -2922,30 +2922,30 @@ static JanetSignal run_vm(JanetFiber *fiber, Janet in) {
     /* fallthrough */
     VM_OP(JOP_MAKE_BRACKET_TUPLE) {
         int32_t count = fiber->stacktop - fiber->stackstart;
-        Janet *mem = fiber->data + fiber->stackstart;
-        const Janet *tup = janet_tuple_n(mem, count);
+        Bender *mem = fiber->data + fiber->stackstart;
+        const Bender *tup = bender_tuple_n(mem, count);
         if (opcode == JOP_MAKE_BRACKET_TUPLE)
-            janet_tuple_flag(tup) |= JANET_TUPLE_FLAG_BRACKETCTOR;
-        stack[D] = janet_wrap_tuple(tup);
+            bender_tuple_flag(tup) |= BENDER_TUPLE_FLAG_BRACKETCTOR;
+        stack[D] = bender_wrap_tuple(tup);
         fiber->stacktop = fiber->stackstart;
         vm_checkgc_pcnext();
     }
 
     VM_OP(JOP_MAKE_SCRATCH_TUPLE) {
         int32_t count = fiber->stacktop - fiber->stackstart;
-        Janet *mem = fiber->data + fiber->stackstart;
-        Janet scratch = stack[E];
-        JanetArray *arr;
-        if (janet_checktype(scratch, JANET_ARRAY)) {
-            arr = janet_unwrap_array(scratch);
+        Bender *mem = fiber->data + fiber->stackstart;
+        Bender scratch = stack[E];
+        BenderArray *arr;
+        if (bender_checktype(scratch, BENDER_ARRAY)) {
+            arr = bender_unwrap_array(scratch);
             if (arr->capacity < count)
-                janet_array_ensure(arr, count, 1);
+                bender_array_ensure(arr, count, 1);
             if (count)
-                memcpy(arr->data, mem, sizeof(Janet) * (size_t) count);
+                memcpy(arr->data, mem, sizeof(Bender) * (size_t) count);
             arr->count = count;
         } else {
-            arr = janet_array_n(mem, count);
-            scratch = janet_wrap_array(arr);
+            arr = bender_array_n(mem, count);
+            scratch = bender_wrap_array(arr);
             stack[E] = scratch;
         }
         stack[A] = scratch;
@@ -2955,54 +2955,54 @@ static JanetSignal run_vm(JanetFiber *fiber, Janet in) {
 
     VM_OP(JOP_MAKE_TABLE) {
         int32_t count = fiber->stacktop - fiber->stackstart;
-        Janet *mem = fiber->data + fiber->stackstart;
+        Bender *mem = fiber->data + fiber->stackstart;
         if (count & 1) {
             vm_commit();
-            janet_panicf("expected even number of arguments to table constructor, got %d", count);
+            bender_panicf("expected even number of arguments to table constructor, got %d", count);
         }
-        JanetTable *table = janet_table(count / 2);
+        BenderTable *table = bender_table(count / 2);
         for (int32_t i = 0; i < count; i += 2)
-            janet_table_put(table, mem[i], mem[i + 1]);
-        stack[D] = janet_wrap_table(table);
+            bender_table_put(table, mem[i], mem[i + 1]);
+        stack[D] = bender_wrap_table(table);
         fiber->stacktop = fiber->stackstart;
         vm_checkgc_pcnext();
     }
 
     VM_OP(JOP_MAKE_STRUCT) {
         int32_t count = fiber->stacktop - fiber->stackstart;
-        Janet *mem = fiber->data + fiber->stackstart;
+        Bender *mem = fiber->data + fiber->stackstart;
         if (count & 1) {
             vm_commit();
-            janet_panicf("expected even number of arguments to struct constructor, got %d", count);
+            bender_panicf("expected even number of arguments to struct constructor, got %d", count);
         }
-        JanetKV *st = janet_struct_begin(count / 2);
+        BenderKV *st = bender_struct_begin(count / 2);
         for (int32_t i = 0; i < count; i += 2)
-            janet_struct_put(st, mem[i], mem[i + 1]);
-        stack[D] = janet_wrap_struct(janet_struct_end(st));
+            bender_struct_put(st, mem[i], mem[i + 1]);
+        stack[D] = bender_wrap_struct(bender_struct_end(st));
         fiber->stacktop = fiber->stackstart;
         vm_checkgc_pcnext();
     }
 
     VM_OP(JOP_MAKE_STRING) {
         int32_t count = fiber->stacktop - fiber->stackstart;
-        Janet *mem = fiber->data + fiber->stackstart;
-        JanetBuffer buffer;
-        janet_buffer_init(&buffer, 10 * count);
+        Bender *mem = fiber->data + fiber->stackstart;
+        BenderBuffer buffer;
+        bender_buffer_init(&buffer, 10 * count);
         for (int32_t i = 0; i < count; i++)
-            janet_to_string_b(&buffer, mem[i]);
-        stack[D] = janet_stringv(buffer.data, buffer.count);
-        janet_buffer_deinit(&buffer);
+            bender_to_string_b(&buffer, mem[i]);
+        stack[D] = bender_stringv(buffer.data, buffer.count);
+        bender_buffer_deinit(&buffer);
         fiber->stacktop = fiber->stackstart;
         vm_checkgc_pcnext();
     }
 
     VM_OP(JOP_MAKE_BUFFER) {
         int32_t count = fiber->stacktop - fiber->stackstart;
-        Janet *mem = fiber->data + fiber->stackstart;
-        JanetBuffer *buffer = janet_buffer(10 * count);
+        Bender *mem = fiber->data + fiber->stackstart;
+        BenderBuffer *buffer = bender_buffer(10 * count);
         for (int32_t i = 0; i < count; i++)
-            janet_to_string_b(buffer, mem[i]);
-        stack[D] = janet_wrap_buffer(buffer);
+            bender_to_string_b(buffer, mem[i]);
+        stack[D] = bender_wrap_buffer(buffer);
         fiber->stacktop = fiber->stackstart;
         vm_checkgc_pcnext();
     }
@@ -3015,17 +3015,17 @@ static JanetSignal run_vm(JanetFiber *fiber, Janet in) {
  * the fiber, setting a breakpoint at the next instruction, executing, and
  * resetting breakpoints to how they were prior. Yes, it's a bit hacky.
  */
-JanetSignal janet_step(JanetFiber *fiber, Janet in, Janet *out) {
+BenderSignal bender_step(BenderFiber *fiber, Bender in, Bender *out) {
     /* No finished or currently alive fibers. */
-    JanetFiberStatus status = janet_fiber_status(fiber);
-    if (status == JANET_STATUS_ALIVE ||
-            status == JANET_STATUS_DEAD ||
-            status == JANET_STATUS_ERROR) {
-        janet_panicf("cannot step fiber with status :%s", janet_status_names[status]);
+    BenderFiberStatus status = bender_fiber_status(fiber);
+    if (status == BENDER_STATUS_ALIVE ||
+            status == BENDER_STATUS_DEAD ||
+            status == BENDER_STATUS_ERROR) {
+        bender_panicf("cannot step fiber with status :%s", bender_status_names[status]);
     }
 
     /* Get PC for setting breakpoints */
-    uint32_t *pc = janet_stack_frame(fiber->data + fiber->frame)->pc;
+    uint32_t *pc = bender_stack_frame(fiber->data + fiber->frame)->pc;
 
     /* Check current opcode (sans debug flag). This tells us where the next or next two candidate
      * instructions will be. Usually it's the next instruction in memory,
@@ -3063,11 +3063,11 @@ JanetSignal janet_step(JanetFiber *fiber, Janet in, Janet *out) {
     }
 
     /* Go */
-#ifdef JANET_NATIVE_EXECUTORS
+#ifdef BENDER_NATIVE_EXECUTORS
     native_stepping++;
 #endif
-    JanetSignal signal = janet_continue(fiber, in, out);
-#ifdef JANET_NATIVE_EXECUTORS
+    BenderSignal signal = bender_continue(fiber, in, out);
+#ifdef BENDER_NATIVE_EXECUTORS
     native_stepping--;
 #endif
 
@@ -3078,62 +3078,62 @@ JanetSignal janet_step(JanetFiber *fiber, Janet in, Janet *out) {
     return signal;
 }
 
-static Janet void_cfunction(int32_t argc, Janet *argv) {
+static Bender void_cfunction(int32_t argc, Bender *argv) {
     (void) argc;
     (void) argv;
-    janet_panic("placeholder");
+    bender_panic("placeholder");
 }
 
-Janet janet_call(JanetFunction *fun, int32_t argc, const Janet *argv) {
+Bender bender_call(BenderFunction *fun, int32_t argc, const Bender *argv) {
     /* Check entry conditions */
-    if (!janet_vm.fiber)
-        janet_panic("janet_call failed because there is no current fiber");
-    if (janet_vm.stackn >= JANET_RECURSION_GUARD)
-        janet_panic("C stack recursed too deeply");
+    if (!bender_vm.fiber)
+        bender_panic("bender_call failed because there is no current fiber");
+    if (bender_vm.stackn >= BENDER_RECURSION_GUARD)
+        bender_panic("C stack recursed too deeply");
     /* Phase D3: C-driven nesting deepens the native stack; convert a
      * pending fault-handler overflow the same way JOP_CALL does. */
-    if (janet_vm.fiber->stack_overflowed) {
-        janet_vm.fiber->stack_overflowed = 0;
-        janet_panic("fiber native stack overflow");
+    if (bender_vm.fiber->stack_overflowed) {
+        bender_vm.fiber->stack_overflowed = 0;
+        bender_panic("fiber native stack overflow");
     }
 
     /* Dirty stack */
-    int32_t dirty_stack = janet_vm.fiber->stacktop - janet_vm.fiber->stackstart;
+    int32_t dirty_stack = bender_vm.fiber->stacktop - bender_vm.fiber->stackstart;
     if (dirty_stack) {
-        janet_fiber_cframe(janet_vm.fiber, void_cfunction);
+        bender_fiber_cframe(bender_vm.fiber, void_cfunction);
     }
 
     /* Tracing */
-    if (fun->gc.flags & JANET_FUNCFLAG_TRACE) {
-        janet_vm.stackn++;
+    if (fun->gc.flags & BENDER_FUNCFLAG_TRACE) {
+        bender_vm.stackn++;
         vm_do_trace(fun, argc, argv);
-        janet_vm.stackn--;
+        bender_vm.stackn--;
     }
 
     /* Push frame */
-    janet_fiber_pushn(janet_vm.fiber, argv, argc);
-    if (janet_fiber_funcframe(janet_vm.fiber, fun)) {
+    bender_fiber_pushn(bender_vm.fiber, argv, argc);
+    if (bender_fiber_funcframe(bender_vm.fiber, fun)) {
         int32_t min = fun->def->min_arity;
         int32_t max = fun->def->max_arity;
-        Janet funv = janet_wrap_function(fun);
+        Bender funv = bender_wrap_function(fun);
         if (min == max && min != argc)
-            janet_panicf("arity mismatch in %v, expected %d, got %d", funv, min, argc);
+            bender_panicf("arity mismatch in %v, expected %d, got %d", funv, min, argc);
         if (min >= 0 && argc < min)
-            janet_panicf("arity mismatch in %v, expected at least %d, got %d", funv, min, argc);
-        janet_panicf("arity mismatch in %v, expected at most %d, got %d", funv, max, argc);
+            bender_panicf("arity mismatch in %v, expected at least %d, got %d", funv, min, argc);
+        bender_panicf("arity mismatch in %v, expected at most %d, got %d", funv, max, argc);
     }
-    janet_fiber_frame(janet_vm.fiber)->flags |= JANET_STACKFRAME_ENTRANCE;
+    bender_fiber_frame(bender_vm.fiber)->flags |= BENDER_STACKFRAME_ENTRANCE;
 
     /* Set up */
-    int32_t oldn = janet_vm.stackn++;
-    int handle = janet_gclock();
+    int32_t oldn = bender_vm.stackn++;
+    int handle = bender_gclock();
 
     /* Run vm */
-    janet_vm.fiber->flags |= JANET_FIBER_RESUME_NO_USEVAL | JANET_FIBER_RESUME_NO_SKIP;
-    int old_coerce_error = janet_vm.coerce_error;
-    janet_vm.coerce_error = 1;
-    JanetSignal signal = run_vm(janet_vm.fiber, janet_wrap_nil());
-    janet_vm.coerce_error = old_coerce_error;
+    bender_vm.fiber->flags |= BENDER_FIBER_RESUME_NO_USEVAL | BENDER_FIBER_RESUME_NO_SKIP;
+    int old_coerce_error = bender_vm.coerce_error;
+    bender_vm.coerce_error = 1;
+    BenderSignal signal = run_vm(bender_vm.fiber, bender_wrap_nil());
+    bender_vm.coerce_error = old_coerce_error;
 
     /* Phase 1.1 (see docs/internals/native-fibers.md): a suspension signal
      * (yield, user signal, debug, ...) reached through these live C frames
@@ -3141,22 +3141,22 @@ Janet janet_call(JanetFunction *fun, int32_t argc, const Janet *argv) {
      * coerced to an error. Each resume re-enters the nested VM below, so
      * the yielding function runs to completion and its C callers observe
      * an ordinary call. */
-    while (signal != JANET_SIGNAL_OK && signal != JANET_SIGNAL_ERROR) {
-        JanetFiber *susp_fiber = janet_vm.fiber;
-        janet_suspend_swap(susp_fiber, signal, *janet_vm.return_reg);
+    while (signal != BENDER_SIGNAL_OK && signal != BENDER_SIGNAL_ERROR) {
+        BenderFiber *susp_fiber = bender_vm.fiber;
+        bender_suspend_swap(susp_fiber, signal, *bender_vm.return_reg);
         /* Resumed. A signal may have been smuggled in (e.g. cancel);
          * consume it the way run_vm entry does. */
-        if (susp_fiber->flags & JANET_FIBER_RESUME_SIGNAL) {
-            signal = (susp_fiber->gc.flags & JANET_FIBER_STATUS_MASK) >> JANET_FIBER_STATUS_OFFSET;
-            susp_fiber->gc.flags &= ~JANET_FIBER_STATUS_MASK;
-            susp_fiber->flags &= ~JANET_FIBER_RESUME_SIGNAL;
-            janet_vm.return_reg[0] = susp_fiber->in_value;
-            if (signal == JANET_SIGNAL_OK) {
+        if (susp_fiber->flags & BENDER_FIBER_RESUME_SIGNAL) {
+            signal = (susp_fiber->gc.flags & BENDER_FIBER_STATUS_MASK) >> BENDER_FIBER_STATUS_OFFSET;
+            susp_fiber->gc.flags &= ~BENDER_FIBER_STATUS_MASK;
+            susp_fiber->flags &= ~BENDER_FIBER_RESUME_SIGNAL;
+            bender_vm.return_reg[0] = susp_fiber->in_value;
+            if (signal == BENDER_SIGNAL_OK) {
                 /* Cannot happen via continue_signal, but stay total: an OK
                  * smuggle is a plain resume. */
                 continue;
             }
-            if (signal != JANET_SIGNAL_ERROR) {
+            if (signal != BENDER_SIGNAL_ERROR) {
                 /* A new suspension was injected on resume: propagate it
                  * outward the same way. */
                 continue;
@@ -3166,42 +3166,42 @@ Janet janet_call(JanetFunction *fun, int32_t argc, const Janet *argv) {
         /* Plain resume: deliver the resume value as the yield result and
          * keep running the nested call. Clear any stale re-entry flags so
          * delivery behaves exactly like the trampoline's run_vm re-entry. */
-        susp_fiber->flags &= ~(JANET_FIBER_RESUME_NO_USEVAL | JANET_FIBER_RESUME_NO_SKIP);
+        susp_fiber->flags &= ~(BENDER_FIBER_RESUME_NO_USEVAL | BENDER_FIBER_RESUME_NO_SKIP);
         signal = run_vm(susp_fiber, susp_fiber->in_value);
     }
 
     /* Teardown */
-    janet_vm.stackn = oldn;
-    janet_gcunlock(handle);
+    bender_vm.stackn = oldn;
+    bender_gcunlock(handle);
     if (dirty_stack) {
-        janet_fiber_popframe(janet_vm.fiber);
-        janet_vm.fiber->stacktop += dirty_stack;
+        bender_fiber_popframe(bender_vm.fiber);
+        bender_vm.fiber->stacktop += dirty_stack;
     }
 
-    if (signal != JANET_SIGNAL_OK) {
-        /* Should match logic in janet_signalv */
-#ifdef JANET_EV
-        if (janet_vm.root_fiber != NULL && signal == JANET_SIGNAL_EVENT) {
-            janet_vm.root_fiber->sched_id++;
+    if (signal != BENDER_SIGNAL_OK) {
+        /* Should match logic in bender_signalv */
+#ifdef BENDER_EV
+        if (bender_vm.root_fiber != NULL && signal == BENDER_SIGNAL_EVENT) {
+            bender_vm.root_fiber->sched_id++;
         }
 #endif
-        if (signal != JANET_SIGNAL_ERROR) {
-            *janet_vm.return_reg = janet_wrap_string(janet_formatc("%v coerced from %s to error", *janet_vm.return_reg, janet_signal_names[signal]));
+        if (signal != BENDER_SIGNAL_ERROR) {
+            *bender_vm.return_reg = bender_wrap_string(bender_formatc("%v coerced from %s to error", *bender_vm.return_reg, bender_signal_names[signal]));
         }
-        janet_panicv(*janet_vm.return_reg);
+        bender_panicv(*bender_vm.return_reg);
     }
 
-    return *janet_vm.return_reg;
+    return *bender_vm.return_reg;
 }
 
 /* P3.6: walk the resume chain for shared-stack fibers parked
  * mid-C (child links verified intact — a stale link means that
  * ancestor already unwound normally and is safe). Self excluded:
  * the suspender abandons cleanly and re-primes on wake. Bounded. */
-static int janet_fiber_chain_has_shared(JanetFiber *fiber) {
+static int bender_fiber_chain_has_shared(BenderFiber *fiber) {
     int depth = 0;
-    JanetFiber *prev = fiber;
-    JanetFiber *f = fiber->resume_fiber;
+    BenderFiber *prev = fiber;
+    BenderFiber *f = fiber->resume_fiber;
     while (NULL != f && depth < 1024) {
         if (f->child != prev) break;
         if (f->shared_stack) return 1;
@@ -3212,155 +3212,155 @@ static int janet_fiber_chain_has_shared(JanetFiber *fiber) {
     return 0;
 }
 
-static JanetSignal janet_check_can_resume(JanetFiber *fiber, Janet *out, int is_cancel) {
+static BenderSignal bender_check_can_resume(BenderFiber *fiber, Bender *out, int is_cancel) {
     /* Check conditions */
-    JanetFiberStatus old_status = janet_fiber_status(fiber);
-    if (janet_vm.stackn >= JANET_RECURSION_GUARD) {
-        janet_fiber_set_status(fiber, JANET_STATUS_ERROR);
-        *out = janet_cstringv("C stack recursed too deeply");
-        return JANET_SIGNAL_ERROR;
+    BenderFiberStatus old_status = bender_fiber_status(fiber);
+    if (bender_vm.stackn >= BENDER_RECURSION_GUARD) {
+        bender_fiber_set_status(fiber, BENDER_STATUS_ERROR);
+        *out = bender_cstringv("C stack recursed too deeply");
+        return BENDER_SIGNAL_ERROR;
     }
     /* If a "task" fiber is trying to be used as a normal fiber, detect that. See bug #920.
      * Fibers must be marked as root fibers manually, or by the ev scheduler. */
-    if (janet_vm.fiber != NULL && (fiber->gc.flags & JANET_FIBER_EV_GCFLAG_ROOT)) {
-#ifdef JANET_EV
-        *out = janet_cstringv(is_cancel
+    if (bender_vm.fiber != NULL && (fiber->gc.flags & BENDER_FIBER_EV_GCFLAG_ROOT)) {
+#ifdef BENDER_EV
+        *out = bender_cstringv(is_cancel
                               ? "cannot cancel root fiber, use ev/cancel"
                               : "cannot resume root fiber, use ev/go");
 #else
-        *out = janet_cstringv(is_cancel
+        *out = bender_cstringv(is_cancel
                               ? "cannot cancel root fiber"
                               : "cannot resume root fiber");
 #endif
-        return JANET_SIGNAL_ERROR;
+        return BENDER_SIGNAL_ERROR;
     }
-    if (old_status == JANET_STATUS_ALIVE ||
-            old_status == JANET_STATUS_DEAD ||
-            (old_status >= JANET_STATUS_USER0 && old_status <= JANET_STATUS_USER4) ||
-            old_status == JANET_STATUS_ERROR) {
-        const uint8_t *str = janet_formatc("cannot resume fiber with status :%s",
-                                           janet_status_names[old_status]);
-        *out = janet_wrap_string(str);
-        return JANET_SIGNAL_ERROR;
+    if (old_status == BENDER_STATUS_ALIVE ||
+            old_status == BENDER_STATUS_DEAD ||
+            (old_status >= BENDER_STATUS_USER0 && old_status <= BENDER_STATUS_USER4) ||
+            old_status == BENDER_STATUS_ERROR) {
+        const uint8_t *str = bender_formatc("cannot resume fiber with status :%s",
+                                           bender_status_names[old_status]);
+        *out = bender_wrap_string(str);
+        return BENDER_SIGNAL_ERROR;
     }
-    return JANET_SIGNAL_OK;
+    return BENDER_SIGNAL_OK;
 }
 
-void janet_try_init(JanetTryState *state) {
-    state->stackn = janet_vm.stackn++;
-    state->gc_handle = janet_vm.gc_suspend;
-    state->vm_fiber = janet_vm.fiber;
-    state->vm_jmp_buf = janet_vm.signal_buf;
-    state->vm_return_reg = janet_vm.return_reg;
-    state->coerce_error = janet_vm.coerce_error;
-    janet_vm.return_reg = &(state->payload);
-    janet_vm.signal_buf = &(state->buf);
-    janet_vm.coerce_error = 0;
+void bender_try_init(BenderTryState *state) {
+    state->stackn = bender_vm.stackn++;
+    state->gc_handle = bender_vm.gc_suspend;
+    state->vm_fiber = bender_vm.fiber;
+    state->vm_jmp_buf = bender_vm.signal_buf;
+    state->vm_return_reg = bender_vm.return_reg;
+    state->coerce_error = bender_vm.coerce_error;
+    bender_vm.return_reg = &(state->payload);
+    bender_vm.signal_buf = &(state->buf);
+    bender_vm.coerce_error = 0;
 }
 
-void janet_restore(JanetTryState *state) {
-    janet_vm.stackn = state->stackn;
-    janet_vm.gc_suspend = state->gc_handle;
-    janet_vm.fiber = state->vm_fiber;
-    janet_vm.signal_buf = state->vm_jmp_buf;
-    janet_vm.return_reg = state->vm_return_reg;
-    janet_vm.coerce_error = state->coerce_error;
+void bender_restore(BenderTryState *state) {
+    bender_vm.stackn = state->stackn;
+    bender_vm.gc_suspend = state->gc_handle;
+    bender_vm.fiber = state->vm_fiber;
+    bender_vm.signal_buf = state->vm_jmp_buf;
+    bender_vm.return_reg = state->vm_return_reg;
+    bender_vm.coerce_error = state->coerce_error;
 }
 
 /* Phase 1.1 swap-suspension (see docs/internals/native-fibers.md). The VM * dynamic registers always describe the RUNNING party. When a fiber
  * suspends with live C frames, its registers are parked in the fiber and
  * the resumer's parked registers loaded, so nothing points into the
- * frozen C stack while the resumer runs. janet_continue_no_check does the
- * inverse when resuming. Host (non-fiber) code parks in janet_vm.base_*. */
+ * frozen C stack while the resumer runs. bender_continue_no_check does the
+ * inverse when resuming. Host (non-fiber) code parks in bender_vm.base_*. */
 
 /* Park the live registers into a fiber (the suspending/yielding party). */
-static void janet_vmregs_save(JanetFiber *f) {
-    f->saved_signal_buf = janet_vm.signal_buf;
-    f->saved_return_reg = janet_vm.return_reg;
-    f->saved_coerce_error = janet_vm.coerce_error;
-    f->saved_stackn = janet_vm.stackn;
-    f->saved_gc_suspend = janet_vm.gc_suspend;
+static void bender_vmregs_save(BenderFiber *f) {
+    f->saved_signal_buf = bender_vm.signal_buf;
+    f->saved_return_reg = bender_vm.return_reg;
+    f->saved_coerce_error = bender_vm.coerce_error;
+    f->saved_stackn = bender_vm.stackn;
+    f->saved_gc_suspend = bender_vm.gc_suspend;
 }
 
 /* Load parked registers from a fiber (the party being switched to). */
-static void janet_vmregs_load(JanetFiber *f) {
-    janet_vm.signal_buf = f->saved_signal_buf;
-    janet_vm.return_reg = f->saved_return_reg;
-    janet_vm.coerce_error = f->saved_coerce_error;
-    janet_vm.stackn = f->saved_stackn;
-    janet_vm.gc_suspend = f->saved_gc_suspend;
+static void bender_vmregs_load(BenderFiber *f) {
+    bender_vm.signal_buf = f->saved_signal_buf;
+    bender_vm.return_reg = f->saved_return_reg;
+    bender_vm.coerce_error = f->saved_coerce_error;
+    bender_vm.stackn = f->saved_stackn;
+    bender_vm.gc_suspend = f->saved_gc_suspend;
 }
 
 /* Park the live registers into the host slots. */
-static void janet_vmregs_save_base(void) {
-    janet_vm.base_signal_buf = janet_vm.signal_buf;
-    janet_vm.base_return_reg = janet_vm.return_reg;
-    janet_vm.base_coerce_error = janet_vm.coerce_error;
-    janet_vm.base_stackn = janet_vm.stackn;
-    janet_vm.base_gc_suspend = janet_vm.gc_suspend;
+static void bender_vmregs_save_base(void) {
+    bender_vm.base_signal_buf = bender_vm.signal_buf;
+    bender_vm.base_return_reg = bender_vm.return_reg;
+    bender_vm.base_coerce_error = bender_vm.coerce_error;
+    bender_vm.base_stackn = bender_vm.stackn;
+    bender_vm.base_gc_suspend = bender_vm.gc_suspend;
 }
 
 /* Load parked registers from the host slots. */
-static void janet_vmregs_load_base(void) {
-    janet_vm.signal_buf = janet_vm.base_signal_buf;
-    janet_vm.return_reg = janet_vm.base_return_reg;
-    janet_vm.coerce_error = janet_vm.base_coerce_error;
-    janet_vm.stackn = janet_vm.base_stackn;
-    janet_vm.gc_suspend = janet_vm.base_gc_suspend;
+static void bender_vmregs_load_base(void) {
+    bender_vm.signal_buf = bender_vm.base_signal_buf;
+    bender_vm.return_reg = bender_vm.base_return_reg;
+    bender_vm.coerce_error = bender_vm.base_coerce_error;
+    bender_vm.stackn = bender_vm.base_stackn;
+    bender_vm.gc_suspend = bender_vm.base_gc_suspend;
 }
 
 /* Suspend the running fiber with live C frames on its native stack.
  * Publishes sig/payload exactly like the trampoline does on a returned
  * signal, parks this fiber's registers, loads the resumer's, and switches
  * out. On resume, execution continues after this call with this fiber's
- * registers live again (re-parked by janet_continue_no_check beforehand). */
-static void janet_suspend_swap(JanetFiber *fiber, JanetSignal sig, Janet payload) {
+ * registers live again (re-parked by bender_continue_no_check beforehand). */
+static void bender_suspend_swap(BenderFiber *fiber, BenderSignal sig, Bender payload) {
     fiber->out_payload = payload;
     fiber->out_signal = sig;
     fiber->last_value = payload;
-    janet_fiber_set_status(fiber, sig);
+    bender_fiber_set_status(fiber, sig);
     /* The previous resume argument has been consumed. A parked fiber
      * receives a fresh input before its C frames run again. */
-    fiber->in_value = janet_wrap_nil();
+    fiber->in_value = bender_wrap_nil();
     fiber->suspend_mode = 1;
-    janet_vmregs_save(fiber);
-    JanetFiber *resumer = fiber->resume_fiber;
+    bender_vmregs_save(fiber);
+    BenderFiber *resumer = fiber->resume_fiber;
     if (resumer) {
-        janet_vmregs_load(resumer);
+        bender_vmregs_load(resumer);
     } else {
-        janet_vmregs_load_base();
+        bender_vmregs_load_base();
     }
-    janet_vm.fiber = resumer;
-    janet_fiber_ctx_swap(&fiber->ctx, fiber->resume_ctx);
+    bender_vm.fiber = resumer;
+    bender_fiber_ctx_swap(&fiber->ctx, fiber->resume_ctx);
 }
 
-/* Suspend the current fiber from C with a yield signal (see janet.h).
+/* Suspend the current fiber from C with a yield signal (see bender.h).
  * Works from any C code running on the fiber's native stack: cfunctions,
- * nested janet_call frames, or future AOT-compiled frames. */
-Janet janet_fiber_yield(Janet v) {
-    JanetFiber *fiber = janet_vm.fiber;
-    if (NULL == fiber) janet_panic("janet_fiber_yield failed because there is no current fiber");
-    if (NULL == fiber->resume_ctx) janet_panic("janet_fiber_yield failed because the fiber was never resumed");
+ * nested bender_call frames, or future AOT-compiled frames. */
+Bender bender_fiber_yield(Bender v) {
+    BenderFiber *fiber = bender_vm.fiber;
+    if (NULL == fiber) bender_panic("bender_fiber_yield failed because there is no current fiber");
+    if (NULL == fiber->resume_ctx) bender_panic("bender_fiber_yield failed because the fiber was never resumed");
     /* P3.6: raw yield needs its C frames preserved across the switch
      * (resume continues them), which shared stacks cannot do (others
      * clobber the region). Fail loud — coroutines stay private. */
     if (fiber->shared_stack) {
-        janet_panic("cannot yield from a shared-stack fiber "
+        bender_panic("cannot yield from a shared-stack fiber "
                     "(use private fibers for coroutines)");
     }
-    JanetSignal sig = JANET_SIGNAL_YIELD;
+    BenderSignal sig = BENDER_SIGNAL_YIELD;
     for (;;) {
-        janet_suspend_swap(fiber, sig, v);
+        bender_suspend_swap(fiber, sig, v);
         /* Resumed: consume a smuggled signal the way run_vm entry does. */
-        if (fiber->flags & JANET_FIBER_RESUME_SIGNAL) {
-            JanetSignal psig = (fiber->gc.flags & JANET_FIBER_STATUS_MASK) >> JANET_FIBER_STATUS_OFFSET;
-            fiber->gc.flags &= ~JANET_FIBER_STATUS_MASK;
-            fiber->flags &= ~JANET_FIBER_RESUME_SIGNAL;
-            janet_vm.return_reg[0] = fiber->in_value;
-            if (psig == JANET_SIGNAL_ERROR) {
-                janet_panicv(fiber->in_value);
+        if (fiber->flags & BENDER_FIBER_RESUME_SIGNAL) {
+            BenderSignal psig = (fiber->gc.flags & BENDER_FIBER_STATUS_MASK) >> BENDER_FIBER_STATUS_OFFSET;
+            fiber->gc.flags &= ~BENDER_FIBER_STATUS_MASK;
+            fiber->flags &= ~BENDER_FIBER_RESUME_SIGNAL;
+            bender_vm.return_reg[0] = fiber->in_value;
+            if (psig == BENDER_SIGNAL_ERROR) {
+                bender_panicv(fiber->in_value);
             }
-            if (psig != JANET_SIGNAL_OK) {
+            if (psig != BENDER_SIGNAL_OK) {
                 /* A new suspension was injected on resume: send the
                  * injected signal outward with the resume value. */
                 sig = psig;
@@ -3373,106 +3373,106 @@ Janet janet_fiber_yield(Janet v) {
 }
 
 /* Per-fiber interpreter loop; see docs/internals/native-fibers.md. This
- * runs on the fiber's own native stack (primed via janet_fiber_ctx_prime).
+ * runs on the fiber's own native stack (primed via bender_fiber_ctx_prime).
  * Between resumes of a fiber, we sit at the ctx_swap waiting to be
  * switched in; on each resume, we run one VM entry, publish the result on
  * the fiber, and switch back to the resumer. VM values, signals and
  * longjmp targets never cross fiber boundaries: every signal handler
- * (jmp_buf) and return register lives in this loop's JanetTryState on the
+ * (jmp_buf) and return register lives in this loop's BenderTryState on the
  * fiber's stack. */
-void janet_fiber_trampoline(void) {
+void bender_fiber_trampoline(void) {
     for (;;) {
-        JanetFiber *fiber = janet_vm.fiber;
-        JanetSignal sig;
-        JanetTryState tstate;
-        sig = janet_try(&tstate);
+        BenderFiber *fiber = bender_vm.fiber;
+        BenderSignal sig;
+        BenderTryState tstate;
+        sig = bender_try(&tstate);
         if (!sig) {
             sig = run_vm(fiber, fiber->in_value);
         }
-        janet_restore(&tstate);
+        bender_restore(&tstate);
         fiber->out_payload = tstate.payload;
         fiber->out_signal = sig;
         fiber->last_value = tstate.payload;
         /* run_vm consumed the previous input; the next resume installs
          * its own value. Do not retain the old input while parked. */
-        fiber->in_value = janet_wrap_nil();
+        fiber->in_value = bender_wrap_nil();
         /* The fiber returned to the trampoline (no frozen C stack above
          * this point): resume re-enters run_vm, and any stale swap-suspend
          * mode from an earlier nested suspension is over. */
         fiber->suspend_mode = 0;
-        janet_fiber_set_status(fiber, sig);
+        bender_fiber_set_status(fiber, sig);
         /* Hand control back with a full register exchange, mirroring
-         * janet_suspend_swap: park this fiber, load the resumer. */
-        janet_vmregs_save(fiber);
-        JanetFiber *tr_resumer = fiber->resume_fiber;
+         * bender_suspend_swap: park this fiber, load the resumer. */
+        bender_vmregs_save(fiber);
+        BenderFiber *tr_resumer = fiber->resume_fiber;
         if (tr_resumer) {
-            janet_vmregs_load(tr_resumer);
+            bender_vmregs_load(tr_resumer);
         } else {
-            janet_vmregs_load_base();
+            bender_vmregs_load_base();
         }
-        janet_vm.fiber = tr_resumer;
-        janet_fiber_ctx_swap(&fiber->ctx, fiber->resume_ctx);
+        bender_vm.fiber = tr_resumer;
+        bender_fiber_ctx_swap(&fiber->ctx, fiber->resume_ctx);
     }
 }
 
-static JanetSignal janet_continue_no_check(JanetFiber *fiber, Janet in, Janet *out) {
+static BenderSignal bender_continue_no_check(BenderFiber *fiber, Bender in, Bender *out) {
 
     /* M4b-2 quantum driver: every resume — loop-scheduled or direct —
      * starts with a fresh poll budget. UNCONDITIONAL (not gated on
      * quantum): anyone may enable quanta mid-run, and a stale zero
      * budget would suspend at the next poll with zero progress. One
      * predictable store per resume. */
-    janet_vm.quantum_remaining = JANET_QUANTUM_BUDGET;
+    bender_vm.quantum_remaining = BENDER_QUANTUM_BUDGET;
 
-    JanetFiberStatus old_status = janet_fiber_status(fiber);
+    BenderFiberStatus old_status = bender_fiber_status(fiber);
 
-#ifdef JANET_EV
-    janet_fiber_did_resume(fiber);
+#ifdef BENDER_EV
+    bender_fiber_did_resume(fiber);
 #endif
 
     /* Clear last value */
-    fiber->last_value = janet_wrap_nil();
+    fiber->last_value = bender_wrap_nil();
 
     /* Phase D3: pending red-zone overflow surfaces here (check-and-
      * clear, mirroring the interrupt block below): the C stack already
      * unwound past the fault by suspension, so raising is safe. */
     if (fiber->stack_overflowed) {
         fiber->stack_overflowed = 0;
-        Janet ov = janet_cstringv("fiber native stack overflow");
+        Bender ov = bender_cstringv("fiber native stack overflow");
         fiber->last_value = ov;
         *out = ov;
-        janet_fiber_set_status(fiber, JANET_SIGNAL_ERROR);
-        return JANET_SIGNAL_ERROR;
+        bender_fiber_set_status(fiber, BENDER_SIGNAL_ERROR);
+        return BENDER_SIGNAL_ERROR;
     }
 
-#ifdef JANET_EV
+#ifdef BENDER_EV
     /* M4b-1 cooperative interrupt (see ev/interrupt): a pending
      * request suspends here — before a single instruction runs — so
      * delivery can never land mid-instruction, inside pcall, or in C.
      * A racing wakeup value in `in` is dropped (interrupt wins). */
     if (fiber->interrupt_requested) {
         fiber->interrupt_requested = 0;
-        Janet iv = fiber->interrupt_value;
-        fiber->interrupt_value = janet_wrap_nil();
+        Bender iv = fiber->interrupt_value;
+        fiber->interrupt_value = bender_wrap_nil();
         fiber->last_value = iv;
         *out = iv;
-        janet_fiber_set_status(fiber, JANET_SIGNAL_YIELD);
-        return JANET_SIGNAL_YIELD;
+        bender_fiber_set_status(fiber, BENDER_SIGNAL_YIELD);
+        return BENDER_SIGNAL_YIELD;
     }
 #endif
 
     /* Continue child fiber if it exists */
     if (fiber->child) {
-        if (janet_vm.root_fiber == NULL) janet_vm.root_fiber = fiber;
-        JanetFiber *child = fiber->child;
-        uint32_t instr = (janet_stack_frame(fiber->data + fiber->frame)->pc)[0];
-        janet_vm.stackn++;
-        JanetSignal sig = janet_continue(child, in, &in);
-        janet_vm.stackn--;
-        if (janet_vm.root_fiber == fiber) janet_vm.root_fiber = NULL;
-        if (sig != JANET_SIGNAL_OK && !(child->flags & (1 << sig))) {
+        if (bender_vm.root_fiber == NULL) bender_vm.root_fiber = fiber;
+        BenderFiber *child = fiber->child;
+        uint32_t instr = (bender_stack_frame(fiber->data + fiber->frame)->pc)[0];
+        bender_vm.stackn++;
+        BenderSignal sig = bender_continue(child, in, &in);
+        bender_vm.stackn--;
+        if (bender_vm.root_fiber == fiber) bender_vm.root_fiber = NULL;
+        if (sig != BENDER_SIGNAL_OK && !(child->flags & (1 << sig))) {
             *out = in;
-            janet_fiber_set_status(fiber, sig);
+            bender_fiber_set_status(fiber, sig);
             fiber->last_value = child->last_value;
             return sig;
         }
@@ -3481,16 +3481,16 @@ static JanetSignal janet_continue_no_check(JanetFiber *fiber, Janet in, Janet *o
             default:
                 break;
             case JOP_NEXT: {
-                if (sig == JANET_SIGNAL_OK ||
-                        sig == JANET_SIGNAL_ERROR ||
-                        sig == JANET_SIGNAL_USER0 ||
-                        sig == JANET_SIGNAL_USER1 ||
-                        sig == JANET_SIGNAL_USER2 ||
-                        sig == JANET_SIGNAL_USER3 ||
-                        sig == JANET_SIGNAL_USER4) {
-                    in = janet_wrap_nil();
+                if (sig == BENDER_SIGNAL_OK ||
+                        sig == BENDER_SIGNAL_ERROR ||
+                        sig == BENDER_SIGNAL_USER0 ||
+                        sig == BENDER_SIGNAL_USER1 ||
+                        sig == BENDER_SIGNAL_USER2 ||
+                        sig == BENDER_SIGNAL_USER3 ||
+                        sig == BENDER_SIGNAL_USER4) {
+                    in = bender_wrap_nil();
                 } else {
-                    in = janet_wrap_integer(0);
+                    in = bender_wrap_integer(0);
                 }
                 break;
             }
@@ -3499,46 +3499,46 @@ static JanetSignal janet_continue_no_check(JanetFiber *fiber, Janet in, Janet *o
     }
 
     /* Handle new fibers being resumed with a non-nil value */
-    if (old_status == JANET_STATUS_NEW && !janet_checktype(in, JANET_NIL)) {
-        Janet *stack = fiber->data + fiber->frame;
-        JanetFunction *func = janet_stack_frame(stack)->func;
+    if (old_status == BENDER_STATUS_NEW && !bender_checktype(in, BENDER_NIL)) {
+        Bender *stack = fiber->data + fiber->frame;
+        BenderFunction *func = bender_stack_frame(stack)->func;
         if (func) {
             if (func->def->arity > 0) {
                 stack[0] = in;
-            } else if (func->def->flags & JANET_FUNCDEF_FLAG_VARARG) {
-                stack[0] = janet_wrap_tuple(janet_tuple_n(&in, 1));
+            } else if (func->def->flags & BENDER_FUNCDEF_FLAG_VARARG) {
+                stack[0] = bender_wrap_tuple(bender_tuple_n(&in, 1));
             }
         }
     }
 
     /* If this is a nested continue (root_fiber already set), root the fiber
-     * so it survives GC. janet_collect only marks root_fiber, so without
-     * this a nested fiber (e.g., from janet_pcall in a C function) would be
+     * so it survives GC. bender_collect only marks root_fiber, so without
+     * this a nested fiber (e.g., from bender_pcall in a C function) would be
      * invisible to GC and could be collected while actively running. */
-    int fiber_rooted = (janet_vm.root_fiber != NULL);
+    int fiber_rooted = (bender_vm.root_fiber != NULL);
     if (fiber_rooted) {
-        janet_gcroot(janet_wrap_fiber(fiber));
+        bender_gcroot(bender_wrap_fiber(fiber));
     }
 
     /* Switch onto the target fiber's own native stack. Phase 1.1: the VM
      * dynamic registers always describe the running party, so park the
      * caller's live registers and load the target's parked registers
      * (fresh fibers park zeroes at creation). The target's suspend path
-     * (janet_suspend_swap or the trampoline publish above) inverts this
+     * (bender_suspend_swap or the trampoline publish above) inverts this
      * exchange on the way out. Fallible work (gcroot) stays above the
      * exchange, where the caller's signal chain is still live. */
-    JanetFiber *caller = janet_vm.fiber;
-    JanetFiberCtx *caller_ctx = caller ? &caller->ctx : &janet_vm.base_ctx;
+    BenderFiber *caller = bender_vm.fiber;
+    BenderFiberCtx *caller_ctx = caller ? &caller->ctx : &bender_vm.base_ctx;
     if (caller) {
-        janet_vmregs_save(caller);
+        bender_vmregs_save(caller);
     } else {
-        janet_vmregs_save_base();
+        bender_vmregs_save_base();
     }
-    janet_vmregs_load(fiber);
+    bender_vmregs_load(fiber);
 
-    if (janet_vm.root_fiber == NULL) janet_vm.root_fiber = fiber;
-    janet_vm.fiber = fiber;
-    janet_fiber_set_status(fiber, JANET_STATUS_ALIVE);
+    if (bender_vm.root_fiber == NULL) bender_vm.root_fiber = fiber;
+    bender_vm.fiber = fiber;
+    bender_fiber_set_status(fiber, BENDER_STATUS_ALIVE);
 
     fiber->in_value = in;
     fiber->resume_ctx = caller_ctx;
@@ -3548,18 +3548,18 @@ static JanetSignal janet_continue_no_check(JanetFiber *fiber, Janet in, Janet *o
      * lane mapping every resume (parked position is always the
      * committed pc); private fibers map+prime once. One branch each. */
     if (fiber->shared_stack) {
-        janet_fiber_shared_prime(fiber);
+        bender_fiber_shared_prime(fiber);
     } else if (NULL == fiber->native_stack_base) {
-        janet_fiber_ensure_native_stack(fiber);
+        bender_fiber_ensure_native_stack(fiber);
     }
-    janet_fiber_ctx_swap(caller_ctx, &fiber->ctx);
+    bender_fiber_ctx_swap(caller_ctx, &fiber->ctx);
 
-    JanetSignal sig = fiber->out_signal;
-    janet_vm.fiber = caller;
-    if (janet_vm.root_fiber == fiber) janet_vm.root_fiber = NULL;
-    janet_fiber_set_status(fiber, sig);
+    BenderSignal sig = fiber->out_signal;
+    bender_vm.fiber = caller;
+    if (bender_vm.root_fiber == fiber) bender_vm.root_fiber = NULL;
+    bender_fiber_set_status(fiber, sig);
     if (fiber_rooted) {
-        janet_gcunroot(janet_wrap_fiber(fiber));
+        bender_gcunroot(bender_wrap_fiber(fiber));
     }
     fiber->last_value = fiber->out_payload;
     *out = fiber->out_payload;
@@ -3568,262 +3568,262 @@ static JanetSignal janet_continue_no_check(JanetFiber *fiber, Janet in, Janet *o
 }
 
 /* Enter the main vm loop */
-JanetSignal janet_continue(JanetFiber *fiber, Janet in, Janet *out) {
+BenderSignal bender_continue(BenderFiber *fiber, Bender in, Bender *out) {
     /* Check conditions */
-    JanetSignal tmp_signal = janet_check_can_resume(fiber, out, 0);
+    BenderSignal tmp_signal = bender_check_can_resume(fiber, out, 0);
     if (tmp_signal) return tmp_signal;
-    return janet_continue_no_check(fiber, in, out);
+    return bender_continue_no_check(fiber, in, out);
 }
 
 /* Enter the main vm loop but immediately raise a signal */
-JanetSignal janet_continue_signal(JanetFiber *fiber, Janet in, Janet *out, JanetSignal sig) {
-    JanetSignal tmp_signal = janet_check_can_resume(fiber, out, sig != JANET_SIGNAL_OK);
+BenderSignal bender_continue_signal(BenderFiber *fiber, Bender in, Bender *out, BenderSignal sig) {
+    BenderSignal tmp_signal = bender_check_can_resume(fiber, out, sig != BENDER_SIGNAL_OK);
     if (tmp_signal) return tmp_signal;
-    if (sig != JANET_SIGNAL_OK) {
-        JanetFiber *child = fiber;
+    if (sig != BENDER_SIGNAL_OK) {
+        BenderFiber *child = fiber;
         while (child->child) child = child->child;
         /* NOTE: We are "smuggling" flags in for later use in an unusal place. This is odd but intentional and
          * saves a bit of memory per fiber rather than creating a new field. There is likely a better way to do this. */
-        child->gc.flags &= ~JANET_FIBER_STATUS_MASK;
-        child->gc.flags |= sig << JANET_FIBER_STATUS_OFFSET;
-        child->flags |= JANET_FIBER_RESUME_SIGNAL;
+        child->gc.flags &= ~BENDER_FIBER_STATUS_MASK;
+        child->gc.flags |= sig << BENDER_FIBER_STATUS_OFFSET;
+        child->flags |= BENDER_FIBER_RESUME_SIGNAL;
     }
-    return janet_continue_no_check(fiber, in, out);
+    return bender_continue_no_check(fiber, in, out);
 }
 
-JanetSignal janet_pcall(
-    JanetFunction *fun,
+BenderSignal bender_pcall(
+    BenderFunction *fun,
     int32_t argc,
-    const Janet *argv,
-    Janet *out,
-    JanetFiber **f) {
-    JanetFiber *fiber;
+    const Bender *argv,
+    Bender *out,
+    BenderFiber **f) {
+    BenderFiber *fiber;
     if (f && *f) {
-        fiber = janet_fiber_reset(*f, fun, argc, argv);
+        fiber = bender_fiber_reset(*f, fun, argc, argv);
     } else {
-        fiber = janet_fiber(fun, 64, argc, argv);
+        fiber = bender_fiber(fun, 64, argc, argv);
     }
     if (f) *f = fiber;
     if (NULL == fiber) {
-        *out = janet_cstringv("arity mismatch");
-        return JANET_SIGNAL_ERROR;
+        *out = bender_cstringv("arity mismatch");
+        return BENDER_SIGNAL_ERROR;
     }
-    return janet_continue(fiber, janet_wrap_nil(), out);
+    return bender_continue(fiber, bender_wrap_nil(), out);
 }
 
-Janet janet_mcall(const char *name, int32_t argc, Janet *argv) {
+Bender bender_mcall(const char *name, int32_t argc, Bender *argv) {
     /* At least 1 argument */
     if (argc < 1) {
-        janet_panicf("method :%s expected at least 1 argument", name);
+        bender_panicf("method :%s expected at least 1 argument", name);
     }
     /* Find method */
-    Janet method = janet_method_lookup(argv[0], name);
-    if (janet_checktype(method, JANET_NIL)) {
-        janet_panicf("could not find method :%s for %v", name, argv[0]);
+    Bender method = bender_method_lookup(argv[0], name);
+    if (bender_checktype(method, BENDER_NIL)) {
+        bender_panicf("could not find method :%s for %v", name, argv[0]);
     }
     /* Invoke method */
-    return janet_method_invoke(method, argc, argv);
+    return bender_method_invoke(method, argc, argv);
 }
 
 /* Setup VM */
-int janet_init(void) {
-#ifdef JANET_TTFX_SITE_PROFILE
-    janet_site_count = 0;
-    janet_site_dropped = 0;
-    janet_site_last = NULL;
-    janet_site_last_id = 0;
-    janet_site_enabled = getenv("JANET_TTFX_SITE_PROFILE") != NULL;
+int bender_init(void) {
+#ifdef BENDER_TTFX_SITE_PROFILE
+    bender_site_count = 0;
+    bender_site_dropped = 0;
+    bender_site_last = NULL;
+    bender_site_last_id = 0;
+    bender_site_enabled = getenv("BENDER_TTFX_SITE_PROFILE") != NULL;
 #endif
 
-    janet_vm.trace_strict = getenv("JANET_TRACE_STRICT") != NULL;
-#ifdef JANET_NATIVE_EXECUTORS
-    /* Linked descriptor registrations can survive janet_deinit; an explicit
+    bender_vm.trace_strict = getenv("BENDER_TRACE_STRICT") != NULL;
+#ifdef BENDER_NATIVE_EXECUTORS
+    /* Linked descriptor registrations can survive bender_deinit; an explicit
      * registration or later publication sets this flag as soon as it can
      * affect dispatch. */
-    janet_vm.native_possible = janet_native_registry_count() != 0;
+    bender_vm.native_possible = bender_native_registry_count() != 0;
 #endif
     /* Native-to-native continuation is on unless explicitly disabled, so one
      * binary can run both halves of an A/B with an identical executor set. */
-    janet_vm.native_continuation = getenv("JANET_NATIVE_NO_CONTINUATION") == NULL;
-    janet_vm.native_continuations = 0;
-    janet_vm.native_continuation_refusals = 0;
-    janet_vm.native_returns = 0;
-    janet_vm.native_interp_calls = 0;
-    janet_vm.native_interp_dispatches = 0;
-    janet_vm.work_allocations = 0;
-    janet_vm.work_alloc_bytes = 0;
-    janet_vm.work_barrier_calls = 0;
-    janet_vm.work_gc_major = 0;
-    janet_vm.work_gc_minor = 0;
-    janet_vm.work_gc_fiber_minor = 0;
-    janet_vm.work_gc_process_minor = 0;
+    bender_vm.native_continuation = getenv("BENDER_NATIVE_NO_CONTINUATION") == NULL;
+    bender_vm.native_continuations = 0;
+    bender_vm.native_continuation_refusals = 0;
+    bender_vm.native_returns = 0;
+    bender_vm.native_interp_calls = 0;
+    bender_vm.native_interp_dispatches = 0;
+    bender_vm.work_allocations = 0;
+    bender_vm.work_alloc_bytes = 0;
+    bender_vm.work_barrier_calls = 0;
+    bender_vm.work_gc_major = 0;
+    bender_vm.work_gc_minor = 0;
+    bender_vm.work_gc_fiber_minor = 0;
+    bender_vm.work_gc_process_minor = 0;
 
     /* Garbage collection */
-    janet_vm.blocks = NULL;
-    janet_vm.weak_blocks = NULL;
-    janet_vm.string_blocks = NULL;
-    janet_vm.sweep_pending[0] = NULL;
-    janet_vm.sweep_pending[1] = NULL;
-    janet_vm.sweep_pending[2] = NULL;
-    janet_vm.gc_quarantine[0] = NULL;
-    janet_vm.gc_quarantine[1] = NULL;
-    janet_vm.gc_quarantine[2] = NULL;
-    janet_vm.gc_quarantine_count = 0;
-    janet_vm.next_collection = 0;
-    janet_vm.gc_interval = 0x400000;
-    janet_vm.block_count = 0;
-    janet_vm.gc_major_live_blocks = 0;
-    janet_vm.gc_mark_phase = 0;
+    bender_vm.blocks = NULL;
+    bender_vm.weak_blocks = NULL;
+    bender_vm.string_blocks = NULL;
+    bender_vm.sweep_pending[0] = NULL;
+    bender_vm.sweep_pending[1] = NULL;
+    bender_vm.sweep_pending[2] = NULL;
+    bender_vm.gc_quarantine[0] = NULL;
+    bender_vm.gc_quarantine[1] = NULL;
+    bender_vm.gc_quarantine[2] = NULL;
+    bender_vm.gc_quarantine_count = 0;
+    bender_vm.next_collection = 0;
+    bender_vm.gc_interval = 0x400000;
+    bender_vm.block_count = 0;
+    bender_vm.gc_major_live_blocks = 0;
+    bender_vm.gc_mark_phase = 0;
     /* Generational policy (Phase 2b-iii): minors run on nursery pressure. */
-    janet_vm.gc_minor_phase = 0;
-    janet_vm.gc_young_bytes = 0;
-    janet_vm.gc_minor_threshold = 256 * 1024;
+    bender_vm.gc_minor_phase = 0;
+    bender_vm.gc_young_bytes = 0;
+    bender_vm.gc_minor_threshold = 256 * 1024;
     /* Step 1 (process heaps): owner-id source starts empty (0 reserved). */
-    janet_vm.gc_owner_next = 0;
+    bender_vm.gc_owner_next = 0;
     /* Step P1 (proc processes): pid serials start empty (0 reserved). */
-    janet_vm.proc_serial = 0;
+    bender_vm.proc_serial = 0;
     /* P3.3 gate: no strict fibers yet (spawn-isolated sets it). */
-    janet_vm.heap_strict_live = 0;
+    bender_vm.heap_strict_live = 0;
     /* P3.5c allocation attribution starts clear (spawn sets it). */
-    janet_vm.gc_alloc_ctx = NULL;
+    bender_vm.gc_alloc_ctx = NULL;
     /* P3.6: lane-shared stack unmapped until first shared resume;
      * opt-in read once (any set value enables). */
-    janet_vm.shared_stack_base = NULL;
-    janet_vm.shared_stack = NULL;
-    janet_vm.shared_stack_size = 0;
-    janet_vm.shared_stack_committed = NULL;
+    bender_vm.shared_stack_base = NULL;
+    bender_vm.shared_stack = NULL;
+    bender_vm.shared_stack_size = 0;
+    bender_vm.shared_stack_committed = NULL;
     /* P3.6 shared C stacks default ON for ev-task + proc fibers: the
      * spawn profile shows per-spawn stack malloc-large + OS zero-fill
      * as the dominant density cost (~1 stack per actor). Opt OUT with
-     * JANET_SHARED_STACKS=0 (generators and C-frame yields keep private
+     * BENDER_SHARED_STACKS=0 (generators and C-frame yields keep private
      * stacks regardless — suspend discipline, enforced at fiber_new). */
     {
-        const char *ssflag = getenv("JANET_SHARED_STACKS");
-        janet_vm.shared_stacks_on = !(NULL != ssflag && 0 == strcmp(ssflag, "0"));
+        const char *ssflag = getenv("BENDER_SHARED_STACKS");
+        bender_vm.shared_stacks_on = !(NULL != ssflag && 0 == strcmp(ssflag, "0"));
     }
 
-    janet_symcache_init();
+    bender_symcache_init();
 
     /* Initialize gc roots */
-    janet_vm.roots = NULL;
-    janet_vm.root_count = 0;
-    janet_vm.root_capacity = 0;
+    bender_vm.roots = NULL;
+    bender_vm.root_count = 0;
+    bender_vm.root_capacity = 0;
 
     /* Initialize shadow root stack (Phase 2b-i) */
-    janet_vm.shadow_roots = NULL;
-    janet_vm.shadow_count = 0;
-    janet_vm.shadow_capacity = 0;
+    bender_vm.shadow_roots = NULL;
+    bender_vm.shadow_count = 0;
+    bender_vm.shadow_capacity = 0;
 
     /* Slab allocator state starts empty (Phase 2b-iii, lazy). */
-    janet_vm.slab_state = NULL;
+    bender_vm.slab_state = NULL;
 
     /* Scratch memory */
-    janet_vm.user = NULL;
-    janet_vm.scratch_mem = NULL;
-    janet_vm.scratch_len = 0;
-    janet_vm.scratch_cap = 0;
+    bender_vm.user = NULL;
+    bender_vm.scratch_mem = NULL;
+    bender_vm.scratch_len = 0;
+    bender_vm.scratch_cap = 0;
 
     /* Sandbox flags */
-    janet_vm.sandbox_flags = 0;
+    bender_vm.sandbox_flags = 0;
 
     /* Initialize registry */
-    janet_vm.registry = NULL;
-    janet_vm.registry_cap = 0;
-    janet_vm.registry_count = 0;
-    janet_vm.registry_dirty = 0;
+    bender_vm.registry = NULL;
+    bender_vm.registry_cap = 0;
+    bender_vm.registry_count = 0;
+    bender_vm.registry_dirty = 0;
 
     /* Initialize abstract registry */
-    janet_vm.abstract_registry = janet_table(0);
-    janet_gcroot(janet_wrap_table(janet_vm.abstract_registry));
+    bender_vm.abstract_registry = bender_table(0);
+    bender_gcroot(bender_wrap_table(bender_vm.abstract_registry));
 
     /* B7.1 named proc registry: lazy (NULL until proc/register runs;
      * NULL reads exactly like an empty table at every use site). */
-    janet_vm.proc_registry = NULL;
+    bender_vm.proc_registry = NULL;
 
     /* Traversal */
-    janet_vm.traversal = NULL;
-    janet_vm.traversal_base = NULL;
-    janet_vm.traversal_top = NULL;
+    bender_vm.traversal = NULL;
+    bender_vm.traversal_base = NULL;
+    bender_vm.traversal_top = NULL;
 
     /* Core env */
-    janet_vm.core_env = NULL;
+    bender_vm.core_env = NULL;
 
     /* Auto suspension */
-    janet_vm.auto_suspend = 0;
+    bender_vm.auto_suspend = 0;
 
     /* M4b-2 quantum driver: ON by default (Step 2 preemptive
-     * reductions); JANET_TIMESLICE=0 restores fully cooperative
+     * reductions); BENDER_TIMESLICE=0 restores fully cooperative
      * scheduling per process, ev/timeslice toggles per VM. */
-    janet_vm.quantum = 0;
-    janet_vm.quantum_remaining = 0;
+    bender_vm.quantum = 0;
+    bender_vm.quantum_remaining = 0;
     {
-        const char *tsenv = getenv("JANET_TIMESLICE");
+        const char *tsenv = getenv("BENDER_TIMESLICE");
         if (NULL == tsenv || strcmp(tsenv, "0") != 0) {
-            janet_vm.quantum = 1;
+            bender_vm.quantum = 1;
         }
     }
 
     /* Dynamic bindings */
-    janet_vm.top_dyns = NULL;
+    bender_vm.top_dyns = NULL;
 
     /* Seed RNG */
-    janet_rng_seed(janet_default_rng(), 0);
-#ifdef JANET_OPCODE_HISTOGRAM
-    atexit(janet_oph_dump);
+    bender_rng_seed(bender_default_rng(), 0);
+#ifdef BENDER_OPCODE_HISTOGRAM
+    atexit(bender_oph_dump);
 #endif
 
     /* Fibers */
-    janet_vm.fiber = NULL;
-    janet_vm.root_fiber = NULL;
-    janet_vm.stackn = 0;
+    bender_vm.fiber = NULL;
+    bender_vm.root_fiber = NULL;
+    bender_vm.stackn = 0;
     /* Phase D: fault handler (process-once) + this thread's alt stack,
      * before any fiber can run here. */
-    janet_fiber_growstack_init();
+    bender_fiber_growstack_init();
     /* Phase 1.1/2a: no active compilation, clean host register park. */
-    janet_vm.compiler_stack = NULL;
-    janet_vm.base_signal_buf = NULL;
-    janet_vm.base_return_reg = NULL;
-    janet_vm.base_coerce_error = 0;
-    janet_vm.base_stackn = 0;
-    janet_vm.base_gc_suspend = 0;
+    bender_vm.compiler_stack = NULL;
+    bender_vm.base_signal_buf = NULL;
+    bender_vm.base_return_reg = NULL;
+    bender_vm.base_coerce_error = 0;
+    bender_vm.base_stackn = 0;
+    bender_vm.base_gc_suspend = 0;
 
-#ifdef JANET_EV
-    janet_ev_init();
-    janet_abstract_home_register();
+#ifdef BENDER_EV
+    bender_ev_init();
+    bender_abstract_home_register();
 #endif
-#ifdef JANET_NET
-    janet_net_init();
+#ifdef BENDER_NET
+    bender_net_init();
 #endif
     return 0;
 }
 
 /* Disable some features at runtime with no way to re-enable them */
-void janet_sandbox(uint32_t flags) {
-    janet_sandbox_assert(JANET_SANDBOX_SANDBOX);
-    janet_vm.sandbox_flags |= flags;
+void bender_sandbox(uint32_t flags) {
+    bender_sandbox_assert(BENDER_SANDBOX_SANDBOX);
+    bender_vm.sandbox_flags |= flags;
 }
 
-void janet_sandbox_assert(uint32_t forbidden_flags) {
-    if (forbidden_flags & janet_vm.sandbox_flags) {
-        janet_panic("operation forbidden by sandbox");
+void bender_sandbox_assert(uint32_t forbidden_flags) {
+    if (forbidden_flags & bender_vm.sandbox_flags) {
+        bender_panic("operation forbidden by sandbox");
     }
 }
 
 /* Total recorded calls across the live table. Flushes first so
  * C-side cached counts land in the tables, then sums tables only. */
-static int64_t janet_profile_total_calls(void) {
+static int64_t bender_profile_total_calls(void) {
     int64_t total = 0;
-    if (NULL != janet_vm.profile_table) {
-        janet_profile_flush();
+    if (NULL != bender_vm.profile_table) {
+        bender_profile_flush();
         {
-            const JanetKV *kvs;
+            const BenderKV *kvs;
             int32_t cap, count, i;
-            janet_dictionary_view(janet_wrap_table(janet_vm.profile_table), &kvs, &count, &cap);
+            bender_dictionary_view(bender_wrap_table(bender_vm.profile_table), &kvs, &count, &cap);
             for (i = 0; i < cap; i++) {
-                const JanetKV *kv = kvs + i;
-                if (janet_checktype(kv->key, JANET_NIL)) continue;
-                total += janet_unwrap_integer(janet_table_get(
-                    janet_unwrap_table(kv->value), janet_ckeywordv("calls")));
+                const BenderKV *kv = kvs + i;
+                if (bender_checktype(kv->key, BENDER_NIL)) continue;
+                total += bender_unwrap_integer(bender_table_get(
+                    bender_unwrap_table(kv->value), bender_ckeywordv("calls")));
             }
         }
     }
@@ -3832,17 +3832,17 @@ static int64_t janet_profile_total_calls(void) {
 
 /* AOT launchers keep their auto-PGO destination in this VM thread rather
  * than process-wide env, so spawned interpreters cannot inherit it. */
-static JANET_THREAD_LOCAL char *janet_auto_profile_output;
+static BENDER_THREAD_LOCAL char *bender_auto_profile_output;
 
-void janet_profile_auto_output(const char *path) {
+void bender_profile_auto_output(const char *path) {
     char *copy = NULL;
     if (path && *path) {
         size_t len = strlen(path) + 1;
         copy = malloc(len);
         if (copy) memcpy(copy, path, len);
     }
-    free(janet_auto_profile_output);
-    janet_auto_profile_output = copy;
+    free(bender_auto_profile_output);
+    bender_auto_profile_output = copy;
 }
 
 /* Auto-PGO workload provenance. An auto-profiled run is only useful as
@@ -3852,91 +3852,91 @@ void janet_profile_auto_output(const char *path) {
  * the profile, using the same vocabulary as the explicit --pgo cache record
  * (:args/:argv/:has-stdin/:stdin-bytes) plus an explicit :replayable
  * verdict. Everything below is inert unless the launcher armed it. */
-#define JANET_AUTO_WORKLOAD_STDIN_MAX (1024 * 1024)
+#define BENDER_AUTO_WORKLOAD_STDIN_MAX (1024 * 1024)
 
-static JANET_THREAD_LOCAL char **janet_auto_workload_argv;
-static JANET_THREAD_LOCAL int janet_auto_workload_argc;
-static JANET_THREAD_LOCAL unsigned long janet_auto_workload_image;
-static JANET_THREAD_LOCAL int janet_auto_workload_armed;
-static JANET_THREAD_LOCAL int janet_auto_workload_stdin;
-static JANET_THREAD_LOCAL uint64_t janet_auto_workload_hash;
-static JANET_THREAD_LOCAL uint64_t janet_auto_workload_out;
+static BENDER_THREAD_LOCAL char **bender_auto_workload_argv;
+static BENDER_THREAD_LOCAL int bender_auto_workload_argc;
+static BENDER_THREAD_LOCAL unsigned long bender_auto_workload_image;
+static BENDER_THREAD_LOCAL int bender_auto_workload_armed;
+static BENDER_THREAD_LOCAL int bender_auto_workload_stdin;
+static BENDER_THREAD_LOCAL uint64_t bender_auto_workload_hash;
+static BENDER_THREAD_LOCAL uint64_t bender_auto_workload_out;
 
-void janet_profile_auto_workload(int argc, char **argv, unsigned long image_bytes) {
+void bender_profile_auto_workload(int argc, char **argv, unsigned long image_bytes) {
     int i;
-    janet_auto_workload_armed = 0;
-    janet_auto_workload_argc = 0;
-    janet_auto_workload_hash = 1469598103934665603ULL; /* FNV-1a 64 offset */
-    janet_auto_workload_out = 0;
-    janet_auto_workload_stdin = 0;
+    bender_auto_workload_armed = 0;
+    bender_auto_workload_argc = 0;
+    bender_auto_workload_hash = 1469598103934665603ULL; /* FNV-1a 64 offset */
+    bender_auto_workload_out = 0;
+    bender_auto_workload_stdin = 0;
     if (argc < 1 || NULL == argv) return;
-    janet_auto_workload_argv = malloc(sizeof(char *) * (size_t) argc);
-    if (NULL == janet_auto_workload_argv) return;
+    bender_auto_workload_argv = malloc(sizeof(char *) * (size_t) argc);
+    if (NULL == bender_auto_workload_argv) return;
     for (i = 0; i < argc; i++) {
         size_t len = (NULL == argv[i]) ? 1 : strlen(argv[i]) + 1;
         char *copy = malloc(len);
         if (NULL == copy) return; /* keep what copied; the record stays honest */
         if (NULL == argv[i]) copy[0] = '\0';
         else memcpy(copy, argv[i], len);
-        janet_auto_workload_argv[janet_auto_workload_argc++] = copy;
+        bender_auto_workload_argv[bender_auto_workload_argc++] = copy;
     }
-    janet_auto_workload_image = image_bytes;
-    janet_auto_workload_armed = 1;
+    bender_auto_workload_image = image_bytes;
+    bender_auto_workload_armed = 1;
 }
 
-void janet_profile_note_stdin(void) {
-    if (janet_auto_workload_armed) janet_auto_workload_stdin = 1;
+void bender_profile_note_stdin(void) {
+    if (bender_auto_workload_armed) bender_auto_workload_stdin = 1;
 }
 
-void janet_profile_note_stdout(const void *bytes, size_t len) {
+void bender_profile_note_stdout(const void *bytes, size_t len) {
     const unsigned char *p = (const unsigned char *) bytes;
     size_t i;
-    if (!janet_auto_workload_armed || NULL == p) return;
+    if (!bender_auto_workload_armed || NULL == p) return;
     for (i = 0; i < len; i++) {
-        janet_auto_workload_hash ^= (uint64_t) p[i];
-        janet_auto_workload_hash *= 1099511628211ULL;
+        bender_auto_workload_hash ^= (uint64_t) p[i];
+        bender_auto_workload_hash *= 1099511628211ULL;
     }
-    janet_auto_workload_out += (uint64_t) len;
+    bender_auto_workload_out += (uint64_t) len;
 }
 
-static void janet_auto_workload_free(void) {
+static void bender_auto_workload_free(void) {
     int i;
-    for (i = 0; i < janet_auto_workload_argc; i++)
-        free(janet_auto_workload_argv[i]);
-    free(janet_auto_workload_argv);
-    janet_auto_workload_argv = NULL;
-    janet_auto_workload_argc = 0;
-    janet_auto_workload_armed = 0;
+    for (i = 0; i < bender_auto_workload_argc; i++)
+        free(bender_auto_workload_argv[i]);
+    free(bender_auto_workload_argv);
+    bender_auto_workload_argv = NULL;
+    bender_auto_workload_argc = 0;
+    bender_auto_workload_armed = 0;
 }
 
 /* Write the companion record for a just-published profile. Non-replayable
  * runs are recorded with :replayable false and a reason: never silently
  * promoted, never silently dropped. */
-static void janet_auto_workload_write(const char *profile) {
-    JanetTable *rec;
-    JanetArray *args;
-    JanetBuffer *joined;
-    JanetBuffer *text;
-    Janet stdin_bytes = janet_wrap_nil();
+static void bender_auto_workload_write(const char *profile) {
+    BenderTable *rec;
+    BenderArray *args;
+    BenderBuffer *joined;
+    BenderBuffer *text;
+    Bender stdin_bytes = bender_wrap_nil();
     const char *reason = NULL;
     int has_stdin = 0;
     int i;
     char path[4096];
     FILE *f;
-    if (!janet_auto_workload_armed || NULL == profile || '\0' == *profile) return;
+    if (!bender_auto_workload_armed || NULL == profile || '\0' == *profile) return;
     if (strlen(profile) + sizeof(".workload") > sizeof(path)) return;
     /* argv[0] is the binary; the workload is what follows, exactly as the
      * explicit --pgo path records it. */
-    args = janet_array(janet_auto_workload_argc);
-    janet_gcroot(janet_wrap_array(args));
-    joined = janet_buffer(0);
-    janet_gcroot(janet_wrap_buffer(joined));
-    for (i = 1; i < janet_auto_workload_argc; i++) {
-        const char *a = janet_auto_workload_argv[i];
+    args = bender_array(bender_auto_workload_argc);
+    bender_gcroot(bender_wrap_array(args));
+    joined = bender_buffer(0);
+    bender_gcroot(bender_wrap_buffer(joined));
+    for (i = 1; i < bender_auto_workload_argc; i++) {
+        const char *a = bender_auto_workload_argv[i];
         const char *c;
-        janet_array_push(args, janet_cstringv(a));
-        if (i > 1) janet_buffer_push_u8(joined, ' ');
-        janet_buffer_push_cstring(joined, a);
+        bender_array_push(args, bender_cstringv(a));
+        if (i > 1) bender_buffer_push_u8(joined, ' ');
+        bender_buffer_push_cstring(joined, a);
         for (c = a; *c != '\0'; c++) {
             /* :args is a space-joined string parsed by aot-words, so an
              * argument carrying whitespace or quotes cannot round-trip. */
@@ -3945,60 +3945,60 @@ static void janet_auto_workload_write(const char *profile) {
                 reason = "unquotable-argv";
         }
     }
-    if (janet_auto_workload_stdin) {
+    if (bender_auto_workload_stdin) {
 #if defined(_WIN32)
         if (NULL == reason) reason = "stdin-capture-unsupported";
 #else
         struct stat st;
         if (0 == fstat(0, &st) && S_ISREG(st.st_mode) && st.st_size >= 0 &&
-                st.st_size <= (off_t) JANET_AUTO_WORKLOAD_STDIN_MAX) {
-            JanetBuffer *sb = janet_buffer((int32_t) st.st_size + 1);
+                st.st_size <= (off_t) BENDER_AUTO_WORKLOAD_STDIN_MAX) {
+            BenderBuffer *sb = bender_buffer((int32_t) st.st_size + 1);
             ssize_t got;
-            janet_gcroot(janet_wrap_buffer(sb));
+            bender_gcroot(bender_wrap_buffer(sb));
             got = pread(0, sb->data, (size_t) st.st_size, 0);
             if (got == (ssize_t) st.st_size) {
-                stdin_bytes = janet_stringv(sb->data, (int32_t) got);
+                stdin_bytes = bender_stringv(sb->data, (int32_t) got);
                 has_stdin = 1;
             } else if (NULL == reason) {
                 reason = "stdin-unreadable";
             }
-            janet_gcunroot(janet_wrap_buffer(sb));
+            bender_gcunroot(bender_wrap_buffer(sb));
         } else if (NULL == reason) {
             /* terminal, pipe, or oversized redirect: not reproducible */
             reason = "stdin-not-replayable";
         }
 #endif
     }
-    rec = janet_table(12);
-    janet_gcroot(janet_wrap_table(rec));
-    janet_table_put(rec, janet_ckeywordv("version"), janet_wrap_integer(1));
-    janet_table_put(rec, janet_ckeywordv("source"), janet_ckeywordv("auto-pgo"));
-    janet_table_put(rec, janet_ckeywordv("args"),
-                    janet_stringv(joined->data, joined->count));
-    janet_table_put(rec, janet_ckeywordv("argv"), janet_wrap_array(args));
-    janet_table_put(rec, janet_ckeywordv("has-stdin"), janet_wrap_boolean(has_stdin));
-    janet_table_put(rec, janet_ckeywordv("stdin-bytes"), stdin_bytes);
-    janet_table_put(rec, janet_ckeywordv("replayable"),
-                    janet_wrap_boolean(NULL == reason));
-    janet_table_put(rec, janet_ckeywordv("reason"),
-                    (NULL == reason) ? janet_wrap_nil() : janet_ckeywordv(reason));
-    janet_table_put(rec, janet_ckeywordv("binary"),
-                    (janet_auto_workload_argc > 0)
-                    ? janet_cstringv(janet_auto_workload_argv[0])
-                    : janet_wrap_nil());
-    janet_table_put(rec, janet_ckeywordv("image-bytes"),
-                    janet_wrap_number((double) janet_auto_workload_image));
-    janet_table_put(rec, janet_ckeywordv("stdout-bytes"),
-                    janet_wrap_number((double) janet_auto_workload_out));
+    rec = bender_table(12);
+    bender_gcroot(bender_wrap_table(rec));
+    bender_table_put(rec, bender_ckeywordv("version"), bender_wrap_integer(1));
+    bender_table_put(rec, bender_ckeywordv("source"), bender_ckeywordv("auto-pgo"));
+    bender_table_put(rec, bender_ckeywordv("args"),
+                    bender_stringv(joined->data, joined->count));
+    bender_table_put(rec, bender_ckeywordv("argv"), bender_wrap_array(args));
+    bender_table_put(rec, bender_ckeywordv("has-stdin"), bender_wrap_boolean(has_stdin));
+    bender_table_put(rec, bender_ckeywordv("stdin-bytes"), stdin_bytes);
+    bender_table_put(rec, bender_ckeywordv("replayable"),
+                    bender_wrap_boolean(NULL == reason));
+    bender_table_put(rec, bender_ckeywordv("reason"),
+                    (NULL == reason) ? bender_wrap_nil() : bender_ckeywordv(reason));
+    bender_table_put(rec, bender_ckeywordv("binary"),
+                    (bender_auto_workload_argc > 0)
+                    ? bender_cstringv(bender_auto_workload_argv[0])
+                    : bender_wrap_nil());
+    bender_table_put(rec, bender_ckeywordv("image-bytes"),
+                    bender_wrap_number((double) bender_auto_workload_image));
+    bender_table_put(rec, bender_ckeywordv("stdout-bytes"),
+                    bender_wrap_number((double) bender_auto_workload_out));
     {   /* printable identity for the run's observed output */
         char hash[32];
         snprintf(hash, sizeof(hash), "%016llx",
-                 (unsigned long long) janet_auto_workload_hash);
-        janet_table_put(rec, janet_ckeywordv("stdout-hash"), janet_cstringv(hash));
+                 (unsigned long long) bender_auto_workload_hash);
+        bender_table_put(rec, bender_ckeywordv("stdout-hash"), bender_cstringv(hash));
     }
-    text = janet_buffer(0);
-    janet_gcroot(janet_wrap_buffer(text));
-    janet_formatb(text, "%j", janet_wrap_table(rec));
+    text = bender_buffer(0);
+    bender_gcroot(bender_wrap_buffer(text));
+    bender_formatb(text, "%j", bender_wrap_table(rec));
     snprintf(path, sizeof(path), "%s.workload", profile);
     f = fopen(path, "wb");
     if (NULL != f) {
@@ -4006,43 +4006,43 @@ static void janet_auto_workload_write(const char *profile) {
         fputc('\n', f);
         fclose(f);
     }
-    janet_gcunroot(janet_wrap_buffer(text));
-    janet_gcunroot(janet_wrap_table(rec));
-    janet_gcunroot(janet_wrap_buffer(joined));
-    janet_gcunroot(janet_wrap_array(args));
+    bender_gcunroot(bender_wrap_buffer(text));
+    bender_gcunroot(bender_wrap_table(rec));
+    bender_gcunroot(bender_wrap_buffer(joined));
+    bender_gcunroot(bender_wrap_array(args));
 }
 
 /* Clear all memory associated with the VM */
-void janet_deinit(void) {
-#ifdef JANET_TTFX_SITE_PROFILE
-    janet_site_dump();
-    janet_site_enabled = 0;
+void bender_deinit(void) {
+#ifdef BENDER_TTFX_SITE_PROFILE
+    bender_site_dump();
+    bender_site_enabled = 0;
 #endif
-#ifdef JANET_EV
+#ifdef BENDER_EV
     /* Publish shutdown before profile flushing or GC can stall the loop. */
-    janet_abstract_home_unregister();
+    bender_abstract_home_unregister();
 #endif
-    /* The private AOT destination or explicit JANET_PROFILE_OUT dumps on
+    /* The private AOT destination or explicit BENDER_PROFILE_OUT dumps on
      * every exit path, including os/exit, before VM teardown. Auto-PGO
      * applies the minimum-call threshold; explicit output preserves its
-     * existing policy. Override the floor with JANET_AUTO_PGO_MIN_CALLS. */
-    if (NULL != janet_vm.profile_table) {
-        const char *pout = janet_auto_profile_output ? janet_auto_profile_output : getenv("JANET_PROFILE_OUT");
-        janet_profile_maybe_stats();
+     * existing policy. Override the floor with BENDER_AUTO_PGO_MIN_CALLS. */
+    if (NULL != bender_vm.profile_table) {
+        const char *pout = bender_auto_profile_output ? bender_auto_profile_output : getenv("BENDER_PROFILE_OUT");
+        bender_profile_maybe_stats();
         if (NULL != pout && '\0' != *pout) {
             int dump = 1;
-            if (janet_auto_profile_output || NULL != getenv("JANET_AUTO_PGO_ACTIVE")) {
-                const char *minenv = getenv("JANET_AUTO_PGO_MIN_CALLS");
+            if (bender_auto_profile_output || NULL != getenv("BENDER_AUTO_PGO_ACTIVE")) {
+                const char *minenv = getenv("BENDER_AUTO_PGO_MIN_CALLS");
                 long mincalls = (NULL == minenv || '\0' == *minenv)
                     ? 10000L : strtol(minenv, NULL, 10);
-                if (janet_profile_total_calls() < mincalls)
+                if (bender_profile_total_calls() < mincalls)
                     dump = 0;
             }
             if (dump) {
-                janet_profile_dump(pout);
+                bender_profile_dump(pout);
                 /* A forced run first writes to an exclusively reserved
                  * .pending sidecar. Publish only its completed dump. */
-                if (janet_auto_profile_output) {
+                if (bender_auto_profile_output) {
                     size_t len = strlen(pout);
                     if (len > 8 && !strcmp(pout + len - 8, ".pending")) {
                         char *completed = malloc(len - 8 + sizeof(".jdn"));
@@ -4059,14 +4059,14 @@ void janet_deinit(void) {
                             /* No replacement: a parallel first run or builder
                              * may already have installed the base profile. */
 #if defined(_WIN32)
-                            if (MoveFileA(pout, completed)) janet_auto_workload_write(completed);
+                            if (MoveFileA(pout, completed)) bender_auto_workload_write(completed);
                             else remove(pout);
 #else
                             /* Only the writer that actually published the
                              * profile describes it: a lost race must not
                              * attach this run's workload to another dump. */
                             if (0 == link(pout, completed))
-                                janet_auto_workload_write(completed);
+                                bender_auto_workload_write(completed);
                             unlink(pout);
 #endif
                             free(completed);
@@ -4074,38 +4074,38 @@ void janet_deinit(void) {
                     }
                 }
             }
-            janet_vm.profile_table = NULL;
+            bender_vm.profile_table = NULL;
         }
     }
-    janet_profile_auto_output(NULL);
-    janet_auto_workload_free();
-    janet_clear_memory();
-    janet_symcache_deinit();
-    janet_free(janet_vm.roots);
-    janet_vm.roots = NULL;
-    janet_vm.root_count = 0;
-    janet_vm.root_capacity = 0;
-    janet_free(janet_vm.shadow_roots);
-    janet_vm.shadow_roots = NULL;
-    janet_vm.shadow_count = 0;
-    janet_vm.shadow_capacity = 0;
+    bender_profile_auto_output(NULL);
+    bender_auto_workload_free();
+    bender_clear_memory();
+    bender_symcache_deinit();
+    bender_free(bender_vm.roots);
+    bender_vm.roots = NULL;
+    bender_vm.root_count = 0;
+    bender_vm.root_capacity = 0;
+    bender_free(bender_vm.shadow_roots);
+    bender_vm.shadow_roots = NULL;
+    bender_vm.shadow_count = 0;
+    bender_vm.shadow_capacity = 0;
     /* Slab pages went with clear_memory above; drop the state itself. */
-    janet_free(janet_vm.slab_state);
-    janet_vm.slab_state = NULL;
-    janet_vm.abstract_registry = NULL;
-    janet_vm.proc_registry = NULL;
-    janet_vm.core_env = NULL;
-    janet_vm.top_dyns = NULL;
-    janet_vm.user = NULL;
-    janet_free(janet_vm.traversal_base);
-    janet_vm.fiber = NULL;
-    janet_vm.root_fiber = NULL;
-    janet_free(janet_vm.registry);
-    janet_vm.registry = NULL;
-#ifdef JANET_EV
-    janet_ev_deinit();
+    bender_free(bender_vm.slab_state);
+    bender_vm.slab_state = NULL;
+    bender_vm.abstract_registry = NULL;
+    bender_vm.proc_registry = NULL;
+    bender_vm.core_env = NULL;
+    bender_vm.top_dyns = NULL;
+    bender_vm.user = NULL;
+    bender_free(bender_vm.traversal_base);
+    bender_vm.fiber = NULL;
+    bender_vm.root_fiber = NULL;
+    bender_free(bender_vm.registry);
+    bender_vm.registry = NULL;
+#ifdef BENDER_EV
+    bender_ev_deinit();
 #endif
-#ifdef JANET_NET
-    janet_net_deinit();
+#ifdef BENDER_NET
+    bender_net_deinit();
 #endif
 }

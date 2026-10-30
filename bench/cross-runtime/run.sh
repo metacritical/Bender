@@ -21,8 +21,8 @@ set -u
 N="${1:-1000000}"
 HERE=$(cd "$(dirname "$0")" && pwd)
 REPO=$(cd "$HERE/../.." && pwd)
-JANET_BIN="${JANET_BIN:-$REPO/build/bender}"
-TMP="${TMPDIR:-/tmp}/janet-cross-runtime.$$"
+BENDER_BIN="${BENDER_BIN:-$REPO/build/bender}"
+TMP="${TMPDIR:-/tmp}/bender-cross-runtime.$$"
 mkdir -p "$TMP"
 trap 'rm -rf "$TMP"' EXIT
 
@@ -35,13 +35,13 @@ printf 'load: %s\n\n' "$(uptime | sed 's/.*load averages*: //')"
 printf '%-10s %10s %10s %10s   %s\n' runtime procs spawn_ms wave_ms result
 printf '%-10s %10s %10s %10s   %s\n' ------- ----- -------- ------- ------
 
-run_wave_janet() {
-    [ -x "$JANET_BIN" ] || { printf '%-10s %s\n' janet "skip: $JANET_BIN not built"; return; }
+run_wave_bender() {
+    [ -x "$BENDER_BIN" ] || { printf '%-10s %s\n' bender "skip: $BENDER_BIN not built"; return; }
     # Keep placement explicit. Timings are stderr so stdout remains suitable
     # for deterministic AOT/PGO parity; parse only the timing record here.
-    out=$(JANET_NO_PROFILE=1 JANET_LANES="${WAVE_LANES:-11}" "$JANET_BIN" \
-              "$HERE/wave.janet" "$N" 2>&1 | awk '/spawn_ms=/' | tr -d '\r')
-    printf '%s\n' "$out" | awk -v rt=janet '{
+    out=$(BENDER_NO_PROFILE=1 BENDER_LANES="${WAVE_LANES:-11}" "$BENDER_BIN" \
+              "$HERE/wave.ben" "$N" 2>&1 | awk '/spawn_ms=/' | tr -d '\r')
+    printf '%s\n' "$out" | awk -v rt=bender '{
         sp=""; wv=""; pr=""; rs=""
         for (i = 1; i <= NF; i++) {
             split($i, kv, "=")
@@ -96,7 +96,7 @@ run_wave_go() {
     }'
 }
 
-run_wave_janet
+run_wave_bender
 run_wave_erlang
 run_wave_go
 
@@ -112,12 +112,12 @@ peak_rss() {
         awk '/maximum resident/{printf "%d\n", $1 / 1024; exit}'
 }
 
-mem_janet() {
-    [ -x "$JANET_BIN" ] || { printf '%-10s %s\n' janet "skip: no binary"; return; }
-    kb=$(peak_rss env JANET_NO_PROFILE=1 JANET_LANES=0 "$JANET_BIN" \
-                    "$HERE/memory.janet" "$N")
-    [ -z "$kb" ] && { printf '%-10s %s\n' janet "skip: no rss"; return; }
-    awk -v rt=janet -v n="$N" -v kb="$kb" 'BEGIN{
+mem_bender() {
+    [ -x "$BENDER_BIN" ] || { printf '%-10s %s\n' bender "skip: no binary"; return; }
+    kb=$(peak_rss env BENDER_NO_PROFILE=1 BENDER_LANES=0 "$BENDER_BIN" \
+                    "$HERE/memory.ben" "$N")
+    [ -z "$kb" ] && { printf '%-10s %s\n' bender "skip: no rss"; return; }
+    awk -v rt=bender -v n="$N" -v kb="$kb" 'BEGIN{
         printf "%-10s %10d %12.0f %12.2f\n", rt, n, kb/1024, kb/n }'
 }
 
@@ -144,7 +144,7 @@ mem_erlang() {
     }'
 }
 
-mem_janet
+mem_bender
 mem_erlang
 
 printf '\nNOTE: the wave is a dependency chain -- it measures spawn and per-hop\n'

@@ -1,7 +1,7 @@
-# Lazy sequences in Janet — design brief and implementation prompt
+# Lazy sequences in Bender — design brief and implementation prompt
 
 Status: **SHIPPED.** The GC fix landed in `b169bdf0`, the lazy sequence API in
-`08ef950a`, and the design record in `1a2a5b71`; `test/suite-lazy.janet` covers
+`08ef950a`, and the design record in `1a2a5b71`; `test/suite-lazy.ben` covers
 all 37 behaviours below and the full suite is green. Every claim in this document
 was verified on a live `build/bender` (arm64, macOS, `1.43.0-dev`) before it was
 written; two probes crashed the process, and those crashes were the central
@@ -14,9 +14,9 @@ What changed during implementation, versus the plan originally recorded here:
   container marker recurses a fixed number of frames and is bounded by its own
   size, so the one unbounded edge was sufficient and far less invasive.
 - **A VM-global worklist does not work.** Resetting it at collection entry let an
-  inner collection (marking re-enters: `janet_env_maybe_detach` allocates) discard
+  inner collection (marking re-enters: `bender_env_maybe_detach` allocates) discard
   the outer pass's pending work and sweep live objects. It crashed `suite-lanes`
-  in `janet_dict_find`. The shipped queue is thread-local and saved/restored
+  in `bender_dict_find`. The shipped queue is thread-local and saved/restored
   around each drain.
 - **`recur` remains unnecessary**, as predicted: tail calls already run in
   constant stack for consumers, and the collector no longer recurses for the
@@ -40,7 +40,7 @@ Three properties must all hold, in this order of importance:
 
 ---
 
-## 2. Why Janet's existing primitives do not satisfy this
+## 2. Why Bender's existing primitives do not satisfy this
 
 ### 2.1 A fiber is not a lazy seq
 
@@ -57,18 +57,18 @@ So property 3 fails outright, and there is no memoization (property 2) either.
 A fiber is a *cursor*, not a *sequence*. This is exactly the surprise the
 requirement rules out.
 
-Also confirmed: Janet's built-in `map` is **eager** over any source. It consumes a
+Also confirmed: Bender's built-in `map` is **eager** over any source. It consumes a
 fiber to exhaustion and returns an array. `map` over an infinite fiber never
 returns — an earlier probe of mine hung for 60s and had to be killed. So the
 existing `map` cannot be reused for the lazy variant.
 
-### 2.2 An abstract type is not available from Janet source
+### 2.2 An abstract type is not available from Bender source
 
-The idiomatic C-backed answer would be a `JanetAbstractType` with `get`/`next`
-slots, making a lazy seq a first-class iterable. Confirmed: `JanetAbstractType` is
+The idiomatic C-backed answer would be a `BenderAbstractType` with `get`/`next`
+slots, making a lazy seq a first-class iterable. Confirmed: `BenderAbstractType` is
 a C struct
 (`src/core/ev.c:6538`, `src/core/ffi.c:210`, `src/core/filewatch.c:830`) with no
-Janet-level constructor (`abstract/new` does not exist; only `abstract?` is
+Bender-level constructor (`abstract/new` does not exist; only `abstract?` is
 exposed at `src/core/corelib.c:375`). Choosing this route means C work in
 `corelib.c`/a new `lazyseq.c`, not a macro.
 
@@ -79,7 +79,7 @@ exposed at `src/core/corelib.c:375`). Choosing this route means C work in
 A lazy seq is a **memoizing pull cell**: a closure that returns either `nil` (end)
 or `(tuple value rest-cell)`, computing its body at most once.
 
-```janet
+```bender
 (defn delay1 [f]
   (var v nil) (var done false)
   (fn [] (if done v (do (set done true) (set v (f)) v))))
@@ -143,14 +143,14 @@ So the trigger is **depth, not count**. `lldb` backtrace:
 
 ```
 stop reason: EXC_BAD_ACCESS (code=2, address=0x1067fffd0)   <- stack guard page
-frame #0: janet_mark(...) at gc.c:165
+frame #0: bender_mark(...) at gc.c:165
 ```
 
-`janet_mark` → `janet_mark_function` → `janet_mark_funcenv` → ... each link of the
+`bender_mark` → `bender_mark_function` → `bender_mark_funcenv` → ... each link of the
 chain is one more C stack frame. There is a recursion guard
-(`JANET_RECURSION_GUARD 1024`, `src/include/janet.h:296`, consulted at
+(`BENDER_RECURSION_GUARD 1024`, `src/include/bender.h:296`, consulted at
 `src/core/gc.c:166` via the `depth` counter), but it only diverts marking to
-`janet_gcroot` — appending to `janet_vm.roots` — which **does not mark
+`bender_gcroot` — appending to `bender_vm.roots` — which **does not mark
 transitively in that pass**. Depth is reset at `gc.c:2668`, `2956`, `3031`, `3083`.
 The effect is that a chain deeper than the guard can leave reachable objects in an
 inconsistent state, and the C stack itself overflows before any guard can help.
@@ -170,16 +170,16 @@ can nest without bound — `funcenv`, `function`, `tuple`, `array`, `table`,
 
 Three facts from the source that shape the fix:
 
-- `janet_mark` (`gc.c:165`) decrements a `depth` counter and, at zero, defers the
-  value to `janet_gcroot` — which only **appends** to `janet_vm.roots`. The drain
+- `bender_mark` (`gc.c:165`) decrements a `depth` counter and, at zero, defers the
+  value to `bender_gcroot` — which only **appends** to `bender_vm.roots`. The drain
   loop at `gc.c:2435` then pops and re-marks those appended roots. So the existing
   machinery is already a gray list; it is simply entered only after 1024 nested C
   frames, by which point the stack is the problem.
-- `janet_mark_many` (`gc.c:291`) is an iterative loop that calls the recursive
-  `janet_mark` per element. It is the natural place to push onto a worklist
+- `bender_mark_many` (`gc.c:291`) is an iterative loop that calls the recursive
+  `bender_mark` per element. It is the natural place to push onto a worklist
   instead.
-- The iteration is one frame per edge: `janet_mark` → `janet_mark_function` →
-  `janet_mark_funcenv` → `janet_mark_many` → `janet_mark`. A chain of length *n*
+- The iteration is one frame per edge: `bender_mark` → `bender_mark_function` →
+  `bender_mark_funcenv` → `bender_mark_many` → `bender_mark`. A chain of length *n*
   costs roughly *4n* C frames. At ~16 KB per frame the default 8 MB stack dies
   near 150k–180k links — exactly the observed threshold.
 
@@ -187,14 +187,14 @@ The clean fix is to make the whole mark phase drain one explicit worklist, so th
 C stack depth is constant regardless of object-graph depth:
 
 ```c
-static void janet_mark_root(Janet seed) {
-    janet_v_push(gray, seed);            /* raw realloc: a push must never
+static void bender_mark_root(Bender seed) {
+    bender_v_push(gray, seed);            /* raw realloc: a push must never
                                           * trigger the collection it protects */
-    while (janet_v_count(gray)) {
-        Janet x = janet_v_pop(gray);
-        switch (janet_type(x)) {
-            case JANET_TUPLE:   /* mark header, push elements */ break;
-            case JANET_FUNCTION:/* mark def + push each env  */ break;
+    while (bender_v_count(gray)) {
+        Bender x = bender_v_pop(gray);
+        switch (bender_type(x)) {
+            case BENDER_TUPLE:   /* mark header, push elements */ break;
+            case BENDER_FUNCTION:/* mark def + push each env  */ break;
             ...
         }
     }
@@ -203,19 +203,19 @@ static void janet_mark_root(Janet seed) {
 
 Requirements for the fix:
 
-- The worklist must grow with **raw realloc** (`janet_realloc`), following the
-  precedent in `janet_gcroot` (`gc.c:3143`) and `janet_gcshadow_push`
+- The worklist must grow with **raw realloc** (`bender_realloc`), following the
+  precedent in `bender_gcroot` (`gc.c:3143`) and `bender_gcshadow_push`
   (`gc.c:3178`), because a push must never be able to trigger the collection it is
   protecting against.
-- `janet_mark` keeps its signature and semantics for C callers; it becomes the
+- `bender_mark` keeps its signature and semantics for C callers; it becomes the
   entry point that seeds and drains the worklist.
 - The worklist must be reset per collection at the same four sites that reset
   `depth` today (`gc.c:2668`, `2956`, `3031`, `3083`), and freed or cleared so a
   long-lived VM does not accumulate.
-- Do **not** simply raise `JANET_RECURSION_GUARD`. It converts a segfault into a
+- Do **not** simply raise `BENDER_RECURSION_GUARD`. It converts a segfault into a
   different silent inconsistency around the 1024-frame boundary, and no value of
   the constant makes unbounded depth safe.
-- Keep `janet_gcroot` and the `gc.c:2435` drain loop until the iterative path is
+- Keep `bender_gcroot` and the `gc.c:2435` drain loop until the iterative path is
   proven; then decide whether the deferred-root path is still needed.
 - Add a regression test that builds a **1,000,000-deep** closure chain, calls
   `gccollect`, and asserts the process survives and the chain still walks.
@@ -236,24 +236,24 @@ first person to point it at a large file will blame the sequence library.
 
 ## 5. Remaining design decisions to settle
 
-### 5.1 Janet source vs C abstract type
+### 5.1 Bender source vs C abstract type
 
-| | Janet source (memoizing closure) | C `JanetAbstractType` |
+| | Bender source (memoizing closure) | C `BenderAbstractType` |
 |---|---|---|
-| Effort | ~150 lines in `boot.janet` | new C type + `get`/`next`/`marshal`/`tostring` |
+| Effort | ~150 lines in `boot.ben` | new C type + `get`/`next`/`marshal`/`tostring` |
 | `each` over it | needs an adapter (`ltoarray`, or a fiber bridge) | native |
 | `length` | no | yes (must force, which is a trap) |
 | Marshal / transmit | closure = **not marshallable** | marshallable with a custom marshal fn |
 | Fibers/threads | fine within one VM | fine |
 
-**Recommendation: start in Janet source.** It is the smaller, reversible step and
+**Recommendation: start in Bender source.** It is the smaller, reversible step and
 matches the stated preference for macro-level work. The marshal gap matters only
 if a lazy seq must cross a thread boundary — and per the project's share-nothing
 decision it must not; pass an array across, not a sequence.
 
-Add an `each`-compatible bridge so ordinary Janet iteration works:
+Add an `each`-compatible bridge so ordinary Bender iteration works:
 
-```janet
+```bender
 (defn ltofiber [c]
   (fiber/new (fn [] (var x c)
                (while (def v (x))
@@ -267,15 +267,15 @@ one-shot **view**, distinct from the reusable sequence value.
 ### 5.2 Naming and shadowing
 
 `map`, `filter`, `take`, `drop`, `range` are already taken with eager semantics and
-are used pervasively in `boot.janet` itself. **Do not shadow them.** Options:
+are used pervasively in `boot.ben` itself. **Do not shadow them.** Options:
 
 - `lazy-` prefix: `lazy-map`, `lazy-filter`, `lazy-take`, `lazy-drop`,
   `lazy-range`, `lazy-concat`, `lazy-seq`, `lazy-cat`, `realize`.
-- This matches the existing `examples/lazyseqs.janet` convention
+- This matches the existing `examples/lazyseqs.ben` convention
   (`lazy-map`, `lazy-take`, `lazy-drop`, `realize`), so promote that file's
   vocabulary rather than inventing a second one.
 
-### 5.3 Relation to `examples/lazyseqs.janet`
+### 5.3 Relation to `examples/lazyseqs.ben`
 
 That example already contains `dolazy`, `cons`, `lazy-range`, `lazy-map`,
 `lazy-take`, `lazy-drop`, `randseq`, `realize`. It has the right shape but note
@@ -286,7 +286,7 @@ there is one definition.
 
 ### 5.4 `force` / `delay` / `promise`
 
-- `delay` exists (`boot.janet:4705`); confirm its `force` counterpart returns the
+- `delay` exists (`boot.ben:4705`); confirm its `force` counterpart returns the
   memoized value and is safe to call repeatedly.
 - `promise`/`deliver` are one-shot write-once cells that block on deref. Given the
   Erlang-style decision, implement over fibers and state clearly whether `deref`
@@ -298,17 +298,17 @@ there is one definition.
 
 1. **Fix iterative GC marking** (§4.1) + the 1M-deep regression test. Blocks
    everything else.
-2. **Core lazy sequence**, Janet source: `lazy-seq`, `lazy-cons`, `lazy-range`,
+2. **Core lazy sequence**, Bender source: `lazy-seq`, `lazy-cons`, `lazy-range`,
    `lazy-map`, `lazy-filter`, `lazy-take`, `lazy-drop`, `lazy-take-while`,
    `lazy-drop-while`, `lazy-concat`/`lazy-cat`, `realize`, `realize-into`.
    Reuse the §3 shapes; keep the `take` short-circuit and the iterative walk.
 3. **`ltofiber` bridge** so `each` works, with the one-shot-view caveat documented.
 4. **Docstrings** in house style; note the marshal limitation explicitly.
-5. **Tests** (`test/suite-lazy.janet`): laziness (0 evals on construct, n on
+5. **Tests** (`test/suite-lazy.ben`): laziness (0 evals on construct, n on
    consume), memoization (impure `f` runs once), exact `take` count, infinite
    source does not hang, 1M-element walk does not crash, empty and
    immediately-false-predicate cases.
-6. **Delete or rewrite `examples/lazyseqs.janet`** so there is one vocabulary.
+6. **Delete or rewrite `examples/lazyseqs.ben`** so there is one vocabulary.
 7. **Update `docs/internals/clojure-surface.md`** — move laziness out of
    "deliberate omissions" and record the marshal and one-shot-fiber caveats.
 
@@ -322,6 +322,6 @@ there is one definition.
 - Constructing a lazy seq over an infinite source neither hangs nor evaluates.
 - `gccollect` after building a 1,000,000-deep chain returns normally (this is the
   §4 regression).
-- `make test` green; `make` from clean produces `build/janet` without warnings.
+- `make test` green; `make` from clean produces `build/bender` without warnings.
 - No eager builtin (`map`, `filter`, `take`) changes behavior — check by running
   the existing suite.

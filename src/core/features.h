@@ -22,8 +22,8 @@
 
 /* Feature test macros */
 
-#ifndef JANET_FEATURES_H_defined
-#define JANET_FEATURES_H_defined
+#ifndef BENDER_FEATURES_H_defined
+#define BENDER_FEATURES_H_defined
 
 #if defined(__NetBSD__) || defined(__APPLE__) || defined(__OpenBSD__) \
     || defined(__bsdi__) || defined(__DragonFly__) || defined(__FreeBSD__)

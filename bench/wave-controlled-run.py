@@ -62,13 +62,13 @@ Manifest
       "sizes": [100000],
       "repeats": 3,
       "timeout_s": 600,
-      "env": {"JANET_NO_PROFILE": "1"},
+      "env": {"BENDER_NO_PROFILE": "1"},
       "variants": [
         {
-          "name": "janet-lanes0",
-          "argv": ["./build/bender", "bench/cross-runtime/wave.janet", "{n}"],
-          "env": {"JANET_LANES": "0"},
-          "env_unset": ["JANET_PROFILE"]
+          "name": "bender-lanes0",
+          "argv": ["./build/bender", "bench/cross-runtime/wave.ben", "{n}"],
+          "env": {"BENDER_LANES": "0"},
+          "env_unset": ["BENDER_PROFILE"]
         },
         {
           "name": "go",
@@ -98,7 +98,7 @@ Usage
 -----
     python3 bench/wave-controlled-run.py manifest.json
     python3 bench/wave-controlled-run.py manifest.json --output-dir /tmp/run1
-    python3 bench/wave-controlled-run.py manifest.json --only janet-lanes0
+    python3 bench/wave-controlled-run.py manifest.json --only bender-lanes0
     python3 bench/wave-controlled-run.py --print-example-manifest
 """
 
@@ -153,17 +153,17 @@ EXAMPLE_MANIFEST = {
     "sizes": [10000, 100000],
     "repeats": 3,
     "timeout_s": 600,
-    "env": {"JANET_NO_PROFILE": "1"},
+    "env": {"BENDER_NO_PROFILE": "1"},
     "variants": [
         {
-            "name": "janet-script-lanes0",
-            "argv": ["./build/bender", "bench/cross-runtime/wave.janet", "{n}"],
-            "env": {"JANET_LANES": "0"},
+            "name": "bender-script-lanes0",
+            "argv": ["./build/bender", "bench/cross-runtime/wave.ben", "{n}"],
+            "env": {"BENDER_LANES": "0"},
         },
         {
-            "name": "janet-aot-lanes0",
+            "name": "bender-aot-lanes0",
             "argv": ["./build/wave-pgo-evidence/wave", "{n}"],
-            "env": {"JANET_LANES": "0"},
+            "env": {"BENDER_LANES": "0"},
         },
         {
             "name": "go",
@@ -635,7 +635,7 @@ def parse_output(text):
       (``bench/cross-runtime/wave.go``, ``bench/wave-go.go``) and Erlang
       (``wave.erl``), which print **integer milliseconds**.
     * ``procs=N result=N`` plus ``spawn_ms=.. wave_ms=.. total_ms=..`` on
-      another stream -- Janet, whose ``eprintf`` line carries the timings.
+      another stream -- Bender, whose ``eprintf`` line carries the timings.
     * a JSON object line, for any harness that emits real decimals.
 
     Keys are canonicalised so ``spawn`` and ``spawn_ms`` are one metric.

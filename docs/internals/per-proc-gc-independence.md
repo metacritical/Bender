@@ -3,15 +3,15 @@
 **Status**: design only, not implemented. Stream B item B4 (Phase 2b's
 collector-swap end goal per `erlang-parity-handoff.md` §5.8/§9.3(b)).
 Written against the tree as of 2026-10-17 (post
-`janet_threaded_visited` cycle-stamp fix; see proc-lanes.md).
+`bender_threaded_visited` cycle-stamp fix; see proc-lanes.md).
 
 ## 1. What "per-proc GC independence" means here
 
 Today every fiber/proc allocates from **one VM-global slab state**
-(`JanetVM.slab_state`): shared page directory, shared size-class
+(`BenderVM.slab_state`): shared page directory, shared size-class
 freelists, shared young-byte counter, shared `xfb` remembered set, and a
 shared `threaded_abstracts` registry. Collections are *scoped sweeps*
-over a shared heap (`janet_sweep_proc_owned`: walk only the target
+over a shared heap (`bender_sweep_proc_owned`: walk only the target
 fiber's three `heap_lists` with an owner filter), not independent
 heaps. "Independence" = each strict/isolated proc gets a **heap that a
 private (or heap-local) collector can collect without walking, locking,
@@ -30,12 +30,12 @@ generational policy) were explicitly the runway for it.
 - **Per-fiber block lists**: every fiber already carries
   `heap_lists[3]`; the filing invariant (fiber objects only in
   globals) keeps census walks stable.
-- **Narrow sweeps**: `janet_sweep_proc_owned` is already O(own lists).
+- **Narrow sweeps**: `bender_sweep_proc_owned` is already O(own lists).
 - **Remembered set**: `xfb` owner-bucketed hash (4096 slots) gives
   O(1) insert and O(own-entries) scan — exactly the shape a shared→
   private edge log needs.
-- **Scoped roots**: `janet_gcshadow_push/mark/pop_to` (2b-i) and
-  `janet_ev_mark_shallow` already let a scoped collector protect C-side
+- **Scoped roots**: `bender_gcshadow_push/mark/pop_to` (2b-i) and
+  `bender_ev_mark_shallow` already let a scoped collector protect C-side
   roots without deep walks.
 - **Generational policy**: page age + dirty flags + write barriers in
   table/array store primitives (2b-iii) already skip old-clean
@@ -43,11 +43,11 @@ generational policy) were explicitly the runway for it.
 
 ## 3. The actual swap, in ordered slices
 
-1. **Per-owner slab arenas.** Split `JanetSlabState`'s page directory
+1. **Per-owner slab arenas.** Split `BenderSlabState`'s page directory
    and freelists into a small shared arena (globals, root fiber,
-   non-strict fibers) plus one `JanetSlabArena` per *live strict owner*
+   non-strict fibers) plus one `BenderSlabArena` per *live strict owner*
    (keyed by `gc_owner`, hash table of arenas, arena freed when the
-   owner's fiber deinits). `janet_gcalloc` routes by
+   owner's fiber deinits). `bender_gcalloc` routes by
    `fiber->gc_owner` (attribution already computed there). Large
    objects stay on the malloc path, unchanged. This is mechanical but
    touches every allocation fast path — the riskiest slice for
@@ -57,7 +57,7 @@ generational policy) were explicitly the runway for it.
    minor fires on *its own* pressure (today's nursery counters already
    approximate this per fiber; the global `gc_minor_threshold` stays
    for the shared arena only).
-3. **Private minors over the arena.** `janet_collect_fiber_minor`
+3. **Private minors over the arena.** `bender_collect_fiber_minor`
    degenerates to: mark arena roots (fiber + proc fields + shadow
    stack slice + ev-shallow), mark the owner's xfb bucket, sweep the
    arena's three lists with NO owner filter (the arena is pure-own by
@@ -71,7 +71,7 @@ generational policy) were explicitly the runway for it.
    over unchanged.
 5. **Majors/teardown.** Full collects iterate arenas; arena free at
    fiber deinit must drain any pending `sweep_pending` chains the same
-   way `janet_deinit_block` parks them today. `threaded_abstracts`
+   way `bender_deinit_block` parks them today. `threaded_abstracts`
    stays VM-global (channels are cross-proc by nature); only its
    *visit* cost was per-minor and is already O(1).
 
@@ -91,6 +91,6 @@ generational policy) were explicitly the runway for it.
 ## 5. Suggested first implementation milestone
 
 Slice 1 alone (arenas, shared collection logic otherwise unchanged)
-measured on `bench/agents.janet` N=20000/100000 plus the full battery
+measured on `bench/agents.ben` N=20000/100000 plus the full battery
 is the right first PR-sized unit. Everything after it is policy
 refinement inside already-proven sweep/mark code.

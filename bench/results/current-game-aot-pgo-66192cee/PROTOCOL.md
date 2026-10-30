@@ -2,13 +2,13 @@
 
 ## Immutable reference
 
-- Runtime source: Janet commit `66192ceed5f2545e14546e12505eda4d31e6cca5`, tree `a9e757129652cea1715f0a4c4d1f512bf48c168c`.
+- Runtime source: Bender commit `66192ceed5f2545e14546e12505eda4d31e6cca5`, tree `a9e757129652cea1715f0a4c4d1f512bf48c168c`.
 - Runtime build source is isolated at `build/current-game-aot-pgo-66192cee/runtime`, extracted using `git archive 66192cee`; unrelated live checkout modifications are not included.
 - Prior contract: `../current-game-6a4f008b-c07042a7/README.md`, runtime-source and saved-world manifests. Old JSON summaries are not byte-exact logs and do not substitute for new runs.
 - Frozen workload must match the prior committed file manifests before any game run. Do not silently substitute the changing live Trinecraft worktree.
 - World slot: `15f2268da8ec2a4105ef2deaf6ae0b19` (Terrain Diffusion 12345).
 - Game arguments: `--frames 6000 --uncapped --world-slot 15f2268da8ec2a4105ef2deaf6ae0b19 --world-root <frozen-world-root>`.
-- Benchmark runtime environment: scrub inherited `JANET_*` / `BENDER_*`, set `JANET_NO_PROFILE=1`, `JANET_LANES=0`, matched isolated cache conditions. Training differs only where required to collect profiles, which must be disclosed.
+- Benchmark runtime environment: scrub inherited `BENDER_*` / `BENDER_*`, set `BENDER_NO_PROFILE=1`, `BENDER_LANES=0`, matched isolated cache conditions. Training differs only where required to collect profiles, which must be disclosed.
 
 ## Acceptance gates
 

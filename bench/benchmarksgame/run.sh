@@ -1,5 +1,5 @@
 #!/bin/bash
-# Benchmarks Game runs for Janet/Bender: repeated timing, mean/min/max.
+# Benchmarks Game runs for Bender/Bender: repeated timing, mean/min/max.
 # Usage: ./run.sh [reps]   (default reps=3)
 # Reports elapsed (real) seconds like the game does; also prints user+sys.
 # Binaries must already be built (see build.sh / README).
@@ -38,30 +38,30 @@ echo
 
 build_native() {
   local src="$1" out="$2"
-  JANET_TOOLS=../../tools $B --aot "$src" --native -o "$out" > /dev/null 2>&1 \
+  BENDER_TOOLS=../../tools $B --aot "$src" --native -o "$out" > /dev/null 2>&1 \
     || { echo "BUILD FAILED: $src"; exit 1; }
   echo "built $out ($(cat "${out}-native/native-names.txt" 2>/dev/null | tr '\n' ' '))"
 }
 
-build_native nbody.janet /tmp/bg-nbody
-build_native spectralnorm.janet /tmp/bg-spectral
-build_native fannkuch.janet /tmp/bg-fannkuch
+build_native nbody.ben /tmp/bg-nbody
+build_native spectralnorm.ben /tmp/bg-spectral
+build_native fannkuch.ben /tmp/bg-fannkuch
 echo
 
 # correctness first (fail fast on mismatch)
 echo "--- correctness ---"
-diff <($B nbody.janet 1000 2>/dev/null) <(printf -- '-0.169075164\n-0.169087605\n') && echo "nbody 1000 OK"
-diff <($B spectralnorm.janet 100 2>/dev/null) <(printf -- '1.274219991\n') && echo "spectral 100 OK"
-diff <($B fannkuch.janet 7 2>/dev/null) <(printf -- '228\nPfannkuchen(7) = 16\n') && echo "fannkuch 7 OK"
+diff <($B nbody.ben 1000 2>/dev/null) <(printf -- '-0.169075164\n-0.169087605\n') && echo "nbody 1000 OK"
+diff <($B spectralnorm.ben 100 2>/dev/null) <(printf -- '1.274219991\n') && echo "spectral 100 OK"
+diff <($B fannkuch.ben 7 2>/dev/null) <(printf -- '228\nPfannkuchen(7) = 16\n') && echo "fannkuch 7 OK"
 diff <(/tmp/bg-nbody 1000 2>/dev/null) <(printf -- '-0.169075164\n-0.169087605\n') && echo "nbody native OK"
 diff <(/tmp/bg-spectral 100 2>/dev/null) <(printf -- '1.274219991\n') && echo "spectral native OK"
 diff <(/tmp/bg-fannkuch 7 2>/dev/null) <(printf -- '228\nPfannkuchen(7) = 16\n') && echo "fannkuch native OK"
 echo
 
 echo "--- perf ---"
-time_case "nbody 5M interp" $B nbody.janet 5000000
+time_case "nbody 5M interp" $B nbody.ben 5000000
 time_case "nbody 5M native" /tmp/bg-nbody 5000000
-time_case "spectral 2000 interp" $B spectralnorm.janet 2000
+time_case "spectral 2000 interp" $B spectralnorm.ben 2000
 time_case "spectral 2000 native" /tmp/bg-spectral 2000
-time_case "fannkuch 10 interp" $B fannkuch.janet 10
+time_case "fannkuch 10 interp" $B fannkuch.ben 10
 time_case "fannkuch 10 native" /tmp/bg-fannkuch 10

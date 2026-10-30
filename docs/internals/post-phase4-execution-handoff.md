@@ -10,13 +10,13 @@ Prepared against repository HEAD `04808694` (Phase-4 fix `0c935aeb`). Recheck HE
 
 ## Non-negotiable facts and constraints
 
-- Public `proc/spawn` now has a Janet continuation wrapper. C `proc/spawn-prepare` tries nonblocking mode3 first; only refused writes produce a plan. Do not restore awaiting in the value-returning C path.
-- `test/suite-proc-spawn-return.janet` already tests forced backpressure, ordinary/tail calls, full GC, cancellation, PID fields and actor replies. Reuse it; do not create a duplicate.
+- Public `proc/spawn` now has a Bender continuation wrapper. C `proc/spawn-prepare` tries nonblocking mode3 first; only refused writes produce a plan. Do not restore awaiting in the value-returning C path.
+- `test/suite-proc-spawn-return.ben` already tests forced backpressure, ordinary/tail calls, full GC, cancellation, PID fields and actor replies. Reuse it; do not create a duplicate.
 - Mutable-capture placement has not yet received a focused regression through that wrapper.
 - Local actor-wave completion marking still has residual quadratic growth. That is an observed limit, not automatic authorization for a collector redesign.
 - A successful `--native` build does not prove the relevant function executed native code.
 - Historical NX_VMEXIT-tagged counts are NOT all native-to-VM boundaries. Never divide total native operations by that partial denominator and call the result all-boundary yield.
-- The existing `test/suite-proc.janet` failure at line605 is baseline-qualified, not green. Compare the actual error and location on each pinned baseline; a changed failure is new evidence.
+- The existing `test/suite-proc.ben` failure at line605 is baseline-qualified, not green. Compare the actual error and location on each pinned baseline; a changed failure is new evidence.
 - Cancellation after enqueue can leave an actor whose PID the caller never receives. Do not claim rollback semantics.
 - No JIT, blanket native actor continuation implementation, default PGO/LTO changes, low-yield heuristic, or new packages in this scope.
 - Keep existing type-hint facilities in mind: verify their current semantics rather than proposing a new annotation syntax.
@@ -47,14 +47,14 @@ command -v make python3 clang
 clang --version
 ```
 
-Confirm the checkout is `/Users/pankajdoharey/Development/Projects/janet`, not the Anton application implementation. Existing unrelated untracked paths include ML/, assorted planning documents, erl_crash.dump and examples/five-million.janet; preserve them.
+Confirm the checkout is `/Users/pankajdoharey/Development/Projects/bender`, not the Anton application implementation. Existing unrelated untracked paths include ML/, assorted planning documents, erl_crash.dump and examples/five-million.ben; preserve them.
 
 Create a unique evidence directory outside the source tree, and record its absolute path. Record baseline SHA before edits. For any comparative instrumentation/compiler change create separate baseline and candidate worktrees from that SHA; keep builds, caches and profiles separate. Example with explicit fresh names:
 
 ```sh
 BASE=$(git rev-parse HEAD)
-git worktree add --detach /tmp/janet-next-baseline-$BASE "$BASE"
-git worktree add -b next-game-kernel /tmp/janet-next-candidate-$BASE "$BASE"
+git worktree add --detach /tmp/bender-next-baseline-$BASE "$BASE"
+git worktree add -b next-game-kernel /tmp/bender-next-candidate-$BASE "$BASE"
 ```
 
 Check destinations/branch availability first; if occupied, choose a fresh name, do not overwrite. Use the workdir parameter rather than relying on shell cwd persistence.
@@ -62,8 +62,8 @@ Check destinations/branch availability first; if occupied, choose a fresh name, 
 Known build command, used successfully in Phase4:
 
 ```sh
-make -j4 NATIVE_EXECUTORS=1 build/bender build/libjanet.a
-JANET_LANES=0 JANET_NO_PROFILE=1 ./build/bender test/suite-proc-spawn-return.janet
+make -j4 NATIVE_EXECUTORS=1 build/bender build/libbender.a
+BENDER_LANES=0 BENDER_NO_PROFILE=1 ./build/bender test/suite-proc-spawn-return.ben
 ```
 
 When invoking direct Xcode Clang, explicitly obtain and record `SDKROOT` using `xcrun --show-sdk-path`; do not generalize this requirement to non-macOS hosts. For AOT builds set `CPATH` to that worktree's `src/conf`. Record compiler, runtime/library/source hashes and effective executable resolution.
@@ -78,7 +78,7 @@ Pass only when baseline identity, toolchain, clean tracked state or explicitly a
 
 Add a small focused test beside the existing proc suites, or extend the existing canonical regression if setup remains comprehensible. This is a test-first change; do not alter runtime semantics to manufacture a pass.
 
-Inspect `src/core/proc.c` around `janet_proc_find_mutable_capture`, `janet_proc_spawn_routed`, and `proc/pid?`; inspect the public wrapper in `src/boot/boot.janet`. Verify the exact local-handle predicate before writing assertions: `proc/pid?` accepts more than one handle shape and alone cannot establish local placement.
+Inspect `src/core/proc.c` around `bender_proc_find_mutable_capture`, `bender_proc_spawn_routed`, and `proc/pid?`; inspect the public wrapper in `src/boot/boot.ben`. Verify the exact local-handle predicate before writing assertions: `proc/pid?` accepts more than one handle shape and alone cannot establish local placement.
 
 ### Required cases
 
@@ -150,10 +150,10 @@ Recover the existing Task1/native-retirement implementation and tests from CURRE
 
 ### Verified current entry points (read-only inspection at `04808694`)
 
-- `tools/loop-executor.janet:162`: `(defn emit [id d &opt cont-pcs])` generates native executors; compile-gated per-ID/per-PC counters and `NX_RETIRE` near170–174/205–207; pure-operation credits near605–611.
-- `tools/callgraph.janet:5246`: `(defn emit-native-lib [outdir])` assembles generated native.c, invokes the executor generator near5654, and integrates the work-report template near5782–5789.
-- `tools/work-profile-template.c:23`: `janet_work_report` emits schema-1 work telemetry, **not** a retirement census. Do not replace its semantics silently.
-- `test/suite-native-executor.sh:118–143` covers budget1/2, portable, census, disabled and sanitized configurations; census uses `-DJANET_NATIVE_RETIRE_CENSUS`.
+- `tools/loop-executor.ben:162`: `(defn emit [id d &opt cont-pcs])` generates native executors; compile-gated per-ID/per-PC counters and `NX_RETIRE` near170–174/205–207; pure-operation credits near605–611.
+- `tools/callgraph.ben:5246`: `(defn emit-native-lib [outdir])` assembles generated native.c, invokes the executor generator near5654, and integrates the work-report template near5782–5789.
+- `tools/work-profile-template.c:23`: `bender_work_report` emits schema-1 work telemetry, **not** a retirement census. Do not replace its semantics silently.
+- `test/suite-native-executor.sh:118–143` covers budget1/2, portable, census, disabled and sanitized configurations; census uses `-DBENDER_NATIVE_RETIRE_CENSUS`.
 - `test/suite-forced-quantum.sh` creates private scratch, hashes generated C/executable and compares same-seed traces. Fixture success does not establish real-workload forced-interrupt parity.
 
 Exact existing commands, inspected but **not executed while preparing this plan**:
@@ -242,7 +242,7 @@ Use the candidate worktree and retain an untouched baseline. Implement one measu
 
 Before edits trace real callers/impact. For typed/unboxed changes specify entry guards, representation, joins, overflow/numeric semantics, error side effects, GC root visibility, native/VM handoff and resume state. Preserve exact retirement semantics; do not fix counters to make an optimization look better. Read existing typed/compiler facilities rather than adding redundant syntax.
 
-Test smallest adversarial fixtures first, then existing native/forced-quantum/GC tests that reach the changed path, then the selected real workload. Run API/quality-delta checks; static map gaps for Janet are not test passes. A semantic reviewer must inspect the actual diff independently and identify untested assumptions.
+Test smallest adversarial fixtures first, then existing native/forced-quantum/GC tests that reach the changed path, then the selected real workload. Run API/quality-delta checks; static map gaps for Bender are not test passes. A semantic reviewer must inspect the actual diff independently and identify untested assumptions.
 
 Rebuild all measured artifacts from committed source, instrument off for timings, with matching toolchains/flags except the intentional change. Repeat the predeclared paired experiment on held-out inputs. Keep rejected outcomes. If the target fails correctness or benefit, do not land it as a performance improvement; retain an isolated experimental commit if useful and document rejection without altering unrelated work.
 

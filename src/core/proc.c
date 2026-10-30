@@ -11,10 +11,10 @@
  * receive yet (take-next only), no loop/handlers yet (raw bodies),
  * no registry yet. */
 
-#ifndef JANET_AMALG
+#ifndef BENDER_AMALG
 #include "features.h"
 #include <stdio.h>
-#include <janet.h>
+#include <bender.h>
 #include "util.h"
 #include "gc.h"
 #include "state.h"
@@ -24,29 +24,29 @@
 #include "proc.h"
 #endif
 
-/* P-lanes platform includes: OUTSIDE the JANET_AMALG guard — the
+/* P-lanes platform includes: OUTSIDE the BENDER_AMALG guard — the
  * amalgam skips per-file includes but still needs these. */
-#ifdef JANET_APPLE
+#ifdef BENDER_APPLE
 #include <mach/mach.h>
 #include <mach/thread_act.h>
 #include <mach/thread_policy.h>
 #endif
-#if defined(JANET_LINUX) || defined(_GNU_SOURCE)
+#if defined(BENDER_LINUX) || defined(_GNU_SOURCE)
 #include <pthread.h>
 #include <sched.h>
 #else
 #include <pthread.h>
 #endif
 
-#ifdef JANET_EV
+#ifdef BENDER_EV
 
 /* Forward: abstract type defined below (used by the getter). */
-extern const JanetAbstractType janet_proc_type;
+extern const BenderAbstractType bender_proc_type;
 /* Forward: pid-tuple resolver (defined with proc/pid, used by send). */
-static JanetChannel *janet_proc_resolve_mbox(Janet x);
-static int janet_proc_is_pid_tuple(Janet x);
-static Janet cfun_proc_spawn_impl(JanetFunction *func, int32_t cap, int isolated);
-static uint32_t janet_proc_next_serial(void);
+static BenderChannel *bender_proc_resolve_mbox(Bender x);
+static int bender_proc_is_pid_tuple(Bender x);
+static Bender cfun_proc_spawn_impl(BenderFunction *func, int32_t cap, int isolated);
+static uint32_t bender_proc_next_serial(void);
 
 /* ===== P-lanes: VM-per-core proc parallelism =====
  * N resident OS threads, each a full share-nothing VM (the ev/thread
@@ -57,10 +57,10 @@ static uint32_t janet_proc_next_serial(void);
  * workers are 1..N. Cross-lane handles are pid tuples
  * [:pid lane serial ctl] (resolve_mbox already speaks tuples; the
  * node field disambiguates lanes). */
-static JANET_THREAD_LOCAL JanetChannel **janet_lane_ctls;
-static JANET_THREAD_LOCAL JanetChannel *janet_lane0_ctl;
-static JANET_THREAD_LOCAL int32_t janet_lane_count;
-static JANET_THREAD_LOCAL int32_t janet_lane_rr;
+static BENDER_THREAD_LOCAL BenderChannel **bender_lane_ctls;
+static BENDER_THREAD_LOCAL BenderChannel *bender_lane0_ctl;
+static BENDER_THREAD_LOCAL int32_t bender_lane_count;
+static BENDER_THREAD_LOCAL int32_t bender_lane_rr;
 
 /* Milestone 2c: work-stealing. The overflow queue is a global
  * threaded channel owned by the main VM (created at lanes-start,
@@ -71,10 +71,10 @@ static JANET_THREAD_LOCAL int32_t janet_lane_rr;
  * as round-robin), 2 = :steal. Counters are the feature indication:
  * lanes-stats reports pushes/pulls so tests assert stealing actually
  * happened. */
-static JANET_THREAD_LOCAL JanetChannel *janet_lane_overflow;
-static JANET_THREAD_LOCAL int32_t janet_lane_policy;
-static volatile JanetAtomicInt janet_lane_overflow_pushed;
-static volatile JanetAtomicInt janet_lane_overflow_pulled;
+static BENDER_THREAD_LOCAL BenderChannel *bender_lane_overflow;
+static BENDER_THREAD_LOCAL int32_t bender_lane_policy;
+static volatile BenderAtomicInt bender_lane_overflow_pushed;
+static volatile BenderAtomicInt bender_lane_overflow_pulled;
 
 /* Milestone 2a: pool-style join. Workers launch on JOINABLE pthreads,
  * each with a completion sync. lanes-stop asks every dispatcher to
@@ -84,38 +84,38 @@ static volatile JanetAtomicInt janet_lane_overflow_pulled;
  * that stops its lanes can reach a clean loop exit (the AOT
  * exit-hang). Straggler workers keep the process alive exactly like
  * the milestone-1 detached workers did. */
-typedef struct JanetLaneLaunch {
+typedef struct BenderLaneLaunch {
     pthread_t thread;
     pthread_mutex_t lock;
     pthread_cond_t cond;
     int exited;
-    JanetBuffer *buf;
+    BenderBuffer *buf;
     uint32_t sandbox_flags;
-} JanetLaneLaunch;
+} BenderLaneLaunch;
 
-static JANET_THREAD_LOCAL JanetLaneLaunch **janet_lane_launches;
+static BENDER_THREAD_LOCAL BenderLaneLaunch **bender_lane_launches;
 
 /* Grace per worker lane when stopping: procs parked in a single recv
  * wake and finish quickly; procs in long loops hit the grace and are
  * detached instead. */
-#define JANET_LANE_STOP_GRACE_SECONDS 2
+#define BENDER_LANE_STOP_GRACE_SECONDS 2
 
-static void *janet_lane_thread_body(void *p) {
-    janet_vm.is_lane_vm = 1;
-    JanetLaneLaunch *L = p;
-    JanetEVGenericMessage args;
+static void *bender_lane_thread_body(void *p) {
+    bender_vm.is_lane_vm = 1;
+    BenderLaneLaunch *L = p;
+    BenderEVGenericMessage args;
     memset(&args, 0, sizeof(args));
     args.tag = 0x1 /* :n — the caller never awaits us */
-        | 0x8 /* JANET_THREAD_NODEINIT_FLAG — see ev.c */;
+        | 0x8 /* BENDER_THREAD_NODEINIT_FLAG — see ev.c */;
     args.argi = L->sandbox_flags;
     args.argp = L->buf;
     args.fiber = NULL;
-    janet_go_thread_subr(args);
+    bender_go_thread_subr(args);
     pthread_mutex_lock(&L->lock);
     L->exited = 1;
     pthread_cond_broadcast(&L->cond);
     pthread_mutex_unlock(&L->lock);
-        janet_vm.is_lane_vm = 0;
+        bender_vm.is_lane_vm = 0;
 return NULL;
 }
 
@@ -124,27 +124,27 @@ return NULL;
  * [:pid lane serial ctl] (resolve_mbox speaks tuples, so proc/send
  * works unchanged). Local spawns (proc/spawn-local, lane-internal
  * spawns) call the impl directly. */
-static int32_t janet_os_cpu_count(void);
-static int32_t janet_lanes_start_impl(int32_t count, int affinity);
+static int32_t bender_os_cpu_count(void);
+static int32_t bender_lanes_start_impl(int32_t count, int affinity);
 
 /* Lazily start the multi-core runtime the first time a proc is spawned.
  *
  * The lane machinery only activates once lanes exist, so without this a plain
  * proc/spawn loop silently uses one core forever while Go and Erlang start
- * their schedulers at boot. Autostart lives HERE rather than in boot.janet
- * because boot.janet also runs during image generation, where spawning lanes
- * hangs the build (observed: janet_boot stuck in the lane join).
+ * their schedulers at boot. Autostart lives HERE rather than in boot.ben
+ * because boot.ben also runs during image generation, where spawning lanes
+ * hangs the build (observed: bender_boot stuck in the lane join).
  *
- * Opt out with JANET_LANES=0; pin a count with JANET_LANES=<n>. Each VM
+ * Opt out with BENDER_LANES=0; pin a count with BENDER_LANES=<n>. Each VM
  * autostarts once; a failed start leaves lanes at 0 rather than erroring, so a
  * sandboxed embedder that forbids threads keeps working single-threaded. */
-static void janet_lanes_maybe_autostart(void) {
-    static JANET_THREAD_LOCAL int attempted = 0;
-    if (attempted || janet_lane_count > 0) return;
+static void bender_lanes_maybe_autostart(void) {
+    static BENDER_THREAD_LOCAL int attempted = 0;
+    if (attempted || bender_lane_count > 0) return;
     attempted = 1;
     /* OPT-IN for now, not default-on.
      *
-     * Autostart is deliberately gated behind JANET_LANES=<n> because turning it
+     * Autostart is deliberately gated behind BENDER_LANES=<n> because turning it
      * on by default changes proc/spawn's RETURN TYPE from a core/proc object to
      * a [:pid lane serial ctl] tuple for every caller (measured: it breaks
      * suite-proc's "spawn returns a proc"). That is a real API break, and it
@@ -153,7 +153,7 @@ static void janet_lanes_maybe_autostart(void) {
      * =0 keeps the historic single-VM behaviour, which is also what the test
      * suite assumes. Once proc handles are uniform across lanes (a local proc
      * proxy, or a pid tuple that satisfies proc/pid?), the default can flip. */
-    const char *raw = getenv("JANET_LANES");
+    const char *raw = getenv("BENDER_LANES");
     if (NULL == raw || 0 == strcmp(raw, "0")) return;
     int32_t count = -1;
     {
@@ -161,24 +161,24 @@ static void janet_lanes_maybe_autostart(void) {
         if (v > 0) count = (int32_t) v;
     }
     if (count < 0) {
-        count = janet_os_cpu_count() - 1;
+        count = bender_os_cpu_count() - 1;
         if (count < 1) count = 1;
     }
     if (count > 64) count = 64;
     /* The worker dispatcher comes from boot; without it we cannot run lanes. */
     {
-        Janet w = janet_wrap_nil();
-        if (NULL != janet_vm.root_fiber && NULL != janet_vm.root_fiber->env) {
-            w = janet_table_get(janet_vm.root_fiber->env,
-                    janet_ckeywordv("proc-lane-worker"));
+        Bender w = bender_wrap_nil();
+        if (NULL != bender_vm.root_fiber && NULL != bender_vm.root_fiber->env) {
+            w = bender_table_get(bender_vm.root_fiber->env,
+                    bender_ckeywordv("proc-lane-worker"));
         }
-        if (janet_checktype(w, JANET_NIL) && NULL != janet_vm.top_dyns) {
-            w = janet_table_get(janet_vm.top_dyns,
-                    janet_ckeywordv("proc-lane-worker"));
+        if (bender_checktype(w, BENDER_NIL) && NULL != bender_vm.top_dyns) {
+            w = bender_table_get(bender_vm.top_dyns,
+                    bender_ckeywordv("proc-lane-worker"));
         }
-        if (!janet_checktype(w, JANET_FUNCTION)) return;
+        if (!bender_checktype(w, BENDER_FUNCTION)) return;
     }
-    (void) janet_lanes_start_impl(count, 0);
+    (void) bender_lanes_start_impl(count, 0);
 }
 
 /* Does this captured value denote mutable cross-lane state?
@@ -192,13 +192,13 @@ static void janet_lanes_maybe_autostart(void) {
  * Immutable values (nil/bool/number/string/symbol/keyword/tuple-of-these) are
  * fine to copy. Threaded channels and abstract handles are explicit carriers,
  * so they are allowed too. */
-static int janet_proc_capture_is_mutable(Janet x) {
-    switch (janet_type(x)) {
-        case JANET_ARRAY:
-        case JANET_TABLE:
-        case JANET_BUFFER:
-        case JANET_FIBER:
-        case JANET_STRUCT:
+static int bender_proc_capture_is_mutable(Bender x) {
+    switch (bender_type(x)) {
+        case BENDER_ARRAY:
+        case BENDER_TABLE:
+        case BENDER_BUFFER:
+        case BENDER_FIBER:
+        case BENDER_STRUCT:
             return 1;
         default:
             return 0;
@@ -207,16 +207,16 @@ static int janet_proc_capture_is_mutable(Janet x) {
 
 /* Return the index of the first mutable capture in `func`'s environments, or
  * -1 when the closure captures only copy-safe values. */
-static int32_t janet_proc_find_mutable_capture(JanetFunction *func) {
+static int32_t bender_proc_find_mutable_capture(BenderFunction *func) {
     if (NULL == func || NULL == func->def) return -1;
     int32_t numenvs = func->def->environments_length;
     int32_t slot = 0;
     for (int32_t e = 0; e < numenvs; e++) {
-        JanetFuncEnv *env = func->envs[e];
+        BenderFuncEnv *env = func->envs[e];
         if (NULL == env) continue;
         int32_t len = env->length;
         for (int32_t i = 0; i < len; i++) {
-            Janet v;
+            Bender v;
             if (env->offset > 0 && NULL != env->as.fiber) {
                 v = env->as.fiber->data[env->offset + i];
             } else if (NULL != env->as.values) {
@@ -224,16 +224,16 @@ static int32_t janet_proc_find_mutable_capture(JanetFunction *func) {
             } else {
                 continue;
             }
-            if (janet_proc_capture_is_mutable(v)) return slot;
+            if (bender_proc_capture_is_mutable(v)) return slot;
             slot++;
         }
     }
     return -1;
 }
 
-static Janet janet_proc_spawn_routed(JanetFunction *func, int32_t cap) {
-    janet_lanes_maybe_autostart();
-    if (0 == janet_lane_count) return cfun_proc_spawn_impl(func, cap, 0);
+static Bender bender_proc_spawn_routed(BenderFunction *func, int32_t cap) {
+    bender_lanes_maybe_autostart();
+    if (0 == bender_lane_count) return cfun_proc_spawn_impl(func, cap, 0);
     /* Crossing a lane boundary marshals the closure, so a MUTABLE capture
      * would arrive as a detached copy: the worker's writes would be invisible
      * to the spawner. Rather than erroring, place such a proc on THIS VM.
@@ -246,19 +246,19 @@ static Janet janet_proc_spawn_routed(JanetFunction *func, int32_t cap) {
      * program mixing shared-state workers with independent workers uses all
      * cores and stays correct, with nothing to learn or opt into.
      *
-     * JANET_PROC_SHARE_TRACE=1 reports the decision for each spawn, since the
+     * BENDER_PROC_SHARE_TRACE=1 reports the decision for each spawn, since the
      * placement is otherwise invisible. */
-    if (janet_proc_find_mutable_capture(func) >= 0) {
-        if (NULL != getenv("JANET_PROC_SHARE_TRACE")) {
+    if (bender_proc_find_mutable_capture(func) >= 0) {
+        if (NULL != getenv("BENDER_PROC_SHARE_TRACE")) {
             fprintf(stderr, "[proc-spawn] shared capture -> local placement "
                             "(a lane would marshal the closure and detach it)\n");
         }
         return cfun_proc_spawn_impl(func, cap, 0);
     }
-    int32_t lane = (janet_lane_rr % janet_lane_count);
-    janet_lane_rr++;
-    JanetChannel *ctl = janet_lane_ctls[lane];
-    uint32_t serial = janet_proc_next_serial();
+    int32_t lane = (bender_lane_rr % bender_lane_count);
+    bender_lane_rr++;
+    BenderChannel *ctl = bender_lane_ctls[lane];
+    uint32_t serial = bender_proc_next_serial();
     /* Bulk fan-out flow control.
      *
      * Each cross-lane spawn posts an event to the target lane's self-pipe,
@@ -277,79 +277,79 @@ static Janet janet_proc_spawn_routed(JanetFunction *func, int32_t cap) {
      * with 2 lanes even 80000 aborts. Making this unbounded needs real
      * backpressure in the lane dispatcher, not a bigger drain frequency. */
     {
-        static JANET_THREAD_LOCAL uint32_t spawn_tick = 0;
-        if (0 == (++spawn_tick & 3)) janet_loop1_poll_now();
+        static BENDER_THREAD_LOCAL uint32_t spawn_tick = 0;
+        if (0 == (++spawn_tick & 3)) bender_loop1_poll_now();
     }
-    Janet msg[4];
-    msg[0] = janet_ckeywordv("spawn");
-    msg[1] = janet_wrap_number((double) serial);
-    msg[2] = janet_wrap_number(cap);
-    msg[3] = janet_wrap_function(func);
-    Janet spawn_msg = janet_wrap_tuple(janet_tuple_n(msg, 4));
+    Bender msg[4];
+    msg[0] = bender_ckeywordv("spawn");
+    msg[1] = bender_wrap_number((double) serial);
+    msg[2] = bender_wrap_number(cap);
+    msg[3] = bender_wrap_function(func);
+    Bender spawn_msg = bender_wrap_tuple(bender_tuple_n(msg, 4));
     /* Milestone 2c: :steal policy offloads to the overflow queue when
      * the target ctl is at high water (3/4 capacity). The task runs
      * wherever a lane pulls it; the spawner's pid tuple keeps the
      * spawn-time lane (documented: sends via that tuple may hit
      * :noproc for pulled procs -- communicate via closures or the
      * proc's own self-pid). Try-mode never blocks the spawner. */
-    if (2 == janet_lane_policy && NULL != janet_lane_overflow &&
-            janet_channel_count(ctl) >= 1) {
-        int pr = janet_channel_push(janet_lane_overflow, spawn_msg, 2);
+    if (2 == bender_lane_policy && NULL != bender_lane_overflow &&
+            bender_channel_count(ctl) >= 1) {
+        int pr = bender_channel_push(bender_lane_overflow, spawn_msg, 2);
         /* Try-mode convention: 0 = refused (queue full), nonzero =
          * enqueued. (Mode 0 is the opposite: 0 = delivered now,
          * nonzero = the caller must await the parked push.) */
         if (pr != 0) {
-        janet_atomic_inc(&janet_lane_overflow_pushed);
+        bender_atomic_inc(&bender_lane_overflow_pushed);
         /* Wakeup: a dispatcher that just parked on an empty ctl will
          * not see the overflow push (pull happens before parking).
          * Nudge the next lane to drain the queue; it keeps pulling
          * until the overflow is empty. */
-        if (janet_lane_count > 0) {
-            JanetChannel *wake = janet_lane_ctls[
-                    (janet_lane_rr + 1) % janet_lane_count];
+        if (bender_lane_count > 0) {
+            BenderChannel *wake = bender_lane_ctls[
+                    (bender_lane_rr + 1) % bender_lane_count];
             if (NULL != wake) {
-                Janet wup[1];
-                wup[0] = janet_ckeywordv("pull");
-                (void) janet_channel_push(wake,
-                        janet_wrap_tuple(janet_tuple_n(wup, 1)), 2);
+                Bender wup[1];
+                wup[0] = bender_ckeywordv("pull");
+                (void) bender_channel_push(wake,
+                        bender_wrap_tuple(bender_tuple_n(wup, 1)), 2);
             }
         }
-        Janet tup[4];
-        tup[0] = janet_ckeywordv("pid");
-        tup[1] = janet_wrap_number((double) (lane + 1));
-        tup[2] = janet_wrap_number((double) serial);
-        tup[3] = janet_wrap_abstract(ctl);
-        return janet_wrap_tuple(janet_tuple_n(tup, 4));
+        Bender tup[4];
+        tup[0] = bender_ckeywordv("pid");
+        tup[1] = bender_wrap_number((double) (lane + 1));
+        tup[2] = bender_wrap_number((double) serial);
+        tup[3] = bender_wrap_abstract(ctl);
+        return bender_wrap_tuple(bender_tuple_n(tup, 4));
         }
         /* try-push refused (full): fall through to the ctl path */
     }
     /* Try-mode never parks: preserve the immediate path when accepted. */
-    int needs_write = janet_channel_push(ctl, spawn_msg, 3);
-    Janet tup[4];
-    tup[0] = janet_ckeywordv("pid");
-    tup[1] = janet_wrap_number((double) (lane + 1));
-    tup[2] = janet_wrap_number((double) serial);
-    tup[3] = janet_wrap_abstract(ctl);
-    Janet pid = janet_wrap_tuple(janet_tuple_n(tup, 4));
+    int needs_write = bender_channel_push(ctl, spawn_msg, 3);
+    Bender tup[4];
+    tup[0] = bender_ckeywordv("pid");
+    tup[1] = bender_wrap_number((double) (lane + 1));
+    tup[2] = bender_wrap_number((double) serial);
+    tup[3] = bender_wrap_abstract(ctl);
+    Bender pid = bender_wrap_tuple(bender_tuple_n(tup, 4));
     if (!needs_write) return pid;
     /* A parked C write resumes with its channel, not at this C frame.
      * The boot wrapper retains the intended pid across its blocking give. */
-    Janet plan[4];
-    plan[0] = janet_ckeywordv("proc-spawn-write");
+    Bender plan[4];
+    plan[0] = bender_ckeywordv("proc-spawn-write");
     plan[1] = pid;
-    plan[2] = janet_wrap_abstract(ctl);
+    plan[2] = bender_wrap_abstract(ctl);
     plan[3] = spawn_msg;
-    return janet_wrap_tuple(janet_tuple_n(plan, 4));
+    return bender_wrap_tuple(bender_tuple_n(plan, 4));
 }
 
 /* Worker-local: spawn-serial -> local proc abstract. */
 /* Current proc->fiber->proc nesting depth during marking (see
- * janet_procat_mark and JANET_PROC_MARK_CHAIN_DEPTH). */
-JANET_THREAD_LOCAL int janet_proc_mark_depth = 0;
+ * bender_procat_mark and BENDER_PROC_MARK_CHAIN_DEPTH). */
+BENDER_THREAD_LOCAL int bender_proc_mark_depth = 0;
 
-static JANET_THREAD_LOCAL JanetTable *janet_lane_local;
+static BENDER_THREAD_LOCAL BenderTable *bender_lane_local;
 
-static int32_t janet_os_cpu_count(void) {
+static int32_t bender_os_cpu_count(void) {
 #ifdef _SC_NPROCESSORS_ONLN
     long n = sysconf(_SC_NPROCESSORS_ONLN);
     if (n > 0) return (int32_t) n;
@@ -359,16 +359,16 @@ static int32_t janet_os_cpu_count(void) {
 
 /* Best-effort core pin for the calling thread. Opt-in via
  * :affinity true; silently a no-op on unsupported platforms. */
-static void janet_lane_pin_core(int32_t core) {
+static void bender_lane_pin_core(int32_t core) {
     if (core < 0) return;
-#if defined(JANET_LINUX) || (defined(_GNU_SOURCE) && defined(__GLIBC__))
+#if defined(BENDER_LINUX) || (defined(_GNU_SOURCE) && defined(__GLIBC__))
     {
         cpu_set_t set;
         CPU_ZERO(&set);
         CPU_SET((int) core % (int) CPU_SETSIZE, &set);
         (void) pthread_setaffinity_np(pthread_self(), sizeof(set), &set);
     }
-#elif defined(JANET_APPLE)
+#elif defined(BENDER_APPLE)
     {
         thread_affinity_policy_data_t policy;
         policy.affinity_tag = (integer_t) (core + 1);
@@ -381,15 +381,15 @@ static void janet_lane_pin_core(int32_t core) {
 #endif
 }
 
-JANET_CORE_FN(cfun_proc_lane_pin,
+BENDER_CORE_FN(cfun_proc_lane_pin,
               "(proc/lane-pin core)",
               "Best-effort pin the calling thread to `core`. Internal: "
               "called by lane workers at startup when :affinity is on. "
               "No-op on platforms without affinity support.") {
-    janet_fixarity(argc, 1);
-    int32_t core = janet_getinteger(argv, 0);
-    janet_lane_pin_core(core);
-    return janet_wrap_nil();
+    bender_fixarity(argc, 1);
+    int32_t core = bender_getinteger(argv, 0);
+    bender_lane_pin_core(core);
+    return bender_wrap_nil();
 }
 
 /* The resident lane dispatcher (a C function so it marshals across
@@ -399,132 +399,132 @@ JANET_CORE_FN(cfun_proc_lane_pin,
  *   [:deliver serial payload]  -> proc/send into the local proc's mbox
  *   [:stop]                    -> return (thread exits)
  */
-JANET_CORE_FN(cfun_proc_self_pid,
+BENDER_CORE_FN(cfun_proc_self_pid,
               "(proc/self-pid)",
               "The calling process's portable pid tuple "
               "[:pid lane serial ctl] -- routable from any lane. For "
               "procs on the main VM this lazily registers the proc "
               "with lane 0's dispatcher on first call.") {
-    janet_fixarity(argc, 0);
+    bender_fixarity(argc, 0);
     (void) argv;
-    JanetFiber *me = janet_vm.fiber;
+    BenderFiber *me = bender_vm.fiber;
     if (NULL == me || NULL == me->proc) {
-        janet_panic("proc/self-pid outside a process");
+        bender_panic("proc/self-pid outside a process");
     }
-    JanetProcess *me_proc = me->proc;
-    if (NULL != getenv("JANET_TRACE_PID")) {
-        janet_eprintf("[pid] env=%d lane_local=%p\n",
+    BenderProcess *me_proc = me->proc;
+    if (NULL != getenv("BENDER_TRACE_PID")) {
+        bender_eprintf("[pid] env=%d lane_local=%p\n",
                 (NULL != me_proc->fiber && NULL != me_proc->fiber->env) ? 1 : 0,
-                (void *) janet_lane_local);
+                (void *) bender_lane_local);
     }
     if (NULL != me_proc->fiber && NULL != me_proc->fiber->env) {
-        Janet cached = janet_table_get(me_proc->fiber->env,
-                janet_ckeywordv("proc-cross-pid"));
-        if (!janet_checktype(cached, JANET_NIL)) {
-            if (NULL != getenv("JANET_TRACE_PID")) {
-                janet_eprintf("[pid] CACHE-HIT registering serial=%u\n",
+        Bender cached = bender_table_get(me_proc->fiber->env,
+                bender_ckeywordv("proc-cross-pid"));
+        if (!bender_checktype(cached, BENDER_NIL)) {
+            if (NULL != getenv("BENDER_TRACE_PID")) {
+                bender_eprintf("[pid] CACHE-HIT registering serial=%u\n",
                         me_proc->serial);
             }
             /* Milestone 2b: cached-pid procs (routed spawns) register
              * in this VM's lane registry too -- the home lane's
              * dispatcher resolves [:proc-monitor]/[:kill] ops through
              * proc/lane-lookup, which reads only this table. */
-            if (NULL == janet_lane_local) {
-                janet_lane_local = janet_table(0);
-                janet_gcroot(janet_wrap_table(janet_lane_local));
+            if (NULL == bender_lane_local) {
+                bender_lane_local = bender_table(0);
+                bender_gcroot(bender_wrap_table(bender_lane_local));
             }
-            if (NULL != getenv("JANET_TRACE_PID"))
-                janet_eprintf("[put] table=%p serial=%u\n",
-                        (void *) janet_lane_local, me_proc->serial);
-            janet_table_put(janet_lane_local,
-                    janet_wrap_number((double) me_proc->serial),
-                    janet_wrap_abstract(me_proc));
+            if (NULL != getenv("BENDER_TRACE_PID"))
+                bender_eprintf("[put] table=%p serial=%u\n",
+                        (void *) bender_lane_local, me_proc->serial);
+            bender_table_put(bender_lane_local,
+                    bender_wrap_number((double) me_proc->serial),
+                    bender_wrap_abstract(me_proc));
             /* ALSO under the DISPATCH serial: the routed-spawn op
              * allocates its own serial on the spawner's VM (the one
              * in the pid tuple / [:proc-monitor]/[:kill] ops), while
              * spawn_impl minted the proc's real serial here. */
-            const Janet *dtup = janet_unwrap_tuple(cached);
-            if (4 == janet_tuple_length(dtup) &&
-                    janet_checktype(dtup[2], JANET_NUMBER)) {
-                janet_table_put(janet_lane_local, dtup[2],
-                        janet_wrap_abstract(me_proc));
+            const Bender *dtup = bender_unwrap_tuple(cached);
+            if (4 == bender_tuple_length(dtup) &&
+                    bender_checktype(dtup[2], BENDER_NUMBER)) {
+                bender_table_put(bender_lane_local, dtup[2],
+                        bender_wrap_abstract(me_proc));
             }
             return cached;
         }
     }
-    if (NULL == janet_lane0_ctl) {
-        janet_panic("proc/self-pid requires lanes (proc/lanes-start)");
+    if (NULL == bender_lane0_ctl) {
+        bender_panic("proc/self-pid requires lanes (proc/lanes-start)");
     }
-    if (NULL == janet_lane_local) {
-        janet_lane_local = janet_table(0);
+    if (NULL == bender_lane_local) {
+        bender_lane_local = bender_table(0);
         /* Allocated under the calling fiber's ctx: root it, or the
          * fiber's completion minor sweeps the registry out from
-         * under later deliveries (observed as janet_hash on freed
+         * under later deliveries (observed as bender_hash on freed
          * memory at 500k procs across 4 lanes). */
-        janet_gcroot(janet_wrap_table(janet_lane_local));
+        bender_gcroot(bender_wrap_table(bender_lane_local));
     }
     uint32_t serial = me_proc->serial;
     /* node must be NONZERO: proc/send forwards [:proc-fwd serial msg]
      * over the carried lane ctl for any nonzero node. Node 0 is the
      * legacy direct-mbox shape (same-VM tasklets). */
-    Janet tup[4];
-    tup[0] = janet_ckeywordv("pid");
-    tup[1] = janet_wrap_number(1);
-    tup[2] = janet_wrap_number((double) serial);
-    tup[3] = janet_wrap_abstract(janet_lane0_ctl);
-    Janet pid = janet_wrap_tuple(janet_tuple_n(tup, 4));
-    janet_table_put(janet_lane_local, janet_wrap_number((double) serial),
-            janet_wrap_abstract(me_proc));
+    Bender tup[4];
+    tup[0] = bender_ckeywordv("pid");
+    tup[1] = bender_wrap_number(1);
+    tup[2] = bender_wrap_number((double) serial);
+    tup[3] = bender_wrap_abstract(bender_lane0_ctl);
+    Bender pid = bender_wrap_tuple(bender_tuple_n(tup, 4));
+    bender_table_put(bender_lane_local, bender_wrap_number((double) serial),
+            bender_wrap_abstract(me_proc));
     if (NULL != me_proc->fiber->env) {
-        janet_table_put(me_proc->fiber->env, janet_ckeywordv("proc-cross-pid"), pid);
+        bender_table_put(me_proc->fiber->env, bender_ckeywordv("proc-cross-pid"), pid);
     }
     return pid;
 }
 
-JANET_CORE_FN(cfun_proc_spawn_local,
+BENDER_CORE_FN(cfun_proc_spawn_local,
               "(proc/spawn-local entry &opt cap)",
               "Spawn on the CALLING VM even when lanes are active "
               "(proc/spawn routes across lanes once started). Same "
               "semantics as proc/spawn otherwise.") {
-    janet_arity(argc, 1, 2);
-    JanetFunction *func = janet_getfunction(argv, 0);
-    int32_t cap = janet_optnat(argv, argc, 1, 64);
+    bender_arity(argc, 1, 2);
+    BenderFunction *func = bender_getfunction(argv, 0);
+    int32_t cap = bender_optnat(argv, argc, 1, 64);
     return cfun_proc_spawn_impl(func, cap, 0);
 }
 
-JANET_CORE_FN(cfun_proc_lane_lookup,
+BENDER_CORE_FN(cfun_proc_lane_lookup,
               "(proc/lane-lookup serial)",
               "Internal: the main VM's C-side serial registry, consulted "
               "by lane 0's dispatcher as a delivery fallback for procs "
               "that registered from C (proc/self-pid's lazy path).") {
-    janet_fixarity(argc, 1);
-    uint32_t serial = (uint32_t) janet_getinteger(argv, 0);
-    if (NULL == janet_lane_local) {
-        if (NULL != getenv("JANET_TRACE_PID"))
-            janet_eprintf("[lookup] table NULL serial=%u\n", serial);
-        return janet_wrap_nil();
+    bender_fixarity(argc, 1);
+    uint32_t serial = (uint32_t) bender_getinteger(argv, 0);
+    if (NULL == bender_lane_local) {
+        if (NULL != getenv("BENDER_TRACE_PID"))
+            bender_eprintf("[lookup] table NULL serial=%u\n", serial);
+        return bender_wrap_nil();
     }
-    Janet found = janet_table_get(janet_lane_local,
-            janet_wrap_number((double) serial));
-    if (NULL != getenv("JANET_TRACE_PID"))
-        janet_eprintf("[lookup] table=%p serial=%u found=%p\n",
-                (void *) janet_lane_local, serial,
-                janet_checktype(found, JANET_NIL) ? NULL
-                    : janet_unwrap_pointer(found));
+    Bender found = bender_table_get(bender_lane_local,
+            bender_wrap_number((double) serial));
+    if (NULL != getenv("BENDER_TRACE_PID"))
+        bender_eprintf("[lookup] table=%p serial=%u found=%p\n",
+                (void *) bender_lane_local, serial,
+                bender_checktype(found, BENDER_NIL) ? NULL
+                    : bender_unwrap_pointer(found));
     return found;
 }
 
-JANET_CORE_FN(cfun_proc_lanes,
+BENDER_CORE_FN(cfun_proc_lanes,
               "(proc/lanes)",
               "Return the number of active proc lanes (worker VMs), or 0 "
               "when running single-VM (the default). Lane 0 is the main "
               "VM; workers are 1..N.") {
-    janet_fixarity(argc, 0);
+    bender_fixarity(argc, 0);
     (void) argv;
-    return janet_wrap_number(janet_lane_count);
+    return bender_wrap_number(bender_lane_count);
 }
 
-JANET_CORE_FN(cfun_proc_lanes_start,
+BENDER_CORE_FN(cfun_proc_lanes_start,
               "(proc/lanes-start &opt count-or-opts)",
               "Start the multi-core proc runtime: `count-or-opts` is a "
               "worker count, or a table {:count n :affinity bool}. With "
@@ -534,177 +534,177 @@ JANET_CORE_FN(cfun_proc_lanes_start,
               "round-robin across the main VM and N worker VMs; "
               "proc/send/recv work unchanged across lanes. Returns the "
               "worker count.") {
-    janet_sandbox_assert(JANET_SANDBOX_THREADS);
-    janet_arity(argc, 0, 1);
-    if (janet_lane_count > 0) {
-        janet_panic("proc lanes already running");
+    bender_sandbox_assert(BENDER_SANDBOX_THREADS);
+    bender_arity(argc, 0, 1);
+    if (bender_lane_count > 0) {
+        bender_panic("proc lanes already running");
     }
     int32_t count = -1;
     int affinity = 0;
-    if (argc >= 1 && !janet_checktype(argv[0], JANET_NIL)) {
-        if (janet_checktype(argv[0], JANET_NUMBER)) {
-            count = janet_getinteger(argv, 0);
-        } else if (janet_checktype(argv[0], JANET_TABLE) ||
-                   janet_checktype(argv[0], JANET_STRUCT)) {
-            Janet t = argv[0];
-            Janet c = janet_get(t, janet_ckeywordv("count"));
-            Janet a = janet_get(t, janet_ckeywordv("affinity"));
-            if (janet_checktype(c, JANET_NUMBER)) count = janet_unwrap_number(c);
-            else if (!janet_checktype(c, JANET_NIL))
-                janet_panic(":count must be an integer");
-            affinity = janet_truthy(a);
+    if (argc >= 1 && !bender_checktype(argv[0], BENDER_NIL)) {
+        if (bender_checktype(argv[0], BENDER_NUMBER)) {
+            count = bender_getinteger(argv, 0);
+        } else if (bender_checktype(argv[0], BENDER_TABLE) ||
+                   bender_checktype(argv[0], BENDER_STRUCT)) {
+            Bender t = argv[0];
+            Bender c = bender_get(t, bender_ckeywordv("count"));
+            Bender a = bender_get(t, bender_ckeywordv("affinity"));
+            if (bender_checktype(c, BENDER_NUMBER)) count = bender_unwrap_number(c);
+            else if (!bender_checktype(c, BENDER_NIL))
+                bender_panic(":count must be an integer");
+            affinity = bender_truthy(a);
         } else {
-            janet_panic("expected a worker count or an options table");
+            bender_panic("expected a worker count or an options table");
         }
     }
     if (count < 0) {
-        count = janet_os_cpu_count() - 1;
+        count = bender_os_cpu_count() - 1;
         if (count < 1) count = 1;
     }
     if (count > 64) count = 64;
-    return janet_wrap_number(janet_lanes_start_impl(count, affinity));
+    return bender_wrap_number(bender_lanes_start_impl(count, affinity));
 }
 
 /* The actual lane startup, shared by proc/lanes-start and the lazy autostart.
  * `count`/`affinity` are already resolved by the caller. */
-static int32_t janet_lanes_start_impl(int32_t count, int affinity) {
+static int32_t bender_lanes_start_impl(int32_t count, int affinity) {
     /* Resolve the boot-level dispatcher via the root dyn table
-     * (boot.janet stores it: (setdyn :proc-lane-worker ...)). The
-     * worker is a Janet function — the thread body accepts a
+     * (boot.ben stores it: (setdyn :proc-lane-worker ...)). The
+     * worker is a Bender function — the thread body accepts a
      * function or fiber as its main. */
-    JanetFunction *worker = NULL;
+    BenderFunction *worker = NULL;
     {
-        Janet w = janet_wrap_nil();
-        /* boot.janet setdyn'd it on the root (boot) fiber's env. */
-        if (NULL != janet_vm.root_fiber && NULL != janet_vm.root_fiber->env) {
-            w = janet_table_get(janet_vm.root_fiber->env,
-                    janet_ckeywordv("proc-lane-worker"));
+        Bender w = bender_wrap_nil();
+        /* boot.ben setdyn'd it on the root (boot) fiber's env. */
+        if (NULL != bender_vm.root_fiber && NULL != bender_vm.root_fiber->env) {
+            w = bender_table_get(bender_vm.root_fiber->env,
+                    bender_ckeywordv("proc-lane-worker"));
         }
-        if (janet_checktype(w, JANET_NIL) && NULL != janet_vm.top_dyns) {
-            w = janet_table_get(janet_vm.top_dyns,
-                    janet_ckeywordv("proc-lane-worker"));
+        if (bender_checktype(w, BENDER_NIL) && NULL != bender_vm.top_dyns) {
+            w = bender_table_get(bender_vm.top_dyns,
+                    bender_ckeywordv("proc-lane-worker"));
         }
-        if (!janet_checktype(w, JANET_FUNCTION))
-            janet_panic("proc/lane-worker not registered (boot mismatch)");
-        worker = (JanetFunction *) janet_unwrap_function(w);
+        if (!bender_checktype(w, BENDER_FUNCTION))
+            bender_panic("proc/lane-worker not registered (boot mismatch)");
+        worker = (BenderFunction *) bender_unwrap_function(w);
     }
-    janet_lane_ctls = janet_calloc(1, sizeof(JanetChannel *) * count);
-    if (NULL == janet_lane_ctls) JANET_OUT_OF_MEMORY;
-    janet_lane_launches = janet_calloc(1, sizeof(JanetLaneLaunch *) * count);
-    if (NULL == janet_lane_launches) {
-        janet_free(janet_lane_ctls);
-        janet_lane_ctls = NULL;
-        JANET_OUT_OF_MEMORY;
+    bender_lane_ctls = bender_calloc(1, sizeof(BenderChannel *) * count);
+    if (NULL == bender_lane_ctls) BENDER_OUT_OF_MEMORY;
+    bender_lane_launches = bender_calloc(1, sizeof(BenderLaneLaunch *) * count);
+    if (NULL == bender_lane_launches) {
+        bender_free(bender_lane_ctls);
+        bender_lane_ctls = NULL;
+        BENDER_OUT_OF_MEMORY;
     }
     for (int32_t i = 0; i < count; i++) {
         /* Threaded control channel: marshals every boundary. */
-        JanetChannel *ctl = janet_channel_make_threaded_c(4096);
-        janet_gcroot(janet_wrap_abstract(ctl));
-        janet_lane_ctls[i] = ctl;
+        BenderChannel *ctl = bender_channel_make_threaded_c(4096);
+        bender_gcroot(bender_wrap_abstract(ctl));
+        bender_lane_ctls[i] = ctl;
         if (affinity) {
             /* Pin to core i (cores 0..N-1); main VM keeps the last
              * core unpinned for its own loop when count < cpu-count. */
-            Janet args[2];
-            args[0] = janet_wrap_number(i);
-            janet_lane_pin_core(i); /* main-side pin of the WORKER is
+            Bender args[2];
+            args[0] = bender_wrap_number(i);
+            bender_lane_pin_core(i); /* main-side pin of the WORKER is
             wrong from here: workers pin themselves at startup when
             told (handled in the launch tuple below). */
             (void) args;
         }
         {
-            Janet tup[3];
-            tup[0] = janet_wrap_abstract(ctl);
-            tup[1] = janet_wrap_number(i + 1);
-            tup[2] = janet_wrap_boolean(affinity);
-            Janet launch = janet_wrap_tuple(janet_tuple_n(tup, 3));
-            /* RAW-allocate the launch buffer: janet_buffer(256) would
+            Bender tup[3];
+            tup[0] = bender_wrap_abstract(ctl);
+            tup[1] = bender_wrap_number(i + 1);
+            tup[2] = bender_wrap_boolean(affinity);
+            Bender launch = bender_wrap_tuple(bender_tuple_n(tup, 3));
+            /* RAW-allocate the launch buffer: bender_buffer(256) would
              * gcalloc the struct into THIS VM's slab, and the worker
              * frees it with ITS slab directory absent — a raw free of
              * a slab-interior pointer (the teardown abort). Both the
              * struct and its data must be plain malloc here. */
-            JanetBuffer *buf = janet_malloc(sizeof(JanetBuffer));
-            if (NULL == buf) JANET_OUT_OF_MEMORY;
-            janet_buffer_init(buf, 256);
+            BenderBuffer *buf = bender_malloc(sizeof(BenderBuffer));
+            if (NULL == buf) BENDER_OUT_OF_MEMORY;
+            bender_buffer_init(buf, 256);
             /* Mirror ev/thread's buffer EXACTLY: the abstract
              * registry table, then the RAW cfunction-registry copy,
              * then the worker function, then the launch value. */
-            janet_marshal(buf, janet_wrap_table(janet_vm.abstract_registry),
-                          NULL, JANET_MARSHAL_UNSAFE);
-            uint32_t count = (uint32_t) janet_vm.registry_count;
-            janet_buffer_push_bytes(buf, (uint8_t *) &count, sizeof(count));
-            janet_buffer_push_bytes(buf,
-                    (uint8_t *) janet_vm.registry,
-                    (int32_t) (janet_vm.registry_count * sizeof(JanetCFunRegistry)));
-            janet_marshal(buf, janet_wrap_function(worker), NULL,
-                          JANET_MARSHAL_UNSAFE);
-            janet_marshal(buf, launch, NULL, JANET_MARSHAL_UNSAFE);
-            JanetEVGenericMessage args;
+            bender_marshal(buf, bender_wrap_table(bender_vm.abstract_registry),
+                          NULL, BENDER_MARSHAL_UNSAFE);
+            uint32_t count = (uint32_t) bender_vm.registry_count;
+            bender_buffer_push_bytes(buf, (uint8_t *) &count, sizeof(count));
+            bender_buffer_push_bytes(buf,
+                    (uint8_t *) bender_vm.registry,
+                    (int32_t) (bender_vm.registry_count * sizeof(BenderCFunRegistry)));
+            bender_marshal(buf, bender_wrap_function(worker), NULL,
+                          BENDER_MARSHAL_UNSAFE);
+            bender_marshal(buf, launch, NULL, BENDER_MARSHAL_UNSAFE);
+            BenderEVGenericMessage args;
             memset(&args, 0, sizeof(args));
             args.tag = 0x1; /* :n — return immediately */
-            args.argi = (uint32_t) janet_vm.sandbox_flags;
+            args.argi = (uint32_t) bender_vm.sandbox_flags;
             args.argp = buf;
             args.fiber = NULL;
             /* Milestone 2a: joinable launch. The buffer ownership and
-             * teardown inside janet_go_thread_subr are unchanged; we
+             * teardown inside bender_go_thread_subr are unchanged; we
              * only wrap the thread so lanes-stop can join it. */
-            JanetLaneLaunch *L = janet_calloc(1, sizeof(JanetLaneLaunch));
-            if (NULL == L) JANET_OUT_OF_MEMORY;
+            BenderLaneLaunch *L = bender_calloc(1, sizeof(BenderLaneLaunch));
+            if (NULL == L) BENDER_OUT_OF_MEMORY;
             L->buf = buf;
-            L->sandbox_flags = (uint32_t) janet_vm.sandbox_flags;
+            L->sandbox_flags = (uint32_t) bender_vm.sandbox_flags;
             pthread_mutex_init(&L->lock, NULL);
             pthread_cond_init(&L->cond, NULL);
-            janet_lane_launches[i] = L;
-            if (pthread_create(&L->thread, NULL, janet_lane_thread_body, L)) {
-                janet_lane_launches[i] = NULL;
+            bender_lane_launches[i] = L;
+            if (pthread_create(&L->thread, NULL, bender_lane_thread_body, L)) {
+                bender_lane_launches[i] = NULL;
                 pthread_mutex_destroy(&L->lock);
                 pthread_cond_destroy(&L->cond);
-                janet_free(L);
-                janet_panic("failed to spawn worker lane thread");
+                bender_free(L);
+                bender_panic("failed to spawn worker lane thread");
             }
-            /* Same contract as janet_ev_threaded_call: hold the loop
+            /* Same contract as bender_ev_threaded_call: hold the loop
              * open while the worker lives. Dropped at join (or kept
              * for detached stragglers, preserving today's semantics). */
-            janet_ev_inc_refcount();
+            bender_ev_inc_refcount();
         }
     }
     /* Milestone 2c: the global overflow queue for the :steal policy.
      * Main-homed and rooted like lane0_ctl; abandoned at stop. */
-    janet_lane_overflow = janet_channel_make_threaded_c(4096);
-    janet_gcroot(janet_wrap_abstract(janet_lane_overflow));
-    janet_lane_overflow_pushed = 0;
-    janet_lane_overflow_pulled = 0;
+    bender_lane_overflow = bender_channel_make_threaded_c(4096);
+    bender_gcroot(bender_wrap_abstract(bender_lane_overflow));
+    bender_lane_overflow_pushed = 0;
+    bender_lane_overflow_pulled = 0;
     /* Milestone 2c: hand each dispatcher its overflow queue via the
      * control channel (marshaling it inside the launch tuple crashes
      * the registry-dedup hash; a ctl message crosses the same way pid
      * tuples always have). */
     for (int32_t i = 0; i < count; i++) {
-        JanetChannel *ctl = janet_lane_ctls[i];
+        BenderChannel *ctl = bender_lane_ctls[i];
         if (NULL == ctl) continue;
-        Janet tup[2];
-        tup[0] = janet_ckeywordv("overflow");
-        tup[1] = janet_wrap_abstract(janet_lane_overflow);
-        (void) janet_channel_push(ctl, janet_wrap_tuple(janet_tuple_n(tup, 2)), 0);
+        Bender tup[2];
+        tup[0] = bender_ckeywordv("overflow");
+        tup[1] = bender_wrap_abstract(bender_lane_overflow);
+        (void) bender_channel_push(ctl, bender_wrap_tuple(bender_tuple_n(tup, 2)), 0);
     }
     /* Lane 0: the main VM's inbound control channel, serviced by the
      * same dispatcher running as a task on the main loop. Symmetry:
      * every proc everywhere has a routable pid. */
-    janet_lane0_ctl = janet_channel_make_threaded_c(4096);
-    janet_gcroot(janet_wrap_abstract(janet_lane0_ctl));
+    bender_lane0_ctl = bender_channel_make_threaded_c(4096);
+    bender_gcroot(bender_wrap_abstract(bender_lane0_ctl));
     {
-        Janet tup[3];
-        tup[0] = janet_wrap_abstract(janet_lane0_ctl);
-        tup[1] = janet_wrap_number(0);
-        tup[2] = janet_wrap_boolean(0);
-        Janet args[1];
-        args[0] = janet_wrap_tuple(janet_tuple_n(tup, 3));
-        JanetFiber *disp = janet_fiber(worker, 64, 1, args);
-        janet_schedule(disp, janet_wrap_nil());
+        Bender tup[3];
+        tup[0] = bender_wrap_abstract(bender_lane0_ctl);
+        tup[1] = bender_wrap_number(0);
+        tup[2] = bender_wrap_boolean(0);
+        Bender args[1];
+        args[0] = bender_wrap_tuple(bender_tuple_n(tup, 3));
+        BenderFiber *disp = bender_fiber(worker, 64, 1, args);
+        bender_schedule(disp, bender_wrap_nil());
     }
-    janet_lane_count = count;
+    bender_lane_count = count;
     return count;
 }
 
-JANET_CORE_FN(cfun_proc_lanes_policy,
+BENDER_CORE_FN(cfun_proc_lanes_policy,
               "(proc/lanes-policy &opt policy)",
               "Get or set the spawn placement policy: :round-robin "
               "(default -- predictable, optimal for uniform fan-out), "
@@ -713,52 +713,52 @@ JANET_CORE_FN(cfun_proc_lanes_policy,
               "lanes pull from it before parking), or :least-loaded "
               "(reserved; currently behaves as round-robin). Returns "
               "the effective policy keyword.") {
-    janet_arity(argc, 0, 1);
+    bender_arity(argc, 0, 1);
     if (argc == 1) {
-        Janet kw = argv[0];
-        if (!janet_checktype(kw, JANET_KEYWORD))
-            janet_panic("policy must be a keyword");
-        const uint8_t *kn = janet_unwrap_keyword(kw);
-        int32_t klen = janet_length(kw);
+        Bender kw = argv[0];
+        if (!bender_checktype(kw, BENDER_KEYWORD))
+            bender_panic("policy must be a keyword");
+        const uint8_t *kn = bender_unwrap_keyword(kw);
+        int32_t klen = bender_length(kw);
         if (5 == klen && 0 == memcmp(kn, "steal", 5)) {
-            janet_lane_policy = 2;
-            if (0 == janet_lane_count)
-                janet_panic(":steal requires lanes (proc/lanes-start)");
+            bender_lane_policy = 2;
+            if (0 == bender_lane_count)
+                bender_panic(":steal requires lanes (proc/lanes-start)");
         } else if (11 == klen && 0 == memcmp(kn, "round-robin", 11)) {
-            janet_lane_policy = 0;
+            bender_lane_policy = 0;
         } else if (12 == klen && 0 == memcmp(kn, "least-loaded", 12)) {
-            janet_lane_policy = 1;
+            bender_lane_policy = 1;
         } else {
-            janet_panic("policy must be :round-robin, :least-loaded, or :steal");
+            bender_panic("policy must be :round-robin, :least-loaded, or :steal");
         }
     }
-    switch (janet_lane_policy) {
+    switch (bender_lane_policy) {
         default:
-        case 0: return janet_ckeywordv("round-robin");
-        case 1: return janet_ckeywordv("least-loaded");
-        case 2: return janet_ckeywordv("steal");
+        case 0: return bender_ckeywordv("round-robin");
+        case 1: return bender_ckeywordv("least-loaded");
+        case 2: return bender_ckeywordv("steal");
     }
 }
 
-JANET_CORE_FN(cfun_proc_lanes_stats,
+BENDER_CORE_FN(cfun_proc_lanes_stats,
               "(proc/lanes-stats)",
               "Work-stealing counters: a struct {:overflow-pushed n "
               ":overflow-pulled n}. Pushes count :steal-policy spawns "
               "offloaded to the overflow queue; pulls count tasks "
               "lanes took from it. Both reset at lanes-start.") {
-    janet_fixarity(argc, 0);
+    bender_fixarity(argc, 0);
     (void) argv;
-    JanetKV *kv = janet_struct_begin(2);
-    janet_struct_put(kv, janet_ckeywordv("overflow-pushed"),
-            janet_wrap_number((double) janet_atomic_load(
-                    &janet_lane_overflow_pushed)));
-    janet_struct_put(kv, janet_ckeywordv("overflow-pulled"),
-            janet_wrap_number((double) janet_atomic_load(
-                    &janet_lane_overflow_pulled)));
-    return janet_wrap_struct(kv);
+    BenderKV *kv = bender_struct_begin(2);
+    bender_struct_put(kv, bender_ckeywordv("overflow-pushed"),
+            bender_wrap_number((double) bender_atomic_load(
+                    &bender_lane_overflow_pushed)));
+    bender_struct_put(kv, bender_ckeywordv("overflow-pulled"),
+            bender_wrap_number((double) bender_atomic_load(
+                    &bender_lane_overflow_pulled)));
+    return bender_wrap_struct(kv);
 }
 
-JANET_CORE_FN(cfun_proc_lane_pull,
+BENDER_CORE_FN(cfun_proc_lane_pull,
               "(proc/lane-pull queue)",
               "Internal: try-pop one task from the given overflow "
               "queue (non-blocking). Returns the [:spawn serial cap "
@@ -766,19 +766,19 @@ JANET_CORE_FN(cfun_proc_lane_pull,
               "up to K of these before parking on its control "
               "channel. The queue travels to lanes as a ctl message; "
               "the C-side TLS global is only valid on the main VM.") {
-    janet_fixarity(argc, 1);
-    JanetChannel *queue = janet_getchannel(argv, 0);
-    Janet item;
-    /* janet_channel_pop returns 1 when an item was obtained, 0 when
+    bender_fixarity(argc, 1);
+    BenderChannel *queue = bender_getchannel(argv, 0);
+    Bender item;
+    /* bender_channel_pop returns 1 when an item was obtained, 0 when
      * the queue is empty (try semantics). */
-    if (!janet_channel_pop(queue, &item, 0)) {
-        return janet_wrap_nil();
+    if (!bender_channel_pop(queue, &item, 0)) {
+        return bender_wrap_nil();
     }
-    janet_atomic_inc(&janet_lane_overflow_pulled);
+    bender_atomic_inc(&bender_lane_overflow_pulled);
     return item;
 }
 
-JANET_CORE_FN(cfun_proc_lanes_stop,
+BENDER_CORE_FN(cfun_proc_lanes_stop,
               "(proc/lanes-stop)",
               "Stop the proc lanes and join the worker threads. Delivers "
               ":stop to every lane dispatcher (workers wake their locally "
@@ -788,43 +788,43 @@ JANET_CORE_FN(cfun_proc_lanes_stop,
               "endless loops keep their worker alive in the background, "
               "as before). Joined workers drop their loop refcount, so a "
               "script can reach a clean exit afterwards. Returns nil.") {
-    janet_fixarity(argc, 0);
+    bender_fixarity(argc, 0);
     (void) argv;
-    if (0 == janet_lane_count) return janet_wrap_nil();
+    if (0 == bender_lane_count) return bender_wrap_nil();
     /* Main dispatcher (lane 0) exits; the main VM itself of course
      * keeps running. */
-    if (NULL != janet_lane0_ctl) {
-        Janet tup[1];
-        tup[0] = janet_ckeywordv("stop");
-        Janet msg = janet_wrap_tuple(janet_tuple_n(tup, 1));
-        (void) janet_channel_push(janet_lane0_ctl, msg, 0);
+    if (NULL != bender_lane0_ctl) {
+        Bender tup[1];
+        tup[0] = bender_ckeywordv("stop");
+        Bender msg = bender_wrap_tuple(bender_tuple_n(tup, 1));
+        (void) bender_channel_push(bender_lane0_ctl, msg, 0);
     }
     /* Workers: ask each dispatcher to exit (try-mode: never block the
      * stop on a busy control channel). */
-    if (NULL != janet_lane_ctls) {
-        for (int32_t i = 0; i < janet_lane_count; i++) {
-            JanetChannel *ctl = janet_lane_ctls[i];
+    if (NULL != bender_lane_ctls) {
+        for (int32_t i = 0; i < bender_lane_count; i++) {
+            BenderChannel *ctl = bender_lane_ctls[i];
             if (NULL == ctl) continue;
-            Janet tup[1];
-            tup[0] = janet_ckeywordv("stop");
-            Janet msg = janet_wrap_tuple(janet_tuple_n(tup, 1));
-            (void) janet_channel_push(ctl, msg, 3);
+            Bender tup[1];
+            tup[0] = bender_ckeywordv("stop");
+            Bender msg = bender_wrap_tuple(bender_tuple_n(tup, 1));
+            (void) bender_channel_push(ctl, msg, 3);
         }
     }
     /* Bounded join: wait each worker's grace, join the finished,
      * detach stragglers. A JOINED worker's ctl is unrooted here (the
      * worker is gone); a straggler keeps its ctl rooted so the main
      * VM's GC can never free a channel the straggler is using. */
-    if (NULL != janet_lane_launches) {
-        for (int32_t i = 0; i < janet_lane_count; i++) {
-            JanetLaneLaunch *L = janet_lane_launches[i];
+    if (NULL != bender_lane_launches) {
+        for (int32_t i = 0; i < bender_lane_count; i++) {
+            BenderLaneLaunch *L = bender_lane_launches[i];
             if (NULL == L) continue;
-            janet_lane_launches[i] = NULL;
+            bender_lane_launches[i] = NULL;
             int done = 0;
-#ifndef JANET_WINDOWS
+#ifndef BENDER_WINDOWS
             struct timespec ts;
             clock_gettime(CLOCK_REALTIME, &ts);
-            ts.tv_sec += JANET_LANE_STOP_GRACE_SECONDS;
+            ts.tv_sec += BENDER_LANE_STOP_GRACE_SECONDS;
             pthread_mutex_lock(&L->lock);
             while (!L->exited) {
                 int rc = pthread_cond_timedwait(&L->cond, &L->lock, &ts);
@@ -834,52 +834,52 @@ JANET_CORE_FN(cfun_proc_lanes_stop,
             pthread_mutex_unlock(&L->lock);
             if (done) {
                 pthread_join(L->thread, NULL);
-                janet_ev_dec_refcount();
+                bender_ev_dec_refcount();
             } else {
                 pthread_detach(L->thread);
             }
             pthread_mutex_destroy(&L->lock);
             pthread_cond_destroy(&L->cond);
-            janet_free(L);
+            bender_free(L);
 #else
             /* Windows: no graceful join yet — milestone-1 detached
              * semantics (documented). */
             done = 1;
             pthread_mutex_destroy(&L->lock);
             pthread_cond_destroy(&L->cond);
-            janet_free(L);
+            bender_free(L);
 #endif
-            if (done && NULL != janet_lane_ctls && NULL != janet_lane_ctls[i]) {
-                janet_gcunroot(janet_wrap_abstract(janet_lane_ctls[i]));
-                janet_lane_ctls[i] = NULL;
+            if (done && NULL != bender_lane_ctls && NULL != bender_lane_ctls[i]) {
+                bender_gcunroot(bender_wrap_abstract(bender_lane_ctls[i]));
+                bender_lane_ctls[i] = NULL;
             }
         }
-        janet_free(janet_lane_launches);
-        janet_lane_launches = NULL;
+        bender_free(bender_lane_launches);
+        bender_lane_launches = NULL;
     }
     /* Free the worker-ctl array; surviving (straggler) entries keep
      * their roots and their channels alive. */
-    if (NULL != janet_lane_ctls) {
-        janet_free(janet_lane_ctls);
-        janet_lane_ctls = NULL;
+    if (NULL != bender_lane_ctls) {
+        bender_free(bender_lane_ctls);
+        bender_lane_ctls = NULL;
     }
     /* Lane 0's dispatcher will process its :stop on an upcoming loop
      * turn; until then the fiber's own stack keeps the channel alive
      * through GC, so dropping our registry root here is sound. */
-    if (NULL != janet_lane0_ctl) {
-        janet_gcunroot(janet_wrap_abstract(janet_lane0_ctl));
-        janet_lane0_ctl = NULL;
+    if (NULL != bender_lane0_ctl) {
+        bender_gcunroot(bender_wrap_abstract(bender_lane0_ctl));
+        bender_lane0_ctl = NULL;
     }
-    if (NULL != janet_lane_local) {
-        janet_gcunroot(janet_wrap_table(janet_lane_local));
+    if (NULL != bender_lane_local) {
+        bender_gcunroot(bender_wrap_table(bender_lane_local));
     }
-    janet_lane_local = NULL;
-    janet_lane_count = 0;
-    janet_lane_rr = 0;
-    return janet_wrap_nil();
+    bender_lane_local = NULL;
+    bender_lane_count = 0;
+    bender_lane_rr = 0;
+    return bender_wrap_nil();
 }
 
-/* JanetProcess lives in proc.h (shared with gc.c for P3.4 majors). */
+/* BenderProcess lives in proc.h (shared with gc.c for P3.4 majors). */
 
 /* Resolve a handle argument to a LOCAL process object.
  *
@@ -890,32 +890,32 @@ JANET_CORE_FN(cfun_proc_lanes_stop,
  * A tuple naming ANOTHER lane cannot be resolved here: those operations
  * manipulate C lists and fibers living in that VM, so it raises instead of
  * guessing. */
-static JanetProcess *janet_getproc(const Janet *argv, int32_t n) {
-    Janet x = argv[n];
-    if (janet_checktype(x, JANET_ABSTRACT) &&
-            janet_abstract_type(janet_unwrap_abstract(x)) == &janet_proc_type) {
-        return (JanetProcess *) janet_unwrap_abstract(x);
+static BenderProcess *bender_getproc(const Bender *argv, int32_t n) {
+    Bender x = argv[n];
+    if (bender_checktype(x, BENDER_ABSTRACT) &&
+            bender_abstract_type(bender_unwrap_abstract(x)) == &bender_proc_type) {
+        return (BenderProcess *) bender_unwrap_abstract(x);
     }
-    if (janet_proc_is_pid_tuple(x)) {
-        const Janet *tup = janet_unwrap_tuple(x);
-        int32_t node = (int32_t) janet_unwrap_number(tup[1]);
+    if (bender_proc_is_pid_tuple(x)) {
+        const Bender *tup = bender_unwrap_tuple(x);
+        int32_t node = (int32_t) bender_unwrap_number(tup[1]);
         if (0 != node) {
-            janet_panicf("this operation needs a local process, but the pid "
+            bender_panicf("this operation needs a local process, but the pid "
                          "names lane %d (objects live in that VM; use "
                          "proc/send or proc/monitor to interact with it)",
                          (int) node);
         }
-        if (NULL != janet_lane_local) {
-            Janet hit = janet_table_get(janet_lane_local,
-                    janet_wrap_number((double) janet_unwrap_number(tup[2])));
-            if (janet_checktype(hit, JANET_ABSTRACT) &&
-                    janet_abstract_type(janet_unwrap_abstract(hit)) == &janet_proc_type) {
-                return (JanetProcess *) janet_unwrap_abstract(hit);
+        if (NULL != bender_lane_local) {
+            Bender hit = bender_table_get(bender_lane_local,
+                    bender_wrap_number((double) bender_unwrap_number(tup[2])));
+            if (bender_checktype(hit, BENDER_ABSTRACT) &&
+                    bender_abstract_type(bender_unwrap_abstract(hit)) == &bender_proc_type) {
+                return (BenderProcess *) bender_unwrap_abstract(hit);
             }
         }
-        janet_panic("pid does not name a live local process");
+        bender_panic("pid does not name a live local process");
     }
-    janet_panicf("expected a proc or pid, got %v", x);
+    bender_panicf("expected a proc or pid, got %v", x);
 }
 
 /* B6 spawn-cost: materialize the mailbox on first real use. Called
@@ -925,22 +925,22 @@ static JanetProcess *janet_getproc(const Janet *argv, int32_t n) {
  * proc->mbox makes the channel reachable through the proc (which the
  * caller's argv/registry already roots) for any GC the subsequent
  * channel push may trigger. */
-static JanetChannel *janet_proc_ensure_mbox(JanetProcess *proc) {
+static BenderChannel *bender_proc_ensure_mbox(BenderProcess *proc) {
     if (NULL == proc->mbox) {
-        proc->mbox = janet_channel_make_threaded_c(proc->mbox_cap);
+        proc->mbox = bender_channel_make_threaded_c(proc->mbox_cap);
     }
     return proc->mbox;
 }
 
 /* Mark everything the process owns (fiber, both channels, P1.2
  * stash + monitors + exit reason). */
-static int janet_procat_mark(void *p, size_t size) {
+static int bender_procat_mark(void *p, size_t size) {
     (void) size;
-    JanetProcess *proc = (JanetProcess *) p;
-#ifdef JANET_ASAN_UAF_TRACE
+    BenderProcess *proc = (BenderProcess *) p;
+#ifdef BENDER_ASAN_UAF_TRACE
     if (NULL != proc->mbox &&
-            NULL == janet_abstract_head(proc->mbox)->type) {
-        JanetAbstractHead *mh = janet_abstract_head(proc->mbox);
+            NULL == bender_abstract_head(proc->mbox)->type) {
+        BenderAbstractHead *mh = bender_abstract_head(proc->mbox);
         char bbuf[560];
         int bl = snprintf(bbuf, sizeof bbuf,
                 "[proc-mbox-tombstoned] proc=%p mbox=%p home=%p "
@@ -948,7 +948,7 @@ static int janet_procat_mark(void *p, size_t size) {
                 " ra0=%p ra1=%p ra2=%p ra3=%p ra4=%p\n",
                 (void *) proc, (void *) proc->mbox, mh->home_vm,
                 mh->exported, mh->teardown_started,
-                (int) mh->gc.data.refcount, janet_vm.is_lane_vm,
+                (int) mh->gc.data.refcount, bender_vm.is_lane_vm,
                 __builtin_return_address(0),
                 __builtin_return_address(1),
                 __builtin_return_address(2),
@@ -958,7 +958,7 @@ static int janet_procat_mark(void *p, size_t size) {
         abort();
     }
     if (NULL != proc->sup &&
-            NULL == janet_abstract_head(proc->sup)->type) {
+            NULL == bender_abstract_head(proc->sup)->type) {
         char bbuf[160];
         int bl = snprintf(bbuf, sizeof bbuf,
                 "[proc-sup-tombstoned] proc=%p sup=%p\n",
@@ -984,18 +984,18 @@ static int janet_procat_mark(void *p, size_t size) {
          * Marking the fiber shallowly instead is UNSOUND (suite-proc loses a
          * parked fiber's in-flight recv value). So keep the edge and bound its
          * depth: proc -> fiber -> closure env -> proc -> ... is walked transitively
-         * for the first JANET_PROC_MARK_CHAIN_DEPTH hops and shallow after that.
+         * for the first BENDER_PROC_MARK_CHAIN_DEPTH hops and shallow after that.
          * The blocks are still marked, so nothing reachable through a bounded
          * prefix is freed, and the quadratic collapses because depth -- not
          * chain length -- caps the walk. */
 
-        if (!janet_vm.gc_minor_phase ||
-                janet_proc_mark_depth < JANET_PROC_MARK_CHAIN_DEPTH) {
-            janet_proc_mark_depth++;
-            janet_mark(janet_wrap_fiber(proc->fiber));
-            janet_proc_mark_depth--;
+        if (!bender_vm.gc_minor_phase ||
+                bender_proc_mark_depth < BENDER_PROC_MARK_CHAIN_DEPTH) {
+            bender_proc_mark_depth++;
+            bender_mark(bender_wrap_fiber(proc->fiber));
+            bender_proc_mark_depth--;
         } else {
-            janet_gc_mark_fiber_shallow(proc->fiber);
+            bender_gc_mark_fiber_shallow(proc->fiber);
         }
     }
     /* Tombstoned (type == NULL) mbox/sup are gone forever: prune the
@@ -1005,18 +1005,18 @@ static int janet_procat_mark(void *p, size_t size) {
      * mailbox's registry life); marking through the dangling pointer
      * walked malloc-reused memory (BUG 2 density tail head). */
     if (NULL != proc->mbox &&
-            NULL == janet_abstract_head(proc->mbox)->type) {
+            NULL == bender_abstract_head(proc->mbox)->type) {
         proc->mbox = NULL;
     }
     if (NULL != proc->sup &&
-            NULL == janet_abstract_head(proc->sup)->type) {
+            NULL == bender_abstract_head(proc->sup)->type) {
         proc->sup = NULL;
     }
-    if (NULL != proc->mbox) janet_mark(janet_wrap_abstract(proc->mbox));
-    if (NULL != proc->sup) janet_mark(janet_wrap_abstract(proc->sup));
-    if (NULL != proc->stash) janet_mark(janet_wrap_array(proc->stash));
-    if (NULL != proc->monitors) janet_mark(janet_wrap_array(proc->monitors));
-    janet_mark(proc->exit_reason);
+    if (NULL != proc->mbox) bender_mark(bender_wrap_abstract(proc->mbox));
+    if (NULL != proc->sup) bender_mark(bender_wrap_abstract(proc->sup));
+    if (NULL != proc->stash) bender_mark(bender_wrap_array(proc->stash));
+    if (NULL != proc->monitors) bender_mark(bender_wrap_array(proc->monitors));
+    bender_mark(proc->exit_reason);
     return 0;
 }
 
@@ -1026,10 +1026,10 @@ static int janet_procat_mark(void *p, size_t size) {
 /* Marshal: NULL/NULL (refuses both directions — same-VM only, like
  * pool handles; cross-lane proxies land in P2). */
 
-const JanetAbstractType janet_proc_type = {
+const BenderAbstractType bender_proc_type = {
     "core/proc",
-    NULL, /* gc: the fiber marks the proc (see janet_mark fiber case) */
-    janet_procat_mark,
+    NULL, /* gc: the fiber marks the proc (see bender_mark fiber case) */
+    bender_procat_mark,
     NULL, /* get */
     NULL, /* put */
     NULL, /* marshal */
@@ -1044,9 +1044,9 @@ const JanetAbstractType janet_proc_type = {
 };
 
 /* Issue a fresh pid serial (0 reserved, wrap skips it). */
-static uint32_t janet_proc_next_serial(void) {
-    uint32_t id = ++janet_vm.proc_serial;
-    if (0 == id) id = ++janet_vm.proc_serial;
+static uint32_t bender_proc_next_serial(void) {
+    uint32_t id = ++bender_vm.proc_serial;
+    if (0 == id) id = ++bender_vm.proc_serial;
     return id;
 }
 
@@ -1055,70 +1055,70 @@ static uint32_t janet_proc_next_serial(void) {
  * (bytecode travels); fibers suspended with C frames refuse (no
  * aliased stacks into the isolated heap). Caller roots the result
  * across subsequent allocations. */
-static JanetFunction *janet_proc_copy_entry(JanetFunction *func) {
-    JanetBuffer *buf = janet_malloc(sizeof(JanetBuffer));
+static BenderFunction *bender_proc_copy_entry(BenderFunction *func) {
+    BenderBuffer *buf = bender_malloc(sizeof(BenderBuffer));
     if (NULL == buf) {
-        JANET_OUT_OF_MEMORY;
+        BENDER_OUT_OF_MEMORY;
     }
-    janet_buffer_init(buf, 64);
-    janet_marshal(buf, janet_wrap_function(func), NULL, JANET_MARSHAL_UNSAFE);
-    Janet copy = janet_unmarshal(buf->data, buf->count, JANET_MARSHAL_UNSAFE, NULL, NULL);
-    janet_buffer_deinit(buf);
-    janet_free(buf);
-    if (!janet_checktype(copy, JANET_FUNCTION)) {
-        janet_panic("proc entry did not survive copy");
+    bender_buffer_init(buf, 64);
+    bender_marshal(buf, bender_wrap_function(func), NULL, BENDER_MARSHAL_UNSAFE);
+    Bender copy = bender_unmarshal(buf->data, buf->count, BENDER_MARSHAL_UNSAFE, NULL, NULL);
+    bender_buffer_deinit(buf);
+    bender_free(buf);
+    if (!bender_checktype(copy, BENDER_FUNCTION)) {
+        bender_panic("proc entry did not survive copy");
     }
-    return janet_unwrap_function(copy);
+    return bender_unwrap_function(copy);
 }
 
-static Janet cfun_proc_spawn_impl(JanetFunction *func, int32_t cap, int isolated) {
+static Bender cfun_proc_spawn_impl(BenderFunction *func, int32_t cap, int isolated) {
     /* Fiber first (P3.5c): spawn-construction attributes to the child
      * via gc_alloc_ctx, so the process's memory is born owned (owner
      * id, strict bit, nursery, filing) and per-proc pressure/sweeps
      * cover it while globals stay quiet. */
     /* 16 slots instead of 64: a raw proc thunk is arity 0 with a tiny body in
      * the common case, and the fiber stack grows on demand anyway
-     * (janet_fiber_pushn reallocates). 64 slots reserved 512 bytes per proc up
+     * (bender_fiber_pushn reallocates). 64 slots reserved 512 bytes per proc up
      * front for every process whether used or not. */
-    JanetFiber *fiber = janet_fiber(func, 16, 0, NULL);
+    BenderFiber *fiber = bender_fiber(func, 16, 0, NULL);
 
-    janet_assert(NULL != fiber, "bad proc fiber");
+    bender_assert(NULL != fiber, "bad proc fiber");
     /* P3.3: strict fibers opt their page claims into the isolated bit
      * (barrier-checked exports) and arm the VM-wide gate. Never
      * inherited, never unmarshalled. Set before the override so every
      * attributed birth agrees. */
     fiber->heap_strict = isolated;
-    if (isolated) janet_vm.heap_strict_live = 1;
+    if (isolated) bender_vm.heap_strict_live = 1;
     /* P3.6: lane-shared stacks when enabled (same suspend discipline
      * as ev tasks — proc bodies block in ev ops, never raw-yield). */
-    fiber->shared_stack = janet_vm.shared_stacks_on;
+    fiber->shared_stack = bender_vm.shared_stacks_on;
     fiber->proc = NULL;
     /* The proc handle stays parent-born (spawner-facing): no strict
      * bit, so registry/monitor/discipline stores of it never trip
      * the export rule — same as before the override. */
-    JanetProcess *proc = janet_abstract(&janet_proc_type, sizeof(JanetProcess));
-    Janet proc_j = janet_wrap_abstract(proc);
+    BenderProcess *proc = bender_abstract(&bender_proc_type, sizeof(BenderProcess));
+    Bender proc_j = bender_wrap_abstract(proc);
     /* Root across the allocations below (fiber + tables can collect). */
-    janet_gcroot(proc_j);
+    bender_gcroot(proc_j);
     proc->fiber = NULL;
-    proc->serial = janet_proc_next_serial();
+    proc->serial = bender_proc_next_serial();
     proc->done = 0;
-    proc->exit_reason = janet_wrap_nil();
+    proc->exit_reason = bender_wrap_nil();
     proc->trap_exit = 0;
     proc->killed = 0;
     proc->isolated_heap = isolated;
     /* Parent env exists for the proto chain (parent-born, before the
      * override engages). */
-    if (NULL != janet_vm.fiber && !janet_vm.fiber->env) {
-        janet_vm.fiber->env = janet_table(0);
+    if (NULL != bender_vm.fiber && !bender_vm.fiber->env) {
+        bender_vm.fiber->env = bender_table(0);
     }
     /* Attributed construction under try/finally: panics longjmp past
      * straight-line clears, which would strand a dangling override
      * (later births filing into a dead fiber's lists). */
-    janet_vm.gc_alloc_ctx = fiber;
+    bender_vm.gc_alloc_ctx = fiber;
     {
-        JanetTryState tstate;
-        JanetSignal sig = janet_try(&tstate);
+        BenderTryState tstate;
+        BenderSignal sig = bender_try(&tstate);
         if (!sig) {
             /* Milestone 2b: the mbox is a THREADED channel — any proc
              * must be sendable (and monitorable) from any lane, and an
@@ -1130,7 +1130,7 @@ static Janet cfun_proc_spawn_impl(JanetFunction *func, int32_t cap, int isolated
              * never sent anything before they park or die, and a
              * threaded channel costs a malloc'd abstract plus mutex
              * and cond init. It materializes on first use
-             * (janet_proc_ensure_mbox: send/try-send/recv/pid).
+             * (bender_proc_ensure_mbox: send/try-send/recv/pid).
              * The sup channel stays EAGER: ev.c's completion hook
              * pushes the :down event only when the fiber carries a
              * supervisor channel, and the late-monitor semantic
@@ -1138,7 +1138,7 @@ static Janet cfun_proc_spawn_impl(JanetFunction *func, int32_t cap, int isolated
              * channel even when nobody monitored during the life. */
             proc->mbox = NULL;
             proc->mbox_cap = (int32_t) cap;
-            proc->sup = janet_channel_make(8);
+            proc->sup = bender_channel_make(8);
             /* P1.2 fields, lazily allocated (density: most procs never
              * stash or monitor — spawn no longer pays 2 arrays + 2
              * root pairs per birth; every mark site null-checks, and
@@ -1150,27 +1150,27 @@ static Janet cfun_proc_spawn_impl(JanetFunction *func, int32_t cap, int isolated
                  * code and constants live in its heap). Re-reset the
                  * fresh fiber onto the copy (reuse pattern from thread
                  * workers). */
-                JanetFunction *copy = janet_proc_copy_entry(func);
-                if (janet_vm.trace_strict) {
-                    janet_strict_debug_envs(copy);
+                BenderFunction *copy = bender_proc_copy_entry(func);
+                if (bender_vm.trace_strict) {
+                    bender_strict_debug_envs(copy);
                 }
-                Janet copy_j = janet_wrap_function(copy);
-                janet_gcroot(copy_j);
-                janet_fiber_reset(fiber, copy, 0, NULL);
+                Bender copy_j = bender_wrap_function(copy);
+                bender_gcroot(copy_j);
+                bender_fiber_reset(fiber, copy, 0, NULL);
                 fiber->heap_strict = isolated;
-                janet_gcunroot(copy_j);
+                bender_gcunroot(copy_j);
             }
             /* Env chain (mirrors ev/go) plus :proc-self for proc/self.
              * Importing the parent-born handle into the strict env is
              * allowed (imports pass; exports panic). Masks set here —
              * after any re-reset, which clears flags. */
             fiber->flags |=
-                JANET_FIBER_MASK_ERROR |
-                JANET_FIBER_MASK_USER0 |
-                JANET_FIBER_MASK_USER1 |
-                JANET_FIBER_MASK_USER2 |
-                JANET_FIBER_MASK_USER3 |
-                JANET_FIBER_MASK_USER4;
+                BENDER_FIBER_MASK_ERROR |
+                BENDER_FIBER_MASK_USER0 |
+                BENDER_FIBER_MASK_USER1 |
+                BENDER_FIBER_MASK_USER2 |
+                BENDER_FIBER_MASK_USER3 |
+                BENDER_FIBER_MASK_USER4;
             /* Erlang-parity fix (c), docs/internals/proc-lanes.md: do NOT
              * proto-chain the child's env to the spawner's FULL env. That
              * chain used to make every top-level `def` the spawner can see
@@ -1186,16 +1186,16 @@ static Janet cfun_proc_spawn_impl(JanetFunction *func, int32_t cap, int isolated
              * Legacy full-chain behavior is still available opt-in via
              * (setdyn :proc-inherit-env true) in the SPAWNER before
              * spawning, for code proven to depend on seeing the spawner's
-             * other dynamic bindings or top-level defs. JANET_PROC_ENV_TRACE
+             * other dynamic bindings or top-level defs. BENDER_PROC_ENV_TRACE
              * logs every narrow-env spawn as a migration aid (this is a
              * breaking change to what a spawned proc's (dyn :key) can see;
              * dyn's own nil-on-miss contract is deliberately NOT touched --
              * see proc-lanes.md's loud-error-vs-silent-nil answer). */
-            fiber->env = janet_table(0);
+            fiber->env = bender_table(0);
             {
-                JanetTable *spawner_env = janet_vm.fiber ? janet_vm.fiber->env : NULL;
+                BenderTable *spawner_env = bender_vm.fiber ? bender_vm.fiber->env : NULL;
                 /* P3.3 export-rule carve-out: proc/spawn-isolated's strict
-                 * heap discipline (janet_strict_debug_envs, the
+                 * heap discipline (bender_strict_debug_envs, the
                  * "shared-store, never captured" escape panic exercised by
                  * suite-proc's P3.3 test) depends on the full proto chain
                  * reaching the real shared parent env so a write through it
@@ -1204,23 +1204,23 @@ static Janet cfun_proc_spawn_impl(JanetFunction *func, int32_t cap, int isolated
                  * already pay marshal-copy per spawn); narrow only the
                  * plain (non-isolated) path here. */
                 int inherit_full = isolated || (NULL != spawner_env &&
-                    janet_truthy(janet_table_get(spawner_env, janet_ckeywordv("proc-inherit-env"))));
+                    bender_truthy(bender_table_get(spawner_env, bender_ckeywordv("proc-inherit-env"))));
                 if (inherit_full) {
                     fiber->env->proto = spawner_env;
                 } else {
                     fiber->env->proto = NULL;
                     if (NULL != spawner_env) {
-                        Janet v_out = janet_table_get(spawner_env, janet_ckeywordv("out"));
-                        if (!janet_checktype(v_out, JANET_NIL)) {
-                            janet_table_put(fiber->env, janet_ckeywordv("out"), v_out);
+                        Bender v_out = bender_table_get(spawner_env, bender_ckeywordv("out"));
+                        if (!bender_checktype(v_out, BENDER_NIL)) {
+                            bender_table_put(fiber->env, bender_ckeywordv("out"), v_out);
                         }
-                        Janet v_err = janet_table_get(spawner_env, janet_ckeywordv("err"));
-                        if (!janet_checktype(v_err, JANET_NIL)) {
-                            janet_table_put(fiber->env, janet_ckeywordv("err"), v_err);
+                        Bender v_err = bender_table_get(spawner_env, bender_ckeywordv("err"));
+                        if (!bender_checktype(v_err, BENDER_NIL)) {
+                            bender_table_put(fiber->env, bender_ckeywordv("err"), v_err);
                         }
                     }
-                    if (NULL != getenv("JANET_PROC_ENV_TRACE")) {
-                        fprintf(stderr, "[JANET_PROC_ENV_TRACE] proc/spawn: narrow "
+                    if (NULL != getenv("BENDER_PROC_ENV_TRACE")) {
+                        fprintf(stderr, "[BENDER_PROC_ENV_TRACE] proc/spawn: narrow "
                                 "env (out/err only, no proto-chain to spawner). "
                                 "(dyn :key) for any other spawner binding now "
                                 "returns nil where it used to resolve. Opt into "
@@ -1230,41 +1230,41 @@ static Janet cfun_proc_spawn_impl(JanetFunction *func, int32_t cap, int isolated
                     }
                 }
             }
-            janet_table_put(fiber->env, janet_ckeywordv("proc-self"), proc_j);
+            bender_table_put(fiber->env, bender_ckeywordv("proc-self"), proc_j);
             proc->fiber = fiber;
             /* P3.5: back-pointer for auto-trigger routing. */
             fiber->proc = proc;
             fiber->supervisor_channel = proc->sup;
-            janet_vm.gc_alloc_ctx = NULL;
-            janet_restore(&tstate);
+            bender_vm.gc_alloc_ctx = NULL;
+            bender_restore(&tstate);
         } else {
-            janet_vm.gc_alloc_ctx = NULL;
-            janet_restore(&tstate);
-            janet_gcunroot(proc_j);
-            janet_panicv(tstate.payload);
+            bender_vm.gc_alloc_ctx = NULL;
+            bender_restore(&tstate);
+            bender_gcunroot(proc_j);
+            bender_panicv(tstate.payload);
         }
     }
-    janet_schedule(fiber, janet_wrap_nil());
-    janet_gcunroot(proc_j);
+    bender_schedule(fiber, bender_wrap_nil());
+    bender_gcunroot(proc_j);
     return proc_j;
 }
 
-JANET_CORE_FN(cfun_proc_spawn,
+BENDER_CORE_FN(cfun_proc_spawn,
               "(proc/spawn-prepare thunk &opt capacity)",
               "Internal primitive for proc/spawn; not a stable public API. "
               "Returns a local or accepted routed handle, or an internal "
               "[:proc-spawn-write pid ctl message] plan. The boot wrapper "
               "must complete that blocking write before returning pid.") {
-    janet_arity(argc, 1, 2);
-    JanetFunction *func = janet_getfunction(argv, 0);
+    bender_arity(argc, 1, 2);
+    BenderFunction *func = bender_getfunction(argv, 0);
     if (func->def->min_arity > 0) {
-        janet_panic("proc thunk must accept 0 arguments");
+        bender_panic("proc thunk must accept 0 arguments");
     }
-    int32_t cap = janet_optnat(argv, argc, 1, 16);
-    return janet_proc_spawn_routed(func, cap);
+    int32_t cap = bender_optnat(argv, argc, 1, 16);
+    return bender_proc_spawn_routed(func, cap);
 }
 
-JANET_CORE_FN(cfun_proc_spawn_isolated,
+BENDER_CORE_FN(cfun_proc_spawn_isolated,
               "(proc/spawn-isolated thunk &opt capacity)",
               "P3.2 strict spawn: like proc/spawn, but the entry is "
               "marshal-copied first — captured values arrive by value, "
@@ -1273,43 +1273,43 @@ JANET_CORE_FN(cfun_proc_spawn_isolated,
               "toward per-proc majors: the process starts with no shared "
               "references of its own. Reads of shared state afterwards "
               "are still the body's discipline (barrier-checked in P3.3).") {
-    janet_arity(argc, 1, 2);
-    JanetFunction *func = janet_getfunction(argv, 0);
+    bender_arity(argc, 1, 2);
+    BenderFunction *func = bender_getfunction(argv, 0);
     if (func->def->min_arity > 0) {
-        janet_panic("proc thunk must accept 0 arguments");
+        bender_panic("proc thunk must accept 0 arguments");
     }
-    int32_t cap = janet_optnat(argv, argc, 1, 16);
+    int32_t cap = bender_optnat(argv, argc, 1, 16);
     /* P3.5c: the entry copy happens inside the impl, attributed to
      * the child (its code lives in its heap). */
     return cfun_proc_spawn_impl(func, cap, 1);
 }
 
-JANET_CORE_FN(cfun_proc_isolated,
+BENDER_CORE_FN(cfun_proc_isolated,
               "(proc/isolated? p)",
               "P3.2: true for strict (spawn-copied) processes.") {
-    janet_fixarity(argc, 1);
-    JanetProcess *proc = janet_getproc(argv, 0);
-    return janet_wrap_boolean(proc->isolated_heap);
+    bender_fixarity(argc, 1);
+    BenderProcess *proc = bender_getproc(argv, 0);
+    return bender_wrap_boolean(proc->isolated_heap);
 }
 
-JANET_CORE_FN(cfun_proc_self,
+BENDER_CORE_FN(cfun_proc_self,
               "(proc/self)",
               "The calling process, or nil outside a process.") {
-    janet_fixarity(argc, 0);
+    bender_fixarity(argc, 0);
     (void) argv;
-    if (NULL == janet_vm.fiber || NULL == janet_vm.fiber->env) {
-        return janet_wrap_nil();
+    if (NULL == bender_vm.fiber || NULL == bender_vm.fiber->env) {
+        return bender_wrap_nil();
     }
-    Janet self = janet_table_get(janet_vm.fiber->env,
-                                 janet_ckeywordv("proc-self"));
-    if (janet_checktype(self, JANET_ABSTRACT) &&
-            janet_abstract_type(janet_unwrap_abstract(self)) == &janet_proc_type) {
+    Bender self = bender_table_get(bender_vm.fiber->env,
+                                 bender_ckeywordv("proc-self"));
+    if (bender_checktype(self, BENDER_ABSTRACT) &&
+            bender_abstract_type(bender_unwrap_abstract(self)) == &bender_proc_type) {
         return self;
     }
-    return janet_wrap_nil();
+    return bender_wrap_nil();
 }
 
-JANET_CORE_FN(cfun_proc_send,
+BENDER_CORE_FN(cfun_proc_send,
               "(proc/send p msg)",
               "Deliver `msg` to `p`'s mailbox (marshal-copied, like all "
               "isolated traffic). `p` is a proc or a [:pid node serial "
@@ -1323,142 +1323,142 @@ JANET_CORE_FN(cfun_proc_send,
               "forgery with a plain channel shares by reference: user "
               "error, remote pids come from spawn-on). Blocks at "
               "capacity. Returns `p`.") {
-    janet_fixarity(argc, 2);
-    if (janet_vm.coerce_error) {
-        janet_panic("cannot proc/send inside janet_call");
+    bender_fixarity(argc, 2);
+    if (bender_vm.coerce_error) {
+        bender_panic("cannot proc/send inside bender_call");
     }
     /* Remote pid? Forward through the lane control channel. */
-    if (janet_checktype(argv[0], JANET_TUPLE)) {
-        const Janet *tup = janet_unwrap_tuple(argv[0]);
-        if (4 == janet_tuple_length(tup) &&
-                janet_checktype(tup[0], JANET_KEYWORD) &&
-                janet_unwrap_keyword(tup[0]) == janet_unwrap_keyword(janet_ckeywordv("pid")) &&
-                janet_checktype(tup[1], JANET_NUMBER) &&
-                0 != (int64_t) janet_unwrap_number(tup[1])) {
-            if (!janet_checktype(tup[2], JANET_NUMBER)) {
-                janet_panic("remote pid serial must be a number");
+    if (bender_checktype(argv[0], BENDER_TUPLE)) {
+        const Bender *tup = bender_unwrap_tuple(argv[0]);
+        if (4 == bender_tuple_length(tup) &&
+                bender_checktype(tup[0], BENDER_KEYWORD) &&
+                bender_unwrap_keyword(tup[0]) == bender_unwrap_keyword(bender_ckeywordv("pid")) &&
+                bender_checktype(tup[1], BENDER_NUMBER) &&
+                0 != (int64_t) bender_unwrap_number(tup[1])) {
+            if (!bender_checktype(tup[2], BENDER_NUMBER)) {
+                bender_panic("remote pid serial must be a number");
             }
-            JanetChannel *ctl = (JanetChannel *) janet_unwrap_abstract(tup[3]);
-            Janet fwd[3];
-            fwd[0] = janet_ckeywordv("proc-fwd");
+            BenderChannel *ctl = (BenderChannel *) bender_unwrap_abstract(tup[3]);
+            Bender fwd[3];
+            fwd[0] = bender_ckeywordv("proc-fwd");
             fwd[1] = tup[2];
             fwd[2] = argv[1];
-            Janet fwdmsg = janet_wrap_tuple(janet_tuple_n(fwd, 3));
-            if (janet_channel_push(ctl, fwdmsg, 0)) {
-                janet_await();
+            Bender fwdmsg = bender_wrap_tuple(bender_tuple_n(fwd, 3));
+            if (bender_channel_push(ctl, fwdmsg, 0)) {
+                bender_await();
             }
             return argv[0];
         }
     }
-    JanetChannel *mbox = janet_proc_resolve_mbox(argv[0]);
-    if (janet_channel_push(mbox, argv[1], 0)) {
-        janet_await();
+    BenderChannel *mbox = bender_proc_resolve_mbox(argv[0]);
+    if (bender_channel_push(mbox, argv[1], 0)) {
+        bender_await();
     }
     return argv[0];
 }
 
-JANET_CORE_FN(cfun_proc_try_send,
+BENDER_CORE_FN(cfun_proc_try_send,
               "(proc/try-send p msg)",
               "Like `proc/send`, but never blocks: delivers when the "
               "mailbox has room (or a reader is parked) and reports "
               "`true`; returns `false` on a full mailbox. Remote pid "
               "tuples forward the same way, also without blocking.") {
-    janet_fixarity(argc, 2);
-    if (janet_vm.coerce_error) {
-        janet_panic("cannot proc/send inside janet_call");
+    bender_fixarity(argc, 2);
+    if (bender_vm.coerce_error) {
+        bender_panic("cannot proc/send inside bender_call");
     }
-    if (janet_checktype(argv[0], JANET_TUPLE)) {
-        const Janet *tup = janet_unwrap_tuple(argv[0]);
-        if (4 == janet_tuple_length(tup) &&
-                janet_checktype(tup[0], JANET_KEYWORD) &&
-                janet_unwrap_keyword(tup[0]) == janet_unwrap_keyword(janet_ckeywordv("pid")) &&
-                janet_checktype(tup[1], JANET_NUMBER) &&
-                0 != (int64_t) janet_unwrap_number(tup[1])) {
-            if (!janet_checktype(tup[2], JANET_NUMBER)) {
-                janet_panic("remote pid serial must be a number");
+    if (bender_checktype(argv[0], BENDER_TUPLE)) {
+        const Bender *tup = bender_unwrap_tuple(argv[0]);
+        if (4 == bender_tuple_length(tup) &&
+                bender_checktype(tup[0], BENDER_KEYWORD) &&
+                bender_unwrap_keyword(tup[0]) == bender_unwrap_keyword(bender_ckeywordv("pid")) &&
+                bender_checktype(tup[1], BENDER_NUMBER) &&
+                0 != (int64_t) bender_unwrap_number(tup[1])) {
+            if (!bender_checktype(tup[2], BENDER_NUMBER)) {
+                bender_panic("remote pid serial must be a number");
             }
-            JanetChannel *ctl = (JanetChannel *) janet_unwrap_abstract(tup[3]);
-            Janet fwd[3];
-            fwd[0] = janet_ckeywordv("proc-fwd");
+            BenderChannel *ctl = (BenderChannel *) bender_unwrap_abstract(tup[3]);
+            Bender fwd[3];
+            fwd[0] = bender_ckeywordv("proc-fwd");
             fwd[1] = tup[2];
             fwd[2] = argv[1];
-            Janet fwdmsg = janet_wrap_tuple(janet_tuple_n(fwd, 3));
+            Bender fwdmsg = bender_wrap_tuple(bender_tuple_n(fwd, 3));
             /* Try-mode push: 0 delivered, nonzero full. */
-            return janet_wrap_boolean(0 == janet_channel_push(ctl, fwdmsg, 3));
+            return bender_wrap_boolean(0 == bender_channel_push(ctl, fwdmsg, 3));
         }
     }
-    JanetChannel *mbox = janet_proc_resolve_mbox(argv[0]);
-    return janet_wrap_boolean(0 == janet_channel_push(mbox, argv[1], 3));
+    BenderChannel *mbox = bender_proc_resolve_mbox(argv[0]);
+    return bender_wrap_boolean(0 == bender_channel_push(mbox, argv[1], 3));
 }
 
-JANET_CORE_FN(cfun_proc_recv,
+BENDER_CORE_FN(cfun_proc_recv,
               "(proc/recv &opt p)",
               "Take the next message from the calling process's own "
               "mailbox (P1.1: take-next only; selective receive lands in "
               "P1.2). With `p`, it must be the calling process (stealing "
               "from other mailboxes is an error). Suspends when empty.") {
-    janet_arity(argc, 0, 1);
-    JanetFiber *me = janet_vm.fiber;
+    bender_arity(argc, 0, 1);
+    BenderFiber *me = bender_vm.fiber;
     if (NULL == me) {
-        janet_panic("proc/recv outside a process");
+        bender_panic("proc/recv outside a process");
     }
     /* Phase 1 fast path: the P3.5 back-pointer IS the self identity —
      * one deref instead of an env table get per message (the 100k-agent
      * profile showed the lookup as ~40% of the recv side). */
-    JanetProcess *me_proc = me->proc;
-    Janet self;
+    BenderProcess *me_proc = me->proc;
+    Bender self;
     if (NULL != me_proc) {
-        self = janet_wrap_abstract(me_proc);
+        self = bender_wrap_abstract(me_proc);
     } else {
         if (NULL == me->env) {
-            janet_panic("proc/recv outside a process");
+            bender_panic("proc/recv outside a process");
         }
-        self = janet_table_get(me->env, janet_ckeywordv("proc-self"));
-        if (!(janet_checktype(self, JANET_ABSTRACT) &&
-                janet_abstract_type(janet_unwrap_abstract(self)) == &janet_proc_type)) {
-            janet_panic("proc/recv outside a process");
+        self = bender_table_get(me->env, bender_ckeywordv("proc-self"));
+        if (!(bender_checktype(self, BENDER_ABSTRACT) &&
+                bender_abstract_type(bender_unwrap_abstract(self)) == &bender_proc_type)) {
+            bender_panic("proc/recv outside a process");
         }
     }
     if (argc >= 1) {
         /* Own pid tuple? Local node + serial must match (remote
          * serials repeat per lane — node disambiguates). */
-        if (janet_checktype(argv[0], JANET_TUPLE)) {
-            const Janet *tup = janet_unwrap_tuple(argv[0]);
-            JanetProcess *mine = (JanetProcess *) janet_unwrap_abstract(self);
-            if (!(4 == janet_tuple_length(tup) &&
-                    janet_checktype(tup[0], JANET_KEYWORD) &&
-                janet_unwrap_keyword(tup[0]) == janet_unwrap_keyword(janet_ckeywordv("pid")) &&
-                    janet_checktype(tup[1], JANET_NUMBER) &&
-                    0 == (int64_t) janet_unwrap_number(tup[1]) &&
-                    janet_checktype(tup[2], JANET_NUMBER) &&
-                    (uint32_t) janet_unwrap_number(tup[2]) == mine->serial)) {
-                janet_panic("proc/recv reads only the caller's own mailbox");
+        if (bender_checktype(argv[0], BENDER_TUPLE)) {
+            const Bender *tup = bender_unwrap_tuple(argv[0]);
+            BenderProcess *mine = (BenderProcess *) bender_unwrap_abstract(self);
+            if (!(4 == bender_tuple_length(tup) &&
+                    bender_checktype(tup[0], BENDER_KEYWORD) &&
+                bender_unwrap_keyword(tup[0]) == bender_unwrap_keyword(bender_ckeywordv("pid")) &&
+                    bender_checktype(tup[1], BENDER_NUMBER) &&
+                    0 == (int64_t) bender_unwrap_number(tup[1]) &&
+                    bender_checktype(tup[2], BENDER_NUMBER) &&
+                    (uint32_t) bender_unwrap_number(tup[2]) == mine->serial)) {
+                bender_panic("proc/recv reads only the caller's own mailbox");
             }
         } else {
-            JanetProcess *want = janet_getproc(argv, 0);
-            JanetProcess *mine = (JanetProcess *) janet_unwrap_abstract(self);
+            BenderProcess *want = bender_getproc(argv, 0);
+            BenderProcess *mine = (BenderProcess *) bender_unwrap_abstract(self);
             if (want != mine) {
-                janet_panic("proc/recv reads only the caller's own mailbox");
+                bender_panic("proc/recv reads only the caller's own mailbox");
             }
         }
     }
-    JanetProcess *proc = (JanetProcess *) janet_unwrap_abstract(self);
-    if (janet_vm.coerce_error) {
-        janet_panic("cannot proc/recv inside janet_call");
+    BenderProcess *proc = (BenderProcess *) bender_unwrap_abstract(self);
+    if (bender_vm.coerce_error) {
+        bender_panic("cannot proc/recv inside bender_call");
     }
     /* B6: first recv materializes the mailbox (an empty mailbox and
      * an unallocated one are behaviorally identical: no push site can
      * exist without the channel pointer, which only this, send, or
      * pid-of mint). */
-    JanetChannel *mbox = janet_proc_ensure_mbox(proc);
-    Janet item;
-    if (janet_channel_pop(mbox, &item, 0)) {
-        janet_schedule(janet_vm.root_fiber, item);
+    BenderChannel *mbox = bender_proc_ensure_mbox(proc);
+    Bender item;
+    if (bender_channel_pop(mbox, &item, 0)) {
+        bender_schedule(bender_vm.root_fiber, item);
     }
-    janet_await();
+    bender_await();
 }
 
-JANET_CORE_FN(cfun_proc_kill,
+BENDER_CORE_FN(cfun_proc_kill,
               "(proc/kill p reason)",
               "Untrappable kill: cancel the process fiber with `reason` "
               "(lands at the next resume/quantum boundary; monitors "
@@ -1467,33 +1467,33 @@ JANET_CORE_FN(cfun_proc_kill,
               "Milestone 2b: a remote pid tuple forwards [:kill serial "
               "reason] to the home lane's dispatcher, which applies the "
               "kill locally.") {
-    janet_fixarity(argc, 2);
+    bender_fixarity(argc, 2);
     /* Milestone 2b: remote pid — forward to the home lane. */
-    if (janet_checktype(argv[0], JANET_TUPLE)) {
-        const Janet *tup = janet_unwrap_tuple(argv[0]);
-        if (4 == janet_tuple_length(tup) &&
-                janet_checktype(tup[0], JANET_KEYWORD) &&
-                janet_unwrap_keyword(tup[0]) == janet_unwrap_keyword(janet_ckeywordv("pid")) &&
-                janet_checktype(tup[1], JANET_NUMBER) &&
-                0 != (int64_t) janet_unwrap_number(tup[1])) {
-            if (!janet_checktype(tup[2], JANET_NUMBER)) {
-                janet_panic("remote pid serial must be a number");
+    if (bender_checktype(argv[0], BENDER_TUPLE)) {
+        const Bender *tup = bender_unwrap_tuple(argv[0]);
+        if (4 == bender_tuple_length(tup) &&
+                bender_checktype(tup[0], BENDER_KEYWORD) &&
+                bender_unwrap_keyword(tup[0]) == bender_unwrap_keyword(bender_ckeywordv("pid")) &&
+                bender_checktype(tup[1], BENDER_NUMBER) &&
+                0 != (int64_t) bender_unwrap_number(tup[1])) {
+            if (!bender_checktype(tup[2], BENDER_NUMBER)) {
+                bender_panic("remote pid serial must be a number");
             }
-            JanetChannel *ctl = (JanetChannel *) janet_unwrap_abstract(tup[3]);
-            Janet k[3];
-            k[0] = janet_ckeywordv("kill");
+            BenderChannel *ctl = (BenderChannel *) bender_unwrap_abstract(tup[3]);
+            Bender k[3];
+            k[0] = bender_ckeywordv("kill");
             k[1] = tup[2];      /* serial */
             k[2] = argv[1];     /* reason */
-            janet_channel_push(ctl, janet_wrap_tuple(janet_tuple_n(k, 3)), 0);
+            bender_channel_push(ctl, bender_wrap_tuple(bender_tuple_n(k, 3)), 0);
             return argv[0];
         }
-        janet_panic("proc/kill: bad pid tuple");
+        bender_panic("proc/kill: bad pid tuple");
     }
-    JanetProcess *proc = janet_getproc(argv, 0);
-    JanetFiber *fiber = proc->fiber;
-    if (NULL != fiber && janet_fiber_can_resume(fiber)) {
+    BenderProcess *proc = bender_getproc(argv, 0);
+    BenderFiber *fiber = proc->fiber;
+    if (NULL != fiber && bender_fiber_can_resume(fiber)) {
         proc->killed = 1;
-        janet_cancel(fiber, argv[1]);
+        bender_cancel(fiber, argv[1]);
         /* P3.5c: retire the mailbox now (purge the victim's pendings —
          * it may be parked in recv — and go quiet so later sends drop
          * silently, Erlang parity). Both objects are listed-valid here
@@ -1502,148 +1502,148 @@ JANET_CORE_FN(cfun_proc_kill,
             /* P3.5c hook, now real: if the victim is parked in recv on
              * its own mailbox, cancel the pending and land the kill
              * immediately (a parked fiber has no next resume). */
-            janet_channel_cancel_reader(proc->mbox, fiber, argv[1]);
+            bender_channel_cancel_reader(proc->mbox, fiber, argv[1]);
         }
     }
     return argv[0];
 }
 
-JANET_CORE_FN(cfun_proc_alive,
+BENDER_CORE_FN(cfun_proc_alive,
               "(proc/alive? p)",
               "True while the process fiber can still resume. Accepts a local\n"
               "core/proc object or a node-0 pid tuple. A tuple naming ANOTHER\n"
               "lane cannot be inspected from here -- its fiber lives in that VM\n"
               "and there is no remote-query op -- so it reports true (it is not\n"
               "known-dead) and monitor/kill are the supported cross-lane verbs.") {
-    janet_fixarity(argc, 1);
-    if (janet_proc_is_pid_tuple(argv[0])) {
-        const Janet *tup = janet_unwrap_tuple(argv[0]);
-        int32_t node = (int32_t) janet_unwrap_number(tup[1]);
-        if (0 == node && NULL != janet_lane_local) {
-            Janet hit = janet_table_get(janet_lane_local,
-                    janet_wrap_number((double) janet_unwrap_number(tup[2])));
-            if (janet_checktype(hit, JANET_ABSTRACT) &&
-                    janet_abstract_type(janet_unwrap_abstract(hit)) == &janet_proc_type) {
-                JanetProcess *proc = (JanetProcess *) janet_unwrap_abstract(hit);
-                return janet_wrap_boolean(NULL != proc->fiber &&
-                                          janet_fiber_can_resume(proc->fiber));
+    bender_fixarity(argc, 1);
+    if (bender_proc_is_pid_tuple(argv[0])) {
+        const Bender *tup = bender_unwrap_tuple(argv[0]);
+        int32_t node = (int32_t) bender_unwrap_number(tup[1]);
+        if (0 == node && NULL != bender_lane_local) {
+            Bender hit = bender_table_get(bender_lane_local,
+                    bender_wrap_number((double) bender_unwrap_number(tup[2])));
+            if (bender_checktype(hit, BENDER_ABSTRACT) &&
+                    bender_abstract_type(bender_unwrap_abstract(hit)) == &bender_proc_type) {
+                BenderProcess *proc = (BenderProcess *) bender_unwrap_abstract(hit);
+                return bender_wrap_boolean(NULL != proc->fiber &&
+                                          bender_fiber_can_resume(proc->fiber));
             }
-            return janet_wrap_false();
+            return bender_wrap_false();
         }
         /* Remote lane: not inspectable, and not known-dead. */
-        return janet_wrap_true();
+        return bender_wrap_true();
     }
-    JanetProcess *proc = janet_getproc(argv, 0);
-    return janet_wrap_boolean(NULL != proc->fiber &&
-                              janet_fiber_can_resume(proc->fiber));
+    BenderProcess *proc = bender_getproc(argv, 0);
+    return bender_wrap_boolean(NULL != proc->fiber &&
+                              bender_fiber_can_resume(proc->fiber));
 }
 
 /* Is `x` a [:pid node serial chan] tuple? Shared so a remote handle can be
  * treated as a handle rather than as an unknown type. */
-static int janet_proc_is_pid_tuple(Janet x) {
-    if (!janet_checktype(x, JANET_TUPLE)) return 0;
-    const Janet *tup = janet_unwrap_tuple(x);
-    return 4 == janet_tuple_length(tup) &&
-           janet_checktype(tup[0], JANET_KEYWORD) &&
-           janet_unwrap_keyword(tup[0]) == janet_unwrap_keyword(janet_ckeywordv("pid")) &&
-           janet_checktype(tup[1], JANET_NUMBER) &&
-           janet_checktype(tup[2], JANET_NUMBER) &&
-           janet_checktype(tup[3], JANET_ABSTRACT);
+static int bender_proc_is_pid_tuple(Bender x) {
+    if (!bender_checktype(x, BENDER_TUPLE)) return 0;
+    const Bender *tup = bender_unwrap_tuple(x);
+    return 4 == bender_tuple_length(tup) &&
+           bender_checktype(tup[0], BENDER_KEYWORD) &&
+           bender_unwrap_keyword(tup[0]) == bender_unwrap_keyword(bender_ckeywordv("pid")) &&
+           bender_checktype(tup[1], BENDER_NUMBER) &&
+           bender_checktype(tup[2], BENDER_NUMBER) &&
+           bender_checktype(tup[3], BENDER_ABSTRACT);
 }
 
-JANET_CORE_FN(cfun_proc_pid,
+BENDER_CORE_FN(cfun_proc_pid,
               "(proc/pid? x)",
               "True for a process handle of EITHER shape: a local core/proc\n"
               "object, or the [:pid lane serial chan] tuple that proc/spawn\n"
               "returns once lanes are active. Branch on this instead of the\n"
               "type; proc/pid, proc/serial and proc/alive? accept both.") {
-    janet_fixarity(argc, 1);
-    if (janet_checktype(argv[0], JANET_ABSTRACT) &&
-            janet_abstract_type(janet_unwrap_abstract(argv[0])) == &janet_proc_type) {
-        return janet_wrap_true();
+    bender_fixarity(argc, 1);
+    if (bender_checktype(argv[0], BENDER_ABSTRACT) &&
+            bender_abstract_type(bender_unwrap_abstract(argv[0])) == &bender_proc_type) {
+        return bender_wrap_true();
     }
-    return janet_wrap_boolean(janet_proc_is_pid_tuple(argv[0]));
+    return bender_wrap_boolean(bender_proc_is_pid_tuple(argv[0]));
 }
 
 /* P1.3 pid interop: a proc's portable face is a [:pid node serial
  * mbox] tuple (same shape as tasklet pids). Sends resolve through
  * the carried channel (no registry needed); monitor/kill need the
- * object (C lists/fibers live there). Tasklet.janet stays untouched:
+ * object (C lists/fibers live there). Tasklet.ben stays untouched:
  * tasklets already resolve unknown pids via the carried channel. */
-static JanetChannel *janet_proc_resolve_mbox(Janet x) {
-    if (janet_checktype(x, JANET_ABSTRACT) &&
-            janet_abstract_type(janet_unwrap_abstract(x)) == &janet_proc_type) {
+static BenderChannel *bender_proc_resolve_mbox(Bender x) {
+    if (bender_checktype(x, BENDER_ABSTRACT) &&
+            bender_abstract_type(bender_unwrap_abstract(x)) == &bender_proc_type) {
         /* B6: lazy mbox — home-VM access only (see ensure helper). */
-        return janet_proc_ensure_mbox((JanetProcess *) janet_unwrap_abstract(x));
+        return bender_proc_ensure_mbox((BenderProcess *) bender_unwrap_abstract(x));
     }
-    if (janet_checktype(x, JANET_TUPLE)) {
-        const Janet *tup = janet_unwrap_tuple(x);
+    if (bender_checktype(x, BENDER_TUPLE)) {
+        const Bender *tup = bender_unwrap_tuple(x);
         /* Keywords intern to unique pointers: pointer compare is exact. */
-        if (4 == janet_tuple_length(tup) &&
-                janet_checktype(tup[0], JANET_KEYWORD) &&
-                janet_unwrap_keyword(tup[0]) == janet_unwrap_keyword(janet_ckeywordv("pid")) &&
-                janet_checktype(tup[3], JANET_ABSTRACT)) {
-            void *abst = janet_unwrap_abstract(tup[3]);
+        if (4 == bender_tuple_length(tup) &&
+                bender_checktype(tup[0], BENDER_KEYWORD) &&
+                bender_unwrap_keyword(tup[0]) == bender_unwrap_keyword(bender_ckeywordv("pid")) &&
+                bender_checktype(tup[3], BENDER_ABSTRACT)) {
+            void *abst = bender_unwrap_abstract(tup[3]);
             /* Carried mailbox: isolated (proc pid) or any channel
              * (tasklet pid — caller owns the triple convention). */
-            return (JanetChannel *) abst;
+            return (BenderChannel *) abst;
         }
     }
-    janet_panic("expected a proc or [:pid node serial chan] pid");
+    bender_panic("expected a proc or [:pid node serial chan] pid");
 }
 
-JANET_CORE_FN(cfun_proc_pid_of,
+BENDER_CORE_FN(cfun_proc_pid_of,
               "(proc/pid p)",
               "P1.3: the process's portable pid tuple [:pid node serial\n"
               "mbox] (same shape as tasklet pids — passes tasklet/pid?).\n"
               "Sends to it deliver via the carried mailbox; monitor/kill\n"
               "need the object.") {
-    janet_fixarity(argc, 1);
+    bender_fixarity(argc, 1);
     /* A pid tuple is already the portable face: return it unchanged so
      * proc/pid is idempotent across handle shapes. */
-    if (janet_proc_is_pid_tuple(argv[0])) return argv[0];
-    JanetProcess *proc = janet_getproc(argv, 0);
-    Janet tup[4];
-    tup[0] = janet_ckeywordv("pid");
-    tup[1] = janet_wrap_integer(0);
-    tup[2] = janet_wrap_integer((int64_t) proc->serial);
+    if (bender_proc_is_pid_tuple(argv[0])) return argv[0];
+    BenderProcess *proc = bender_getproc(argv, 0);
+    Bender tup[4];
+    tup[0] = bender_ckeywordv("pid");
+    tup[1] = bender_wrap_integer(0);
+    tup[2] = bender_wrap_integer((int64_t) proc->serial);
     /* B6: the carried mailbox is the pid tuple's routable face —
      * materialize it here (once) so sends through the tuple resolve. */
-    tup[3] = janet_wrap_abstract(janet_proc_ensure_mbox(proc));
-    return janet_wrap_tuple(janet_tuple_n(tup, 4));
+    tup[3] = bender_wrap_abstract(bender_proc_ensure_mbox(proc));
+    return bender_wrap_tuple(bender_tuple_n(tup, 4));
 }
 
-JANET_CORE_FN(cfun_proc_serial,
+BENDER_CORE_FN(cfun_proc_serial,
               "(proc/serial p)",
               "P1.3: the process's numeric serial (pid tuple slot 2).\n"
               "Accepts a local core/proc or a pid tuple.") {
-    janet_fixarity(argc, 1);
-    if (janet_proc_is_pid_tuple(argv[0])) return janet_unwrap_tuple(argv[0])[2];
-    JanetProcess *proc = janet_getproc(argv, 0);
-    return janet_wrap_integer((int64_t) proc->serial);
+    bender_fixarity(argc, 1);
+    if (bender_proc_is_pid_tuple(argv[0])) return bender_unwrap_tuple(argv[0])[2];
+    BenderProcess *proc = bender_getproc(argv, 0);
+    return bender_wrap_integer((int64_t) proc->serial);
 }
 
-JANET_CORE_FN(cfun_proc_stash,
+BENDER_CORE_FN(cfun_proc_stash,
               "(proc/stash p)",
               "P1.2: the process's selective-receive stash array (live "
-              "object — scan/remove/push from Janet; the match loop in "
-              "examples/proc.janet owns the discipline).") {
-    janet_fixarity(argc, 1);
-    JanetProcess *proc = janet_getproc(argv, 0);
-    if (NULL == proc->stash) proc->stash = janet_array(0);
-    return janet_wrap_array(proc->stash);
+              "object — scan/remove/push from Bender; the match loop in "
+              "examples/proc.ben owns the discipline).") {
+    bender_fixarity(argc, 1);
+    BenderProcess *proc = bender_getproc(argv, 0);
+    if (NULL == proc->stash) proc->stash = bender_array(0);
+    return bender_wrap_array(proc->stash);
 }
 
-JANET_CORE_FN(cfun_proc_sup_of,
+BENDER_CORE_FN(cfun_proc_sup_of,
               "(proc/sup-of p)",
               "P1.2: the process's completion (supervisor) channel. "
               "Reapers take completion events here; bodies never touch it.") {
-    janet_fixarity(argc, 1);
-    JanetProcess *proc = janet_getproc(argv, 0);
-    return janet_wrap_abstract(proc->sup);
+    bender_fixarity(argc, 1);
+    BenderProcess *proc = bender_getproc(argv, 0);
+    return bender_wrap_abstract(proc->sup);
 }
 
-JANET_CORE_FN(cfun_proc_monitor,
+BENDER_CORE_FN(cfun_proc_monitor,
               "(proc/monitor watched watcher tag)",
               "P1.2: record that `watcher` wants [:down tag reason] when\n"
               "`watched` completes. `watcher` is a proc (same-lane) or,\n"
@@ -1658,53 +1658,53 @@ JANET_CORE_FN(cfun_proc_monitor,
               "takes the watched proc's supervisor channel (same-VM\n"
               "only) and forwards [:down tag status value] to the\n"
               "watcher, whatever lane it lives on. Returns `watcher`.") {
-    janet_fixarity(argc, 3);
+    bender_fixarity(argc, 3);
     /* Milestone 2b: remote pid tuples are handled at the dispatcher
      * level (:proc-monitor op from procx/monitor-chan) -- registration
      * must happen on the watched proc's home lane, where the C
      * completion hook delivers. */
-    JanetProcess *watched = janet_getproc(argv, 0);
-    if (NULL == watched->monitors) watched->monitors = janet_array(0);
-    janet_array_push(watched->monitors, argv[2]);
-    janet_array_push(watched->monitors, argv[1]);
+    BenderProcess *watched = bender_getproc(argv, 0);
+    if (NULL == watched->monitors) watched->monitors = bender_array(0);
+    bender_array_push(watched->monitors, argv[2]);
+    bender_array_push(watched->monitors, argv[1]);
     return argv[1];
 }
 
-JANET_CORE_FN(cfun_proc_monitors_of,
+BENDER_CORE_FN(cfun_proc_monitors_of,
               "(proc/monitors-of p)",
               "P1.2: the flat [tag watcher] monitor array (live — reapers "
               "drain it, then clear it).") {
-    janet_fixarity(argc, 1);
-    JanetProcess *proc = janet_getproc(argv, 0);
-    if (NULL == proc->monitors) proc->monitors = janet_array(0);
-    return janet_wrap_array(proc->monitors);
+    bender_fixarity(argc, 1);
+    BenderProcess *proc = bender_getproc(argv, 0);
+    if (NULL == proc->monitors) proc->monitors = bender_array(0);
+    return bender_wrap_array(proc->monitors);
 }
 
-JANET_CORE_FN(cfun_proc_record_exit,
+BENDER_CORE_FN(cfun_proc_record_exit,
               "(proc/record-exit p reason)",
               "P1.2: mark the process done with `reason` (reapers call "
               "this once, right after taking the completion event).") {
-    janet_fixarity(argc, 2);
-    JanetProcess *proc = janet_getproc(argv, 0);
+    bender_fixarity(argc, 2);
+    BenderProcess *proc = bender_getproc(argv, 0);
     proc->done = 1;
     proc->exit_reason = argv[1];
     return argv[0];
 }
 
-JANET_CORE_FN(cfun_proc_done,
+BENDER_CORE_FN(cfun_proc_done,
               "(proc/done? p)",
               "P1.2: true once the exit was recorded (late-monitor path).") {
-    janet_fixarity(argc, 1);
-    JanetProcess *proc = janet_getproc(argv, 0);
-    return janet_wrap_boolean(proc->done);
+    bender_fixarity(argc, 1);
+    BenderProcess *proc = bender_getproc(argv, 0);
+    return bender_wrap_boolean(proc->done);
 }
 
 /* B7.1 named process registry (erlang:register/2, whereis/1,
- * unregister/1). janet_vm.proc_registry is a lazily-allocated
- * keyword -> core/proc JanetTable, root-marked in gc.c alongside
+ * unregister/1). bender_vm.proc_registry is a lazily-allocated
+ * keyword -> core/proc BenderTable, root-marked in gc.c alongside
  * top_dyns/profile_table and reset in vm.c's init/deinit (see those
  * sites for the full reasoning) -- no further GC plumbing needed
- * here; an ordinary JanetTable's own marking covers the registered
+ * here; an ordinary BenderTable's own marking covers the registered
  * proc handles, so a live registration correctly keeps its process
  * reachable, and removing a stale entry (below) correctly releases
  * that reference.
@@ -1719,14 +1719,14 @@ JANET_CORE_FN(cfun_proc_done,
  * never observes a name as free while its proc is still genuinely
  * alive) -- the lag leans in the safe direction, so proc->done is
  * used as-is rather than inventing an unverified workaround. */
-static JanetTable *janet_proc_registry_table(void) {
-    if (NULL == janet_vm.proc_registry) {
-        janet_vm.proc_registry = janet_table(0);
+static BenderTable *bender_proc_registry_table(void) {
+    if (NULL == bender_vm.proc_registry) {
+        bender_vm.proc_registry = bender_table(0);
     }
-    return janet_vm.proc_registry;
+    return bender_vm.proc_registry;
 }
 
-JANET_CORE_FN(cfun_proc_register,
+BENDER_CORE_FN(cfun_proc_register,
               "(proc/register name proc)",
               "B7.1: register `proc` under keyword `name` for "
               "proc/whereis lookup. Panics if `name` is already "
@@ -1735,144 +1735,144 @@ JANET_CORE_FN(cfun_proc_register,
               "the previous holder of `name` has completed, the "
               "registration is replaced without requiring an "
               "explicit unregister first. Returns `proc`.") {
-    janet_fixarity(argc, 2);
-    if (!janet_checktype(argv[0], JANET_KEYWORD)) {
-        janet_panicf("proc/register name must be a keyword, got %v", argv[0]);
+    bender_fixarity(argc, 2);
+    if (!bender_checktype(argv[0], BENDER_KEYWORD)) {
+        bender_panicf("proc/register name must be a keyword, got %v", argv[0]);
     }
-    JanetProcess *proc = janet_getproc(argv, 1);
-    JanetTable *reg = janet_proc_registry_table();
-    Janet prev = janet_table_get(reg, argv[0]);
-    if (janet_checktype(prev, JANET_ABSTRACT) &&
-            janet_abstract_type(janet_unwrap_abstract(prev)) == &janet_proc_type) {
-        JanetProcess *prevproc = (JanetProcess *) janet_unwrap_abstract(prev);
+    BenderProcess *proc = bender_getproc(argv, 1);
+    BenderTable *reg = bender_proc_registry_table();
+    Bender prev = bender_table_get(reg, argv[0]);
+    if (bender_checktype(prev, BENDER_ABSTRACT) &&
+            bender_abstract_type(bender_unwrap_abstract(prev)) == &bender_proc_type) {
+        BenderProcess *prevproc = (BenderProcess *) bender_unwrap_abstract(prev);
         if (!prevproc->done) {
-            janet_panicf("proc/register: name %v already registered to a live process",
+            bender_panicf("proc/register: name %v already registered to a live process",
                          argv[0]);
         }
     }
-    janet_table_put(reg, argv[0], argv[1]);
+    bender_table_put(reg, argv[0], argv[1]);
     (void) proc;
     return argv[1];
 }
 
-JANET_CORE_FN(cfun_proc_whereis,
+BENDER_CORE_FN(cfun_proc_whereis,
               "(proc/whereis name)",
               "B7.1: look up the process registered under keyword "
               "`name`, or nil if unregistered. If the registered "
               "process has since completed, the stale entry is "
               "removed and nil is returned -- a caller never "
               "receives a handle to an already-finished process.") {
-    janet_fixarity(argc, 1);
-    if (!janet_checktype(argv[0], JANET_KEYWORD)) {
-        janet_panicf("proc/whereis name must be a keyword, got %v", argv[0]);
+    bender_fixarity(argc, 1);
+    if (!bender_checktype(argv[0], BENDER_KEYWORD)) {
+        bender_panicf("proc/whereis name must be a keyword, got %v", argv[0]);
     }
-    if (NULL == janet_vm.proc_registry) return janet_wrap_nil();
-    Janet found = janet_table_get(janet_vm.proc_registry, argv[0]);
-    if (janet_checktype(found, JANET_NIL)) return janet_wrap_nil();
-    JanetProcess *proc = (JanetProcess *) janet_unwrap_abstract(found);
+    if (NULL == bender_vm.proc_registry) return bender_wrap_nil();
+    Bender found = bender_table_get(bender_vm.proc_registry, argv[0]);
+    if (bender_checktype(found, BENDER_NIL)) return bender_wrap_nil();
+    BenderProcess *proc = (BenderProcess *) bender_unwrap_abstract(found);
     if (proc->done) {
-        janet_table_remove(janet_vm.proc_registry, argv[0]);
-        return janet_wrap_nil();
+        bender_table_remove(bender_vm.proc_registry, argv[0]);
+        return bender_wrap_nil();
     }
     return found;
 }
 
-JANET_CORE_FN(cfun_proc_unregister,
+BENDER_CORE_FN(cfun_proc_unregister,
               "(proc/unregister name)",
               "B7.1: remove the registration under keyword `name`, "
               "if present. No-op, not an error, if nothing is "
               "registered under that name. Returns nil.") {
-    janet_fixarity(argc, 1);
-    if (!janet_checktype(argv[0], JANET_KEYWORD)) {
-        janet_panicf("proc/unregister name must be a keyword, got %v", argv[0]);
+    bender_fixarity(argc, 1);
+    if (!bender_checktype(argv[0], BENDER_KEYWORD)) {
+        bender_panicf("proc/unregister name must be a keyword, got %v", argv[0]);
     }
-    if (NULL != janet_vm.proc_registry) {
-        janet_table_remove(janet_vm.proc_registry, argv[0]);
+    if (NULL != bender_vm.proc_registry) {
+        bender_table_remove(bender_vm.proc_registry, argv[0]);
     }
-    return janet_wrap_nil();
+    return bender_wrap_nil();
 }
 
-JANET_CORE_FN(cfun_proc_exit_reason,
+BENDER_CORE_FN(cfun_proc_exit_reason,
               "(proc/exit-reason p)",
               "P1.2: the recorded exit reason (:normal on clean exit).") {
-    janet_fixarity(argc, 1);
-    JanetProcess *proc = janet_getproc(argv, 0);
+    bender_fixarity(argc, 1);
+    BenderProcess *proc = bender_getproc(argv, 0);
     return proc->exit_reason;
 }
 
-JANET_CORE_FN(cfun_proc_trap_exit,
+BENDER_CORE_FN(cfun_proc_trap_exit,
               "(proc/trap-exit p flag)",
               "P1.4: set the loop-process trap flag (read back with\n"
               "proc/trap?). Trapping loops observe linked peers' deaths\n"
               "as :down messages and survive; untrapped loops die with\n"
               "the reason. Kill (proc/kill) bypasses the flag. Returns `p`.") {
-    janet_fixarity(argc, 2);
-    JanetProcess *proc = janet_getproc(argv, 0);
-    proc->trap_exit = janet_truthy(argv[1]) ? 1 : 0;
+    bender_fixarity(argc, 2);
+    BenderProcess *proc = bender_getproc(argv, 0);
+    proc->trap_exit = bender_truthy(argv[1]) ? 1 : 0;
     return argv[0];
 }
 
-JANET_CORE_FN(cfun_proc_trap,
+BENDER_CORE_FN(cfun_proc_trap,
               "(proc/trap? p)",
               "P1.4: the loop-process trap flag.") {
-    janet_fixarity(argc, 1);
-    JanetProcess *proc = janet_getproc(argv, 0);
-    return janet_wrap_boolean(proc->trap_exit);
+    bender_fixarity(argc, 1);
+    BenderProcess *proc = bender_getproc(argv, 0);
+    return bender_wrap_boolean(proc->trap_exit);
 }
 
-JANET_CORE_FN(cfun_proc_killed,
+BENDER_CORE_FN(cfun_proc_killed,
               "(proc/killed? p)",
               "P1.4b: true once proc/kill armed this process (terminal; "
               "the dispatch loop re-raises handler errors while armed so "
               "kills of handler-wedged fibers cannot be trapped by the "
               "loop's own protect).") {
-    janet_fixarity(argc, 1);
-    JanetProcess *proc = janet_getproc(argv, 0);
-    return janet_wrap_boolean(proc->killed);
+    bender_fixarity(argc, 1);
+    BenderProcess *proc = bender_getproc(argv, 0);
+    return bender_wrap_boolean(proc->killed);
 }
 
-static const JanetRegExt proc_cfuns_ext[] = {
-    JANET_CORE_REG("proc/spawn-prepare", cfun_proc_spawn),
-    JANET_CORE_REG("proc/spawn-isolated", cfun_proc_spawn_isolated),
-        JANET_CORE_REG("proc/self-pid", cfun_proc_self_pid),
-        JANET_CORE_REG("proc/spawn-local", cfun_proc_spawn_local),
-        JANET_CORE_REG("proc/lane-lookup", cfun_proc_lane_lookup),
-        JANET_CORE_REG("proc/lanes", cfun_proc_lanes),
-        JANET_CORE_REG("proc/lanes-start", cfun_proc_lanes_start),
-        JANET_CORE_REG("proc/lanes-policy", cfun_proc_lanes_policy),
-        JANET_CORE_REG("proc/lanes-stats", cfun_proc_lanes_stats),
-        JANET_CORE_REG("proc/lane-pull", cfun_proc_lane_pull),
-        JANET_CORE_REG("proc/lanes-stop", cfun_proc_lanes_stop),
-        JANET_CORE_REG("proc/lane-pin", cfun_proc_lane_pin),
-    JANET_CORE_REG("proc/isolated?", cfun_proc_isolated),
-    JANET_CORE_REG("proc/self", cfun_proc_self),
-    JANET_CORE_REG("proc/send", cfun_proc_send),
-    JANET_CORE_REG("proc/try-send", cfun_proc_try_send),
-    JANET_CORE_REG("proc/recv", cfun_proc_recv),
-    JANET_CORE_REG("proc/kill", cfun_proc_kill),
-    JANET_CORE_REG("proc/alive?", cfun_proc_alive),
-    JANET_CORE_REG("proc/pid?", cfun_proc_pid),
-    JANET_CORE_REG("proc/pid", cfun_proc_pid_of),
-    JANET_CORE_REG("proc/serial", cfun_proc_serial),
-    JANET_CORE_REG("proc/stash", cfun_proc_stash),
-    JANET_CORE_REG("proc/sup-of", cfun_proc_sup_of),
-    JANET_CORE_REG("proc/monitor", cfun_proc_monitor),
-    JANET_CORE_REG("proc/monitors-of", cfun_proc_monitors_of),
-    JANET_CORE_REG("proc/record-exit", cfun_proc_record_exit),
-    JANET_CORE_REG("proc/done?", cfun_proc_done),
-    JANET_CORE_REG("proc/exit-reason", cfun_proc_exit_reason),
-    JANET_CORE_REG("proc/trap-exit", cfun_proc_trap_exit),
-    JANET_CORE_REG("proc/trap?", cfun_proc_trap),
-    JANET_CORE_REG("proc/killed?", cfun_proc_killed),
-    JANET_CORE_REG("proc/register", cfun_proc_register),
-    JANET_CORE_REG("proc/whereis", cfun_proc_whereis),
-    JANET_CORE_REG("proc/unregister", cfun_proc_unregister),
-    JANET_REG_END
+static const BenderRegExt proc_cfuns_ext[] = {
+    BENDER_CORE_REG("proc/spawn-prepare", cfun_proc_spawn),
+    BENDER_CORE_REG("proc/spawn-isolated", cfun_proc_spawn_isolated),
+        BENDER_CORE_REG("proc/self-pid", cfun_proc_self_pid),
+        BENDER_CORE_REG("proc/spawn-local", cfun_proc_spawn_local),
+        BENDER_CORE_REG("proc/lane-lookup", cfun_proc_lane_lookup),
+        BENDER_CORE_REG("proc/lanes", cfun_proc_lanes),
+        BENDER_CORE_REG("proc/lanes-start", cfun_proc_lanes_start),
+        BENDER_CORE_REG("proc/lanes-policy", cfun_proc_lanes_policy),
+        BENDER_CORE_REG("proc/lanes-stats", cfun_proc_lanes_stats),
+        BENDER_CORE_REG("proc/lane-pull", cfun_proc_lane_pull),
+        BENDER_CORE_REG("proc/lanes-stop", cfun_proc_lanes_stop),
+        BENDER_CORE_REG("proc/lane-pin", cfun_proc_lane_pin),
+    BENDER_CORE_REG("proc/isolated?", cfun_proc_isolated),
+    BENDER_CORE_REG("proc/self", cfun_proc_self),
+    BENDER_CORE_REG("proc/send", cfun_proc_send),
+    BENDER_CORE_REG("proc/try-send", cfun_proc_try_send),
+    BENDER_CORE_REG("proc/recv", cfun_proc_recv),
+    BENDER_CORE_REG("proc/kill", cfun_proc_kill),
+    BENDER_CORE_REG("proc/alive?", cfun_proc_alive),
+    BENDER_CORE_REG("proc/pid?", cfun_proc_pid),
+    BENDER_CORE_REG("proc/pid", cfun_proc_pid_of),
+    BENDER_CORE_REG("proc/serial", cfun_proc_serial),
+    BENDER_CORE_REG("proc/stash", cfun_proc_stash),
+    BENDER_CORE_REG("proc/sup-of", cfun_proc_sup_of),
+    BENDER_CORE_REG("proc/monitor", cfun_proc_monitor),
+    BENDER_CORE_REG("proc/monitors-of", cfun_proc_monitors_of),
+    BENDER_CORE_REG("proc/record-exit", cfun_proc_record_exit),
+    BENDER_CORE_REG("proc/done?", cfun_proc_done),
+    BENDER_CORE_REG("proc/exit-reason", cfun_proc_exit_reason),
+    BENDER_CORE_REG("proc/trap-exit", cfun_proc_trap_exit),
+    BENDER_CORE_REG("proc/trap?", cfun_proc_trap),
+    BENDER_CORE_REG("proc/killed?", cfun_proc_killed),
+    BENDER_CORE_REG("proc/register", cfun_proc_register),
+    BENDER_CORE_REG("proc/whereis", cfun_proc_whereis),
+    BENDER_CORE_REG("proc/unregister", cfun_proc_unregister),
+    BENDER_REG_END
 };
 
-void janet_lib_proc(JanetTable *env) {
-    janet_core_cfuns_ext(env, NULL, (JanetRegExt *) proc_cfuns_ext);
-    janet_register_abstract_type(&janet_proc_type);
+void bender_lib_proc(BenderTable *env) {
+    bender_core_cfuns_ext(env, NULL, (BenderRegExt *) proc_cfuns_ext);
+    bender_register_abstract_type(&bender_proc_type);
 }
 
-#endif /* JANET_EV */
+#endif /* BENDER_EV */

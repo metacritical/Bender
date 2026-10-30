@@ -20,9 +20,9 @@
 * IN THE SOFTWARE.
 */
 
-#ifndef JANET_AMALG
+#ifndef BENDER_AMALG
 #include "features.h"
-#include <janet.h>
+#include <bender.h>
 #include <math.h>
 #include "util.h"
 #include "state.h"
@@ -30,301 +30,301 @@
 
 /* Macro fills */
 
-JanetType(janet_type)(Janet x) {
-    return janet_type(x);
+BenderType(bender_type)(Bender x) {
+    return bender_type(x);
 }
-int (janet_checktype)(Janet x, JanetType type) {
-    return janet_checktype(x, type);
+int (bender_checktype)(Bender x, BenderType type) {
+    return bender_checktype(x, type);
 }
-int (janet_checktypes)(Janet x, int typeflags) {
-    return janet_checktypes(x, typeflags);
+int (bender_checktypes)(Bender x, int typeflags) {
+    return bender_checktypes(x, typeflags);
 }
-int (janet_truthy)(Janet x) {
-    return janet_truthy(x);
-}
-
-JanetStruct(janet_unwrap_struct)(Janet x) {
-    return janet_unwrap_struct(x);
-}
-JanetTuple(janet_unwrap_tuple)(Janet x) {
-    return janet_unwrap_tuple(x);
-}
-JanetFiber *(janet_unwrap_fiber)(Janet x) {
-    return janet_unwrap_fiber(x);
-}
-JanetArray *(janet_unwrap_array)(Janet x) {
-    return janet_unwrap_array(x);
-}
-JanetTable *(janet_unwrap_table)(Janet x) {
-    return janet_unwrap_table(x);
-}
-JanetBuffer *(janet_unwrap_buffer)(Janet x) {
-    return janet_unwrap_buffer(x);
-}
-JanetString(janet_unwrap_string)(Janet x) {
-    return janet_unwrap_string(x);
-}
-JanetSymbol(janet_unwrap_symbol)(Janet x) {
-    return janet_unwrap_symbol(x);
-}
-JanetKeyword(janet_unwrap_keyword)(Janet x) {
-    return janet_unwrap_keyword(x);
-}
-JanetAbstract(janet_unwrap_abstract)(Janet x) {
-    return janet_unwrap_abstract(x);
-}
-void *(janet_unwrap_pointer)(Janet x) {
-    return janet_unwrap_pointer(x);
-}
-JanetFunction *(janet_unwrap_function)(Janet x) {
-    return janet_unwrap_function(x);
-}
-JanetCFunction(janet_unwrap_cfunction)(Janet x) {
-    return janet_unwrap_cfunction(x);
-}
-int (janet_unwrap_boolean)(Janet x) {
-    return janet_unwrap_boolean(x);
-}
-int32_t (janet_unwrap_integer)(Janet x) {
-    return janet_unwrap_integer(x);
+int (bender_truthy)(Bender x) {
+    return bender_truthy(x);
 }
 
-#if defined(JANET_NANBOX_32) || defined(JANET_NANBOX_64)
-Janet(janet_wrap_nil)(void) {
-    return janet_wrap_nil();
+BenderStruct(bender_unwrap_struct)(Bender x) {
+    return bender_unwrap_struct(x);
 }
-Janet(janet_wrap_true)(void) {
-    return janet_wrap_true();
+BenderTuple(bender_unwrap_tuple)(Bender x) {
+    return bender_unwrap_tuple(x);
 }
-Janet(janet_wrap_false)(void) {
-    return janet_wrap_false();
+BenderFiber *(bender_unwrap_fiber)(Bender x) {
+    return bender_unwrap_fiber(x);
 }
-Janet(janet_wrap_boolean)(int x) {
-    return janet_wrap_boolean(x);
+BenderArray *(bender_unwrap_array)(Bender x) {
+    return bender_unwrap_array(x);
 }
-Janet(janet_wrap_string)(JanetString x) {
-    return janet_wrap_string(x);
+BenderTable *(bender_unwrap_table)(Bender x) {
+    return bender_unwrap_table(x);
 }
-Janet(janet_wrap_symbol)(JanetSymbol x) {
-    return janet_wrap_symbol(x);
+BenderBuffer *(bender_unwrap_buffer)(Bender x) {
+    return bender_unwrap_buffer(x);
 }
-Janet(janet_wrap_keyword)(JanetKeyword x) {
-    return janet_wrap_keyword(x);
+BenderString(bender_unwrap_string)(Bender x) {
+    return bender_unwrap_string(x);
 }
-Janet(janet_wrap_array)(JanetArray *x) {
-    return janet_wrap_array(x);
+BenderSymbol(bender_unwrap_symbol)(Bender x) {
+    return bender_unwrap_symbol(x);
 }
-Janet(janet_wrap_tuple)(JanetTuple x) {
-    return janet_wrap_tuple(x);
+BenderKeyword(bender_unwrap_keyword)(Bender x) {
+    return bender_unwrap_keyword(x);
 }
-Janet(janet_wrap_struct)(JanetStruct x) {
-    return janet_wrap_struct(x);
+BenderAbstract(bender_unwrap_abstract)(Bender x) {
+    return bender_unwrap_abstract(x);
 }
-Janet(janet_wrap_fiber)(JanetFiber *x) {
-    return janet_wrap_fiber(x);
+void *(bender_unwrap_pointer)(Bender x) {
+    return bender_unwrap_pointer(x);
 }
-Janet(janet_wrap_buffer)(JanetBuffer *x) {
-    return janet_wrap_buffer(x);
+BenderFunction *(bender_unwrap_function)(Bender x) {
+    return bender_unwrap_function(x);
 }
-Janet(janet_wrap_function)(JanetFunction *x) {
-    return janet_wrap_function(x);
+BenderCFunction(bender_unwrap_cfunction)(Bender x) {
+    return bender_unwrap_cfunction(x);
 }
-Janet(janet_wrap_cfunction)(JanetCFunction x) {
-    return janet_wrap_cfunction(x);
+int (bender_unwrap_boolean)(Bender x) {
+    return bender_unwrap_boolean(x);
 }
-Janet(janet_wrap_table)(JanetTable *x) {
-    return janet_wrap_table(x);
+int32_t (bender_unwrap_integer)(Bender x) {
+    return bender_unwrap_integer(x);
 }
-Janet(janet_wrap_abstract)(JanetAbstract x) {
-    return janet_wrap_abstract(x);
+
+#if defined(BENDER_NANBOX_32) || defined(BENDER_NANBOX_64)
+Bender(bender_wrap_nil)(void) {
+    return bender_wrap_nil();
 }
-Janet(janet_wrap_pointer)(void *x) {
-    return janet_wrap_pointer(x);
+Bender(bender_wrap_true)(void) {
+    return bender_wrap_true();
 }
-Janet(janet_wrap_integer)(int32_t x) {
-    return janet_wrap_integer(x);
+Bender(bender_wrap_false)(void) {
+    return bender_wrap_false();
+}
+Bender(bender_wrap_boolean)(int x) {
+    return bender_wrap_boolean(x);
+}
+Bender(bender_wrap_string)(BenderString x) {
+    return bender_wrap_string(x);
+}
+Bender(bender_wrap_symbol)(BenderSymbol x) {
+    return bender_wrap_symbol(x);
+}
+Bender(bender_wrap_keyword)(BenderKeyword x) {
+    return bender_wrap_keyword(x);
+}
+Bender(bender_wrap_array)(BenderArray *x) {
+    return bender_wrap_array(x);
+}
+Bender(bender_wrap_tuple)(BenderTuple x) {
+    return bender_wrap_tuple(x);
+}
+Bender(bender_wrap_struct)(BenderStruct x) {
+    return bender_wrap_struct(x);
+}
+Bender(bender_wrap_fiber)(BenderFiber *x) {
+    return bender_wrap_fiber(x);
+}
+Bender(bender_wrap_buffer)(BenderBuffer *x) {
+    return bender_wrap_buffer(x);
+}
+Bender(bender_wrap_function)(BenderFunction *x) {
+    return bender_wrap_function(x);
+}
+Bender(bender_wrap_cfunction)(BenderCFunction x) {
+    return bender_wrap_cfunction(x);
+}
+Bender(bender_wrap_table)(BenderTable *x) {
+    return bender_wrap_table(x);
+}
+Bender(bender_wrap_abstract)(BenderAbstract x) {
+    return bender_wrap_abstract(x);
+}
+Bender(bender_wrap_pointer)(void *x) {
+    return bender_wrap_pointer(x);
+}
+Bender(bender_wrap_integer)(int32_t x) {
+    return bender_wrap_integer(x);
 }
 #endif
 
-#ifndef JANET_NANBOX_32
-double (janet_unwrap_number)(Janet x) {
-    return janet_unwrap_number(x);
+#ifndef BENDER_NANBOX_32
+double (bender_unwrap_number)(Bender x) {
+    return bender_unwrap_number(x);
 }
 #endif
 
-#ifdef JANET_NANBOX_64
-Janet(janet_wrap_number)(double x) {
-    return janet_wrap_number(x);
+#ifdef BENDER_NANBOX_64
+Bender(bender_wrap_number)(double x) {
+    return bender_wrap_number(x);
 }
 #endif
 
 /*****/
 
-void *janet_memalloc_empty(int32_t count) {
+void *bender_memalloc_empty(int32_t count) {
     int32_t i;
-    void *mem = array_allocate(sizeof(JanetKV), count);
-    janet_vm.next_collection += (size_t) count * sizeof(JanetKV);
+    void *mem = array_allocate(sizeof(BenderKV), count);
+    bender_vm.next_collection += (size_t) count * sizeof(BenderKV);
     if (NULL == mem) {
-        JANET_OUT_OF_MEMORY;
+        BENDER_OUT_OF_MEMORY;
     }
-    JanetKV *mmem = (JanetKV *)mem;
+    BenderKV *mmem = (BenderKV *)mem;
     for (i = 0; i < count; i++) {
-        JanetKV *kv = mmem + i;
-        kv->key = janet_wrap_nil();
-        kv->value = janet_wrap_nil();
+        BenderKV *kv = mmem + i;
+        kv->key = bender_wrap_nil();
+        kv->value = bender_wrap_nil();
     }
     return mem;
 }
 
-void janet_memempty(JanetKV *mem, int32_t count) {
+void bender_memempty(BenderKV *mem, int32_t count) {
     int32_t i;
     for (i = 0; i < count; i++) {
-        mem[i].key = janet_wrap_nil();
-        mem[i].value = janet_wrap_nil();
+        mem[i].key = bender_wrap_nil();
+        mem[i].value = bender_wrap_nil();
     }
 }
 
-#ifdef JANET_NANBOX_64
+#ifdef BENDER_NANBOX_64
 
-Janet janet_wrap_number_safe(double d) {
-    Janet ret;
+Bender bender_wrap_number_safe(double d) {
+    Bender ret;
     ret.number = isnan(d) ? NAN : d;
     return ret;
 }
 
-void *janet_nanbox_to_pointer(Janet x) {
-    x.i64 &= JANET_NANBOX_PAYLOADBITS;
-    x.u64 <<= JANET_NANBOX_64_POINTER_SHIFT; /* Alignment, usually 0 */
+void *bender_nanbox_to_pointer(Bender x) {
+    x.i64 &= BENDER_NANBOX_PAYLOADBITS;
+    x.u64 <<= BENDER_NANBOX_64_POINTER_SHIFT; /* Alignment, usually 0 */
     return x.pointer;
 }
 
-Janet janet_nanbox_from_pointer(void *p, uint64_t tagmask) {
-    Janet ret;
+Bender bender_nanbox_from_pointer(void *p, uint64_t tagmask) {
+    Bender ret;
     ret.pointer = p;
     /* Should be noop when pointer shift is 0 */
     /*
-    janet_assert(!(ret.u64 & (uint64_t) ((1 << JANET_NANBOX_64_POINTER_SHIFT) - 1)), "unaligned pointer wrap");
+    bender_assert(!(ret.u64 & (uint64_t) ((1 << BENDER_NANBOX_64_POINTER_SHIFT) - 1)), "unaligned pointer wrap");
     */
-    ret.u64 >>= JANET_NANBOX_64_POINTER_SHIFT; /* Alignment, usually 0 */
+    ret.u64 >>= BENDER_NANBOX_64_POINTER_SHIFT; /* Alignment, usually 0 */
     ret.u64 |= tagmask;
     return ret;
 }
 
-Janet janet_nanbox_from_cpointer(const void *p, uint64_t tagmask) {
-    Janet ret;
+Bender bender_nanbox_from_cpointer(const void *p, uint64_t tagmask) {
+    Bender ret;
     ret.pointer = (void *)p;
     /* Should be noop when pointer shift is 0 */
     /*
-    janet_assert(!(ret.u64 & (uint64_t) ((1 << JANET_NANBOX_64_POINTER_SHIFT) - 1)), "unaligned pointer wrap");
+    bender_assert(!(ret.u64 & (uint64_t) ((1 << BENDER_NANBOX_64_POINTER_SHIFT) - 1)), "unaligned pointer wrap");
     */
-    ret.u64 >>= JANET_NANBOX_64_POINTER_SHIFT; /* Alignment, usually 0 */
+    ret.u64 >>= BENDER_NANBOX_64_POINTER_SHIFT; /* Alignment, usually 0 */
     ret.u64 |= tagmask;
     return ret;
 }
 
-Janet janet_nanbox_from_double(double d) {
-    Janet ret;
+Bender bender_nanbox_from_double(double d) {
+    Bender ret;
     ret.number = d;
     return ret;
 }
 
-Janet janet_nanbox_from_bits(uint64_t bits) {
-    Janet ret;
+Bender bender_nanbox_from_bits(uint64_t bits) {
+    Bender ret;
     ret.u64 = bits;
     return ret;
 }
 
-#elif defined(JANET_NANBOX_32)
+#elif defined(BENDER_NANBOX_32)
 
-Janet janet_wrap_number(double x) {
-    Janet ret;
+Bender bender_wrap_number(double x) {
+    Bender ret;
     ret.number = x;
-    ret.tagged.type += JANET_DOUBLE_OFFSET;
+    ret.tagged.type += BENDER_DOUBLE_OFFSET;
     return ret;
 }
 
-Janet janet_wrap_number_safe(double d) {
+Bender bender_wrap_number_safe(double d) {
     double x = isnan(d) ? NAN : d;
-    return janet_wrap_number(x);
+    return bender_wrap_number(x);
 }
 
-Janet janet_nanbox32_from_tagi(uint32_t tag, int32_t integer) {
-    Janet ret;
+Bender bender_nanbox32_from_tagi(uint32_t tag, int32_t integer) {
+    Bender ret;
     ret.tagged.type = tag;
     ret.tagged.payload.integer = integer;
     return ret;
 }
 
-Janet janet_nanbox32_from_tagp(uint32_t tag, void *pointer) {
-    Janet ret;
+Bender bender_nanbox32_from_tagp(uint32_t tag, void *pointer) {
+    Bender ret;
     ret.tagged.type = tag;
     ret.tagged.payload.pointer = pointer;
     return ret;
 }
 
-double janet_unwrap_number(Janet x) {
-    x.tagged.type -= JANET_DOUBLE_OFFSET;
+double bender_unwrap_number(Bender x) {
+    x.tagged.type -= BENDER_DOUBLE_OFFSET;
     return x.number;
 }
 
 #else
 
-Janet janet_wrap_number_safe(double d) {
-    return janet_wrap_number(d);
+Bender bender_wrap_number_safe(double d) {
+    return bender_wrap_number(d);
 }
 
-Janet janet_wrap_nil(void) {
-    Janet y;
-    y.type = JANET_NIL;
+Bender bender_wrap_nil(void) {
+    Bender y;
+    y.type = BENDER_NIL;
     y.as.u64 = 0;
     return y;
 }
 
-Janet janet_wrap_true(void) {
-    Janet y;
-    y.type = JANET_BOOLEAN;
+Bender bender_wrap_true(void) {
+    Bender y;
+    y.type = BENDER_BOOLEAN;
     y.as.u64 = 1;
     return y;
 }
 
-Janet janet_wrap_false(void) {
-    Janet y;
-    y.type = JANET_BOOLEAN;
+Bender bender_wrap_false(void) {
+    Bender y;
+    y.type = BENDER_BOOLEAN;
     y.as.u64 = 0;
     return y;
 }
 
-Janet janet_wrap_boolean(int x) {
-    Janet y;
-    y.type = JANET_BOOLEAN;
+Bender bender_wrap_boolean(int x) {
+    Bender y;
+    y.type = BENDER_BOOLEAN;
     y.as.u64 = !!x;
     return y;
 }
 
-#define JANET_WRAP_DEFINE(NAME, TYPE, DTYPE, UM)\
-Janet janet_wrap_##NAME(TYPE x) {\
-    Janet y;\
+#define BENDER_WRAP_DEFINE(NAME, TYPE, DTYPE, UM)\
+Bender bender_wrap_##NAME(TYPE x) {\
+    Bender y;\
     y.type = DTYPE;\
     y.as.u64 = 0; /* zero other bits in case of 32 bit integer */ \
     y.as.UM = x;\
     return y;\
 }
 
-JANET_WRAP_DEFINE(number, double, JANET_NUMBER, number)
-JANET_WRAP_DEFINE(string, const uint8_t *, JANET_STRING, cpointer)
-JANET_WRAP_DEFINE(symbol, const uint8_t *, JANET_SYMBOL, cpointer)
-JANET_WRAP_DEFINE(keyword, const uint8_t *, JANET_KEYWORD, cpointer)
-JANET_WRAP_DEFINE(array, JanetArray *, JANET_ARRAY, pointer)
-JANET_WRAP_DEFINE(tuple, const Janet *, JANET_TUPLE, cpointer)
-JANET_WRAP_DEFINE(struct, const JanetKV *, JANET_STRUCT, cpointer)
-JANET_WRAP_DEFINE(fiber, JanetFiber *, JANET_FIBER, pointer)
-JANET_WRAP_DEFINE(buffer, JanetBuffer *, JANET_BUFFER, pointer)
-JANET_WRAP_DEFINE(function, JanetFunction *, JANET_FUNCTION, pointer)
-JANET_WRAP_DEFINE(cfunction, JanetCFunction, JANET_CFUNCTION, pointer)
-JANET_WRAP_DEFINE(table, JanetTable *, JANET_TABLE, pointer)
-JANET_WRAP_DEFINE(abstract, void *, JANET_ABSTRACT, pointer)
-JANET_WRAP_DEFINE(pointer, void *, JANET_POINTER, pointer)
+BENDER_WRAP_DEFINE(number, double, BENDER_NUMBER, number)
+BENDER_WRAP_DEFINE(string, const uint8_t *, BENDER_STRING, cpointer)
+BENDER_WRAP_DEFINE(symbol, const uint8_t *, BENDER_SYMBOL, cpointer)
+BENDER_WRAP_DEFINE(keyword, const uint8_t *, BENDER_KEYWORD, cpointer)
+BENDER_WRAP_DEFINE(array, BenderArray *, BENDER_ARRAY, pointer)
+BENDER_WRAP_DEFINE(tuple, const Bender *, BENDER_TUPLE, cpointer)
+BENDER_WRAP_DEFINE(struct, const BenderKV *, BENDER_STRUCT, cpointer)
+BENDER_WRAP_DEFINE(fiber, BenderFiber *, BENDER_FIBER, pointer)
+BENDER_WRAP_DEFINE(buffer, BenderBuffer *, BENDER_BUFFER, pointer)
+BENDER_WRAP_DEFINE(function, BenderFunction *, BENDER_FUNCTION, pointer)
+BENDER_WRAP_DEFINE(cfunction, BenderCFunction, BENDER_CFUNCTION, pointer)
+BENDER_WRAP_DEFINE(table, BenderTable *, BENDER_TABLE, pointer)
+BENDER_WRAP_DEFINE(abstract, void *, BENDER_ABSTRACT, pointer)
+BENDER_WRAP_DEFINE(pointer, void *, BENDER_POINTER, pointer)
 
-#undef JANET_WRAP_DEFINE
+#undef BENDER_WRAP_DEFINE
 
 #endif

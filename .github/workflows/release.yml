@@ -28,15 +28,15 @@ jobs:
       - name: Compile the project
         run: make clean && make
       - name: Build the artifact
-        run: JANET_DIST_DIR=janet-${{ env.version }}-${{ env.platform }} make build/janet-${{ env.version }}-${{ env.platform }}-x64.tar.gz
+        run: BENDER_DIST_DIR=bender-${{ env.version }}-${{ env.platform }} make build/bender-${{ env.version }}-${{ env.platform }}-x64.tar.gz
       - name: Draft the release
         uses: softprops/action-gh-release@v1
         with:
           draft: true
           files: |
             build/*.gz
-            build/janet.h
-            build/c/janet.c
+            build/bender.h
+            build/c/bender.c
             build/c/shell.c
 
   release-arm:
@@ -57,15 +57,15 @@ jobs:
       - name: Compile the project
         run: make clean && make
       - name: Build the artifact
-        run: JANET_DIST_DIR=janet-${{ env.version }}-${{ env.platform }} make build/janet-${{ env.version }}-${{ env.platform }}-aarch64.tar.gz
+        run: BENDER_DIST_DIR=bender-${{ env.version }}-${{ env.platform }} make build/bender-${{ env.version }}-${{ env.platform }}-aarch64.tar.gz
       - name: Draft the release
         uses: softprops/action-gh-release@v1
         with:
           draft: true
           files: |
             build/*.gz
-            build/janet.h
-            build/c/janet.c
+            build/bender.h
+            build/c/bender.c
             build/c/shell.c
 
   release-windows:
@@ -108,11 +108,11 @@ jobs:
         run: echo "version=${GITHUB_REF/refs\/tags\//}" >> $GITHUB_ENV
       - name: Set the platform
         run: echo "platform=cosmo" >> $GITHUB_ENV
-      - name: build Janet APE binary
+      - name: build Bender APE binary
         run: bash ./.github/cosmo/build
       - name: push binary to github
         uses: softprops/action-gh-release@v1
         with:
           draft: true
           files: |
-            /sc/cosmocc/janet.com
+            /sc/cosmocc/bender.com

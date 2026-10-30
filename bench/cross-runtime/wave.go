@@ -9,7 +9,7 @@
 //
 // Build: go build -o wave-go wave.go
 // Run:   ./wave-go <n>
-// Emits one machine-readable line, mirrored by wave.janet and wave.erl.
+// Emits one machine-readable line, mirrored by wave.ben and wave.erl.
 package main
 
 import (

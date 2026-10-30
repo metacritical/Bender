@@ -13,10 +13,10 @@ Full design rationale lives in `docs/internals/b7.2-part-b-design-note.md`
 (this plan summarizes it for execution tracking). Two independent tracks,
 safe to run in parallel on disjoint files.
 
-## Track 1: B7.2 Part B — DCE (tools/callgraph.janet, tools/mkimage.janet)
+## Track 1: B7.2 Part B — DCE (tools/callgraph.ben, tools/mkimage.ben)
 
-Confirmed by direct code reading: `mkimage.janet` never consults
-`callgraph.janet`'s `reachable`/`tainted` analysis. There is no
+Confirmed by direct code reading: `mkimage.ben` never consults
+`callgraph.ben`'s `reachable`/`tainted` analysis. There is no
 tree-shaking anywhere in this toolchain today — only native-kernel
 candidate selection and diagnostics. Building real DCE is therefore a
 new safety-critical system, not an extension of an existing one.
@@ -50,7 +50,7 @@ nothing).
 ### Piece 2 (only after Piece 1 lands and is verified): supervision-tree roots
 Add the FIRST narrow exception to the container-taint rule: `sup/child`
 calls with a bare top-level function reference at the `entry` argument
-position (exactly `examples/supervisor.janet`'s own documented
+position (exactly `examples/supervisor.ben`'s own documented
 contract) become precise roots instead of generic taint. Any
 non-bare-reference `entry` contributes no root but must NOT fall back
 to whole-program taint — only that one site stays generically taint-safe.
@@ -70,7 +70,7 @@ down their own children before replying), causing an abrupt
 Fixed with a type-aware 3.0s budget for supervisor children. ANY future
 change to supervisor teardown, nesting, or restart logic MUST include
 an explicit 2-3-level-deep nesting test under a bounded timeout, the
-same way `test/suite-supervisor.janet` test 5 now permanently guards
+same way `test/suite-supervisor.ben` test 5 now permanently guards
 this. Do not let this class of bug recur.
 
 ## Track 2: B7.3 — M:N scheduler core / resident-proc migration (src/core/proc.c, src/core/ev.c)

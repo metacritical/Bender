@@ -1,6 +1,6 @@
 # Why 71% of functions have unproven types, and a plan for unboxing
 
-Investigation date: 2026-10-18, against ttfx `bin/ttfx-cli.janet`
+Investigation date: 2026-10-18, against ttfx `bin/ttfx-cli.ben`
 (`native-lib 6 kernels`, 779 refused functions).
 
 ## 1. The measured distribution
@@ -31,11 +31,11 @@ blocker is parameters.
 
 Verified three ways:
 
-1. `emit-c-type-map` (`tools/callgraph.janet`) has **no `:table` or
+1. `emit-c-type-map` (`tools/callgraph.ben`) has **no `:table` or
    `:struct` entry**. The map covers numeric widths, `:array`,
    `:tuple`, `:pointer`, `:bool`, `:nil`, `:string`, `:keyword`,
    `:symbol`. Tables are absent.
-2. `tools/infer.janet` **never mentions `:table`** (grep: zero hits).
+2. `tools/infer.ben` **never mentions `:table`** (grep: zero hits).
    The lattice cannot even name the type.
 3. The native gate accepts exactly:
    `numeric | :array | :tuple | :pointer | :string | :keyword | :symbol`.
@@ -45,7 +45,7 @@ engine function takes a table as its first argument. A survey of
 unproven functions shows first params named `ctx` (effect context),
 `cv` (canvas), `st` (effect state), `rng`, `bt`, `fx` — e.g.
 
-```janet
+```bender
 (defn canvas-char-count [cv] (length (cv :kept)))
 (defn rng-random [rng] ...)
 (defn backtracker-step [bt ctx] ...)
@@ -59,7 +59,7 @@ compiler's vocabulary.
 
 The gate opens with:
 
-```janet
+```bender
 (var concrete (and (> (length pt) 0) (not (d :vararg))))
 ```
 
@@ -83,8 +83,8 @@ mid-iteration, so the kernelizer refuses.
 
 The new executor tier (`978400f1`) solves this by keeping `pc` and
 slots as real VM state and polling via the exported
-`janet_native_poll()`. Enabled it (`-DJANET_NATIVE_EXECUTORS` +
-`JANET_NATIVE_EXECUTORS=1`) and measured, 3 alternating pairs per
+`bender_native_poll()`. Enabled it (`-DBENDER_NATIVE_EXECUTORS` +
+`BENDER_NATIVE_EXECUTORS=1`) and measured, 3 alternating pairs per
 effect:
 
 | effect | baseline | executors | delta |
@@ -106,7 +106,7 @@ from pursuing dispatch-level work expecting a win.
 
 ## 5. Why unboxing tables is the real lever
 
-A table field read is `janet_table_get` → `janet_dict_find`: hash the
+A table field read is `bender_table_get` → `bender_dict_find`: hash the
 key, probe the array, unwrap the result. Phase 5 (`cbdfffe6`) already
 proved the alternative for *locally constructed* closed-shape tables:
 flatten to a C struct and use the existing `:pread`/`:pwrite`
@@ -129,18 +129,18 @@ unfalsifiable. **Do not skip — the executor tier shipped 80 functions
 of machinery for 0% precisely because value was assumed, not measured.**
 
 Deliverable: a profile of CLI decrypt/smoke attributing time across
-`janet_dict_find` (table access), boxing/allocation, dispatch, and GC.
+`bender_dict_find` (table access), boxing/allocation, dispatch, and GC.
 This single measurement decides whether Steps 1-3 are worth anything.
 
 ### Step 1: `:table` as an opaque handle (small, low risk, low ceiling)
-Add `:table "JanetTable*"` to `emit-c-type-map`, accept `:table` in the
-gate, unbox via `janet_unwrap_table`. Field access still calls
-`janet_table_get` from C — **no hashing is eliminated**. Expected win:
+Add `:table "BenderTable*"` to `emit-c-type-map`, accept `:table` in the
+gate, unbox via `bender_unwrap_table`. Field access still calls
+`bender_table_get` from C — **no hashing is eliminated**. Expected win:
 small, possibly zero (same shape as the executor result).
 
 Value: unblocks the ~226 functions whose returns are already proven, so
 they stop being refused outright, and makes Step 2 incremental rather
-than all-or-nothing. Gate: if Step 0's profile shows `janet_dict_find`
+than all-or-nothing. Gate: if Step 0's profile shows `bender_dict_find`
 is not material, **stop here and reconsider the whole direction**.
 
 ### Step 2: closed-shape table *parameters* (the actual win)
@@ -178,7 +178,7 @@ The CLI gap is **33-159× behind Rust** (`bench-engines.md` §2: decrypt
 206,500 vs 1,290 fps). Six kernels, full PGO, and 80 executors have not
 moved it. Unboxing table access is the largest single identified lever,
 but nobody should expect it to close two orders of magnitude on its
-own — Janet values are NaN-boxed throughout, allocation is pervasive,
+own — Bender values are NaN-boxed throughout, allocation is pervasive,
 and the GC is global. Unboxing is necessary, not sufficient.
 
 Related constraint worth stating plainly: **the million-process goal

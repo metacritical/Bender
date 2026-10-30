@@ -420,13 +420,13 @@ class ArgvAndParsingTests(RunnerHarness):
         self.assertEqual(metrics["wave_ms"], 8)
         self.assertEqual(metrics["total_ms"], 15)
 
-    def test_janet_split_stdout_and_stderr_records_merge(self):
+    def test_bender_split_stdout_and_stderr_records_merge(self):
         code, trial = self.run_single(
             "import sys;n=int(sys.argv[1]);"
             "print(f'procs={n} result={n}');"
             "print(f'procs={n} result={n} spawn_ms=3 wave_ms=4 total_ms=7',"
             " file=sys.stderr)",
-            name="janet",
+            name="bender",
         )
         self.assertEqual(code, 0)
         self.assertEqual(trial["metrics"]["spawn_ms"], 3)
@@ -584,7 +584,7 @@ class ManifestAndCliTests(RunnerHarness):
         manifest = runner.load_manifest(path)
         self.assertEqual(
             [v["name"] for v in manifest["variants"]],
-            ["janet-script-lanes0", "janet-script-lanes11", "go", "erlang"],
+            ["bender-script-lanes0", "bender-script-lanes11", "go", "erlang"],
         )
         self.assertEqual(runner.total_trials(manifest), 24)
         self.assertEqual(manifest["repo"], os.path.dirname(os.path.dirname(HERE)))

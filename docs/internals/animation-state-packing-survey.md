@@ -1,4 +1,4 @@
-# Animation/event state packing survey (ttfx Janet port)
+# Animation/event state packing survey (ttfx Bender port)
 
 Date: 2026-10-23
 Status: **read-only scout survey.** No source was modified. This document
@@ -22,15 +22,15 @@ plan, so they come first.
 
 ### 0.1 The port is not in this repository
 
-`janet-port/` does not exist under `/Users/pankajdoharey/Development/Projects/janet`.
+`bender-port/` does not exist under `/Users/pankajdoharey/Development/Projects/bender`.
 The ttfx port lives in a sibling project:
 
 ```
 /Users/pankajdoharey/Development/Projects/ML/ttfx/          # Rust reference (src/), ports
-/Users/pankajdoharey/Development/Projects/ML/ttfx/janet-port/src/*.janet
+/Users/pankajdoharey/Development/Projects/ML/ttfx/bender-port/src/*.ben
 ```
 
-Every `janet-port/...` path below is relative to `.../Projects/ML/ttfx/`. This
+Every `bender-port/...` path below is relative to `.../Projects/ML/ttfx/`. This
 document lives in the compiler repo because the compiler changes (kernels,
 executors, hints) live here; the application changes live there.
 
@@ -43,7 +43,7 @@ python3 bench-cli-packed-path-vs-rust.py
 ```
 
 No file of that name, and no packed-vs-Rust comparison script of any name,
-exists anywhere under `Projects/ML/ttfx`, `Projects/janet`, `/tmp`, or
+exists anywhere under `Projects/ML/ttfx`, `Projects/bender`, `/tmp`, or
 `$HOME` (searched by name and by content). It was an uncommitted ad-hoc
 script. The committed harness, `bench/validate-languages.py`, covers **five**
 effects, not 37:
@@ -61,28 +61,28 @@ this work, not an optional extra. Section 4.3 specifies it.
 
 The task framing asks for "a validated native C serializer ... registered as a
 native kernel". That is not how this toolchain works. A kernel is an ordinary
-Janet `defn` carrying `:hint` metadata; `tools/callgraph.janet` type-checks it
+Bender `defn` carrying `:hint` metadata; `tools/callgraph.ben` type-checks it
 and *emits* the C. There is no registry of hand-authored C kernel functions for
 application code to join.
 
-The working template is in the port itself, `janet-port/src/rng-kernels.janet:13`:
+The working template is in the port itself, `bender-port/src/rng-kernels.ben:13`:
 
-```janet
+```bender
 (defn k-next-word! {:hint {:params [:array :array :array :array :array :array :array :array]
                            :returns :array}} [r s0 s1 s2 s3 t1 t2 t3]
   ...)
 ```
 
-and in `janet/test/fixtures/hinted-export/module.janet`:
+and in `bender/test/fixtures/hinted-export/module.ben`:
 
-```janet
+```bender
 (defn hot {:hint {:params [:long] :returns :long}} [x] (+ x 1))
 ```
 
 So "write a C serializer" really means **one of two different projects**, and
 they have very different costs. Section 5.4 separates them — and concludes
 that the cheap one is **blocked**: an emitted kernel cannot construct a string
-(`mkstr` → `:unknown` → refuse, `callgraph.janet:2201-2202`), so it cannot
+(`mkstr` → `:unknown` → refuse, `callgraph.ben:2201-2202`), so it cannot
 return a frame. There are two native tiers, neither of which accepts
 hand-authored C from application code; see §5.4 and §5.7.
 
@@ -92,10 +92,10 @@ hand-authored C from application code; see §5.4 and §5.7.
 
 ### 1.1 The record being packed
 
-`janet-port/src/canvas.janet:44` — the only constructor. One mutable table per
+`bender-port/src/canvas.ben:44` — the only constructor. One mutable table per
 character, 21 keys:
 
-```janet
+```bender
 (defn charanim-new [id col row sym]
   @{:id id :input-col col :input-row row :input-sym sym
     :visible false :scenes @{} :active nil
@@ -105,18 +105,18 @@ character, 21 keys:
     :uses-preexisting-colors true})
 ```
 
-Instantiated twice: once per input glyph (`canvas.janet:111`) and once per
-*unoccupied canvas cell* as a fill (`canvas.janet:194`). On an 80x24 canvas the
+Instantiated twice: once per input glyph (`canvas.ben:111`) and once per
+*unoccupied canvas cell* as a fill (`canvas.ben:194`). On an 80x24 canvas the
 fill arena dominates — roughly 1900 records for a ~100-glyph logo. The arena
 `(cv :anims)` is never compacted; ids are stable arena indices, deliberately
-mirroring Rust's `CharId` slots (`canvas.janet:378-379`). `ctx-new` aliases it:
-`:chars (canvas :anims)` (`scene.janet:217`).
+mirroring Rust's `CharId` slots (`canvas.ben:378-379`). `ctx-new` aliases it:
+`:chars (canvas :anims)` (`scene.ben:217`).
 
 There is **no `:cur-bg`**. The handoff lists it speculatively; the port has
 foreground only, and `ctx-format-cell`/`ctx-frame-string` emit `C/color-fg`
 plus `C/COLOR-RESET` with no background escape. Do not budget a bg lane.
 
-### 1.2 Raw occurrence counts across `janet-port/src/**.janet`
+### 1.2 Raw occurrence counts across `bender-port/src/**.ben`
 
 | Field | Occurrences | `put` writes | Verdict |
 |---|---:|---:|---|
@@ -150,44 +150,44 @@ charanim scene-name and the ctx active-id array).
 
 #### `:cur-col` / `:cur-row` — position
 
-Writers (both hot, both in `scene.janet`):
-- `ctx-motion-move` `scene.janet:447-448` — per active char per tick, the
+Writers (both hot, both in `scene.ben`):
+- `ctx-motion-move` `scene.ben:447-448` — per active char per tick, the
   single hottest write pair in the engine.
-- `ctx-motion-set-coordinate` `scene.janet:360-361` — called by effects.
+- `ctx-motion-set-coordinate` `scene.ben:360-361` — called by effects.
 
 Hot readers:
-- `ctx-frame-string` `scene.janet:704-705` — **per character per frame**, over
+- `ctx-frame-string` `scene.ben:704-705` — **per character per frame**, over
   the whole arena including fills.
-- `ctx-frame-cells` `scene.janet:760-761` — same, GUI backend.
-- `ctx-motion-activate-path` `scene.janet:312-313,319` — origin segment.
-- `effects/matrix.janet:65,67` — per column per tick.
-- `effects/thunderstorm.janet:76,123-124,225,245-246`.
-- `effects/orbittingvolley.janet:36,46,64,84`.
-- `effects/unstable.janet:21-22,48-49,68-69` — inside `filter` over `(ctx :active)`.
-- `effects/bubbles.janet:46,65`, `effects/spotlights.janet:67,83`,
-  `effects/binarypath.janet:49-50`, `effects/overflow.janet:17,32`,
-  `effects/print.janet:43`, `effects/rings.janet:90-91`.
+- `ctx-frame-cells` `scene.ben:760-761` — same, GUI backend.
+- `ctx-motion-activate-path` `scene.ben:312-313,319` — origin segment.
+- `effects/matrix.ben:65,67` — per column per tick.
+- `effects/thunderstorm.ben:76,123-124,225,245-246`.
+- `effects/orbittingvolley.ben:36,46,64,84`.
+- `effects/unstable.ben:21-22,48-49,68-69` — inside `filter` over `(ctx :active)`.
+- `effects/bubbles.ben:46,65`, `effects/spotlights.ben:67,83`,
+  `effects/binarypath.ben:49-50`, `effects/overflow.ben:17,32`,
+  `effects/print.ben:43`, `effects/rings.ben:90-91`.
 
 #### `:cur-sym` / `:cur-fg` — appearance
 
-Writers (all hot, all `scene.janet`): `ctx-activate-scene:262-263`,
+Writers (all hot, all `scene.ben`): `ctx-activate-scene:262-263`,
 `ctx-set-appearance:271-272`, `ctx-step-synced:548-549,572-573`,
 `ctx-step-animation:593-594,601-602`.
 
 Hot readers: `ctx-frame-string:736,745,747` (**per visible cell per frame**),
-`ctx-frame-cells:764-767`, `effects/matrix.janet:49,92,101-102,125-129`,
-`effects/thunderstorm.janet:162`, `effects/laseretch.janet:62`.
+`ctx-frame-cells:764-767`, `effects/matrix.ben:49,92,101-102,125-129`,
+`effects/thunderstorm.ben:162`, `effects/laseretch.ben:62`.
 
 #### `:active` (charanim: the active scene *name*, a string, or nil)
 
-Hot read/write in `ctx-step-animation` `scene.janet:578,597-598`,
+Hot read/write in `ctx-step-animation` `scene.ben:578,597-598`,
 `ctx-step-synced:551-552,573`, `ctx-char-active?:616-617` — all three run per
 active char per tick. Also `ctx-activate-scene:261`,
 `ctx-deactivate-scene:275`, `ctx-fire-event:347-349`.
 
-Setup/teardown writers: `particles.janet:33,48`, `effects/laseretch.janet:17,43`,
-`effects/thunderstorm.janet:65,111`. Readers: `effects/beams.janet:35-36`,
-`effects/blackhole.janet:116`, `effects/unstable.janet:70`.
+Setup/teardown writers: `particles.ben:33,48`, `effects/laseretch.ben:17,43`,
+`effects/thunderstorm.ben:65,111`. Readers: `effects/beams.ben:35-36`,
+`effects/blackhole.ben:116`, `effects/unstable.ben:70`.
 
 #### `:active-path` (the active path *name*, a string, or nil)
 
@@ -195,12 +195,12 @@ Hot: `ctx-motion-move:442` (read, first thing every tick per char),
 `ctx-char-active?:615`, `ctx-step-synced:543`.
 Writers: `ctx-motion-activate-path:326`, `ctx-motion-deactivate-path:336-339`,
 plus **direct nil-clears that bypass the accessor**:
-`particles.janet:32,47`, `effects/laseretch.janet:18,44`,
-`effects/thunderstorm.janet:64,113`.
+`particles.ben:32,47`, `effects/laseretch.ben:18,44`,
+`effects/thunderstorm.ben:64,113`.
 
-Those direct clears are load-bearing. `scene.janet:322-325` documents it:
+Those direct clears are load-bearing. `scene.ben:322-325` documents it:
 
-```janet
+```bender
   # :path-live counts characters with a non-nil :active-path; only this
   # function turns nil -> non-nil (direct clears elsewhere may leave the
   # counter high, which is safe: it only disables an optimization).
@@ -215,7 +215,7 @@ and is a parity hazard.
 `ctx-frame-string:710-711` reads `:layer` and `:id` on **both** the incoming
 char and the incumbent cell occupant, per character per frame:
 
-```janet
+```bender
 (when (or (= nil prev) (> (a :layer) (prev :layer))
           (and (= (a :layer) (prev :layer)) (> (a :id) (prev :id))))
   (put row idx a))
@@ -223,48 +223,48 @@ char and the incumbent cell occupant, per character per frame:
 
 `:visible` is read at `ctx-frame-string:703` and `ctx-frame-cells:759` per
 character per frame; written only by `ctx-set-visible:266` and
-`effects/laseretch.janet:179`.
+`effects/laseretch.ben:179`.
 
 `:layer` writers are all setup-ish except `ctx-fire-event:348` (event action
 `"layer"`) and `ctx-motion-activate-path:330-331` (path-carried layer):
-`effects/binarypath.janet:192`, `bubbles.janet:145`, `burn.janet:24`,
-`laseretch.janet:163,178`, `orbittingvolley.janet:168`, `synthgrid.janet:52`,
-`thunderstorm.janet:14,21,109`.
+`effects/binarypath.ben:192`, `bubbles.ben:145`, `burn.ben:24`,
+`laseretch.ben:163,178`, `orbittingvolley.ben:168`, `synthgrid.ben:52`,
+`thunderstorm.ben:14,21,109`.
 
 #### `:scenes` / `:paths` — per-character sub-tables
 
 `:scenes` is a name→packed-scene table. One hot read:
 `ctx-step-animation:579` and `ctx-char-active?:617` do
 `(get (a :scenes) (a :active))` — a string-keyed table probe per active char
-per tick. This is the `janet_dict_find` traffic visible in release samples.
+per tick. This is the `bender_dict_find` traffic visible in release samples.
 Everything else is setup (`ctx-new-scene*:235-248`, `ctx-scene:251`).
 
 `:paths` is a name→packed-path table. Hot read: `ctx-motion-move:444`
 `(get (a :paths) pname)`. Setup/structural elsewhere:
 `ctx-motion-new-path:368-372`, `ctx-motion-add-waypoint:377`,
 `ctx-motion-retarget-path:394`, plus effect-side reads
-`effects/vhstape.janet:76,79,81,88,167`, `unstable.janet:46,66`,
-`orbittingvolley.janet:78`, `rings.janet:65`.
-Wholesale resets: `particles.janet:34`, `laseretch.janet:19`,
-`thunderstorm.janet:63,112`, `print.janet:103`.
+`effects/vhstape.ben:76,79,81,88,167`, `unstable.ben:46,66`,
+`orbittingvolley.ben:78`, `rings.ben:65`.
+Wholesale resets: `particles.ben:34`, `laseretch.ben:19`,
+`thunderstorm.ben:63,112`, `print.ben:103`.
 
 #### Setup-only, safe to leave boxed
 
 `:input-col`, `:input-row`, `:input-sym`, `:is-fill`,
 `:uses-preexisting-colors`, `:links`, `:north`, `:east`, `:south`, `:west`.
 The neighbour fields are written once in `canvas-build-neighbor-map:204-216`
-and read only by `spanning.janet:21` during spanning-tree construction.
-`:links` is read/written only in `spanning.janet:10-15,32,61,144`.
+and read only by `spanning.ben:21` during spanning-tree construction.
+`:links` is read/written only in `spanning.ben:10-15,32,61,144`.
 
 ### 1.4 What *blocks* packing — the reflection audit
 
 This is the good news. Searched the whole port for `keys`, `pairs`, `freeze`,
 `table/clone`, `marshal`, `struct`, and whole-table printing applied to a
 charanim. **Zero hits.** Every match of `keys`/`pairs` is on gradient or
-effect-state tables (`effects/rain.janet:21`, `spray.janet:89`,
-`waves.janet:71`, `binarypath.janet:204,208`, `pour.janet:100`,
-`bouncyballs.janet:20`, `randomsequence.janet:61`, `matrix.janet:293`,
-`spanning.janet:55`, `effects.janet:84`).
+effect-state tables (`effects/rain.ben:21`, `spray.ben:89`,
+`waves.ben:71`, `binarypath.ben:204,208`, `pour.ben:100`,
+`bouncyballs.ben:20`, `randomsequence.ben:61`, `matrix.ben:293`,
+`spanning.ben:55`, `effects.ben:84`).
 
 Nothing iterates a charanim's key set, serializes one, or looks a field up
 through a computed keyword. Field access is 100% static. Packing is therefore
@@ -274,7 +274,7 @@ Two further structural facts that help:
 
 - Only **two** sites iterate the whole arena: `ctx-frame-string:702` and
   `ctx-frame-cells:758`. Everything else goes through `ctx-anim`/`(ctx :chars)`
-  by id. `ctx-anim` call sites: `scene.janet` 22, `thunderstorm` 14, `slice`
+  by id. `ctx-anim` call sites: `scene.ben` 22, `thunderstorm` 14, `slice`
   13, `print` 13, `orbittingvolley` 11, `matrix` 10, `spanning` 9, then a long
   tail of 1–8.
 - No effect stashes a charanim *table reference* in its own state. Effects
@@ -284,23 +284,23 @@ Two further structural facts that help:
 
 ### 1.5 Three name collisions that will bite a careless `sed`
 
-1. **`:visible` on matrix columns.** `effects/matrix.janet:14,26,48,53-55,57,63,71-73,76,89,98-99,112,116,163,170,199,203,213` —
+1. **`:visible` on matrix columns.** `effects/matrix.ben:14,26,48,53-55,57,63,71-73,76,89,98-99,112,116,163,170,199,203,213` —
    that is a matrix *column* record whose `:visible` is an **array of char ids**,
    unrelated to charanim `:visible` (a boolean). Matrix has 35 raw hits on the
    hot-field regex and most are this.
-2. **`:paths` on rings' own char records.** `effects/rings.janet:201` builds
+2. **`:paths` on rings' own char records.** `effects/rings.ben:201` builds
    `@{:id id :coords rotated :paths paths ...}` — an *array* of path names on a
-   private record, read at `rings.janet:65,102` with `index-of`. Not a charanim.
-3. **`:active-*` on effect state.** `effects/matrix.janet:144,148,154,169-171,178,180,187,263`
-   use `:active-columns`; `effects/swarm.janet:26,41,67,176` use `:active-area`;
-   `scene.janet:219` uses `:active-scratch`. None are charanim fields.
+   private record, read at `rings.ben:65,102` with `index-of`. Not a charanim.
+3. **`:active-*` on effect state.** `effects/matrix.ben:144,148,154,169-171,178,180,187,263`
+   use `:active-columns`; `effects/swarm.ben:26,41,67,176` use `:active-area`;
+   `scene.ben:219` uses `:active-scratch`. None are charanim fields.
 
 ### 1.6 Where the time actually goes
 
 From `docs/internals/ttfx-kernel-plan.md:53-70`, a full 1398-frame
 instrumented run and the Rust comparison:
 
-| Phase | Rust | Janet | Ratio | Janet share |
+| Phase | Rust | Bender | Ratio | Bender share |
 |---|---|---|---:|---:|
 | Motion stepping | 32.3us | 1007us | ~31x | 72.8% |
 | Scene animation | 8.2us | 164us | ~20x | 11.9% |
@@ -321,10 +321,10 @@ its win will be diffuse and modest rather than concentrated.
 
 ### 2.1 What is already packed
 
-`janet-port/src/scene.janet` establishes the house style: a flat `@[...]` with
+`bender-port/src/scene.ben` establishes the house style: a flat `@[...]` with
 module-level integer index constants and a `*-new` constructor.
 
-```janet
+```bender
 (def frame-sym 0) (def frame-fg 1) (def frame-duration 2) (def frame-ticks 3)
 (defn frame-new [sym fg duration] @[sym fg duration 0])          ; :23-40
 
@@ -346,10 +346,10 @@ module-level integer index constants and a `*-new` constructor.
 Access is positional application: `(f frame-sym)`, `(put sc scene-head ...)`.
 There is no accessor-function layer for frames/scenes, and only four thin ones
 for paths (`ctx-path-waypoints`, `ctx-path-set-speed`, `ctx-path-reset-hold`,
-`ctx-path-set-hold`, `scene.janet:187-194`). **Precedent: positional access at
+`ctx-path-set-hold`, `scene.ben:187-194`). **Precedent: positional access at
 the use site, named constants, no getter functions.** Follow it; adding a
 getter-function layer would reintroduce the call overhead packing exists to
-remove, and `callgraph.janet` has no native-to-native continuation
+remove, and `callgraph.ben` has no native-to-native continuation
 (`ttfx-pgo-runtime-feedback.md:140-142`), so every accessor call is a VM exit.
 
 ### 2.2 What is still boxed
@@ -358,15 +358,15 @@ remove, and `callgraph.janet` has no native-to-native continuation
 - **`:scenes`**: `@{}` string→packed-scene, per character.
 - **`:paths`**: `@{}` string→packed-path, per character.
 - **ctx `:events`**: `@{}` id→array of `[kind caller atype avalue]` tuples
-  (`scene.janet:297-303`).
-- **ctx itself**: a 13-key table (`scene.janet:216-220`), touched a handful of
+  (`scene.ben:297-303`).
+- **ctx itself**: a 13-key table (`scene.ben:216-220`), touched a handful of
   times per tick — not worth packing.
 
 ### 2.3 Lifetimes
 
 | Structure | Created | Mutated | Destroyed |
 |---|---|---|---|
-| charanim | canvas build (`canvas.janet:111,194`) or `ctx-add-character:227` | every tick | never (arena) |
+| charanim | canvas build (`canvas.ben:111,194`) or `ctx-add-character:227` | every tick | never (arena) |
 | `:scenes` entries | effect build | per tick (frame ticks, head) | `scene-reset`; wholesale `@{}` in thunderstorm/laseretch |
 | `:paths` entries | effect build + `ctx-motion-new-path` | per tick | wholesale `@{}` resets |
 | `:events` entry | `ctx-register-event` | append-only | `ctx-clear-char-events:537` |
@@ -383,8 +383,8 @@ monotonically — exactly like `(cv :anims)` does today.
 Packed scenes and paths are *values stored in boxed per-character tables*. The
 remaining cost is not inside them — it is reaching them:
 
-```janet
-; scene.janet:577-580, per active char per tick
+```bender
+; scene.ben:577-580, per active char per tick
 (def a ((ctx :chars) id))                 ; array index  — cheap
 (when (= nil (a :active)) (break nil))    ; table probe  #1
 (def sc (get (a :scenes) (a :active)))    ; table probe  #2 + #3 (string key)
@@ -406,7 +406,7 @@ the specific waste this project removes. Same story in `ctx-motion-move:441-445`
    shaping").
 2. Field access is fully static ⇒ mechanical rewrite is safe.
 3. No accessor-call layer (no native-to-native continuation).
-4. Scene/path *names* are strings with semantic content — `effects/swarm.janet:35-41`
+4. Scene/path *names* are strings with semantic content — `effects/swarm.ben:35-41`
    reads `(a :active-path)` and does
    `(scan-number (string/slice (st :active-area) 0 1))`, parsing a numeric
    prefix out of the path name. Names cannot become bare integers without
@@ -415,10 +415,10 @@ the specific waste this project removes. Same story in `ctx-motion-move:441-445`
 
 ### 3.2 Proposed layout
 
-Add to `janet-port/src/scene.janet` (or a new `src/anim.janet` imported by
-both `scene.janet` and `canvas.janet`), in the established style:
+Add to `bender-port/src/scene.ben` (or a new `src/anim.ben` imported by
+both `scene.ben` and `canvas.ben`), in the established style:
 
-```janet
+```bender
 # Packed per-character animation state: parallel arrays indexed by char id.
 # Lane naming mirrors frame-*/scene-*/path-*: `anim-<field>` is the LANE,
 # `(anim-cur-col ...)` is never a function -- lanes are indexed directly.
@@ -447,7 +447,7 @@ table-header path.
 with per-character dense arrays plus a name sidecar, so the hot path indexes
 and only the cold path stringifies:
 
-```janet
+```bender
 (def anim-scenes    8)   # array of packed scenes, dense, build-order
 (def anim-scene-ix  9)   # @{} name -> index   (SETUP ONLY, never hot)
 (def anim-paths    10)   # array of packed paths, dense, build-order
@@ -457,7 +457,7 @@ and only the cold path stringifies:
 
 Then the hot path becomes, for `ctx-step-animation`:
 
-```janet
+```bender
 (def ax (ctx :anim))
 (def ai (((ax anim-active)) id))               ; integer, -1 == none
 (when (< ai 0) (break nil))
@@ -466,17 +466,17 @@ Then the hot path becomes, for `ctx-step-animation`:
 
 and for `ctx-motion-move`:
 
-```janet
+```bender
 (def pi (((ax anim-apath)) id))
 (when (< pi 0) (break nil))
 (def p ((((ax anim-paths)) id) pi))
 ```
 
 The scene/path **name** stays available as `(sc scene-name)` / `(p path-name)`,
-which already exist (`scene.janet:29,170`). That satisfies constraint 4:
-`effects/swarm.janet` reads the name off the packed path record instead of off
+which already exist (`scene.ben:29,170`). That satisfies constraint 4:
+`effects/swarm.ben` reads the name off the packed path record instead of off
 the charanim. Same for `ctx-fire-scene-complete`, which needs the completed
-scene's name as the event caller (`scene.janet:551-553,597-599,605-606`).
+scene's name as the event caller (`scene.ben:551-553,597-599,605-606`).
 
 **Stays boxed, deliberately:**
 
@@ -489,7 +489,7 @@ scene's name as the event caller (`scene.janet:551-553,597-599,605-606`).
   separate setup-time arrays as a cosmetic follow-up. No measurable win.
 - **ctx `:events`** — leave alone. `ttfx-pgo-runtime-feedback.md:182` records
   this experiment already: *"event table -> array: 1.0082 (13/37 faster)"* —
-  **measured 0.8% slower and rejected.** The `janet-port/build/ttfx-cli-packed-events*`
+  **measured 0.8% slower and rejected.** The `bender-port/build/ttfx-cli-packed-events*`
   binaries on disk are that rejected attempt. Do not redo it. The task brief
   lists event state as a packing target; the evidence says no.
 
@@ -510,12 +510,12 @@ one commit, one A/B, one 37/37 parity run.
 | Stage | Scope | Files touched | Risk | Rationale |
 |---|---|---|---|---|
 | **0** | Rebuild the all-37 parity+timing harness (Section 4.3) | `ML/ttfx/bench/` | none | §0.2: nothing below is verifiable without it |
-| **1** | `:cur-col`, `:cur-row` → lanes | `scene.janet`, `canvas.janet`, 12 effects | **low** | pure numbers; 2 writers, mechanical readers; biggest single hot pair |
-| **2** | `:visible`, `:layer`, drop `:id` | `scene.janet`, 9 effects | **low** | render-only; `ctx-frame-string`/`ctx-frame-cells` are the only readers plus setup writers |
-| **3** | `:cur-sym`, `:cur-fg` → lanes | `scene.janet`, `matrix`, `thunderstorm`, `laseretch` | **low-med** | 6 writers all in `scene.janet`; matrix compares `:cur-fg` by identity (`matrix.janet:101,126`) — preserve color value identity, do not normalize |
-| **4** | `:scenes` → dense array + `:active` → index | `scene.janet`, `beams`, `blackhole`, `unstable`, `laseretch`, `thunderstorm`, `particles` | **medium** | kills hot probe #2/#3; must keep `scene-name` flowing to `ctx-fire-scene-complete`; wholesale `(put a :scenes @{})` resets (`thunderstorm.janet:110`) become array clears |
-| **5** | `:paths` → dense array + `:active-path` → index | `scene.janet`, `vhstape`, `unstable`, `orbittingvolley`, `rings`, `swarm`, `print`, `particles`, `laseretch`, `thunderstorm` | **high** | see §4.1; auto-naming, swarm string parsing, `:path-live` asymmetry, wholesale resets |
-| **6** | Slim the residual charanim table | `canvas.janet`, `spanning.janet` | low | cosmetic; measure before keeping |
+| **1** | `:cur-col`, `:cur-row` → lanes | `scene.ben`, `canvas.ben`, 12 effects | **low** | pure numbers; 2 writers, mechanical readers; biggest single hot pair |
+| **2** | `:visible`, `:layer`, drop `:id` | `scene.ben`, 9 effects | **low** | render-only; `ctx-frame-string`/`ctx-frame-cells` are the only readers plus setup writers |
+| **3** | `:cur-sym`, `:cur-fg` → lanes | `scene.ben`, `matrix`, `thunderstorm`, `laseretch` | **low-med** | 6 writers all in `scene.ben`; matrix compares `:cur-fg` by identity (`matrix.ben:101,126`) — preserve color value identity, do not normalize |
+| **4** | `:scenes` → dense array + `:active` → index | `scene.ben`, `beams`, `blackhole`, `unstable`, `laseretch`, `thunderstorm`, `particles` | **medium** | kills hot probe #2/#3; must keep `scene-name` flowing to `ctx-fire-scene-complete`; wholesale `(put a :scenes @{})` resets (`thunderstorm.ben:110`) become array clears |
+| **5** | `:paths` → dense array + `:active-path` → index | `scene.ben`, `vhstape`, `unstable`, `orbittingvolley`, `rings`, `swarm`, `print`, `particles`, `laseretch`, `thunderstorm` | **high** | see §4.1; auto-naming, swarm string parsing, `:path-live` asymmetry, wholesale resets |
+| **6** | Slim the residual charanim table | `canvas.ben`, `spanning.ben` | low | cosmetic; measure before keeping |
 | **7** | Serializer work — **not recommended**, see §5.4 | separate project | n/a | the cheap in-toolchain route is blocked; what remains is a C native module |
 
 Stages 1–3 are the safe, high-value core: they cover the render loop's
@@ -532,10 +532,10 @@ accepted packed-motion-path stage already returned only 0.9893).
 
 ### 4.1 Ranked risks
 
-**R1 — `effects/swarm.janet` path-name string parsing. HIGHEST.**
-`swarm.janet:31-45`:
+**R1 — `effects/swarm.ben` path-name string parsing. HIGHEST.**
+`swarm.ben:31-45`:
 
-```janet
+```bender
 (when (< (length (ctx :active)) (length (st :current)))
   ...
   (def active ((S/ctx-anim ctx id) :active-path))
@@ -559,7 +559,7 @@ claim is **recorded nowhere in either tree** — every committed record claims
 37/37 (see §4.4). Two possibilities, with opposite consequences:
 - *If the divergence is real*, swarm's Rust comparison is already failing, so a
   regression introduced here is the one **least likely to be caught**. Freeze a
-  Janet-vs-Janet baseline before stage 5 and compare against that.
+  Bender-vs-Bender baseline before stage 5 and compare against that.
 - *If it is a misremembering* (plausibly of `bench/languages.md:43`, where
   swarm is "not ported" for Lua/Chez), then swarm has a working Rust gate and
   should simply be held to it.
@@ -568,9 +568,9 @@ Either way swarm is the highest-risk effect here on code grounds alone, and
 resolving which case applies is Stage 0 work, not something to assume.
 
 **R2 — `ctx-motion-new-path` auto-naming depends on table cardinality.**
-`scene.janet:366-371`:
+`scene.ben:366-371`:
 
-```janet
+```bender
 (when (empty? pname)
   (var n (length ((ctx-anim ctx id) :paths)))
   (while (not (nil? (get ((ctx-anim ctx id) :paths) (string n))))
@@ -580,8 +580,8 @@ resolving which case applies is Stage 0 work, not something to assume.
 
 The generated name is derived from `(length :paths)` then probed upward. With
 a dense array the length is the same number, but **only if no path is ever
-removed**. Wholesale `(put a :paths @{})` resets (`particles.janet:34`,
-`laseretch.janet:19`, `thunderstorm.janet:63,112`, `print.janet:103`) set the
+removed**. Wholesale `(put a :paths @{})` resets (`particles.ben:34`,
+`laseretch.ben:19`, `thunderstorm.ben:63,112`, `print.ben:103`) set the
 count back to zero, so subsequent auto-names restart. A dense array must
 reproduce that exactly — clear the array *and* the name sidecar together.
 Any divergence silently renames paths, which changes event-caller matching in
@@ -596,29 +596,29 @@ undetectable by inspection and only shows up as a frame diff. Port the
 asymmetry verbatim, comment included.
 
 **R4 — `matrix` color/symbol identity comparisons.**
-`effects/matrix.janet:101` `(= ((S/ctx-anim ctx last) :cur-fg) (st :highlight-color))`
-and `:125-129` compare `:cur-sym`/`:cur-fg` against neighbour values. Janet `=`
-on colors depends on the color representation chosen in `color.janet`. Stage 3
+`effects/matrix.ben:101` `(= ((S/ctx-anim ctx last) :cur-fg) (st :highlight-color))`
+and `:125-129` compare `:cur-sym`/`:cur-fg` against neighbour values. Bender `=`
+on colors depends on the color representation chosen in `color.ben`. Stage 3
 must not change representation, only storage. Matrix is also the densest
 effect on the hot-field regex (35 hits) and has the `:visible` name collision
 (§1.5).
 
-**R5 — `thunderstorm` wholesale state resets.** `thunderstorm.janet:63-65`
+**R5 — `thunderstorm` wholesale state resets.** `thunderstorm.ben:63-65`
 and `:109-113` reset `:paths`, `:active-path`, `:active`, `:scenes`, `:layer`
 together, mid-run, for recycled spark characters. Lane writes must be
 simultaneous and complete; a half-reset character is a new failure mode that
 the boxed version could not express.
 
 **R6 — `unstable` filters over `(ctx :active)` reading position and `:paths`.**
-`unstable.janet:46-50,66-71` builds predicates that read
+`unstable.ben:46-50,66-71` builds predicates that read
 `(S/ctx-path-waypoints (get (a :paths) "explode"))` and compare `:cur-col`/
 `:cur-row` against the last waypoint, inside `filter`. Touched by stages 1 and 5
 simultaneously — sequence them, do not batch.
 
 **R7 — `rings` `index-of` over its private `:paths` array.**
-`rings.janet:101-102`:
+`rings.ben:101-102`:
 
-```janet
+```bender
 (def current ((S/ctx-anim ctx (ch :id)) :active-path))
 (def index (index-of current (ch :paths)))
 ```
@@ -628,10 +628,10 @@ own ordered array of path names. Stage 5 must keep this an
 index-of-name-in-rings-array, feeding it `(p path-name)`.
 
 **R8 — `print`/`vhstape`/`orbittingvolley`/`spotlights` nil-checks on
-`:active-path`.** `print.janet:57`, `vhstape.janet:98`,
-`orbittingvolley.janet:76`, `spotlights.janet:110`, `blackhole.janet:116` all
+`:active-path`.** `print.ben:57`, `vhstape.ben:98`,
+`orbittingvolley.ben:76`, `spotlights.ben:110`, `blackhole.ben:116` all
 test `(nil? ... :active-path)`. These become `(< idx 0)`. Mechanical, but a
-missed site is a silent truthiness bug: `0` is truthy in Janet, so a forgotten
+missed site is a silent truthiness bug: `0` is truthy in Bender, so a forgotten
 `nil?` site that becomes index `0` flips from "no path" to "path 0". **Audit
 every `nil?`/truthiness test on `:active` and `:active-path` before stage 4/5.**
 This is the single most likely way to ship a wrong frame.
@@ -651,7 +651,7 @@ charanim field access at all (`bouncyballs`, `colorshift`, `crumble`,
 `decrypt`, `errorcorrect`, `expand`, `fireworks`, `highlight`, `middleout`,
 `pour`, `rain`, `randomsequence`, `scattered`, `slice`, `slide`, `smoke`,
 `spray`, `waves`, `wipe`). They still need parity runs — they exercise
-`scene.janet`'s hot path — but no edits.
+`scene.ben`'s hot path — but no edits.
 
 ### 4.2 Risk tiers, by effect
 
@@ -664,15 +664,15 @@ charanim field access at all (`bouncyballs`, `colorshift`, `crumble`,
 ### 4.3 The validation harness — what exists, and what must be rebuilt
 
 **Dump contract** (this is the stable part, and it is byte-exact).
-`janet-port/src/scene.janet:823-836`, `faithful-dump`: for each frame, print
+`bender-port/src/scene.ben:823-836`, `faithful-dump`: for each frame, print
 the frame's byte length, then the frame; on stderr `frames=N`. Uses the
 virtual clock, so output is timing-independent. `tools/parity/dump.py:5-6`
 documents the identical format for the Python reference. Rust implements it
 behind `--parity-dump` (`ML/ttfx/src/cli.rs:149-150`, `src/main.rs:170,212`),
 which also implies the virtual clock (`src/main.rs:149`).
 
-**Flags.** Janet CLI: `--dump-frames` (implies virtual clock,
-`bin/ttfx-cli.janet:180`), `--max-frames N` (`:944`), `--seed N` (`:110`),
+**Flags.** Bender CLI: `--dump-frames` (implies virtual clock,
+`bin/ttfx-cli.ben:180`), `--max-frames N` (`:944`), `--seed N` (`:110`),
 `--input-file` (`:29`), `--bench` (`:932`). Rust: `--parity-dump`,
 `--max-frames`, `--seed`.
 
@@ -682,7 +682,7 @@ x 3 inputs x seeds (42, 1337), with `COLUMNS=80 LINES=24` pinned and
 `--max-frames 400`. Its docstring states the standard plainly: *"This
 validates complete bounded frame dumps, not similar-looking screenshots. No
 engine is eligible for a timing row until it passes this gate."* Note it
-hardcodes the Janet binary as `janet-port/build/ttfx-cli-rel2` (line 36) and
+hardcodes the Bender binary as `bender-port/build/ttfx-cli-rel2` (line 36) and
 an absolute path to the bender build (line 37).
 
 **What must be rebuilt (Stage 0).** Generalize `validate-languages.py` into an
@@ -690,11 +690,11 @@ all-37 gate:
 
 1. Enumerate the canonical 37 from `tools/fx/cases/*.txt` (37 files, one per
    effect, and the same set `tools/fx/speed.py:46-48` derives from
-   `src/fx/effects/*.rs`). `janet-port/src/effects.janet:44-81` `REGISTRY` and
+   `src/fx/effects/*.rs`). `bender-port/src/effects.ben:44-81` `REGISTRY` and
    `ttfx-cli --list` agree, but the `cases` directory is the Rust-side source
    of truth and also carries each effect's option set.
 2. Keep the existing `digest()` SHA-256-of-whole-dump criterion and the pinned
-   `COLUMNS=80 LINES=24`, `JANET_NO_PROFILE=1` env.
+   `COLUMNS=80 LINES=24`, `BENDER_NO_PROFILE=1` env.
 3. Parameterize the candidate binary instead of hardcoding `ttfx-cli-rel2`, so
    stage N's build can be compared against both Rust and the previous stage.
 4. Record per-effect pass/fail, and carry a declared known-divergence list.
@@ -708,14 +708,14 @@ Per-stage procedure:
 cd /Users/pankajdoharey/Development/Projects/ML/ttfx
 cargo build --release
 RUST=target/release/ttfx
-JAN=janet-port/build/<stage-binary>
+JAN=bender-port/build/<stage-binary>
 for fx in $(basename -s .txt -a tools/fx/cases/*.txt); do
   for inp in tools/parity/inputs/basic.txt tools/parity/inputs/paragraph.txt \
              ruby-port/logo.txt; do
     for seed in 42 1337; do
       COLUMNS=80 LINES=24 "$RUST" --seed $seed --parity-dump --max-frames 400 \
         "$fx" < "$inp" > /tmp/rs.dump
-      COLUMNS=80 LINES=24 JANET_NO_PROFILE=1 "$JAN" --seed $seed --max-frames 400 \
+      COLUMNS=80 LINES=24 BENDER_NO_PROFILE=1 "$JAN" --seed $seed --max-frames 400 \
         --dump-frames --input-file "$inp" "$fx" > /tmp/jn.dump
       cmp -s /tmp/rs.dump /tmp/jn.dump \
         && echo "PASS $fx $(basename $inp) $seed" \
@@ -728,35 +728,35 @@ done
 **Four non-obvious invocation traps**, each of which silently produces a
 meaningless comparison rather than an error:
 
-- **Seed defaults differ.** Janet defaults to `12345`
-  (`bin/ttfx-cli.janet:110-112`); Rust's `--seed` is `Option<u64>`, unset
+- **Seed defaults differ.** Bender defaults to `12345`
+  (`bin/ttfx-cli.ben:110-112`); Rust's `--seed` is `Option<u64>`, unset
   (`src/cli.rs:124`). Omit `--seed` and the two sides run *different streams*
   and every effect "fails". Always pass it explicitly on both.
 - **Input routing is asymmetric.** Rust `--parity-dump` reads **stdin**; the
-  Janet port takes `--input-file`. And `--text` takes precedence over
+  Bender port takes `--input-file`. And `--text` takes precedence over
   `--input-file` (`:24-28`), while *no* input at all silently falls back to a
   baked-in Omarchy logo (`:134`) instead of erroring.
 - **`--bench` beats `--dump-frames`.** The `--bench` branch is checked first
   (`:932-942`) and exits 0 without serializing. A command carrying both
   produces an empty dump that `cmp` reports as a mismatch.
 - **Virtual clock is implicit on both sides, by different flags.**
-  `--dump-frames` enables it in Janet (`:180`); `--parity-dump` implies it in
-  Rust (`src/cli.rs:162-166`). The Janet port has **no** `--virtual-clock` and
+  `--dump-frames` enables it in Bender (`:180`); `--parity-dump` implies it in
+  Rust (`src/cli.rs:162-166`). The Bender port has **no** `--virtual-clock` and
   **no** `--parity-dump` flag.
 
 **Also available, and more than I first credited:**
 
 - `tools/parity/run_suite.sh` + `tools/parity/cases.txt` — a real 178-case
   corpus (x2 seeds), **6 of them swarm** (`cases.txt:138-143`). But it compares
-  **Rust vs the pinned Python TTE reference**, not Janet vs Rust, so it
+  **Rust vs the pinned Python TTE reference**, not Bender vs Rust, so it
   validates the reference rather than the port. It also needs
   `tools/parity/fetch_reference.sh` run first: `reference/tte` is **absent in
   this checkout**, so `dump.py`, `m0_dump.py` and `tty_run.py` cannot run at
   all right now.
 - `tools/fx/oracle.sh <effect> full` — Rust fx engine vs original engine over
   all 37 case files; useful to confirm the *reference* is stable before
-  blaming a Janet stage.
-- `janet-port/bench/hot-stack.janet` — workload generator for an external
+  blaming a Bender stage.
+- `bender-port/bench/hot-stack.ben` — workload generator for an external
   profiler; asserts cross-replay determinism, and `--dump` emits a
   `cmp`-able length-prefixed stream.
 - `bench/compare-languages.py` (timing), `bench/validate-gui-state.py` and
@@ -771,16 +771,16 @@ This deserves its own subsection because the task brief states it as fact.
 `known-fail`, `expected-mismatch`, skip lists, allowlists, `XFAIL`, and bare
 `36`:
 
-- `janet-port/TODO-effects.md:1` — *"37/37 done, ground-truth gate: 37/37 vs
+- `bender-port/TODO-effects.md:1` — *"37/37 done, ground-truth gate: 37/37 vs
   Rust"*; `:64` lists swarm as checked.
-- `janet-port/README.md:73,87-88,133,159` — *"37/37 effects byte-identical"*.
-- `bench-engines.md:88-92` — *"Janet and Rust completed 37/37"* (the only
+- `bender-port/README.md:73,87-88,133,159` — *"37/37 effects byte-identical"*.
+- `bench-engines.md:88-92` — *"Bender and Rust completed 37/37"* (the only
   documented shortfall is **Node** at 31/37).
 - `bench/languages-validation.log` — 30 PASS lines, zero FAIL lines.
 - The only `XFAIL` mechanism in either tree is `js-port/scripts/sweep.sh:9-11`,
   for laseretch-vs-ruby, unrelated.
 - `bench/languages.md:43` records swarm as *"not ported"* for Lua/Chez — that
-  is an absence in those ports, not a Janet failure, and is a plausible source
+  is an absence in those ports, not a Bender failure, and is a plausible source
   of a misremembered "36".
 
 So the 36/37 figure appears only in the prose of
@@ -792,13 +792,13 @@ against Rust at seeds 42/1337 before assuming a known-divergence exists.
 If it does reproduce, the usable historical baseline is
 `docs/benchmarks/2026-09-21.csv:31,68,105,142,179,216`, which carries swarm
 output **sha256 hashes** — the only committed swarm digests available to diff
-against. Otherwise freeze a pre-stage Janet dump and compare against that:
+against. Otherwise freeze a pre-stage Bender dump and compare against that:
 
 ```sh
 cmp /tmp/swarm-baseline-prestage.dump /tmp/cand-swarm.dump
 ```
 
-**Also available:** `janet-port/bench/hot-stack.janet` (hot-stack sampling,
+**Also available:** `bender-port/bench/hot-stack.ben` (hot-stack sampling,
 for attribution not parity), `bench/compare-languages.py` (timing),
 `bench/validate-gui-state.py` and `compare-gui-languages.py` (GUI path —
 `ctx-frame-cells` is the GUI's consumer of the same fields, so stages 1–3 need
@@ -810,7 +810,7 @@ a GUI parity pass too, easy to forget).
 
 ### 5.1 Where it is
 
-`janet-port/src/scene.janet:676-753`. Supporting state: `space-runs`
+`bender-port/src/scene.ben:676-753`. Supporting state: `space-runs`
 (`:663`, a lazily grown array of space strings indexed by run length),
 `color-strings` (`:668`, a never-evicted `@{}` color→escape cache), and
 `color-string` (`:670-674`, whose body is manually inlined at the hot call
@@ -861,7 +861,7 @@ From `docs/internals/native-loop-executors.md:226` and `:294`:
   native because almost every per-cell operation is an effectful call.
 
 And the honest ceiling, from `ttfx-kernel-plan.md:69` and `:79-82`: render is
-**15.3%** of Janet frame time and the **worst ratio of the three phases (53x
+**15.3%** of Bender frame time and the **worst ratio of the three phases (53x
 vs Rust's 4.1us)**. *"211us vs 4us on formatting: buffer pushes, color-escape
 encoding, per-cell dispatch, space-run/gap logic in the interpreter."*
 
@@ -873,27 +873,27 @@ bounded at ~15% end-to-end on that workload, and a realistic one well under.
 There are **two independent native tiers** in this toolchain, and neither is
 the "register a C kernel" of the task framing.
 
-- **Tier A — emitted native functions.** `tools/callgraph.janet` type-proves a
+- **Tier A — emitted native functions.** `tools/callgraph.ben` type-proves a
   whole `defn` and emits C (`emit-fn-c:2653`, `wrapper-for:4168`), registers it
-  with `janet_cfuns(env, "native", regs)` (`:5650`), writes a
-  `native-names.txt` manifest (`:5671`), and `tools/mkimage.janet:126-139`
-  reads that manifest to **strip the Janet defn** from the image. This is the
-  `:hint`/kernel tier that `rng-kernels.janet` uses.
-- **Tier B — loop executors.** `tools/loop-executor.janet` plus the
-  `JANET_NATIVE_EXECUTORS` regions in `src/core/vm.c`. Binds **structurally**,
+  with `bender_cfuns(env, "native", regs)` (`:5650`), writes a
+  `native-names.txt` manifest (`:5671`), and `tools/mkimage.ben:126-139`
+  reads that manifest to **strip the Bender defn** from the image. This is the
+  `:hint`/kernel tier that `rng-kernels.ben` uses.
+- **Tier B — loop executors.** `tools/loop-executor.ben` plus the
+  `BENDER_NATIVE_EXECUTORS` regions in `src/core/vm.c`. Binds **structurally**,
   by exact bytecode comparison, never by name, and is double opt-in
-  (`-DJANET_NATIVE_EXECUTORS` at build plus `JANET_NATIVE_EXECUTORS=1` at run).
+  (`-DBENDER_NATIVE_EXECUTORS` at build plus `BENDER_NATIVE_EXECUTORS=1` at run).
   This is the tier `ctx-frame-string` already goes through today.
 
 **Option A — a Tier-A hinted kernel. Blocked, and I had this wrong.** An
 earlier draft of this section argued a kernel could take a `:buffer` and
-return a `:string`, citing the ABI type map (`callgraph.janet:266,284,4247`).
+return a `:string`, citing the ABI type map (`callgraph.ben:266,284,4247`).
 That map governs *passing through* values that already exist; it does not
 permit **constructing** them. Verified: `mkstr`, `mkbuf` and `mkstu` all set
 their destination slot to `:unknown` —
 
-```janet
-; tools/callgraph.janet:2201-2202
+```bender
+; tools/callgraph.ben:2201-2202
 (or (= op 'mkbuf) (= op 'mkstr) (= op 'mkstu) (= op 'mktab))
 (do (put st (ins 1) :unknown))
 ; and again in the declaration walk, :2760-2761
@@ -904,9 +904,9 @@ their destination slot to `:unknown` —
 frame string**. The fallback of writing into a caller-supplied buffer and
 returning a byte count does not rescue it either, because the writes are
 `buffer/push-string` — a call, not an op — and the corroborating evidence on
-allocation-in-loops stands: `test/fixtures/native-executor.janet:11-13` shows
+allocation-in-loops stands: `test/fixtures/native-executor.ben:11-13` shows
 `unsupported-loop` refused precisely for calling `array/push`, and
-`rng-kernels.janet:1-11` states the envelope as *"Fixed-limb int arrays,
+`rng-kernels.ben:1-11` states the envelope as *"Fixed-limb int arrays,
 in-place, no allocation"* with kernel-to-kernel calls refusing `:array`
 returns.
 
@@ -914,10 +914,10 @@ returns.
 (An earlier draft of this doc recorded this as unverified because I searched
 inside `emit-fn-c:2653-3000` and found only vararg/return-shape refusals plus
 a comment about declaring loop-reassigned slots. Wrong function: the veto is
-one layer up, in candidate selection, `callgraph.janet:5253-5262`.)
+one layer up, in candidate selection, `callgraph.ben:5253-5262`.)
 
-```janet
-; tools/callgraph.janet:5253-5262
+```bender
+; tools/callgraph.ben:5253-5262
 ; Hybrid wrappers replace the bytecode definition entirely. A C loop
 ; cannot yield a VM quantum and later resume its native stack/locals.
 ; Keep loops boxed until native continuations exist; ...
@@ -948,7 +948,7 @@ here; that experiment has been run.
 **Option C — a plain native module (or `ffi/defbind-alias`) over reshaped flat
 state.** A real C function, compiled as a native module or bound through the
 FFI, which the port calls like any other function. This is the **only** route
-that may both allocate and return a fresh Janet string. It needs the packed
+that may both allocate and return a fresh Bender string. It needs the packed
 cell record of §5.5 to be worth doing, and it carries the GC/barrier review
 burden that `native-loop-executors.md:301-305` is blunt about — a prior
 prototype's signature-derived "leaf" shortcut was unsound because *"A C call
@@ -971,7 +971,7 @@ Pass B currently stores a *table reference* per cell. A kernel needs flat
 numbers. Proposal — three parallel `width*nrows` lanes, allocated once on ctx
 and reused (same lifetime discipline as `:frame-rows`):
 
-```janet
+```bender
 (def cell-sym  0)   # index into a per-frame symbol table (int, -1 == empty)
 (def cell-fg   1)   # index into an escape-string table   (int, -1 == none)
 (def cell-lay  2)   # layer, for in-place arbitration during scatter
@@ -1001,7 +1001,7 @@ already settled that question.
 ### 5.6 The byte-compatibility contract
 
 A replacement must reproduce these, and they are the corner cases that will
-break first. Every item is read off `scene.janet:676-753`.
+break first. Every item is read off `scene.ben:676-753`.
 
 1. **Row order and separator.** Row-major from `visible-top` downward. `"\n"`
    *between* rows only — no leading and no trailing newline (`first-row` flag,
@@ -1016,7 +1016,7 @@ break first. Every item is read off `scene.janet:676-753`.
    it looks.
 4. **Trailing spaces are emitted.** The pending gap is flushed at end of row
    (`:750-751`). Rows are not right-trimmed. (Contrast `layout-lines` in
-   `canvas.janet:91-92`, which *does* trim — different function, do not
+   `canvas.ben:91-92`, which *does* trim — different function, do not
    generalize.)
 5. **No color-run coalescing.** This is the one most likely to be "optimized"
    into a parity failure. Every colored cell emits its **own** escape, its
@@ -1035,7 +1035,7 @@ break first. Every item is read off `scene.janet:676-753`.
    (`:710-711`). Equal layer *and* equal id cannot occur (ids are unique).
    First-write-wins and last-write-wins are both wrong.
 9. **Multi-byte symbols.** Symbols are UTF-8 character *strings* from
-   `utf8-chars` (`canvas.janet:25-37`), not bytes. A kernel must treat them as
+   `utf8-chars` (`canvas.ben:25-37`), not bytes. A kernel must treat them as
    opaque byte runs of length ≥ 1 and must not assume one byte per cell.
 10. **The return is a fresh immutable string** (`(string buf)`, `:753`); the
     buffer is reused. A kernel returning the buffer itself would alias.
@@ -1047,21 +1047,21 @@ tier (verified):
 
 **Tier A — emitted native functions.**
 
-1. Annotate the Janet function: `(defn k-frame-emit {:hint {:params [...] :returns :long}} [...] ...)`.
-   Handling is at `tools/callgraph.janet:678-684` (dict modifier on `defn`),
+1. Annotate the Bender function: `(defn k-frame-emit {:hint {:params [...] :returns :long}} [...] ...)`.
+   Handling is at `tools/callgraph.ben:678-684` (dict modifier on `defn`),
    with contract validation and malformed-hint rejection exercised by
-   `test/fixtures/hinted-export/{module,malformed,direct,duplicate,name-collision,alias-collision,prefix}.janet`.
-2. `callgraph.janet` type-proves it and emits C via `emit-fn-c:2653` plus a
+   `test/fixtures/hinted-export/{module,malformed,direct,duplicate,name-collision,alias-collision,prefix}.ben`.
+2. `callgraph.ben` type-proves it and emits C via `emit-fn-c:2653` plus a
    boxed wrapper from `wrapper-for:4168`.
-3. Registration is `janet_cfuns(env, "native", regs)` (`:5650`), and the
+3. Registration is `bender_cfuns(env, "native", regs)` (`:5650`), and the
    accepted set is written to a `native-names.txt` manifest (`:5671`).
-4. `tools/mkimage.janet:126-139` reads that manifest and **strips the Janet
+4. `tools/mkimage.ben:126-139` reads that manifest and **strips the Bender
    defn** from the image, so the native version is the only one left. This is
    the step that makes acceptance load-bearing: a silent refusal leaves the
-   boxed Janet function in place and you get no error, just no speedup.
-5. Build with `JANET_NATIVE_EXECUTORS=1 bender --aot bin/ttfx-cli.janet
+   boxed Bender function in place and you get no error, just no speedup.
+5. Build with `BENDER_NATIVE_EXECUTORS=1 bender --aot bin/ttfx-cli.ben
    --native -o build/...`, which prints `native-lib <n> kernels <path>`. Use
-   `--emit-native-lib <dir>` (`callgraph.janet:72-73`) to dump the generated C
+   `--emit-native-lib <dir>` (`callgraph.ben:72-73`) to dump the generated C
    and confirm **your** function is in it. Refusals print the offending
    signature (`params [table ? table] ret nil`, `slot mixes keyword/unknown`).
    "N kernels emitted" is not evidence yours is one of them, and
@@ -1070,11 +1070,11 @@ tier (verified):
 
 **Tier B — loop executors.** Binding is **structural**, by exact bytecode-word
 comparison, not by name — so there is nothing to annotate and nothing to
-register from the application side. Double opt-in: `-DJANET_NATIVE_EXECUTORS`
-at build plus `JANET_NATIVE_EXECUTORS=1` at run. Dispatch lives in
-`src/core/vm.c` (`JANET_NATIVE_EXECUTORS` regions at `:327, 1555, 1867-1871,
-2732-2736, 3305`; poll at `janet_native_poll:375`); registration refusal is
-reported by the generated image itself (`callgraph.janet:5531`,
+register from the application side. Double opt-in: `-DBENDER_NATIVE_EXECUTORS`
+at build plus `BENDER_NATIVE_EXECUTORS=1` at run. Dispatch lives in
+`src/core/vm.c` (`BENDER_NATIVE_EXECUTORS` regions at `:327, 1555, 1867-1871,
+2732-2736, 3305`; poll at `bender_native_poll:375`); registration refusal is
+reported by the generated image itself (`callgraph.ben:5531`,
 `"native executor registration refused"`). Because binding is by bytecode
 identity, **any edit to a function silently unbinds its executor** — relevant
 to this whole migration: stages 1–5 will invalidate existing executor
@@ -1168,7 +1168,7 @@ which the current refusal messages suggest is the hard part.
    seeds 42/1337 before assuming a known divergence exists. Also run
    `tools/parity/fetch_reference.sh`: `reference/tte` is absent, so the Python
    reference suites cannot run at all today.
-3. Freeze Janet-vs-Janet baseline dumps for `swarm` (and ideally for all 37) at
+3. Freeze Bender-vs-Bender baseline dumps for `swarm` (and ideally for all 37) at
    the current HEAD, so later stages have a reference that does not depend on
    the Rust comparison.
 4. Decide the `nil` vs `-1` sentinel question (§4.1 R8) **with a measurement**
@@ -1182,7 +1182,7 @@ which the current refusal messages suggest is the hard part.
    native module remains, and it should be costed on its own against a ≤15%
    target — not carried along here.
 7. Separately, cost native-to-native continuation (§6.3) and compare it against
-   stages 4–6 before committing to those. Note that `callgraph.janet:5253-5256`
+   stages 4–6 before committing to those. Note that `callgraph.ben:5253-5256`
    names this exact feature as the unblocker for its own loop veto: *"Keep
    loops boxed until native continuations exist."*
 
@@ -1190,41 +1190,41 @@ which the current refusal messages suggest is the hard part.
 
 Port (`/Users/pankajdoharey/Development/Projects/ML/ttfx/`):
 
-- `janet-port/src/canvas.janet:44` — `charanim-new`, the 21-field record
-- `janet-port/src/canvas.janet:102-112,184-198` — arena + fill construction
-- `janet-port/src/scene.janet:23-43,170-194` — existing packed frame/scene/path layouts
-- `janet-port/src/scene.janet:407-460` — `ctx-path-step`, `ctx-motion-move` (hot motion)
-- `janet-port/src/scene.janet:575-620` — `ctx-step-animation`, `ctx-char-active?` (hot animation)
-- `janet-port/src/scene.janet:628-649` — `ctx-update` (the tick)
-- `janet-port/src/scene.janet:663-753` — space-run/color caches, `ctx-frame-string`
-- `janet-port/src/scene.janet:755-769` — `ctx-frame-cells` (GUI consumer)
-- `janet-port/src/scene.janet:823-836` — `faithful-dump`, the parity format
-- `janet-port/src/rng-kernels.janet:1-13` — the working `:hint` kernel template
-- `janet-port/src/effects.janet:44-81` — the 37-effect registry
-- `janet-port/bin/ttfx-cli.janet:110,180,932,944` — `--seed`, `--dump-frames`, `--bench`, `--max-frames`
+- `bender-port/src/canvas.ben:44` — `charanim-new`, the 21-field record
+- `bender-port/src/canvas.ben:102-112,184-198` — arena + fill construction
+- `bender-port/src/scene.ben:23-43,170-194` — existing packed frame/scene/path layouts
+- `bender-port/src/scene.ben:407-460` — `ctx-path-step`, `ctx-motion-move` (hot motion)
+- `bender-port/src/scene.ben:575-620` — `ctx-step-animation`, `ctx-char-active?` (hot animation)
+- `bender-port/src/scene.ben:628-649` — `ctx-update` (the tick)
+- `bender-port/src/scene.ben:663-753` — space-run/color caches, `ctx-frame-string`
+- `bender-port/src/scene.ben:755-769` — `ctx-frame-cells` (GUI consumer)
+- `bender-port/src/scene.ben:823-836` — `faithful-dump`, the parity format
+- `bender-port/src/rng-kernels.ben:1-13` — the working `:hint` kernel template
+- `bender-port/src/effects.ben:44-81` — the 37-effect registry
+- `bender-port/bin/ttfx-cli.ben:110,180,932,944` — `--seed`, `--dump-frames`, `--bench`, `--max-frames`
 - `bench/validate-languages.py` — the 5-effect byte-parity gate to generalize
 - `tools/parity/dump.py:5-6` — dump format spec
 - `src/cli.rs:149-159`, `src/main.rs:149,170,212` — Rust `--parity-dump`
 
 Compiler (this repo):
 
-- `tools/callgraph.janet:72-73` — `--emit-native-lib`
-- `tools/callgraph.janet:199,678-684,761-772` — `:hint` contract handling
-- `tools/callgraph.janet:266,284,4247` — `:string`/`:buffer` ABI for values that
+- `tools/callgraph.ben:72-73` — `--emit-native-lib`
+- `tools/callgraph.ben:199,678-684,761-772` — `:hint` contract handling
+- `tools/callgraph.ben:266,284,4247` — `:string`/`:buffer` ABI for values that
   already exist (pass-through only — **not** construction)
-- `tools/callgraph.janet:2201-2202,2760-2761` — `mkstr`/`mkbuf`/`mkstu` →
+- `tools/callgraph.ben:2201-2202,2760-2761` — `mkstr`/`mkbuf`/`mkstu` →
   `:unknown` → downstream refusal: why a kernel cannot return a built string
-- `tools/callgraph.janet:5253-5262` — Tier A's backward-jump/self-edge veto
+- `tools/callgraph.ben:5253-5262` — Tier A's backward-jump/self-edge veto
   ("A C loop cannot yield a VM quantum"): why a kernel cannot contain the loop
-- `tools/callgraph.janet:2653,4168,5650,5671` — `emit-fn-c`, `wrapper-for`,
-  `janet_cfuns` registration, `native-names.txt` manifest (Tier A)
-- `tools/callgraph.janet:5531` — `"native executor registration refused"` (Tier B)
-- `tools/mkimage.janet:126-139` — manifest-driven stripping of the Janet defn
-- `tools/callgraph.janet:389-430` — `:kernel` pread/pwrite intrinsics
-- `tools/loop-executor.janet` — executor eligibility and emitted C
-- `src/core/vm.c:375` — `janet_native_poll`
+- `tools/callgraph.ben:2653,4168,5650,5671` — `emit-fn-c`, `wrapper-for`,
+  `bender_cfuns` registration, `native-names.txt` manifest (Tier A)
+- `tools/callgraph.ben:5531` — `"native executor registration refused"` (Tier B)
+- `tools/mkimage.ben:126-139` — manifest-driven stripping of the Bender defn
+- `tools/callgraph.ben:389-430` — `:kernel` pread/pwrite intrinsics
+- `tools/loop-executor.ben` — executor eligibility and emitted C
+- `src/core/vm.c:375` — `bender_native_poll`
 - `src/core/vm.c:874-877` — SoA-shaping evidence in the profiler
-- `test/fixtures/native-executor.janet:11-13` — allocation disqualifies a loop
+- `test/fixtures/native-executor.ben:11-13` — allocation disqualifies a loop
 - `test/fixtures/hinted-export/` — hint acceptance/rejection cases
 - `docs/internals/ttfx-kernel-plan.md:44-95` — the phase-split measurements
 - `docs/internals/native-loop-executors.md:220-230,290-310` — `ctx-frame-string`

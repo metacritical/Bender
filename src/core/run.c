@@ -20,49 +20,49 @@
 * IN THE SOFTWARE.
 */
 
-#ifndef JANET_AMALG
+#ifndef BENDER_AMALG
 #include "features.h"
-#include <janet.h>
+#include <bender.h>
 #include "state.h"
 #endif
 
-/* Run a string of code. The return value is a set of error flags, JANET_DO_ERROR_RUNTIME, JANET_DO_ERROR_COMPILE, and JANET_DOR_ERROR_PARSE if
+/* Run a string of code. The return value is a set of error flags, BENDER_DO_ERROR_RUNTIME, BENDER_DO_ERROR_COMPILE, and BENDER_DOR_ERROR_PARSE if
  * any errors were encountered in those phases. More information is printed to stderr. */
-int janet_dobytes(JanetTable *env, const uint8_t *bytes, int32_t len, const char *sourcePath, Janet *out) {
-    JanetParser *parser;
+int bender_dobytes(BenderTable *env, const uint8_t *bytes, int32_t len, const char *sourcePath, Bender *out) {
+    BenderParser *parser;
     int errflags = 0, done = 0;
     int32_t index = 0;
-    Janet ret = janet_wrap_nil();
-    JanetFiber *fiber = NULL;
-    const uint8_t *where = sourcePath ? janet_cstring(sourcePath) : NULL;
+    Bender ret = bender_wrap_nil();
+    BenderFiber *fiber = NULL;
+    const uint8_t *where = sourcePath ? bender_cstring(sourcePath) : NULL;
 
-    if (where) janet_gcroot(janet_wrap_string(where));
+    if (where) bender_gcroot(bender_wrap_string(where));
     if (NULL == sourcePath) sourcePath = "<unknown>";
-    parser = janet_abstract(&janet_parser_type, sizeof(JanetParser));
-    janet_parser_init(parser);
-    janet_gcroot(janet_wrap_abstract(parser));
+    parser = bender_abstract(&bender_parser_type, sizeof(BenderParser));
+    bender_parser_init(parser);
+    bender_gcroot(bender_wrap_abstract(parser));
 
     /* While we haven't seen an error */
     while (!done) {
 
         /* Evaluate parsed values */
-        while (janet_parser_has_more(parser)) {
-            Janet form = janet_parser_produce(parser);
-            JanetCompileResult cres = janet_compile(form, env, where);
-            if (cres.status == JANET_COMPILE_OK) {
-                JanetFunction *f = janet_thunk(cres.funcdef);
-                fiber = janet_fiber(f, 64, 0, NULL);
+        while (bender_parser_has_more(parser)) {
+            Bender form = bender_parser_produce(parser);
+            BenderCompileResult cres = bender_compile(form, env, where);
+            if (cres.status == BENDER_COMPILE_OK) {
+                BenderFunction *f = bender_thunk(cres.funcdef);
+                fiber = bender_fiber(f, 64, 0, NULL);
                 fiber->env = env;
-                JanetSignal status;
+                BenderSignal status;
                 /* M4b-2: quantum-INTERRUPT is transparent here (bare run
                  * must complete) — resume again. Quiesce still unwinds. */
                 do {
-                    status = janet_continue(fiber, janet_wrap_nil(), &ret);
-                } while (status == JANET_SIGNAL_INTERRUPT && janet_vm.quantum &&
-                        !janet_atomic_load_relaxed(&janet_vm.auto_suspend));
-                if (status != JANET_SIGNAL_OK && status != JANET_SIGNAL_EVENT) {
-                    janet_stacktrace_ext(fiber, ret, "");
-                    errflags |= JANET_DO_ERROR_RUNTIME;
+                    status = bender_continue(fiber, bender_wrap_nil(), &ret);
+                } while (status == BENDER_SIGNAL_INTERRUPT && bender_vm.quantum &&
+                        !bender_atomic_load_relaxed(&bender_vm.auto_suspend));
+                if (status != BENDER_SIGNAL_OK && status != BENDER_SIGNAL_EVENT) {
+                    bender_stacktrace_ext(fiber, ret, "");
+                    errflags |= BENDER_DO_ERROR_RUNTIME;
                     done = 1;
                 }
             } else {
@@ -73,19 +73,19 @@ int janet_dobytes(JanetTable *env, const uint8_t *bytes, int32_t len, const char
                     line = cres.error_mapping.line;
                     col = cres.error_mapping.column;
                 }
-                JanetString ctx = janet_formatc("%s:%d:%d: compile error",
+                BenderString ctx = bender_formatc("%s:%d:%d: compile error",
                                                 sourcePath, line, col);
-                JanetString errstr = janet_formatc("%s: %s",
+                BenderString errstr = bender_formatc("%s: %s",
                                                    (const char *)ctx,
                                                    (const char *)cres.error);
-                ret = janet_wrap_string(errstr);
+                ret = bender_wrap_string(errstr);
                 if (cres.macrofiber) {
-                    janet_eprintf("%s", (const char *)ctx);
-                    janet_stacktrace_ext(cres.macrofiber, ret, "");
+                    bender_eprintf("%s", (const char *)ctx);
+                    bender_stacktrace_ext(cres.macrofiber, ret, "");
                 } else {
-                    janet_eprintf("%s\n", (const char *)errstr);
+                    bender_eprintf("%s\n", (const char *)errstr);
                 }
-                errflags |= JANET_DO_ERROR_COMPILE;
+                errflags |= BENDER_DO_ERROR_COMPILE;
                 done = 1;
             }
         }
@@ -93,28 +93,28 @@ int janet_dobytes(JanetTable *env, const uint8_t *bytes, int32_t len, const char
         if (done) break;
 
         /* Dispatch based on parse state */
-        switch (janet_parser_status(parser)) {
-            case JANET_PARSE_DEAD:
+        switch (bender_parser_status(parser)) {
+            case BENDER_PARSE_DEAD:
                 done = 1;
                 break;
-            case JANET_PARSE_ERROR: {
-                errflags |= JANET_DO_ERROR_PARSE;
+            case BENDER_PARSE_ERROR: {
+                errflags |= BENDER_DO_ERROR_PARSE;
                 int32_t line = (int32_t) parser->line;
                 int32_t col = (int32_t) parser->column;
-                JanetString errstr = janet_formatc("%s:%d:%d: parse error: %s",
+                BenderString errstr = bender_formatc("%s:%d:%d: parse error: %s",
                                                    sourcePath, line, col,
-                                                   janet_parser_error(parser));
-                ret = janet_wrap_string(errstr);
-                janet_eprintf("%s\n", (const char *)errstr);
+                                                   bender_parser_error(parser));
+                ret = bender_wrap_string(errstr);
+                bender_eprintf("%s\n", (const char *)errstr);
                 done = 1;
                 break;
             }
-            case JANET_PARSE_ROOT:
-            case JANET_PARSE_PENDING:
+            case BENDER_PARSE_ROOT:
+            case BENDER_PARSE_PENDING:
                 if (index >= len) {
-                    janet_parser_eof(parser);
+                    bender_parser_eof(parser);
                 } else {
-                    janet_parser_consume(parser, bytes[index++]);
+                    bender_parser_consume(parser, bytes[index++]);
                 }
                 break;
         }
@@ -122,17 +122,17 @@ int janet_dobytes(JanetTable *env, const uint8_t *bytes, int32_t len, const char
     }
 
     /* Clean up and return errors */
-    janet_gcunroot(janet_wrap_abstract(parser));
-    if (where) janet_gcunroot(janet_wrap_string(where));
-#ifdef JANET_EV
+    bender_gcunroot(bender_wrap_abstract(parser));
+    if (where) bender_gcunroot(bender_wrap_string(where));
+#ifdef BENDER_EV
     /* Enter the event loop if we are not already in it */
-    if (janet_vm.stackn == 0) {
+    if (bender_vm.stackn == 0) {
         if (fiber) {
-            janet_gcroot(janet_wrap_fiber(fiber));
+            bender_gcroot(bender_wrap_fiber(fiber));
         }
-        janet_loop();
+        bender_loop();
         if (fiber) {
-            janet_gcunroot(janet_wrap_fiber(fiber));
+            bender_gcunroot(bender_wrap_fiber(fiber));
             if (!errflags)
                 ret = fiber->last_value;
         }
@@ -142,24 +142,24 @@ int janet_dobytes(JanetTable *env, const uint8_t *bytes, int32_t len, const char
     return errflags;
 }
 
-int janet_dostring(JanetTable *env, const char *str, const char *sourcePath, Janet *out) {
+int bender_dostring(BenderTable *env, const char *str, const char *sourcePath, Bender *out) {
     int32_t len = 0;
     while (str[len]) ++len;
-    return janet_dobytes(env, (const uint8_t *)str, len, sourcePath, out);
+    return bender_dobytes(env, (const uint8_t *)str, len, sourcePath, out);
 }
 
 /* Run a fiber to completion (use event loop if enabled). Return the status. */
-int janet_loop_fiber(JanetFiber *fiber) {
+int bender_loop_fiber(BenderFiber *fiber) {
     int status;
-#ifdef JANET_EV
-    janet_schedule(fiber, janet_wrap_nil());
-    janet_loop();
-    status = janet_fiber_status(fiber);
+#ifdef BENDER_EV
+    bender_schedule(fiber, bender_wrap_nil());
+    bender_loop();
+    status = bender_fiber_status(fiber);
 #else
-    Janet out;
-    status = janet_continue(fiber, janet_wrap_nil(), &out);
-    if (status != JANET_SIGNAL_OK && status != JANET_SIGNAL_EVENT) {
-        janet_stacktrace_ext(fiber, out, "");
+    Bender out;
+    status = bender_continue(fiber, bender_wrap_nil(), &out);
+    if (status != BENDER_SIGNAL_OK && status != BENDER_SIGNAL_EVENT) {
+        bender_stacktrace_ext(fiber, out, "");
     }
 #endif
     return status;

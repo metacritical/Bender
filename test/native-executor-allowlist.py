@@ -12,7 +12,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parent.parent
-EMITTER = ROOT / "tools/loop-executor.janet"
+EMITTER = ROOT / "tools/loop-executor.ben"
 VERIFIER = ROOT / "src/core/bytecode.c"
 ASSEMBLER = ROOT / "src/core/asm.c"
 EXCLUDED = {"sru", "sruim"}  # uint32 domain; no corresponding native guard yet.
@@ -45,7 +45,7 @@ def emitter_opcodes(source):
 
 
 def verifier_opcodes(source, assembler):
-    fn = one(r"static int native_structure_matches\(.*?\) \{(.*?)\n\}\s*\n\s*int janet_native_matches", source, VERIFIER)
+    fn = one(r"static int native_structure_matches\(.*?\) \{(.*?)\n\}\s*\n\s*int bender_native_matches", source, VERIFIER)
     cases = one(r"switch \(n->words\[i\] & 0xFF\) \{(.*?)\bdefault:\s*return 0;", fn, VERIFIER)
     opcodes = re.findall(r"\bcase\s+(JOP_[A-Z0-9_]+)\s*:", cases)
     if not opcodes:

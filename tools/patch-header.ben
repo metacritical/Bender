@@ -1,0 +1,3 @@
+# Patch bender.h 
+(def [_ benderh benderconf output] (dyn :args))
+(spit output (string/replace `#include "benderconf.h"` (slurp benderconf) (slurp benderh)))

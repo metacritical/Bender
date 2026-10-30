@@ -1,0 +1,117 @@
+# Regression: the Phase 6 ABI types. Before this, every non-numeric
+# leaf except :array/:tuple/:pointer/:string/:keyword/:symbol was
+# refused at both concrete gates, even for a function that merely
+# passes the value through. The wrapper must guard the Bender type,
+# unbox once, call the flat-C kernel, and box once on return.
+#
+# Bool is special: PGO masks and `(type true)` spell it :boolean while
+# comparisons spell it :bool. suite-pgo-seed covers the normalization;
+# here we prove both a hinted bool parameter AND a call-site-evidenced
+# bool parameter flow through a real native call.
+(import ./helper :prefix "" :exit true)
+(start-suite)
+(def root "/tmp/bender-aot-native-abi-suite")
+(os/execute ["/bin/rm" "-rf" root] :p)
+(os/mkdir root)
+(def source (string root "/app.ben"))
+(def binary (string root "/app"))
+(spit source `
+# --- bool: hinted param + bool return -------------------------------
+(defn bool-flip {:hint {:params [:bool] :returns :bool}} [b]
+  (if b false true))
+
+# --- bool: proven from comparison results at the call site, no hint -
+(defn bool-int [b]
+  (if b 10 20))
+(defn bool-int-caller [x]
+  (bool-int (> x 0)))
+
+# --- opaque/raw pass-throughs ---------------------------------------
+# Each kernel receives the flat C value, returns the same slot, and
+# never touches the boxed representation.
+(defn table-id {:hint {:params [:table] :returns :table}} [t] t)
+(defn struct-id {:hint {:params [:struct] :returns :struct}} [s] s)
+(defn tuple-id {:hint {:params [:tuple] :returns :tuple}} [t] t)
+(defn string-id {:hint {:params [:string] :returns :string}} [s] s)
+(defn keyword-id {:hint {:params [:keyword] :returns :keyword}} [k] k)
+(defn symbol-id {:hint {:params [:symbol] :returns :symbol}} [s] s)
+(defn buffer-id {:hint {:params [:buffer] :returns :buffer}} [b] b)
+(defn function-id {:hint {:params [:function] :returns :function}} [f] f)
+(defn cfunction-id {:hint {:params [:cfunction] :returns :cfunction}} [f] f)
+(defn fiber-id {:hint {:params [:fiber] :returns :fiber}} [f] f)
+
+(assert (= false (bool-flip true)) "bool kernel inverts true")
+(assert (= true (bool-flip false)) "bool kernel inverts false")
+(assert (= :boolean (type (bool-flip true))) "bool return is a Bender boolean")
+(assert (= 10 (bool-int (> 2 1))) "call-site-evidenced bool param, true branch")
+(assert (= 20 (bool-int (> 1 2))) "call-site-evidenced bool param, false branch")
+(assert (= 10 (bool-int-caller 3)) "native-to-native call with a bool argument")
+(assert (= 20 (bool-int-caller -3)) "native-to-native false path")
+
+(def tbl @{:a 1})
+(assert (= tbl (table-id tbl)) "table pass-through is identity")
+(put tbl :b 2)
+(assert (= 2 (tbl :b)) "returned table is the same mutable table")
+
+(def st {:a 1 :b 2})
+(assert (= st (struct-id st)) "struct pass-through is identity")
+(assert (= st (struct-id {:a 1 :b 2})) "struct value equality")
+
+(def tup [1 2 3])
+(assert (= tup (tuple-id tup)) "tuple pass-through is identity")
+(assert (= [1 2 3] (tuple-id [1 2 3])) "tuple value equality")
+(assert (= "hello" (string-id "hello")) "string pass-through")
+(assert (= :key (keyword-id :key)) "keyword pass-through")
+(assert (= 'sym (symbol-id 'sym)) "symbol pass-through")
+
+(def buf (buffer "abc"))
+(assert (= buf (buffer-id buf)) "buffer pass-through is identity")
+(assert (= 3 (length (buffer-id buf))) "returned buffer is usable")
+
+(def f (fn [x] (+ x 1)))
+(assert (= 8 ((function-id f) 7)) "function pass-through is callable")
+(assert (= 8 ((function-id (fn [x] (+ x 1))) 7)) "fresh function pass-through")
+(assert (= 7 ((cfunction-id math/floor) 7.9)) "cfunction pass-through is callable")
+(def fib (fiber/new (fn [] 42)))
+(assert (= :new (fiber/status (fiber-id fib))) "fiber pass-through keeps status")
+`)
+(def env (merge @{} (os/environ) {"BENDER_NO_PROFILE" "1"}))
+(assert (= 0 (os/execute ["./build/bender" "--aot" source "--native"
+                         "--no-auto-pgo" "-o" binary] :e env))
+        "ABI-type build succeeds")
+(def names (string (slurp (string binary "-native/native-names.txt"))))
+(each nm ["bool-flip" "bool-int" "bool-int-caller" "table-id" "struct-id"
+          "tuple-id" "string-id" "keyword-id" "symbol-id" "buffer-id"
+          "function-id" "cfunction-id" "fiber-id"]
+  (assert (string/find nm names)
+          (string nm " got a native wrapper")))
+(assert (= 0 (os/execute [binary] :e env)) "native ABI-type binary exits clean")
+(assert (= 0 (os/execute ["./build/bender" source] :e env))
+        "same source passes identically under the interpreter")
+
+# Guard behavior is a NATIVE-boundary property: the hint is a contract
+# the emitted wrapper enforces. Under the plain interpreter the same
+# hint is only lint metadata, so this source is run natively only.
+(def guard-source (string root "/guard.ben"))
+(def guard-binary (string root "/guard"))
+(spit guard-source `
+(defn bool-flip {:hint {:params [:bool] :returns :bool}} [b]
+  (if b false true))
+(defn table-id {:hint {:params [:table] :returns :table}} [t] t)
+(defn string-id {:hint {:params [:string] :returns :string}} [s] s)
+
+# The wrapper is a real Bender cfunction: a wrong argument type must
+# panic (fail closed), not reinterpret the value.
+(def [ok _] (protect (bool-flip 1)))
+(assert (not ok) "bool wrapper rejects a number")
+(def [ok2 _] (protect (table-id 1)))
+(assert (not ok2) "table wrapper rejects a number")
+(def [ok3 _] (protect (string-id :not-a-string)))
+(assert (not ok3) "string wrapper rejects a keyword")
+`)
+(assert (= 0 (os/execute ["./build/bender" "--aot" guard-source "--native"
+                         "--no-auto-pgo" "-o" guard-binary] :e env))
+        "ABI guard build succeeds")
+(assert (= 0 (os/execute [guard-binary] :e env))
+        "wrong-type calls panic inside the native wrappers")
+(end-suite)

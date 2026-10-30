@@ -1,0 +1,246 @@
+# Generates a TextMate grammar (JSON) for Bender source files (.ben).
+#
+# Usage:
+#   bender tools/linguist_grammar.ben > grammar/syntaxes/bender.tmLanguage.json
+#
+# The symbol lists are taken from the running interpreter, so the grammar
+# follows the core library as it grows. Special forms are always treated as
+# control keywords; macros are detected through their :macro property; every
+# other binding becomes a support function.
+#
+# Core bindings are emitted exactly as the running interpreter reports them.
+
+(def special-list
+  @["break"
+    "def"
+    "do"
+    "var"
+    "set"
+    "fn"
+    "while"
+    "if"
+    "quote"
+    "quasiquote"
+    "unquote"
+    "upscope"
+    "splice"])
+
+(def regex-meta "\\^$.|?*+()[]{}")
+
+(defn- json-str
+  "Return `s` as a JSON string literal, including the surrounding quotes."
+  [s]
+  (def buf @"")
+  (buffer/push-byte buf 34)
+  (each b s
+    (case b
+      34 (buffer/push-string buf "\\\"")
+      92 (buffer/push-string buf "\\\\")
+      8 (buffer/push-string buf "\\b")
+      12 (buffer/push-string buf "\\f")
+      10 (buffer/push-string buf "\\n")
+      13 (buffer/push-string buf "\\r")
+      9 (buffer/push-string buf "\\t")
+      (if (< b 32)
+        (buffer/push-string buf (string/format "\\u%04x" b))
+        (buffer/push-byte buf b))))
+  (buffer/push-byte buf 34)
+  (string buf))
+
+(defn- re-escape
+  "Escape a literal symbol for use in a regex alternation."
+  [s]
+  (def buf @"")
+  (each b s
+    (def c (string/from-bytes b))
+    (when (string/find c regex-meta)
+      (buffer/push-byte buf 92))
+    (buffer/push-byte buf b))
+  (string buf))
+
+(defn- longest-first
+  [a b]
+  (> (length a) (length b)))
+
+(defn- alternation
+  "Build a regex alternation, longest symbol first so prefixes cannot win."
+  [syms]
+  (string/join (map re-escape (sort (array/slice syms) longest-first)) "|"))
+
+(def bindings (all-bindings))
+
+# Special forms are compiler syntax, not entries in all-bindings, so seed the
+# control list from them first and then add macros discovered at runtime.
+(def control @[])
+(def seen @{})
+(each s special-list
+  (put seen s true)
+  (array/push control s))
+
+(def builtin @[])
+(each s bindings
+  (def name s)
+  (unless (get seen name)
+    (def v (dyn (symbol s)))
+    (if (and v (get v :macro))
+      (do
+        (put seen name true)
+        (array/push control name))
+      (array/push builtin name))))
+
+(def boundary "(?<![.\\w_\\-=!@\\$%^&?/<>*])")
+(def lookahead "(?![.\\w_\\-=!@\\$%^&?/<>*])")
+
+(def control-re (string boundary "(" (alternation control) ")" lookahead))
+(def builtin-re (string boundary "(" (alternation builtin) ")" lookahead))
+
+(def grammar
+  (string
+    "{\n"
+    "  \"$schema\": \"https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json\",\n"
+    "  \"name\": \"Bender\",\n"
+    "  \"scopeName\": \"source.bender\",\n"
+    "  \"fileTypes\": [\"ben\"],\n"
+    "  \"uuid\": \"d2f4a1c8-7e3b-4a6f-9c2d-1b8e5f7a9c3d\",\n"
+    "  \"foldingStartMarker\": \"(\\\\(|\\\\[|\\\\{)\",\n"
+    "  \"foldingStopMarker\": \"(\\\\)|\\\\]|\\\\})\",\n"
+    "  \"patterns\": [{\"include\": \"#all\"}],\n"
+    "  \"repository\": {\n"
+
+    "    \"all\": {\n"
+    "      \"patterns\": [\n"
+    "        {\"include\": \"#comment\"},\n"
+    "        {\"include\": \"#longstring\"},\n"
+    "        {\"include\": \"#string\"},\n"
+    "        {\"include\": \"#readermac\"},\n"
+    "        {\"include\": \"#parens\"},\n"
+    "        {\"include\": \"#brackets\"},\n"
+    "        {\"include\": \"#braces\"},\n"
+    "        {\"include\": \"#hint\"},\n"
+    "        {\"include\": \"#literal\"},\n"
+    "        {\"include\": \"#keyword\"},\n"
+    "        {\"include\": \"#hex-number\"},\n"
+    "        {\"include\": \"#radix-number\"},\n"
+    "        {\"include\": \"#decimal-number\"},\n"
+    "        {\"include\": \"#control\"},\n"
+    "        {\"include\": \"#builtin\"},\n"
+    "        {\"include\": \"#symbol\"}\n"
+    "      ]\n"
+    "    },\n"
+
+    "    \"comment\": {\n"
+    "      \"match\": \"(#).*$\",\n"
+    "      \"name\": \"comment.line.number-sign.bender\",\n"
+    "      \"captures\": {\"1\": {\"name\": \"punctuation.definition.comment.bender\"}}\n"
+    "    },\n"
+
+    "    \"string\": {\n"
+    "      \"begin\": \"(@?\\\")\",\n"
+    "      \"beginCaptures\": {\"1\": {\"name\": \"punctuation.definition.string.begin.bender\"}},\n"
+    "      \"end\": \"\\\"\",\n"
+    "      \"endCaptures\": {\"0\": {\"name\": \"punctuation.definition.string.end.bender\"}},\n"
+    "      \"name\": \"string.quoted.double.bender\",\n"
+    "      \"patterns\": [\n"
+    "        {\"match\": \"(\\\\\\\\[nevr0zft\\\"\\\\\\\\']|\\\\\\\\x[0-9a-fA-F]{2}|\\\\\\\\u[0-9a-fA-F]{4}|\\\\\\\\U[0-9a-fA-F]{6})\",\n"
+    "         \"name\": \"constant.character.escape.bender\"}\n"
+    "      ]\n"
+    "    },\n"
+
+    "    \"longstring\": {\n"
+    "      \"begin\": \"(@?)(`+)\",\n"
+    "      \"beginCaptures\": {\n"
+    "        \"1\": {\"name\": \"punctuation.definition.string.begin.bender\"},\n"
+    "        \"2\": {\"name\": \"punctuation.definition.string.begin.bender\"}\n"
+    "      },\n"
+    "      \"end\": \"\\\\2\",\n"
+    "      \"endCaptures\": {\"0\": {\"name\": \"punctuation.definition.string.end.bender\"}},\n"
+    "      \"name\": \"string.quoted.triple.bender\"\n"
+    "    },\n"
+
+    "    \"readermac\": {\n"
+    "      \"match\": \"['~;,]\",\n"
+    "      \"name\": \"punctuation.other.readermacro.bender\"\n"
+    "    },\n"
+
+    "    \"parens\": {\n"
+    "      \"begin\": \"(@?\\\\()\",\n"
+    "      \"beginCaptures\": {\"1\": {\"name\": \"punctuation.definition.parens.begin.bender\"}},\n"
+    "      \"end\": \"(\\\\))\",\n"
+    "      \"endCaptures\": {\"1\": {\"name\": \"punctuation.definition.parens.end.bender\"}},\n"
+    "      \"patterns\": [{\"include\": \"#all\"}]\n"
+    "    },\n"
+
+    "    \"brackets\": {\n"
+    "      \"begin\": \"(@?\\\\[)\",\n"
+    "      \"beginCaptures\": {\"1\": {\"name\": \"punctuation.definition.brackets.begin.bender\"}},\n"
+    "      \"end\": \"(\\\\])\",\n"
+    "      \"endCaptures\": {\"1\": {\"name\": \"punctuation.definition.brackets.end.bender\"}},\n"
+    "      \"patterns\": [{\"include\": \"#all\"}]\n"
+    "    },\n"
+
+    "    \"braces\": {\n"
+    "      \"begin\": \"(@?\\\\{)\",\n"
+    "      \"beginCaptures\": {\"1\": {\"name\": \"punctuation.definition.braces.begin.bender\"}},\n"
+    "      \"end\": \"(\\\\})\",\n"
+    "      \"endCaptures\": {\"1\": {\"name\": \"punctuation.definition.braces.end.bender\"}},\n"
+    "      \"patterns\": [{\"include\": \"#all\"}]\n"
+    "    },\n"
+
+    "    \"hint\": {\n"
+    "      \"match\": "
+    (json-str (string boundary ":hint" lookahead))
+    ",\n      \"name\": \"keyword.other.hint.bender\"\n"
+    "    },\n"
+
+    "    \"literal\": {\n"
+    "      \"match\": "
+    (json-str (string boundary "(true|false|nil)" lookahead))
+    ",\n      \"name\": \"constant.language.bender\"\n"
+    "    },\n"
+
+    "    \"keyword\": {\n"
+    "      \"match\": "
+    (json-str (string boundary ":[.:\\w_\\-=!@\\$%^&?/<>*]*"))
+    ",\n      \"name\": \"constant.keyword.bender\"\n"
+    "    },\n"
+
+    "    \"hex-number\": {\n"
+    "      \"match\": "
+    (json-str (string boundary "[-+]?0x([_\\da-fA-F]+|[_\\da-fA-F]+\\.[_\\da-fA-F]*|\\.[_\\da-fA-F]+)(&[+-]?[\\da-fA-F]+)?" lookahead))
+    ",\n      \"name\": \"constant.numeric.hex.bender\"\n"
+    "    },\n"
+
+    "    \"radix-number\": {\n"
+    "      \"match\": "
+    (json-str (string boundary "[-+]?\\d\\d?r([_\\w]+|[_\\w]+\\.[_\\w]*|\\.[_\\w]+)(&[+-]?[\\w]+)?" lookahead))
+    ",\n      \"name\": \"constant.numeric.radix.bender\"\n"
+    "    },\n"
+
+    "    \"decimal-number\": {\n"
+    "      \"match\": "
+    (json-str (string boundary "[-+]?([_\\d]+|[_\\d]+\\.[_\\d]*|\\.[_\\d]+)([eE&][+-]?[\\d]+)?" lookahead))
+    ",\n      \"name\": \"constant.numeric.decimal.bender\"\n"
+    "    },\n"
+
+    "    \"control\": {\n"
+    "      \"match\": "
+    (json-str control-re)
+    ",\n      \"name\": \"keyword.control.bender\"\n"
+    "    },\n"
+
+    "    \"builtin\": {\n"
+    "      \"match\": "
+    (json-str builtin-re)
+    ",\n      \"name\": \"support.function.bender\"\n"
+    "    },\n"
+
+    "    \"symbol\": {\n"
+    "      \"match\": "
+    (json-str (string boundary "[.a-zA-Z_\\-=!@\\$%^&?/<>*][.:\\w_\\-=!@\\$%^&?/<>*]*"))
+    ",\n      \"name\": \"variable.other.bender\"\n"
+    "    }\n"
+
+    "  }\n"
+    "}\n"))
+
+(print grammar)

@@ -2,9 +2,9 @@
 
 Everything we can do to close the gap to Rust, roughly ordered by
 perf-per-risk. Checked items ship; unchecked items are staged behind
-bench gates (bench/run.janet + ttfx byte-identical table). Goal is not
+bench gates (bench/run.ben + ttfx byte-identical table). Goal is not
 elegance — it is matching `rustc -O` assembly on hot loops while
-keeping every Janet program working.
+keeping every Bender program working.
 
 Baseline (M-series, interpreter): rng-double ~28ns/op, array-sum
 ~13ns/elem, table-get ~16ns/op, alloc-tuple ~64ns/op. Profile: 96%
@@ -15,27 +15,27 @@ Baseline (M-series, interpreter): rng-double ~28ns/op, array-sum
 
 - [x] Computed-goto threading (`vm.c:run_vm`). Switch dispatch
   mispredicts; threading is strictly better on GCC/Clang.
-- [x] `JANET_LIKELY/UNLIKELY` on ALU fast paths + GC polls (`vm.c`).
+- [x] `BENDER_LIKELY/UNLIKELY` on ALU fast paths + GC polls (`vm.c`).
   ~1-3% on numeric loops, free (ttfx interp 547 → 637 fps).
   Next: annotate `fiber_push`, `table_get` probe loop, `symcache`
   hit path.
 - [x] AOT cc flags: `-O3 -fwrapv -fno-math-errno
-  -fno-trapping-math` (`boot.janet`). `-fwrapv` is a CORRECTNESS fix
+  -fno-trapping-math` (`boot.ben`). `-fwrapv` is a CORRECTNESS fix
   for `:wrap` int policy (signed overflow is UB otherwise); the rest
   is the safe fast-math subset (no reassociation, oracle-identical).
   Never `-ffast-math` (breaks parity on NaN/-0/div-by-zero).
-- [x] Fail-closed native emission + oracle (`janet-diff.janet`,
+- [x] Fail-closed native emission + oracle (`bender-diff.ben`,
   PGO parity gate in `bender --aot --pgo`). Every optimization below
   must keep byte-parity or refuse loudly (`native-skip`).
-- [x] `divf`/`mod`/`rem` float-kernel emission (`callgraph.janet`).
+- [x] `divf`/`mod`/`rem` float-kernel emission (`callgraph.ben`).
   Exact boxed semantics: `floor(a/b)`, `b==0?a:a-b*floor(a/b)`,
-  `fmod(a,b)`. Int widths refuse (C `%` truncates, Janet mods floor —
+  `fmod(a,b)`. Int widths refuse (C `%` truncates, Bender mods floor —
   diverge on negatives).
 - [x] Reserved-C-name prefix (`k_` in `emit-c-name`). Defining
   `fmod` is UB: the compiler folds `fmod(-2.5,1.5)` with builtin
   semantics (-1) instead of calling the kernel (0.5). Any libm/libc
   name or keyword collides the same way.
-- [x] `bench/run.janet` micro-harness: rng-double ~28ns/op,
+- [x] `bench/run.ben` micro-harness: rng-double ~28ns/op,
   array-sum ~13ns/elem, table-get ~16ns/op, alloc-tuple ~64ns/op.
 - [x] `divim` emission + lib-path skip diagnostics (the lib path
   printed nothing; real builds were undiagnosable).
@@ -77,7 +77,7 @@ Baseline (M-series, interpreter): rng-double ~28ns/op, array-sum
 
 ## Tier 2 — value representation + allocation
 
-- [ ] **Bump-allocator nursery.** `janet_gcalloc` today does
+- [ ] **Bump-allocator nursery.** `bender_gcalloc` today does
   slab-or-malloc + 3-way list prepend + counters per object. Add a
   thread-local 256KB bump region: fast path = 3 instructions
   (pointer += size, compare, store). Fall back to slab on overflow.
@@ -133,7 +133,7 @@ Baseline (M-series, interpreter): rng-double ~28ns/op, array-sum
 - [ ] **Lock-free mailboxes (MPSC ring).** `pthread_mutex` per
   channel (`ev.c`) bounces cache lines; single-producer rings are
   ~5x lower latency. Keep mutex path for MPMC.
-- [ ] **Work-stealing pool.** `examples/pool.janet` is static
+- [ ] **Work-stealing pool.** `examples/pool.ben` is static
   dispatch; steal-on-idle halves tail latency on uneven workloads.
 - [ ] **Zero-copy numeric sharing by default.** `core/shared`
   flattening exists; extend to `:array of :double/:long` without
@@ -171,7 +171,7 @@ Baseline (M-series, interpreter): rng-double ~28ns/op, array-sum
 
 ## Method (non-negotiable)
 
-1. Every item lands with a bench row (bench/run.janet or ttfx
+1. Every item lands with a bench row (bench/run.ben or ttfx
    byte-identical table) or it does not land.
 2. Soundness first: `native-skip` with a reason beats a fast wrong
    answer. The `fmod` name-collision bug (-1 vs 0.5) is the template
@@ -182,7 +182,7 @@ Baseline (M-series, interpreter): rng-double ~28ns/op, array-sum
 
 ## Appendix — ttfx-grounded findings (2026-10-09)
 
-Ran `janet-port` 46x190 decrypt, seed 42: 1819 frames, 637 fps
+Ran `bender-port` 46x190 decrypt, seed 42: 1819 frames, 637 fps
 interpreter (was 547; branch hints +1.16x). AOT lib path emitted **0
 kernels** with **zero diagnostics** (fixed: lib path now prints
 `native-skip` lines like `--emit-native`). Passing all sources
@@ -203,7 +203,7 @@ the tiers above, ranked for this workload:
    have an inference + emission arm (audit: `eqim/neqim/ltim/gtim`,
    `slim/srim/sruim` done; `divim` done; none remain unhandled).
 3. **Non-negative int range analysis (shipped: PGO evidence).**
-   `floor-div` (`canvas.janet`, canvas dims) refused on int width.
+   `floor-div` (`canvas.ben`, canvas dims) refused on int width.
    Now: collector min/max → unanimous `min >= 0` seeds nonneg for
    unrebound params → trunc `divf`/`mod`/`rem` with fail-loud
    domain guards. Static `≥0` tracking (`ldi 0`, `len`,
@@ -249,11 +249,11 @@ on ttfx 46×190 decrypt (call-heavy, alternating callees):
 - Uncached (per-call hashing): +58%.
 - Last-entry cache: +44% on ttfx, and a 16× regression on
   alternating-call micros (every call misses + flushes). Wrong design.
-- 16→64-line direct-mapped cache + single `janet_type` per arg +
+- 16→64-line direct-mapped cache + single `bender_type` per arg +
   1-in-8 min/max/element sampling (types/counts exact): **~10%**.
 - Type masks and call counts stay exact every call (seeding
   unanimity must be exact); ranges/elements are heuristic evidence
   consumed behind fail-loud guards. First 16 calls per entry always
   record fully (small tests keep exact evidence).
-- `JANET_PROFILE_STATS=1` prints hits/misses at stop/deinit.
+- `BENDER_PROFILE_STATS=1` prints hits/misses at stop/deinit.
 - Steady state pays zero (collection runs first-run/explicit only).

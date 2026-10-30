@@ -1,0 +1,11 @@
+# Standalone parity gate, not part of the portable suite-compile lint fixtures.
+# Interpreter: passes. Current single-thunk AOT: fails because the top-level
+# definition is lexical and is not published into the current fiber env.
+# Run both targets explicitly; do not skip or invert this assertion for AOT.
+(defn curenv-contract-fixture [&named x] x)
+(def lints @[])
+(def result (compile '(curenv-contract-fixture :x 42)
+                     (curenv) "compile-curenv-contract.ben" lints))
+(assert (and (function? result) (empty? lints) (= 42 (result)))
+        "top-level definitions must be visible to dynamic compile through curenv")
+(print "curenv top-level dynamic compilation contract passed")

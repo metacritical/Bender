@@ -42,5 +42,5 @@ native-skip 0 thunk types not proven: params [] ret nil
 native-skip 1  types not proven: params [] ret ?
 native-skip 2 while types not proven: params [] ret nil
 native-skip 3  types not proven: params [] ret ?
-native-lib 0 kernels /tmp/janet-wave-evidence-35671ede/trained-native
-mkimage: 1205 bytes, 827 registry names -> /tmp/janet-wave-evidence-35671ede/trained.c
+native-lib 0 kernels /tmp/bender-wave-evidence-35671ede/trained-native
+mkimage: 1205 bytes, 827 registry names -> /tmp/bender-wave-evidence-35671ede/trained.c

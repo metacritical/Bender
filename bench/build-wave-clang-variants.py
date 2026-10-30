@@ -3,7 +3,7 @@
 
 Each variant cleans the source tree and snapshots its matching bender/static
 archive before the next clean. Instrumentation covers both shell and runtime;
-this is LLVM PGO, not Janet's --aot --native --pgo type-profile pass.
+this is LLVM PGO, not Bender's --aot --native --pgo type-profile pass.
 """
 
 import argparse
@@ -17,7 +17,7 @@ import subprocess
 import sys
 
 PIN = "a69c09843714e1733660e5335b285dd383680d23"
-WAVE = Path("bench/cross-runtime/wave.janet")
+WAVE = Path("bench/cross-runtime/wave.ben")
 VARIANTS = ("baseline", "instrumented", "profile-use", "lto")
 
 
@@ -92,9 +92,9 @@ def main():
     if not Path(sdkroot).is_dir():
         parser.error(f"SDKROOT does not name a directory: {sdkroot}")
     env["SDKROOT"] = str(Path(sdkroot).resolve())
-    # Neither Janet's type profiler nor an inherited compiler/profile path may
+    # Neither Bender's type profiler nor an inherited compiler/profile path may
     # contaminate LLVM training. Explicit Make arguments control build flags.
-    for key in ("LLVM_PROFILE_FILE", "JANET_PROFILE", "JANET_PROFILE_OUT",
+    for key in ("LLVM_PROFILE_FILE", "BENDER_PROFILE", "BENDER_PROFILE_OUT",
                 "NATIVE_COMMIT_PROBE", "CPATH", "CFLAGS", "LDFLAGS"):
         env.pop(key, None)
     manifest = {"source_commit": PIN, "wave_sha256": digest(wave),
@@ -113,7 +113,7 @@ def main():
     def build(name, cflags, ldflags="-rdynamic"):
         step(f"{name}-clean", [make_cmd, "clean"], args.build_timeout)
         argv = [make_cmd, "-j1", *common, f"CFLAGS={cflags}",
-                f"LDFLAGS={ldflags}", "build/bender", "build/libjanet.a"]
+                f"LDFLAGS={ldflags}", "build/bender", "build/libbender.a"]
         step(f"{name}-build", argv, args.build_timeout)
         stamp = (root / "build/.native-executors-mode").read_text().strip()
         if stamp != "enabled":
@@ -121,7 +121,7 @@ def main():
         dest = evidence / name
         dest.mkdir()
         files = {}
-        for filename in ("bender", "libjanet.a"):
+        for filename in ("bender", "libbender.a"):
             src = root / "build" / filename
             if not src.is_file() or not src.stat().st_size:
                 raise RuntimeError(f"{name}: missing/empty {src}")
@@ -146,8 +146,8 @@ def main():
             tag = f"train-lanes{lanes}-n{n}"
             profile = raw / f"{tag}-%p.profraw"
             train_env = env.copy()
-            train_env.update(LLVM_PROFILE_FILE=str(profile), JANET_NO_PROFILE="1",
-                             JANET_LANES=str(lanes))
+            train_env.update(LLVM_PROFILE_FILE=str(profile), BENDER_NO_PROFILE="1",
+                             BENDER_LANES=str(lanes))
             step(tag, [str(evidence / "instrumented/bender"), str(wave), str(n)],
                  args.train_timeout, train_env)
             actual = (logs / f"{tag}.stdout").read_text().strip()

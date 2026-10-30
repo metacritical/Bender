@@ -20,9 +20,9 @@
 * IN THE SOFTWARE.
 */
 
-#ifndef JANET_AMALG
+#ifndef BENDER_AMALG
 #include "features.h"
-#include <janet.h>
+#include <bender.h>
 #include "compile.h"
 #include "gc.h"
 #include "util.h"
@@ -49,7 +49,7 @@ static int bs_read_bit(uint32_t *bitset, int32_t index) {
 }
 
 /* Look up table for instructions */
-const enum JanetInstructionType janet_instructions[JOP_INSTRUCTION_COUNT] = {
+const enum BenderInstructionType bender_instructions[JOP_INSTRUCTION_COUNT] = {
     JINT_0, /* JOP_NOOP, */
     JINT_S, /* JOP_ERROR, */
     JINT_ST, /* JOP_TYPECHECK, */
@@ -136,7 +136,7 @@ const enum JanetInstructionType janet_instructions[JOP_INSTRUCTION_COUNT] = {
 
 /* Keep track of how large corelib is. Useful
  * for minimizing code bloat. */
-#ifdef JANET_BOOTSTRAP
+#ifdef BENDER_BOOTSTRAP
 int64_t total_instruction_count = 0;
 int64_t total_optimize_fixpoint_loops = 0;
 int64_t total_funcdefs_optimized = 0;
@@ -152,13 +152,13 @@ typedef struct {
 /* Generate a bitmap for all instructions that are leaders
  * of basic blocks. Use this either to construct basic blocks
  * or quickly iterate over them. */
-static uint32_t *janet_bytecode_leader_bitmap(JanetFuncDef *def) {
+static uint32_t *bender_bytecode_leader_bitmap(BenderFuncDef *def) {
     uint32_t *code = def->bytecode;
     int32_t *codes = (int32_t *)code;
     int32_t len = def->bytecode_length;
     int32_t words = ((len - 1) / 32) + 1;
     uint32_t *leaders = array_allocate(sizeof(uint32_t), words);
-    janet_assert(words >= 0, "bad len");
+    bender_assert(words >= 0, "bad len");
     memset(leaders, 0, (size_t) words * sizeof(uint32_t));
     int did_jump = 1; /* pc=0 is a leader */
     uint32_t target = 0;
@@ -193,16 +193,16 @@ static uint32_t *janet_bytecode_leader_bitmap(JanetFuncDef *def) {
 }
 
 /* Generate basic blocks analysis */
-static BytecodeBB *janet_bytecode_basic_blocks(JanetFuncDef *def, int32_t *n_blocks) {
+static BytecodeBB *bender_bytecode_basic_blocks(BenderFuncDef *def, int32_t *n_blocks) {
     uint32_t *code = def->bytecode;
     int32_t *codes = (int32_t *)code;
     /* Allocate array of blocks to return */
-    uint32_t *bitmap = janet_bytecode_leader_bitmap(def);
+    uint32_t *bitmap = bender_bytecode_leader_bitmap(def);
     int32_t len = def->bytecode_length;
     int32_t words = ((len - 1) / 32) + 1;
     int32_t block_count = 0;
     for (int32_t i = 0; i < words; i++) {
-#ifdef JANET_MSVC
+#ifdef BENDER_MSVC
         block_count += __popcnt(bitmap[i]);
 #elif defined(__GNUC__)
         block_count += __builtin_popcount(bitmap[i]);
@@ -224,17 +224,17 @@ static BytecodeBB *janet_bytecode_basic_blocks(JanetFuncDef *def, int32_t *n_blo
             pc++;
             done = (pc >= len) || (bitmap[pc >> 5] & (((uint32_t)1) << (pc & 0x1F)));
         } while (!done);
-        janet_assert(pc <= len, "bad block end");
+        bender_assert(pc <= len, "bad block end");
         bb.end = pc;
         bb.next[0] = -1;
         bb.next[1] = -1;
         blocks[next_block_i++] = bb;
     }
-    janet_assert(next_block_i == block_count, "bad block count");
+    bender_assert(next_block_i == block_count, "bad block count");
     /* add forward cfg edges */
     for (int32_t i = 0; i < block_count; i++) {
         int32_t target;
-        janet_assert(blocks[i].end > blocks[i].start, "degenerate block start >= end");
+        bender_assert(blocks[i].end > blocks[i].start, "degenerate block start >= end");
         int32_t lastpc = blocks[i].end - 1;
         switch (code[lastpc] & 0x7F) {
             default:
@@ -264,9 +264,9 @@ static BytecodeBB *janet_bytecode_basic_blocks(JanetFuncDef *def, int32_t *n_blo
                 break;
             }
         }
-        janet_assert(j < block_count, "did not find next block");
+        bender_assert(j < block_count, "did not find next block");
     }
-    janet_free(bitmap);
+    bender_free(bitmap);
     *n_blocks = block_count;
     return blocks;
 }
@@ -284,9 +284,9 @@ typedef struct {
 
 /* Keep seen values for replacement in this structure */
 typedef struct {
-    JanetTable *value_lookup; /* Map instruction templates -> VN */
+    BenderTable *value_lookup; /* Map instruction templates -> VN */
     int32_t *value_numbers; /* Map slot -> value numbers */
-    JanetFuncDef *def;
+    BenderFuncDef *def;
 } VNContext;
 
 /* Reconstitute instructions (re-encode after changing parameters) */
@@ -311,7 +311,7 @@ static double vn_encode_1arg(uint32_t opcode, int32_t vn) {
     uint64_t vnu = (uint64_t)(vn + 0x20000);
     uint64_t integer = opcode | (vnu << 7);
     /* integer should be less than 53 significant bits */
-    janet_assert(integer <= JANET_INTMAX_DOUBLE, "encoding failure");
+    bender_assert(integer <= BENDER_INTMAX_DOUBLE, "encoding failure");
     return (double) integer;
 }
 
@@ -321,7 +321,7 @@ static double vn_encode_2arg(uint32_t opcode, int32_t vn1, int32_t vn2) {
     uint64_t vn2u = (uint64_t)(vn2 + 0x20000);
     uint64_t integer = opcode | (vn1u << 7) | (vn2u << 30);
     /* integer should be at most 53 significant bits */
-    janet_assert(integer <= JANET_INTMAX_DOUBLE, "encoding failure");
+    bender_assert(integer <= BENDER_INTMAX_DOUBLE, "encoding failure");
     return (double) integer;
 }
 
@@ -331,7 +331,7 @@ static double vn_encode_vn(VN vn) {
     encoded |= vn.slot & 0xFFFF;
     encoded |= vn.has_slot ? 0x10000 : 0;
     encoded |= vn64 << 17;
-    janet_assert(encoded <= JANET_INTMAX_DOUBLE, "encoding failure");
+    bender_assert(encoded <= BENDER_INTMAX_DOUBLE, "encoding failure");
     union {
         double d;
         uint64_t u;
@@ -357,9 +357,9 @@ static VN vn_decode_vn(double encoded) {
 /* Get a value number for a given instruction key */
 static VN vn_check_key(VNContext *ctx, double key) {
     VN zero = {0};
-    Janet check = janet_table_get(ctx->value_lookup, janet_wrap_number(key));
-    if (!janet_checktype(check, JANET_NUMBER)) return zero;
-    VN ret = vn_decode_vn(janet_unwrap_number(check));
+    Bender check = bender_table_get(ctx->value_lookup, bender_wrap_number(key));
+    if (!bender_checktype(check, BENDER_NUMBER)) return zero;
+    VN ret = vn_decode_vn(bender_unwrap_number(check));
     /* Ensure the value number is still valid */
     if (ret.has_slot) {
         if (ctx->value_numbers[ret.slot] != ret.value_number) {
@@ -420,7 +420,7 @@ static uint32_t vn_find_reg(VNContext *ctx, int32_t value_number, uint32_t curre
 }
 
 static void vn_add_lookup(VNContext *ctx, double key, VN vn) {
-    janet_table_put(ctx->value_lookup, janet_wrap_number(key), janet_wrap_number(vn_encode_vn(vn)));
+    bender_table_put(ctx->value_lookup, bender_wrap_number(key), bender_wrap_number(vn_encode_vn(vn)));
     if (vn.has_slot) {
         ctx->value_numbers[vn.slot] = vn.value_number;
     }
@@ -535,11 +535,11 @@ static VN vn_const_prop(VNContext *ctx, uint32_t opcode, int32_t Bv, int32_t Cv)
 
 /* Local value numbering routine - reduce number of loads, moves, and redundant computations.  */
 /* TODO - slot maps for removed symbols can be removed */
-void janet_bytecode_local_value_numbering(JanetFuncDef *def, BytecodeBB *blocks, int32_t n_blocks) {
+void bender_bytecode_local_value_numbering(BenderFuncDef *def, BytecodeBB *blocks, int32_t n_blocks) {
     if (def->closure_bitset) return; /* Upvalues can be changed by side effects */
     if (def->bytecode_length >= 0x10000) return; /* Prevent overflow in value numbering */
-    JanetTable value_lookup;
-    janet_table_init(&value_lookup, 24);
+    BenderTable value_lookup;
+    bender_table_init(&value_lookup, 24);
     VNContext ctx;
     ctx.def = def;
     ctx.value_lookup = &value_lookup;
@@ -549,7 +549,7 @@ void janet_bytecode_local_value_numbering(JanetFuncDef *def, BytecodeBB *blocks,
         BytecodeBB block = blocks[blocki];
         int32_t nextv = 1 + def->slotcount; /* Reserve negative values */
         for (int32_t i = 0; i < def->slotcount; i++) ctx.value_numbers[i] = i + 1; /* initialize to some unique value */
-        janet_table_clear(ctx.value_lookup);
+        bender_table_clear(ctx.value_lookup);
         for (int32_t pc = block.start; pc < block.end; pc++) {
             uint32_t A = (code[pc] & 0xFF00U) >> 8;
             uint32_t B = (code[pc] & 0xFF0000U) >> 16;
@@ -559,7 +559,7 @@ void janet_bytecode_local_value_numbering(JanetFuncDef *def, BytecodeBB *blocks,
             uint32_t opcode = code[pc] & 0x7F;
             switch (opcode) {
                 default:
-                    janet_assert(0, "unhandled opcode");
+                    bender_assert(0, "unhandled opcode");
                     continue;
                 /* Moves */
                 case JOP_MOVE_NEAR: {
@@ -845,12 +845,12 @@ void janet_bytecode_local_value_numbering(JanetFuncDef *def, BytecodeBB *blocks,
             }
         }
     }
-    janet_free(ctx.value_numbers);
-    janet_table_deinit(&value_lookup);
+    bender_free(ctx.value_numbers);
+    bender_table_deinit(&value_lookup);
 }
 
 /* Traverse bytecode and remove unreachable code my marking it as a noop. */
-void janet_bytecode_dead_code(JanetFuncDef *def) {
+void bender_bytecode_dead_code(BenderFuncDef *def) {
     int32_t *pcstack = NULL;
     uint32_t *code = def->bytecode;
     int32_t *codes = (int32_t *)code;
@@ -858,10 +858,10 @@ void janet_bytecode_dead_code(JanetFuncDef *def) {
     int32_t words = ((len - 1) / 32) + 1;
     uint32_t *visited_bitmap = array_allocate(sizeof(uint32_t), words);
     memset(visited_bitmap, 0, words * sizeof(uint32_t));
-    janet_v_push(pcstack, 0);
-    while (janet_v_count(pcstack)) {
-        int32_t pc = janet_v_last(pcstack);
-        janet_v_pop(pcstack);
+    bender_v_push(pcstack, 0);
+    while (bender_v_count(pcstack)) {
+        int32_t pc = bender_v_last(pcstack);
+        bender_v_pop(pcstack);
         while (pc < len) {
             int32_t index = pc >> 5;
             int32_t mask = ((uint32_t)1) << (pc & 0x1F);
@@ -878,14 +878,14 @@ void janet_bytecode_dead_code(JanetFuncDef *def) {
                     pc = len;
                     continue;
                 case JOP_JUMP:
-                    janet_v_push(pcstack, pc + (codes[pc] >> 8));
+                    bender_v_push(pcstack, pc + (codes[pc] >> 8));
                     pc = len;
                     continue;
                 case JOP_JUMP_IF:
                 case JOP_JUMP_IF_NIL:
                 case JOP_JUMP_IF_NOT:
                 case JOP_JUMP_IF_NOT_NIL:
-                    janet_v_push(pcstack, pc + (codes[pc] >> 16));
+                    bender_v_push(pcstack, pc + (codes[pc] >> 16));
                     pc++;
                     continue;
             }
@@ -896,15 +896,15 @@ void janet_bytecode_dead_code(JanetFuncDef *def) {
             code[pc] = JOP_NOOP;
         }
     }
-    janet_free(visited_bitmap);
-    janet_v_free(pcstack);
+    bender_free(visited_bitmap);
+    bender_v_free(pcstack);
 }
 
 /* Handle remapping symbols when bytecode changes */
-static void rewrite_symbolmap(JanetFuncDef *def, uint32_t *pc_map) {
+static void rewrite_symbolmap(BenderFuncDef *def, uint32_t *pc_map) {
     int32_t smout = 0;
     for (int32_t i = 0; i < def->symbolmap_length; i++) {
-        JanetSymbolMap *sm = def->symbolmap + i;
+        BenderSymbolMap *sm = def->symbolmap + i;
         int keep = 1;
         /* Don't rewrite upvalue mappings */
         if (sm->birth_pc < UINT32_MAX) {
@@ -921,12 +921,12 @@ static void rewrite_symbolmap(JanetFuncDef *def, uint32_t *pc_map) {
 }
 
 /* Remove unused closure defs */
-static void janet_bytecode_remove_unused_closures_for_analysis(
-    JanetFuncDef *def, const JanetRetainedDef *retained, int32_t count) {
+static void bender_bytecode_remove_unused_closures_for_analysis(
+    BenderFuncDef *def, const BenderRetainedDef *retained, int32_t count) {
     if (def->defs_length < 1) return;
     uint32_t *code = def->bytecode;
     int32_t words = ((def->defs_length - 1) >> 5) + 1;
-    janet_assert(words > 0, "bad length");
+    bender_assert(words > 0, "bad length");
     uint32_t *bitset = array_allocate(sizeof(uint32_t), words);
     memset(bitset, 0, words * sizeof(uint32_t));
     for (int32_t pc = 0; pc < def->bytecode_length; pc++) {
@@ -980,31 +980,31 @@ static void janet_bytecode_remove_unused_closures_for_analysis(
                     continue;
             }
         }
-        janet_free(def_remaps);
+        bender_free(def_remaps);
 
         /* TODO - recalculate closure bitset and do more optimization */
     }
 
-    janet_free(bitset);
+    bender_free(bitset);
 }
 
-void janet_bytecode_remove_unused_closures(JanetFuncDef *def) {
-    janet_bytecode_remove_unused_closures_for_analysis(def, NULL, 0);
+void bender_bytecode_remove_unused_closures(BenderFuncDef *def) {
+    bender_bytecode_remove_unused_closures_for_analysis(def, NULL, 0);
 }
 
 /* Remove unused constants from the constant buffer */
-void janet_bytecode_remove_unused_constants(JanetFuncDef *def) {
+void bender_bytecode_remove_unused_constants(BenderFuncDef *def) {
     if (def->constants_length < 1) return;
     uint32_t *code = def->bytecode;
     int32_t words = ((def->constants_length - 1) >> 5) + 1;
-    janet_assert(words > 0, "bad length");
+    bender_assert(words > 0, "bad length");
     uint32_t *bitset = array_allocate(sizeof(uint32_t), words);
     memset(bitset, 0, words * sizeof(uint32_t));
 
     /* Quirk: We rely on the first N constants being the named arguments of a function for warnings
      * while making function calls. Preserve these in the case we have named arguments so we don't get
      * spurious warnings for unused named arguments (or miss warnings!) */
-    if (def->flags & JANET_FUNCDEF_FLAG_NAMEDARGS) {
+    if (def->flags & BENDER_FUNCDEF_FLAG_NAMEDARGS) {
         for (int32_t index = 0; index < def->named_args_count; index++) {
             bs_set_bit(bitset, index);
         }
@@ -1052,18 +1052,18 @@ void janet_bytecode_remove_unused_constants(JanetFuncDef *def) {
                     continue;
             }
         }
-        janet_free(constant_remaps);
+        bender_free(constant_remaps);
     }
 
-    janet_free(bitset);
+    bender_free(bitset);
 }
 
 /* Remove all noops while preserving jumps and debugging information.
  * Useful as part of a filtering compiler pass. */
-void janet_bytecode_remove_noops(JanetFuncDef *def) {
+void bender_bytecode_remove_noops(BenderFuncDef *def) {
 
     /* Get an instruction rewrite map so we can rewrite jumps */
-    uint32_t *pc_map = janet_smalloc(sizeof(uint32_t) * (1 + def->bytecode_length));
+    uint32_t *pc_map = bender_smalloc(sizeof(uint32_t) * (1 + def->bytecode_length));
     uint32_t new_bytecode_length = 0;
     for (int32_t i = 0; i < def->bytecode_length; i++) {
         uint32_t instr = def->bytecode[i];
@@ -1088,8 +1088,8 @@ void janet_bytecode_remove_noops(JanetFuncDef *def) {
             case JOP_JUMP:
                 /* relative pc is in DS field of instruction */
                 old_jump_target = i + (((int32_t)instr) >> 8);
-                janet_assert(old_jump_target >= 0, "bounds");
-                janet_assert(old_jump_target < def->bytecode_length, "bounds");
+                bender_assert(old_jump_target >= 0, "bounds");
+                bender_assert(old_jump_target < def->bytecode_length, "bounds");
                 new_jump_target = pc_map[old_jump_target];
                 instr += (uint32_t)(new_jump_target - old_jump_target + (i - j)) << 8;
                 break;
@@ -1099,8 +1099,8 @@ void janet_bytecode_remove_noops(JanetFuncDef *def) {
             case JOP_JUMP_IF_NOT_NIL:
                 /* relative pc is in ES field of instruction */
                 old_jump_target = i + (((int32_t)instr) >> 16);
-                janet_assert(old_jump_target >= 0, "bounds");
-                janet_assert(old_jump_target < def->bytecode_length, "bounds");
+                bender_assert(old_jump_target >= 0, "bounds");
+                bender_assert(old_jump_target < def->bytecode_length, "bounds");
                 new_jump_target = pc_map[old_jump_target];
                 instr += (uint32_t)(new_jump_target - old_jump_target + (i - j)) << 16;
                 break;
@@ -1118,13 +1118,13 @@ void janet_bytecode_remove_noops(JanetFuncDef *def) {
     rewrite_symbolmap(def, pc_map);
 
     def->bytecode_length = new_bytecode_length;
-    def->bytecode = janet_realloc(def->bytecode, def->bytecode_length * sizeof(uint32_t));
-    janet_sfree(pc_map);
+    def->bytecode = bender_realloc(def->bytecode, def->bytecode_length * sizeof(uint32_t));
+    bender_sfree(pc_map);
 }
 
 /* Simple Jump threading. Traverse basic blocks instead?
  * jump instructions are always last instruction in basic block. */
-void janet_bytecode_jump_threading(JanetFuncDef *def) {
+void bender_bytecode_jump_threading(BenderFuncDef *def) {
     int32_t blen = def->bytecode_length;
     uint32_t *code = def->bytecode;
     int32_t *codes = (int32_t *)code;
@@ -1203,7 +1203,7 @@ void janet_bytecode_jump_threading(JanetFuncDef *def) {
  * mode == 1: Fill bitset with input slots (uses) - slots that are read before writes
  * mode == 2: Fill bitset with output slots (defs) - all written slots (currently disabled)
  */
-static void janet_bytecode_movopt_basic_block(JanetFuncDef *def, BytecodeBB bb, uint32_t *bitset, int mode) {
+static void bender_bytecode_movopt_basic_block(BenderFuncDef *def, BytecodeBB bb, uint32_t *bitset, int mode) {
     if (bb.start >= bb.end) return; /* Degenerate block */
     if (mode == 0) {
         /* Flip bits */
@@ -1230,7 +1230,7 @@ static void janet_bytecode_movopt_basic_block(JanetFuncDef *def, BytecodeBB bb, 
          * return to our function. */
         switch (Iop) {
             default:
-                janet_assert(0, "unhandled instruction");
+                bender_assert(0, "unhandled instruction");
                 continue;
             case JOP_JUMP:
             case JOP_NOOP:
@@ -1422,7 +1422,7 @@ static void janet_bytecode_movopt_basic_block(JanetFuncDef *def, BytecodeBB bb, 
             /* Clear writes, set reads (in that order!) */
             if (out != -1) bs_clear_bit(bitset, out);
             for (int j = 0; j < nins; j++) {
-                janet_assert(ins[j] < def->slotcount, "slot too big");
+                bender_assert(ins[j] < def->slotcount, "slot too big");
                 bs_set_bit(bitset, ins[j]);
             }
         }
@@ -1430,11 +1430,11 @@ static void janet_bytecode_movopt_basic_block(JanetFuncDef *def, BytecodeBB bb, 
 }
 
 /* Generate use-def information for all basic blocks, then remove extra writes. */
-void janet_bytecode_movopt_full(JanetFuncDef *def, BytecodeBB *blocks, int32_t nblocks) {
+void bender_bytecode_movopt_full(BenderFuncDef *def, BytecodeBB *blocks, int32_t nblocks) {
 
     /* Allocate nblocks bitmaps */
     int32_t wordlen = ((def->slotcount - 1) >> 5) + 1;
-    janet_assert(wordlen > 0, "bad len");
+    bender_assert(wordlen > 0, "bad len");
     uint32_t **bitsets = array_allocate(sizeof(uint32_t *), nblocks);
     for (int32_t block_i = 0; block_i < nblocks; block_i++) {
         bitsets[block_i] = array_allocate(sizeof(uint32_t), wordlen);
@@ -1443,7 +1443,7 @@ void janet_bytecode_movopt_full(JanetFuncDef *def, BytecodeBB *blocks, int32_t n
 
     /* Find all local block inputs */
     for (int32_t block_i = 0; block_i < nblocks; block_i++) {
-        janet_bytecode_movopt_basic_block(def, blocks[block_i], bitsets[block_i], 1);
+        bender_bytecode_movopt_basic_block(def, blocks[block_i], bitsets[block_i], 1);
     }
 
     /* Propagate inputs to predecessors */
@@ -1466,18 +1466,18 @@ void janet_bytecode_movopt_full(JanetFuncDef *def, BytecodeBB *blocks, int32_t n
 
     /* Remove extra writes */
     for (int32_t block_i = 0; block_i < nblocks; block_i++) {
-        janet_bytecode_movopt_basic_block(def, blocks[block_i], bitsets[block_i], 0);
+        bender_bytecode_movopt_basic_block(def, blocks[block_i], bitsets[block_i], 0);
     }
 
     /* Cleanup */
     for (int32_t block_i = 0; block_i < nblocks; block_i++) {
-        janet_free(bitsets[block_i]);
+        bender_free(bitsets[block_i]);
     }
-    janet_free(bitsets);
+    bender_free(bitsets);
 }
 
 /* Rename slots to normalize code and reduce def->slotcount */
-void janet_bytecode_compact_slots(JanetFuncDef *def) {
+void bender_bytecode_compact_slots(BenderFuncDef *def) {
     /* TODO - we would need to be somewhat careful in that case. */
     if (def->slotcount > 256) return;
     /* Remap: old slot -> new slot */
@@ -1505,14 +1505,14 @@ void janet_bytecode_compact_slots(JanetFuncDef *def) {
         invert[i] = i;
         if (i > greatest) greatest = i;
     }
-    if (def->flags & (JANET_FUNCDEF_FLAG_VARARG | JANET_FUNCDEF_FLAG_NAMEDARGS | JANET_FUNCDEF_FLAG_STRUCTARG)) {
+    if (def->flags & (BENDER_FUNCDEF_FLAG_VARARG | BENDER_FUNCDEF_FLAG_NAMEDARGS | BENDER_FUNCDEF_FLAG_STRUCTARG)) {
         remap[def->arity] = def->arity;
         invert[def->arity] = def->arity;
         next_slot++;
     }
     /* Rename 8 bit slots first, then larger slots */
     for (int32_t pc = 0; pc < len; pc++) {
-        enum JanetInstructionType itype = janet_instructions[code[pc] & 0x7F];
+        enum BenderInstructionType itype = bender_instructions[code[pc] & 0x7F];
         int nslots = 0;
         uint32_t slots[3];
         /* rewrite slots. For now, assume adding slot delta will not overflow any slot indices */
@@ -1598,7 +1598,7 @@ void janet_bytecode_compact_slots(JanetFuncDef *def) {
             smout++;
             continue; /* upvalue */
         }
-        JanetSymbolMap sm = def->symbolmap[i];
+        BenderSymbolMap sm = def->symbolmap[i];
         uint32_t old_slot = sm.slot_index;
         if (remap[old_slot] != -1) { /* If not remapped, drop! */
             sm.slot_index = (uint32_t) remap[old_slot];
@@ -1608,18 +1608,18 @@ void janet_bytecode_compact_slots(JanetFuncDef *def) {
     def->symbolmap_length = smout;
     if (greatest + 1 > next_slot) next_slot = greatest + 1;
     def->slotcount = next_slot;
-    janet_free(remap);
+    bender_free(remap);
 }
 
 /*
  * Inlining
  */
 
-/* Rewrite a chunk of code for inline use. Returns a vector of uint32_ts to be freed with janet_v_free.
+/* Rewrite a chunk of code for inline use. Returns a vector of uint32_ts to be freed with bender_v_free.
  * Use dest_slot = -1 to mean an inline tail call.
  * TODO - replace some of the asserts with return NULL to indicate inlining failed.
  * */
-uint32_t *janet_bytecode_inline_chunk(JanetFuncDef *idef,
+uint32_t *bender_bytecode_inline_chunk(BenderFuncDef *idef,
                                       int32_t dest_slot, uint32_t slot_delta, uint32_t const_delta) {
     int is_tail = dest_slot < 0;
     uint32_t *icode = idef->bytecode;
@@ -1627,22 +1627,22 @@ uint32_t *janet_bytecode_inline_chunk(JanetFuncDef *idef,
     int32_t *jump_pcs = NULL;
     int32_t *remap = NULL;
     /* Skip functions that are too hard for now */
-    janet_assert(slot_delta < 256, "slot delta too big");
-    janet_assert(idef->defs_length == 0, "no inlining closure functions");
-    janet_assert(idef->environments_length == 0, "no inlining functions that reference closure environments");
+    bender_assert(slot_delta < 256, "slot delta too big");
+    bender_assert(idef->defs_length == 0, "no inlining closure functions");
+    bender_assert(idef->environments_length == 0, "no inlining functions that reference closure environments");
     /* Patch instructions with slot shift and constant index shift. */
     for (int32_t pc = 0; pc < idef->bytecode_length; pc++) {
-        enum JanetInstructionType itype = janet_instructions[icode[pc] & 0x7F];
+        enum BenderInstructionType itype = bender_instructions[icode[pc] & 0x7F];
         uint32_t newi = icode[pc];
         /* rewrite slots. For now, assume adding slot delta will not overflow any slot indices */
         switch (itype) {
             case JINT_SES:
-                janet_assert(0, "upvalue instruction not supported for inlining");
+                bender_assert(0, "upvalue instruction not supported for inlining");
             case JINT_0:
             case JINT_L:
                 break;
             case JINT_S:
-                janet_assert((newi & 0x7F) != JOP_LOAD_SELF, "cannot inline lds instruction");
+                bender_assert((newi & 0x7F) != JOP_LOAD_SELF, "cannot inline lds instruction");
             /* fallthrough */
             case JINT_SI:
             case JINT_SU:
@@ -1664,45 +1664,45 @@ uint32_t *janet_bytecode_inline_chunk(JanetFuncDef *idef,
                 break;
         }
         if (is_tail) {
-            janet_v_push(code, newi);
+            bender_v_push(code, newi);
         } else {
             /* Account for new locations for jump targets */
-            janet_v_push(remap, janet_v_count(code));
+            bender_v_push(remap, bender_v_count(code));
             /* Replace returns with move and jump to end of the block
              * Also fix tail calls that are no longer in tail position. */
             switch (icode[pc] & 0x7F) {
                 default:
-                    janet_v_push(code, newi);
+                    bender_v_push(code, newi);
                     break;
                 case JOP_RETURN: {
                     uint32_t retreg = newi >> 8;
-                    janet_assert(retreg < 0x10000U, "retreg too big");
-                    janet_v_push(code, JOP_MOVE_NEAR | (dest_slot << 8) | (retreg << 16));
+                    bender_assert(retreg < 0x10000U, "retreg too big");
+                    bender_v_push(code, JOP_MOVE_NEAR | (dest_slot << 8) | (retreg << 16));
                     if (pc < idef->bytecode_length - 1) {
                         /* Last instruction doesn't need a jump. Jump-
                          * threading would take care of this, but why not
                          * generate better code earlier? */
-                        janet_v_push(jump_pcs, janet_v_count(code));
-                        janet_v_push(code, JOP_JUMP);
+                        bender_v_push(jump_pcs, bender_v_count(code));
+                        bender_v_push(code, JOP_JUMP);
                     }
                 }
                 break;
                 case JOP_RETURN_NIL: {
-                    janet_v_push(code, JOP_LOAD_NIL | (dest_slot << 8));
+                    bender_v_push(code, JOP_LOAD_NIL | (dest_slot << 8));
                     if (pc < idef->bytecode_length - 1) { /* Ditto */
-                        janet_v_push(jump_pcs, janet_v_count(code));
-                        janet_v_push(code, JOP_JUMP);
+                        bender_v_push(jump_pcs, bender_v_count(code));
+                        bender_v_push(code, JOP_JUMP);
                     }
                 }
                 break;
                 case JOP_TAILCALL: {
                     /* Convert to a normal call and jump */
                     uint32_t callee = newi >> 8;
-                    janet_assert(callee < 0x10000U, "callee too big");
-                    janet_v_push(code, JOP_CALL | (dest_slot << 8) | (callee << 16));
+                    bender_assert(callee < 0x10000U, "callee too big");
+                    bender_v_push(code, JOP_CALL | (dest_slot << 8) | (callee << 16));
                     if (pc < idef->bytecode_length - 1) { /* Ditto */
-                        janet_v_push(jump_pcs, janet_v_count(code));
-                        janet_v_push(code, JOP_JUMP);
+                        bender_v_push(jump_pcs, bender_v_count(code));
+                        bender_v_push(code, JOP_JUMP);
                     }
                 }
                 break;
@@ -1710,7 +1710,7 @@ uint32_t *janet_bytecode_inline_chunk(JanetFuncDef *idef,
         }
     }
     if (!is_tail) {
-        janet_assert(janet_v_count(remap) == idef->bytecode_length, "bad remap");
+        bender_assert(bender_v_count(remap) == idef->bytecode_length, "bad remap");
         /* Fix jumps to account for the inserted jumps */
         for (int32_t old_pc = 0; old_pc < idef->bytecode_length; old_pc++) {
             switch (idef->bytecode[old_pc] & 0x7F) {
@@ -1735,77 +1735,77 @@ uint32_t *janet_bytecode_inline_chunk(JanetFuncDef *idef,
                 continue;
             }
         }
-        janet_v_free(remap);
+        bender_v_free(remap);
     }
     /* Now fix jumps to jump to the end of the generated block */
-    while (janet_v_count(jump_pcs)) {
-        int32_t pc = janet_v_last(jump_pcs);
-        janet_v_pop(jump_pcs);
-        int32_t target = janet_v_count(code) - pc;
-        janet_assert(target > 0, "backwards jump");
+    while (bender_v_count(jump_pcs)) {
+        int32_t pc = bender_v_last(jump_pcs);
+        bender_v_pop(jump_pcs);
+        int32_t target = bender_v_count(code) - pc;
+        bender_assert(target > 0, "backwards jump");
         code[pc] = JOP_JUMP | ((uint32_t)target << 8);
     }
-    janet_v_free(jump_pcs);
+    bender_v_free(jump_pcs);
     return code;
 }
 
-/* Entry point for optimization. The def should already be valid as determined by janet_verify.
+/* Entry point for optimization. The def should already be valid as determined by bender_verify.
  * The compiler may skip this check for performance but the assembler will not. */
-void janet_bytecode_optimize_for_analysis(JanetFuncDef *def, int32_t level,
-                                         const JanetRetainedDef *retained, int32_t count) {
+void bender_bytecode_optimize_for_analysis(BenderFuncDef *def, int32_t level,
+                                         const BenderRetainedDef *retained, int32_t count) {
     int32_t delta;
-#ifdef JANET_DEBUG
-    int result = janet_verify(def);
+#ifdef BENDER_DEBUG
+    int result = bender_verify(def);
     if (result != 0) {
         for (int32_t i = 0; i < def->bytecode_length; i++) {
-            janet_eprintf("%4d: %Q\n", i, janet_asm_decode_instruction(def->bytecode[i]));
+            bender_eprintf("%4d: %Q\n", i, bender_asm_decode_instruction(def->bytecode[i]));
         }
     }
-    janet_assert(result == 0, "input bytecode bad");
+    bender_assert(result == 0, "input bytecode bad");
 #endif
     if (level >= 0) {
         do { /* Fixpoint for instruction removal */
             int32_t before = def->bytecode_length;
-            janet_bytecode_jump_threading(def);
+            bender_bytecode_jump_threading(def);
             {
                 int32_t nblocks = 0;
-                BytecodeBB *basic_blocks = janet_bytecode_basic_blocks(def, &nblocks);
-                janet_assert(nblocks > 0, "no blocks");
+                BytecodeBB *basic_blocks = bender_bytecode_basic_blocks(def, &nblocks);
+                bender_assert(nblocks > 0, "no blocks");
                 if (level >= 1) {
                     /* TODO - allow limited value numbering at optimize = 0.
                      * Constant folding can currently remove named slots which can break debug info */
-                    janet_bytecode_local_value_numbering(def, basic_blocks, nblocks);
+                    bender_bytecode_local_value_numbering(def, basic_blocks, nblocks);
                 }
                 /* This will currently also break debug info, although less severely than
                  * value numbering. At optimize=0, we should pin all named slots but allow
                  * constant propogation for anonymous intermediate computations */
-                janet_bytecode_movopt_full(def, basic_blocks, nblocks);
-                janet_free(basic_blocks);
+                bender_bytecode_movopt_full(def, basic_blocks, nblocks);
+                bender_free(basic_blocks);
             }
-            janet_bytecode_dead_code(def);
-            janet_bytecode_remove_noops(def);
+            bender_bytecode_dead_code(def);
+            bender_bytecode_remove_noops(def);
             delta = def->bytecode_length - before;
-#ifdef JANET_BOOTSTRAP
+#ifdef BENDER_BOOTSTRAP
             total_optimize_fixpoint_loops++;
 #endif
         } while (delta < 0);
-        janet_bytecode_remove_unused_constants(def);
-        janet_bytecode_remove_unused_closures_for_analysis(def, retained, count);
-        janet_bytecode_compact_slots(def);
+        bender_bytecode_remove_unused_constants(def);
+        bender_bytecode_remove_unused_closures_for_analysis(def, retained, count);
+        bender_bytecode_compact_slots(def);
     }
-#ifdef JANET_BOOTSTRAP
+#ifdef BENDER_BOOTSTRAP
     total_instruction_count += def->bytecode_length;
     total_funcdefs_optimized++;
 #endif
 }
 
-void janet_bytecode_optimize(JanetFuncDef *def, int32_t level) {
-    janet_bytecode_optimize_for_analysis(def, level, NULL, 0);
+void bender_bytecode_optimize(BenderFuncDef *def, int32_t level) {
+    bender_bytecode_optimize_for_analysis(def, level, NULL, 0);
 }
 
 /* Verify some bytecode */
-int janet_verify(JanetFuncDef *def) {
-    int vargs = !!(def->flags & JANET_FUNCDEF_FLAG_VARARG);
+int bender_verify(BenderFuncDef *def) {
+    int vargs = !!(def->flags & BENDER_FUNCDEF_FLAG_VARARG);
     int32_t i;
     int32_t maxslot = def->arity + vargs;
     int32_t sc = def->slotcount;
@@ -1822,7 +1822,7 @@ int janet_verify(JanetFuncDef *def) {
         if ((instr & 0x7F) >= JOP_INSTRUCTION_COUNT) {
             return 3;
         }
-        enum JanetInstructionType type = janet_instructions[instr & 0x7F];
+        enum BenderInstructionType type = bender_instructions[instr & 0x7F];
         switch (type) {
             case JINT_0:
                 continue;
@@ -1905,7 +1905,7 @@ int janet_verify(JanetFuncDef *def) {
 
     /* Verify debug info - slotmapping, etc. */
     for (int32_t i = def->symbolmap_length - 1; i >= 0; i--) {
-        JanetSymbolMap jsm = def->symbolmap[i];
+        BenderSymbolMap jsm = def->symbolmap[i];
         if (jsm.birth_pc == UINT32_MAX) {
             if (jsm.death_pc >= (uint32_t) def->environments_length) {
                 return 10;
@@ -1932,11 +1932,11 @@ int janet_verify(JanetFuncDef *def) {
 
 /* Allocate an empty funcdef. This function may have added functionality
  * as commonalities between asm and compile arise. */
-JanetFuncDef *janet_funcdef_alloc(void) {
-    JanetFuncDef *def = janet_gcalloc(JANET_MEMORY_FUNCDEF, sizeof(JanetFuncDef));
-#ifdef JANET_TTFX_SITE_PROFILE
-    extern uint64_t janet_site_profile_new_id(void);
-    def->site_profile_id = janet_site_profile_new_id();
+BenderFuncDef *bender_funcdef_alloc(void) {
+    BenderFuncDef *def = bender_gcalloc(BENDER_MEMORY_FUNCDEF, sizeof(BenderFuncDef));
+#ifdef BENDER_TTFX_SITE_PROFILE
+    extern uint64_t bender_site_profile_new_id(void);
+    def->site_profile_id = bender_site_profile_new_id();
 #endif
     def->environments = NULL;
     def->constants = NULL;
@@ -1976,14 +1976,14 @@ JanetFuncDef *janet_funcdef_alloc(void) {
  *
  * Split into the exact structural compare (scalars, every word, primitive
  * constant bits, opcode allowlist) and the bytecode well-formedness gate
- * (janet_verify). The structural compare is what the exact-match contract
- * is about and runs at every native entry epoch; janet_verify is
+ * (bender_verify). The structural compare is what the exact-match contract
+ * is about and runs at every native entry epoch; bender_verify is
  * deterministic over those same compared fields — only debug symbolmap
  * data falls outside them and no supported path mutates it after
  * creation — so the VM amortizes it to the first validation of a
- * (definition, descriptor) pair. janet_native_matches (both parts) stays
+ * (definition, descriptor) pair. bender_native_matches (both parts) stays
  * the full authority for registration, attachment and direct calls. */
-static int native_structure_matches(JanetFuncDef *d, const JanetNativeCode *n) {
+static int native_structure_matches(BenderFuncDef *d, const BenderNativeCode *n) {
     if (!n || !n->execute || !n->words || n->length <= 0 ||
             n->slotcount < 0 || n->arity < 0 || n->min_arity < 0 ||
             n->max_arity < n->min_arity || n->constants_length < 0 ||
@@ -1992,26 +1992,26 @@ static int native_structure_matches(JanetFuncDef *d, const JanetNativeCode *n) {
             d->max_arity != n->max_arity || d->flags != n->flags ||
             d->constants_length != n->constants_length ||
             d->environments_length || d->defs_length || d->named_args_count ||
-            (d->flags & (JANET_FUNCDEF_FLAG_VARARG | JANET_FUNCDEF_FLAG_NEEDSENV |
-                         JANET_FUNCDEF_FLAG_STRUCTARG | JANET_FUNCDEF_FLAG_NAMEDARGS))) return 0;
+            (d->flags & (BENDER_FUNCDEF_FLAG_VARARG | BENDER_FUNCDEF_FLAG_NEEDSENV |
+                         BENDER_FUNCDEF_FLAG_STRUCTARG | BENDER_FUNCDEF_FLAG_NAMEDARGS))) return 0;
     if (!n->region_mask || n->region_mask_words != (n->length + 63) / 64) return 0;
     if (memcmp(d->bytecode, n->words, (size_t)n->length * sizeof(uint32_t))) return 0;
     for (int32_t i = 0; i < n->constants_length; i++) {
         if (!n->constants) return 0;
-        const JanetNativeConstant *c = n->constants + i;
-        if (c->type == (JanetType)JANET_NATIVE_OPAQUE) continue; /* live pool load; no identity assumed */
-        Janet x = d->constants[i];
-        if (!janet_checktype(x, c->type)) return 0;
+        const BenderNativeConstant *c = n->constants + i;
+        if (c->type == (BenderType)BENDER_NATIVE_OPAQUE) continue; /* live pool load; no identity assumed */
+        Bender x = d->constants[i];
+        if (!bender_checktype(x, c->type)) return 0;
         switch (c->type) {
-            case JANET_NUMBER: {
-                double v = janet_unwrap_number(x);
+            case BENDER_NUMBER: {
+                double v = bender_unwrap_number(x);
                 if (memcmp(&v, &c->number, sizeof(double))) return 0;
                 break;
             }
-            case JANET_BOOLEAN:
-                if (janet_unwrap_boolean(x) != (c->number != 0)) return 0;
+            case BENDER_BOOLEAN:
+                if (bender_unwrap_boolean(x) != (c->number != 0)) return 0;
                 break;
-            case JANET_NIL: break;
+            case BENDER_NIL: break;
             default: return 0;
         }
     }
@@ -2052,196 +2052,196 @@ static int native_structure_matches(JanetFuncDef *d, const JanetNativeCode *n) {
     return 1;
 }
 
-int janet_native_matches(JanetFuncDef *d, const JanetNativeCode *n) {
-    return native_structure_matches(d, n) && janet_verify(d) == 0;
+int bender_native_matches(BenderFuncDef *d, const BenderNativeCode *n) {
+    return native_structure_matches(d, n) && bender_verify(d) == 0;
 }
 
 /* VM region re-entry validation for a definition with a descriptor set:
- * run the exact structural compare, amortizing janet_verify to the first
+ * run the exact structural compare, amortizing bender_verify to the first
  * validation of this (definition, descriptor) pair (deterministic over
  * the structurally compared fields). Updates the definition's validation
  * cache on success; a failure leaves the cache untouched so the next
  * region entry re-runs the compare. */
-int janet_native_revalidate(JanetFuncDef *d) {
-    const JanetNativeCode *n = d->native_code;
-    if (d->native_verified == n && d->native_verified_epoch == janet_vm.native_epoch)
+int bender_native_revalidate(BenderFuncDef *d) {
+    const BenderNativeCode *n = d->native_code;
+    if (d->native_verified == n && d->native_verified_epoch == bender_vm.native_epoch)
         return 1;
     if (!native_structure_matches(d, n)) return 0;
-    if (d->native_verified != n && janet_verify(d) != 0) return 0;
+    if (d->native_verified != n && bender_verify(d) != 0) return 0;
     d->native_verified = n;
-    d->native_verified_epoch = janet_vm.native_epoch;
+    d->native_verified_epoch = bender_vm.native_epoch;
     return 1;
 }
 
-/* Boot predicates are Janet functions with tiny, side-effect-free bodies.
+/* Boot predicates are Bender functions with tiny, side-effect-free bodies.
  * Executors recognize the exact core function definitions and compute their
  * results inline. Identity, not the binding name, is the guard: a module
- * that shadows nil?/empty?/... has a different JanetFuncDef and therefore
- * falls back to the VM. native_init runs before boot.janet defines these
+ * that shadows nil?/empty?/... has a different BenderFuncDef and therefore
+ * falls back to the VM. native_init runs before boot.ben defines these
  * functions, so registration is retried lazily from the first predicate
- * call, by which point janet_vm.core_env is fully populated. */
+ * call, by which point bender_vm.core_env is fully populated. */
 typedef enum {
-    JANET_NATIVE_PRED_NIL,
-    JANET_NATIVE_PRED_EMPTY,
-    JANET_NATIVE_PRED_SYMBOL,
-    JANET_NATIVE_PRED_KEYWORD,
-    JANET_NATIVE_PRED_STRING,
-    JANET_NATIVE_PRED_NUMBER,
-    JANET_NATIVE_PRED_BOOLEAN,
-    JANET_NATIVE_PRED_FUNCTION,
-    JANET_NATIVE_PRED_CFUNCTION,
-    JANET_NATIVE_PRED_TABLE,
-    JANET_NATIVE_PRED_STRUCT,
-    JANET_NATIVE_PRED_ARRAY,
-    JANET_NATIVE_PRED_TUPLE,
-    JANET_NATIVE_PRED_BUFFER,
-    JANET_NATIVE_PRED_FIBER,
-    JANET_NATIVE_PRED_TRUTHY,
-    JANET_NATIVE_PRED_TRUE,
-    JANET_NATIVE_PRED_FALSE,
-    JANET_NATIVE_PRED_COUNT
-} JanetNativePredicate;
+    BENDER_NATIVE_PRED_NIL,
+    BENDER_NATIVE_PRED_EMPTY,
+    BENDER_NATIVE_PRED_SYMBOL,
+    BENDER_NATIVE_PRED_KEYWORD,
+    BENDER_NATIVE_PRED_STRING,
+    BENDER_NATIVE_PRED_NUMBER,
+    BENDER_NATIVE_PRED_BOOLEAN,
+    BENDER_NATIVE_PRED_FUNCTION,
+    BENDER_NATIVE_PRED_CFUNCTION,
+    BENDER_NATIVE_PRED_TABLE,
+    BENDER_NATIVE_PRED_STRUCT,
+    BENDER_NATIVE_PRED_ARRAY,
+    BENDER_NATIVE_PRED_TUPLE,
+    BENDER_NATIVE_PRED_BUFFER,
+    BENDER_NATIVE_PRED_FIBER,
+    BENDER_NATIVE_PRED_TRUTHY,
+    BENDER_NATIVE_PRED_TRUE,
+    BENDER_NATIVE_PRED_FALSE,
+    BENDER_NATIVE_PRED_COUNT
+} BenderNativePredicate;
 
-static const char *const janet_native_pred_names[JANET_NATIVE_PRED_COUNT] = {
+static const char *const bender_native_pred_names[BENDER_NATIVE_PRED_COUNT] = {
     "nil?", "empty?", "symbol?", "keyword?", "string?", "number?",
     "boolean?", "function?", "cfunction?", "table?", "struct?", "array?",
     "tuple?", "buffer?", "fiber?", "truthy?", "true?", "false?"
 };
-static JanetFuncDef *janet_native_pred_defs[JANET_NATIVE_PRED_COUNT];
-static Janet janet_native_pred_keys[JANET_NATIVE_PRED_COUNT];
-static int janet_native_pred_keys_ready;
-static int janet_native_preds_ready;
+static BenderFuncDef *bender_native_pred_defs[BENDER_NATIVE_PRED_COUNT];
+static Bender bender_native_pred_keys[BENDER_NATIVE_PRED_COUNT];
+static int bender_native_pred_keys_ready;
+static int bender_native_preds_ready;
 
-JANET_API void janet_native_register_predicates(JanetTable *env) {
+BENDER_API void bender_native_register_predicates(BenderTable *env) {
     int32_t i;
     int found = 0;
-    if (!janet_native_pred_keys_ready) {
-        for (i = 0; i < JANET_NATIVE_PRED_COUNT; i++) {
-            Janet key = janet_csymbolv(janet_native_pred_names[i]);
-            janet_gcroot(key);
-            janet_native_pred_keys[i] = key;
+    if (!bender_native_pred_keys_ready) {
+        for (i = 0; i < BENDER_NATIVE_PRED_COUNT; i++) {
+            Bender key = bender_csymbolv(bender_native_pred_names[i]);
+            bender_gcroot(key);
+            bender_native_pred_keys[i] = key;
         }
-        janet_native_pred_keys_ready = 1;
+        bender_native_pred_keys_ready = 1;
     }
     if (!env) return;
-    for (i = 0; i < JANET_NATIVE_PRED_COUNT; i++) {
-        Janet v = janet_wrap_nil();
-        JanetBindingType bt = janet_resolve(env,
-            janet_unwrap_symbol(janet_native_pred_keys[i]), &v);
-        janet_native_pred_defs[i] =
-            (bt != JANET_BINDING_NONE && janet_checktype(v, JANET_FUNCTION))
-                ? janet_unwrap_function(v)->def : NULL;
-        if (janet_native_pred_defs[i]) found++;
+    for (i = 0; i < BENDER_NATIVE_PRED_COUNT; i++) {
+        Bender v = bender_wrap_nil();
+        BenderBindingType bt = bender_resolve(env,
+            bender_unwrap_symbol(bender_native_pred_keys[i]), &v);
+        bender_native_pred_defs[i] =
+            (bt != BENDER_BINDING_NONE && bender_checktype(v, BENDER_FUNCTION))
+                ? bender_unwrap_function(v)->def : NULL;
+        if (bender_native_pred_defs[i]) found++;
     }
-    /* native_init sees the pre-boot core env (no Janet-defined predicates).
+    /* native_init sees the pre-boot core env (no Bender-defined predicates).
      * Keep the defs unresolved so the first executor call retries against
      * the fully populated core env. Once any predicate is found, missing
      * ones are permanently left to the VM. */
-    if (found > 0) janet_native_preds_ready = 1;
+    if (found > 0) bender_native_preds_ready = 1;
 }
 
-static void janet_native_predicates_lazy(void) {
-    if (janet_native_preds_ready) return;
-    if (janet_vm.core_env) janet_native_register_predicates(janet_vm.core_env);
+static void bender_native_predicates_lazy(void) {
+    if (bender_native_preds_ready) return;
+    if (bender_vm.core_env) bender_native_register_predicates(bender_vm.core_env);
 }
 
-static int janet_native_empty_p(Janet x, Janet *out) {
-    switch (janet_type(x)) {
-        case JANET_ARRAY:
-            *out = janet_wrap_boolean(janet_unwrap_array(x)->count == 0);
+static int bender_native_empty_p(Bender x, Bender *out) {
+    switch (bender_type(x)) {
+        case BENDER_ARRAY:
+            *out = bender_wrap_boolean(bender_unwrap_array(x)->count == 0);
             return 1;
-        case JANET_TUPLE:
-            *out = janet_wrap_boolean(janet_tuple_length(janet_unwrap_tuple(x)) == 0);
+        case BENDER_TUPLE:
+            *out = bender_wrap_boolean(bender_tuple_length(bender_unwrap_tuple(x)) == 0);
             return 1;
-        case JANET_TABLE:
-            *out = janet_wrap_boolean(janet_unwrap_table(x)->count == 0);
+        case BENDER_TABLE:
+            *out = bender_wrap_boolean(bender_unwrap_table(x)->count == 0);
             return 1;
-        case JANET_STRUCT:
-            *out = janet_wrap_boolean(janet_struct_length(janet_unwrap_struct(x)) == 0);
+        case BENDER_STRUCT:
+            *out = bender_wrap_boolean(bender_struct_length(bender_unwrap_struct(x)) == 0);
             return 1;
-        case JANET_STRING:
-            *out = janet_wrap_boolean(janet_string_length(janet_unwrap_string(x)) == 0);
+        case BENDER_STRING:
+            *out = bender_wrap_boolean(bender_string_length(bender_unwrap_string(x)) == 0);
             return 1;
-        case JANET_SYMBOL:
-            *out = janet_wrap_boolean(janet_string_length(janet_unwrap_symbol(x)) == 0);
+        case BENDER_SYMBOL:
+            *out = bender_wrap_boolean(bender_string_length(bender_unwrap_symbol(x)) == 0);
             return 1;
-        case JANET_KEYWORD:
-            *out = janet_wrap_boolean(janet_string_length(janet_unwrap_keyword(x)) == 0);
+        case BENDER_KEYWORD:
+            *out = bender_wrap_boolean(bender_string_length(bender_unwrap_keyword(x)) == 0);
             return 1;
-        case JANET_BUFFER:
-            *out = janet_wrap_boolean(janet_unwrap_buffer(x)->count == 0);
+        case BENDER_BUFFER:
+            *out = bender_wrap_boolean(bender_unwrap_buffer(x)->count == 0);
             return 1;
         default:
             return 0;
     }
 }
 
-JANET_API int janet_native_core_predicate(Janet callee, int32_t argc,
-        const Janet *argv, Janet *out) {
+BENDER_API int bender_native_core_predicate(Bender callee, int32_t argc,
+        const Bender *argv, Bender *out) {
     int32_t i;
-    JanetFuncDef *d;
-    Janet x;
-    if (argc != 1 || !janet_checktype(callee, JANET_FUNCTION)) return 0;
-    if (!janet_native_preds_ready) janet_native_predicates_lazy();
-    d = janet_unwrap_function(callee)->def;
+    BenderFuncDef *d;
+    Bender x;
+    if (argc != 1 || !bender_checktype(callee, BENDER_FUNCTION)) return 0;
+    if (!bender_native_preds_ready) bender_native_predicates_lazy();
+    d = bender_unwrap_function(callee)->def;
     x = argv[0];
-    for (i = 0; i < JANET_NATIVE_PRED_COUNT; i++) {
-        if (d != janet_native_pred_defs[i]) continue;
+    for (i = 0; i < BENDER_NATIVE_PRED_COUNT; i++) {
+        if (d != bender_native_pred_defs[i]) continue;
         switch (i) {
-            case JANET_NATIVE_PRED_NIL:
-                *out = janet_wrap_boolean(janet_checktype(x, JANET_NIL));
+            case BENDER_NATIVE_PRED_NIL:
+                *out = bender_wrap_boolean(bender_checktype(x, BENDER_NIL));
                 return 1;
-            case JANET_NATIVE_PRED_EMPTY:
-                return janet_native_empty_p(x, out);
-            case JANET_NATIVE_PRED_SYMBOL:
-                *out = janet_wrap_boolean(janet_checktype(x, JANET_SYMBOL));
+            case BENDER_NATIVE_PRED_EMPTY:
+                return bender_native_empty_p(x, out);
+            case BENDER_NATIVE_PRED_SYMBOL:
+                *out = bender_wrap_boolean(bender_checktype(x, BENDER_SYMBOL));
                 return 1;
-            case JANET_NATIVE_PRED_KEYWORD:
-                *out = janet_wrap_boolean(janet_checktype(x, JANET_KEYWORD));
+            case BENDER_NATIVE_PRED_KEYWORD:
+                *out = bender_wrap_boolean(bender_checktype(x, BENDER_KEYWORD));
                 return 1;
-            case JANET_NATIVE_PRED_STRING:
-                *out = janet_wrap_boolean(janet_checktype(x, JANET_STRING));
+            case BENDER_NATIVE_PRED_STRING:
+                *out = bender_wrap_boolean(bender_checktype(x, BENDER_STRING));
                 return 1;
-            case JANET_NATIVE_PRED_NUMBER:
-                *out = janet_wrap_boolean(janet_checktype(x, JANET_NUMBER));
+            case BENDER_NATIVE_PRED_NUMBER:
+                *out = bender_wrap_boolean(bender_checktype(x, BENDER_NUMBER));
                 return 1;
-            case JANET_NATIVE_PRED_BOOLEAN:
-                *out = janet_wrap_boolean(janet_checktype(x, JANET_BOOLEAN));
+            case BENDER_NATIVE_PRED_BOOLEAN:
+                *out = bender_wrap_boolean(bender_checktype(x, BENDER_BOOLEAN));
                 return 1;
-            case JANET_NATIVE_PRED_FUNCTION:
-                *out = janet_wrap_boolean(janet_checktype(x, JANET_FUNCTION));
+            case BENDER_NATIVE_PRED_FUNCTION:
+                *out = bender_wrap_boolean(bender_checktype(x, BENDER_FUNCTION));
                 return 1;
-            case JANET_NATIVE_PRED_CFUNCTION:
-                *out = janet_wrap_boolean(janet_checktype(x, JANET_CFUNCTION));
+            case BENDER_NATIVE_PRED_CFUNCTION:
+                *out = bender_wrap_boolean(bender_checktype(x, BENDER_CFUNCTION));
                 return 1;
-            case JANET_NATIVE_PRED_TABLE:
-                *out = janet_wrap_boolean(janet_checktype(x, JANET_TABLE));
+            case BENDER_NATIVE_PRED_TABLE:
+                *out = bender_wrap_boolean(bender_checktype(x, BENDER_TABLE));
                 return 1;
-            case JANET_NATIVE_PRED_STRUCT:
-                *out = janet_wrap_boolean(janet_checktype(x, JANET_STRUCT));
+            case BENDER_NATIVE_PRED_STRUCT:
+                *out = bender_wrap_boolean(bender_checktype(x, BENDER_STRUCT));
                 return 1;
-            case JANET_NATIVE_PRED_ARRAY:
-                *out = janet_wrap_boolean(janet_checktype(x, JANET_ARRAY));
+            case BENDER_NATIVE_PRED_ARRAY:
+                *out = bender_wrap_boolean(bender_checktype(x, BENDER_ARRAY));
                 return 1;
-            case JANET_NATIVE_PRED_TUPLE:
-                *out = janet_wrap_boolean(janet_checktype(x, JANET_TUPLE));
+            case BENDER_NATIVE_PRED_TUPLE:
+                *out = bender_wrap_boolean(bender_checktype(x, BENDER_TUPLE));
                 return 1;
-            case JANET_NATIVE_PRED_BUFFER:
-                *out = janet_wrap_boolean(janet_checktype(x, JANET_BUFFER));
+            case BENDER_NATIVE_PRED_BUFFER:
+                *out = bender_wrap_boolean(bender_checktype(x, BENDER_BUFFER));
                 return 1;
-            case JANET_NATIVE_PRED_FIBER:
-                *out = janet_wrap_boolean(janet_checktype(x, JANET_FIBER));
+            case BENDER_NATIVE_PRED_FIBER:
+                *out = bender_wrap_boolean(bender_checktype(x, BENDER_FIBER));
                 return 1;
-            case JANET_NATIVE_PRED_TRUTHY:
-                *out = janet_wrap_boolean(janet_truthy(x));
+            case BENDER_NATIVE_PRED_TRUTHY:
+                *out = bender_wrap_boolean(bender_truthy(x));
                 return 1;
-            case JANET_NATIVE_PRED_TRUE:
-                *out = janet_wrap_boolean(
-                    janet_checktype(x, JANET_BOOLEAN) && janet_unwrap_boolean(x));
+            case BENDER_NATIVE_PRED_TRUE:
+                *out = bender_wrap_boolean(
+                    bender_checktype(x, BENDER_BOOLEAN) && bender_unwrap_boolean(x));
                 return 1;
-            case JANET_NATIVE_PRED_FALSE:
-                *out = janet_wrap_boolean(
-                    janet_checktype(x, JANET_BOOLEAN) && !janet_unwrap_boolean(x));
+            case BENDER_NATIVE_PRED_FALSE:
+                *out = bender_wrap_boolean(
+                    bender_checktype(x, BENDER_BOOLEAN) && !bender_unwrap_boolean(x));
                 return 1;
             default:
                 return 0;
@@ -2250,15 +2250,15 @@ JANET_API int janet_native_core_predicate(Janet callee, int32_t argc,
     return 0;
 }
 
-int janet_native_register(JanetFunction *f, const JanetNativeCode *n) {
+int bender_native_register(BenderFunction *f, const BenderNativeCode *n) {
     f->def->native_code = NULL;
-#ifdef JANET_NATIVE_EXECUTORS
-    if (janet_native_matches(f->def, n)) {
+#ifdef BENDER_NATIVE_EXECUTORS
+    if (bender_native_matches(f->def, n)) {
         f->def->native_code = n;
-        janet_vm.native_possible = 1;
+        bender_vm.native_possible = 1;
         /* Validation just ran; seed the re-entry cache at this epoch. */
         f->def->native_verified = n;
-        f->def->native_verified_epoch = janet_vm.native_epoch;
+        f->def->native_verified_epoch = bender_vm.native_epoch;
         return 1;
     }
 #else
@@ -2275,24 +2275,24 @@ int janet_native_register(JanetFunction *f, const JanetNativeCode *n) {
  * The registry is indexed by a cheap exact key (scalar shape fields plus
  * a rolling hash over every bytecode word, computed once at publish), so
  * an attach attempt hashes the definition once and runs the full
- * janet_native_matches exact compare only on a key hit — definitions
+ * bender_native_matches exact compare only on a key hit — definitions
  * with no key hit do zero verify work. Names and keys never decide
- * attachment; janet_native_matches does. */
+ * attachment; bender_native_matches does. */
 
-#define JANET_NATIVE_REGISTRY_MAX 256
-#define JANET_NATIVE_REGISTRY_BUCKETS 512u /* power of two */
+#define BENDER_NATIVE_REGISTRY_MAX 256
+#define BENDER_NATIVE_REGISTRY_BUCKETS 512u /* power of two */
 
-#ifdef JANET_NATIVE_EXECUTORS
-static const JanetNativeCode *native_registry[JANET_NATIVE_REGISTRY_MAX];
-static uint64_t native_registry_keys[JANET_NATIVE_REGISTRY_MAX];
-static int32_t native_registry_buckets[JANET_NATIVE_REGISTRY_BUCKETS]; /* head idx+1, 0 empty */
-static int32_t native_registry_chain[JANET_NATIVE_REGISTRY_MAX]; /* next idx, -1 end */
+#ifdef BENDER_NATIVE_EXECUTORS
+static const BenderNativeCode *native_registry[BENDER_NATIVE_REGISTRY_MAX];
+static uint64_t native_registry_keys[BENDER_NATIVE_REGISTRY_MAX];
+static int32_t native_registry_buckets[BENDER_NATIVE_REGISTRY_BUCKETS]; /* head idx+1, 0 empty */
+static int32_t native_registry_chain[BENDER_NATIVE_REGISTRY_MAX]; /* next idx, -1 end */
 static int32_t native_registry_len;
 static uint32_t native_registry_gen;
 
 /* Rolling FNV-1a over the exact scalar shape and every bytecode word.
  * Equal keys are necessary for an exact structural match, never
- * sufficient: the full janet_native_matches word compare still decides
+ * sufficient: the full bender_native_matches word compare still decides
  * (a 64-bit key collision only costs one wasted exact compare). Constant
  * entries are deliberately not hashed. Opaque descriptor entries assume
  * nothing about the live pool value, so hashing the def's actual constant
@@ -2316,14 +2316,14 @@ static uint64_t native_shape_key(int32_t length, int32_t slotcount, int32_t arit
     return h;
 }
 
-static uint64_t native_def_key(const JanetFuncDef *d) {
+static uint64_t native_def_key(const BenderFuncDef *d) {
     return native_shape_key(d->bytecode_length, d->slotcount, d->arity,
                             d->min_arity, d->max_arity, d->flags,
                             d->constants_length, d->bytecode);
 }
 
 /* Cheap prefilter before whole-definition validation. */
-static int native_shape_prefilter(const JanetFuncDef *d, const JanetNativeCode *n) {
+static int native_shape_prefilter(const BenderFuncDef *d, const BenderNativeCode *n) {
     return d->bytecode_length == n->length && d->slotcount == n->slotcount &&
            d->arity == n->arity && d->min_arity == n->min_arity &&
            d->max_arity == n->max_arity && d->flags == n->flags &&
@@ -2331,81 +2331,81 @@ static int native_shape_prefilter(const JanetFuncDef *d, const JanetNativeCode *
 }
 #endif
 
-int janet_native_region_allowed(const JanetNativeCode *n, uint32_t pc) {
+int bender_native_region_allowed(const BenderNativeCode *n, uint32_t pc) {
     return n && n->region_mask && pc < (uint32_t)n->length &&
            (n->region_mask[pc >> 6] & (1ull << (pc & 63)));
 }
 
-void janet_native_registry_add(const JanetNativeCode *n) {
-#ifdef JANET_NATIVE_EXECUTORS
+void bender_native_registry_add(const BenderNativeCode *n) {
+#ifdef BENDER_NATIVE_EXECUTORS
     if (!n || !n->execute) return;
-    if (native_registry_len < JANET_NATIVE_REGISTRY_MAX) {
+    if (native_registry_len < BENDER_NATIVE_REGISTRY_MAX) {
         int32_t idx = native_registry_len++;
         uint64_t key = native_shape_key(n->length, n->slotcount, n->arity,
                                         n->min_arity, n->max_arity, n->flags,
                                         n->constants_length, n->words);
-        uint32_t b = (uint32_t)key & (JANET_NATIVE_REGISTRY_BUCKETS - 1);
+        uint32_t b = (uint32_t)key & (BENDER_NATIVE_REGISTRY_BUCKETS - 1);
         native_registry[idx] = n;
         native_registry_keys[idx] = key;
         native_registry_chain[idx] = native_registry_buckets[b] - 1;
         native_registry_buckets[b] = idx + 1;
     }
     native_registry_gen++;
-    janet_vm.native_possible = 1;
-    janet_vm.native_epoch++; /* conservative: publication can enable attachment */
+    bender_vm.native_possible = 1;
+    bender_vm.native_epoch++; /* conservative: publication can enable attachment */
 #else
     (void)n;
 #endif
 }
 
-void janet_native_invalidate(void) {
-    janet_vm.native_epoch++;
+void bender_native_invalidate(void) {
+    bender_vm.native_epoch++;
 }
 
-int janet_native_registry_count(void) {
-#ifdef JANET_NATIVE_EXECUTORS
+int bender_native_registry_count(void) {
+#ifdef BENDER_NATIVE_EXECUTORS
     return native_registry_len;
 #else
     return 0;
 #endif
 }
 
-uint32_t janet_native_registry_generation(void) {
-#ifdef JANET_NATIVE_EXECUTORS
+uint32_t bender_native_registry_generation(void) {
+#ifdef BENDER_NATIVE_EXECUTORS
     return native_registry_gen;
 #else
     return 0;
 #endif
 }
 
-int janet_native_try_attach(JanetFuncDef *d) {
-#ifdef JANET_NATIVE_EXECUTORS
+int bender_native_try_attach(BenderFuncDef *d) {
+#ifdef BENDER_NATIVE_EXECUTORS
     d->native_attach_gen = native_registry_gen;
     if (d->native_code) return 1; /* explicit registration already won */
-    janet_vm.native_attach_attempts++;
+    bender_vm.native_attach_attempts++;
     uint64_t key = native_def_key(d);
-    uint32_t b = (uint32_t)key & (JANET_NATIVE_REGISTRY_BUCKETS - 1);
-    const JanetNativeCode *unique = NULL;
+    uint32_t b = (uint32_t)key & (BENDER_NATIVE_REGISTRY_BUCKETS - 1);
+    const BenderNativeCode *unique = NULL;
     int ambiguous = 0, prehits = 0;
     for (int32_t ci = native_registry_buckets[b] - 1; ci >= 0 && !ambiguous;
             ci = native_registry_chain[ci]) {
         if (native_registry_keys[ci] != key) continue; /* bucket slot collision */
-        const JanetNativeCode *n = native_registry[ci];
+        const BenderNativeCode *n = native_registry[ci];
         if (!native_shape_prefilter(d, n)) continue; /* 64-bit key collision guard */
         prehits++;
-        if (janet_native_matches(d, n)) {
+        if (bender_native_matches(d, n)) {
             if (unique) ambiguous = 1;
             else unique = n;
         }
     }
-    (void)prehits; /* only read by JANET_NATIVE_ATTACH_DEBUG diagnostics */
+    (void)prehits; /* only read by BENDER_NATIVE_ATTACH_DEBUG diagnostics */
     if (ambiguous) {
-        janet_vm.native_attach_ambiguous++;
+        bender_vm.native_attach_ambiguous++;
         return 0;
     }
     if (!unique) {
-        janet_vm.native_attach_nomatch++;
-#ifdef JANET_NATIVE_ATTACH_DEBUG
+        bender_vm.native_attach_nomatch++;
+#ifdef BENDER_NATIVE_ATTACH_DEBUG
         fprintf(stderr, "native-attach: no descriptor for def name=%s len=%d slots=%d "
                 "arity=%d/%d/%d consts=%d flags=%x envs=%d prehits=%d\n",
                 d->name ? (const char *)d->name : "?", d->bytecode_length, d->slotcount,
@@ -2417,9 +2417,9 @@ int janet_native_try_attach(JanetFuncDef *d) {
     d->native_code = unique;
     /* Validation just ran; seed the re-entry cache at this epoch. */
     d->native_verified = unique;
-    d->native_verified_epoch = janet_vm.native_epoch;
-    janet_vm.native_attach_attached++;
-#ifdef JANET_NATIVE_ATTACH_DEBUG
+    d->native_verified_epoch = bender_vm.native_epoch;
+    bender_vm.native_attach_attached++;
+#ifdef BENDER_NATIVE_ATTACH_DEBUG
     fprintf(stderr, "native-attach: attached def name=%s len=%d\n",
             d->name ? (const char *)d->name : "?", d->bytecode_length);
 #endif
@@ -2430,26 +2430,26 @@ int janet_native_try_attach(JanetFuncDef *d) {
 #endif
 }
 
-uint64_t janet_native_stat(int which) {
-#ifdef JANET_NATIVE_EXECUTORS
+uint64_t bender_native_stat(int which) {
+#ifdef BENDER_NATIVE_EXECUTORS
     switch (which) {
-        case JANET_NATIVE_STAT_ATTACH_ATTEMPTS: return janet_vm.native_attach_attempts;
-        case JANET_NATIVE_STAT_ATTACH_ATTACHED: return janet_vm.native_attach_attached;
-        case JANET_NATIVE_STAT_ATTACH_AMBIGUOUS: return janet_vm.native_attach_ambiguous;
-        case JANET_NATIVE_STAT_ATTACH_NOMATCH: return janet_vm.native_attach_nomatch;
-        case JANET_NATIVE_STAT_VM_EXITS: return janet_vm.native_vm_exits;
-        case JANET_NATIVE_STAT_CONTINUATIONS: return janet_vm.native_continuations;
-        case JANET_NATIVE_STAT_CONTINUATION_REFUSALS: return janet_vm.native_continuation_refusals;
-        case JANET_NATIVE_STAT_NATIVE_RETURNS: return janet_vm.native_returns;
-        case JANET_NATIVE_STAT_INTERP_CALLS: return janet_vm.native_interp_calls;
-        case JANET_NATIVE_STAT_INTERP_DISPATCHES: return janet_vm.native_interp_dispatches;
-        case JANET_NATIVE_STAT_ALLOCATIONS: return janet_vm.work_allocations;
-        case JANET_NATIVE_STAT_ALLOC_BYTES: return janet_vm.work_alloc_bytes;
-        case JANET_NATIVE_STAT_BARRIER_CALLS: return janet_vm.work_barrier_calls;
-        case JANET_NATIVE_STAT_GC_MAJOR: return janet_vm.work_gc_major;
-        case JANET_NATIVE_STAT_GC_MINOR: return janet_vm.work_gc_minor;
-        case JANET_NATIVE_STAT_GC_FIBER_MINOR: return janet_vm.work_gc_fiber_minor;
-        case JANET_NATIVE_STAT_GC_PROCESS_MINOR: return janet_vm.work_gc_process_minor;
+        case BENDER_NATIVE_STAT_ATTACH_ATTEMPTS: return bender_vm.native_attach_attempts;
+        case BENDER_NATIVE_STAT_ATTACH_ATTACHED: return bender_vm.native_attach_attached;
+        case BENDER_NATIVE_STAT_ATTACH_AMBIGUOUS: return bender_vm.native_attach_ambiguous;
+        case BENDER_NATIVE_STAT_ATTACH_NOMATCH: return bender_vm.native_attach_nomatch;
+        case BENDER_NATIVE_STAT_VM_EXITS: return bender_vm.native_vm_exits;
+        case BENDER_NATIVE_STAT_CONTINUATIONS: return bender_vm.native_continuations;
+        case BENDER_NATIVE_STAT_CONTINUATION_REFUSALS: return bender_vm.native_continuation_refusals;
+        case BENDER_NATIVE_STAT_NATIVE_RETURNS: return bender_vm.native_returns;
+        case BENDER_NATIVE_STAT_INTERP_CALLS: return bender_vm.native_interp_calls;
+        case BENDER_NATIVE_STAT_INTERP_DISPATCHES: return bender_vm.native_interp_dispatches;
+        case BENDER_NATIVE_STAT_ALLOCATIONS: return bender_vm.work_allocations;
+        case BENDER_NATIVE_STAT_ALLOC_BYTES: return bender_vm.work_alloc_bytes;
+        case BENDER_NATIVE_STAT_BARRIER_CALLS: return bender_vm.work_barrier_calls;
+        case BENDER_NATIVE_STAT_GC_MAJOR: return bender_vm.work_gc_major;
+        case BENDER_NATIVE_STAT_GC_MINOR: return bender_vm.work_gc_minor;
+        case BENDER_NATIVE_STAT_GC_FIBER_MINOR: return bender_vm.work_gc_fiber_minor;
+        case BENDER_NATIVE_STAT_GC_PROCESS_MINOR: return bender_vm.work_gc_process_minor;
         default: return 0;
     }
 #else
@@ -2458,9 +2458,9 @@ uint64_t janet_native_stat(int which) {
 #endif
 }
 
-uint64_t janet_native_exit_stat(int opcode) {
-#ifdef JANET_NATIVE_EXECUTORS
-    return (opcode >= 0 && opcode < 256) ? janet_vm.native_exit_opcodes[opcode] : 0;
+uint64_t bender_native_exit_stat(int opcode) {
+#ifdef BENDER_NATIVE_EXECUTORS
+    return (opcode >= 0 && opcode < 256) ? bender_vm.native_exit_opcodes[opcode] : 0;
 #else
     (void)opcode;
     return 0;
@@ -2468,9 +2468,9 @@ uint64_t janet_native_exit_stat(int opcode) {
 }
 
 /* Create a simple closure from a funcdef */
-JanetFunction *janet_thunk(JanetFuncDef *def) {
-    JanetFunction *func = janet_gcalloc(JANET_MEMORY_FUNCTION, sizeof(JanetFunction));
+BenderFunction *bender_thunk(BenderFuncDef *def) {
+    BenderFunction *func = bender_gcalloc(BENDER_MEMORY_FUNCTION, sizeof(BenderFunction));
     func->def = def;
-    janet_assert(def->environments_length == 0, "tried to create thunk that needs upvalues");
+    bender_assert(def->environments_length == 0, "tried to create thunk that needs upvalues");
     return func;
 }

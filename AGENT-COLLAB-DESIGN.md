@@ -1,7 +1,7 @@
 # AGENT-COLLAB-DESIGN.md
 ## A coordination layer for LLM agents on separate worktrees — same machine or across the internet
 
-*Derived from the 2026-10-11 janet/janet_clear_memory debugging session, where two
+*Derived from the 2026-10-11 bender/bender_clear_memory debugging session, where two
 agents worked the same repository simultaneously and every failure mode of
 uncoordinated multi-agent work was observed firsthand.*
 
@@ -14,7 +14,7 @@ uncoordinated multi-agent work was observed firsthand.*
 | P1 | The other agent's edits landed in `abstract.c`/`gc.c` **while I was editing**; my edit tool rejected writes ("file changed since read"). I nearly clobbered in-flight work. | **File-claim leases with intent.** Agents declare *what they will touch* before touching it; writes check claims. |
 | P2 | I discovered the other agent only forensically — file mtimes, commit authorship. No identity, no way to ask "are you mid-rewrite?" | **Identity registry + presence.** Agents register; runs heartbeat; anyone can list who is active, on what. |
 | P3 | My fix needed three rebases onto a moving HEAD; landing required hand-rolled "clean window" polling and race guards; committing risked entangling their uncommitted WIP. | **Serialized merge queue.** Landings are proposals processed one at a time with automated rebase + gated checks in scratch worktrees. |
-| P4 | Their wedged processes (suite-proc parked 2–3 h; `nnstrict.janet` spinning 3 h) poisoned my timing-sensitive measurements. I killed processes I couldn't attribute with certainty. | **Run registry + resource reservation.** Every process carries a run ID; benchmark windows are reserved; orphans are attributable and killable by policy. |
+| P4 | Their wedged processes (suite-proc parked 2–3 h; `nnstrict.ben` spinning 3 h) poisoned my timing-sensitive measurements. I killed processes I couldn't attribute with certainty. | **Run registry + resource reservation.** Every process carries a run ID; benchmark windows are reserved; orphans are attributable and killable by policy. |
 | P5 | We duplicated work: both agents reproduced the same UAF independently, hours apart. I had instrumented evidence they never saw. | **Shared task board with evidence.** One task = one claim; findings attach to tasks, not to private context. |
 | P6 | My handoff was filesystem graffiti (untracked `HANDOFF-*.md`) — no delivery guarantee, no ack, no lifecycle. | **Durable messages with ack.** A handoff is a typed message that stays unread-flagged until the recipient acknowledges. |
 | P7 | Same repo, two worktrees, one machine — and we already hit all of this. The team will be **multi-machine, multi-human**, over the internet. | **Transport tiers:** start on git-only (works anywhere), upgrade to a small server for liveness; humans onboard their agents as first-class members. |
@@ -51,20 +51,20 @@ enough for machines.
 
 | Entity | ID form | Example | Notes |
 |--------|---------|---------|-------|
-| Project | `proj:<slug>:<id8>` | `proj:janet:a3f9c2d1` | `id8` = first 8 hex of SHA-256 of the canonical remote URL → the same project is recognized from any clone on any machine. |
+| Project | `proj:<slug>:<id8>` | `proj:bender:a3f9c2d1` | `id8` = first 8 hex of SHA-256 of the canonical remote URL → the same project is recognized from any clone on any machine. |
 | Agent | `agent:<handle>:<id8>` | `agent:blueant:91f3` | Owned by a human (`owner:`). Carries an ed25519 public key. |
 | Human | `hum:<handle>` | `hum:pankaj` | Humans never hold leases directly; their agents act for them. |
 | Run | `run:<agent-id8>:<ulid>` | `run:91f3:01JAX8…` | One agent turn-loop. Registers with a heartbeat TTL. All spawned processes carry it as `COORD_RUN_ID`. |
-| Task | `task:<proj-slug>:<n>:<slug>` | `task:janet:42:segfault-clear-memory` | `n` monotonic per project. Immutable body + mutable state. |
+| Task | `task:<proj-slug>:<n>:<slug>` | `task:bender:42:segfault-clear-memory` | `n` monotonic per project. Immutable body + mutable state. |
 | Lane (worktree) | `wt:<agent-id8>:<branch>` | `wt:91f3:fix/ta-walk-hardening` | One worktree = one branch = one integration lane. |
-| Lease | `lease:<proj-slug>:<id8>` | `lease:janet:77b1` | Pathspec + intent + TTL + mode. |
+| Lease | `lease:<proj-slug>:<id8>` | `lease:bender:77b1` | Pathspec + intent + TTL + mode. |
 | Message | `msg:<ulid>` | `msg:01JAX9…` | Signed envelope, durable, acked. |
 | Machine | `mach:<hostname>` | `mach:pankajs-mbp` | Capability tags + benchmark reservation target. |
 
 **Document envelope** (every board document):
 ```json
-{ "kind": "task", "v": 1, "proj": "proj:janet:a3f9c2d1",
-  "id": "task:janet:42:segfault-clear-memory", "rev": 7,
+{ "kind": "task", "v": 1, "proj": "proj:bender:a3f9c2d1",
+  "id": "task:bender:42:segfault-clear-memory", "rev": 7,
   "updated_by": "agent:blueant:91f3", "updated_at": "…Z", "sig": "ed25519:…" }
 ```
 Writes are CAS on `rev`. Conflicts fail loudly — never a silent clobber.
@@ -93,8 +93,8 @@ agents-coord/
 
 **Task document:**
 ```json
-{ "kind": "task", "id": "task:janet:42:segfault-clear-memory", "rev": 7,
-  "title": "Shutdown segfault in janet_clear_memory",
+{ "kind": "task", "id": "task:bender:42:segfault-clear-memory", "rev": 7,
+  "title": "Shutdown segfault in bender_clear_memory",
   "intent": "Reproduce, root-cause, fix, verify",
   "state": "in-progress",
   "claimed_by": "agent:blueant:91f3", "claim_expires": "…Z",
@@ -115,7 +115,7 @@ open → claimed → in-progress → in-review → landed
 
 **Lane manifest** (predicted vs actual file touches — the anti-P1 device):
 ```json
-{ "lane": "wt:91f3:fix/ta-walk-hardening", "task": "task:janet:42",
+{ "lane": "wt:91f3:fix/ta-walk-hardening", "task": "task:bender:42",
   "base": "78de4a75", "status": "in-progress",
   "predicted_files": ["src/core/gc.c", "src/core/abstract.c"],
   "actual_files": ["src/core/gc.c", "src/core/abstract.c"] }
@@ -182,7 +182,7 @@ guards, rebase-on-moving-HEAD, and "commit must not entangle WIP".
 { "kind": "msg", "id": "msg:01JAX9…",
   "from": "agent:blueant:91f3", "to": ["agent:metacritical:44ab"],
   "type": "handoff|question|answer|claim-request|conflict|status|alert",
-  "refs": { "task": "task:janet:42", "lane": "wt:91f3:…" },
+  "refs": { "task": "task:bender:42", "lane": "wt:91f3:…" },
   "body": { … }, "ack": "pending", "sig": "…" }
 ```
 - Durable mailbox per agent; `coord inbox` / `coord ack <msg>`.
@@ -283,14 +283,14 @@ idempotent where possible (`claim` twice = no-op returning the claim).
 
 **Phase 0 — today (0 infra, this repo):** conventions + `coord` as a single
 stdlib-Python script committed to the coordination branch; roster with both
-agents; open `task:janet:42` with today's evidence attached; adopt lease+lane
+agents; open `task:bender:42` with today's evidence attached; adopt lease+lane
 declarations. Both agents get `AGENTS.md` instructions: *before investigating,
 `coord task list`; before editing, `coord lease take`; before landing,
 `coord propose-merge`.*
 
 **Phase 1 — this week:** `coordd` on this Mac (Go single binary), Tailscale
 exposure, websocket `watch`, TTL sweeper, web board page. Second machine joins
-(janet CI box or a collaborator's laptop) to prove cross-machine.
+(bender CI box or a collaborator's laptop) to prove cross-machine.
 
 **Phase 2:** merge coordinator automation with scratch-worktree rebase + gated
 checks; reservation scheduler; attribution (`coord ps` / `kill-run`).

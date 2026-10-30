@@ -19,7 +19,7 @@ per landed slice.
 - Fix + regression test (suite-proc or suite-lanes fan-in section).
 
 ### 2. BUG: per-lane density threshold
-- 4-lane 1M (~225k/lane) crashes above ~900k total: janet_hash on freed
+- 4-lane 1M (~225k/lane) crashes above ~900k total: bender_hash on freed
   abstract in worker run_vm. 8-lane (125k/lane) clean.
 - Audit cross-thread refs that survive GC: pid tuples in child envs, C-side
   registries, marshaled channel refs; find the unrooted/dangling one.
@@ -41,7 +41,7 @@ per landed slice.
 - 4d. 1-vs-N-lane agents demo benchmark + numbers.
 
 ### 5. Tests (throughout, feature-indication style)
-- Extend suite-lanes.janet per feature (join, monitors, kill, steal policy,
+- Extend suite-lanes.ben per feature (join, monitors, kill, steal policy,
   fan-in regression, density regression skip-if-low-RAM).
 - Every suite runs under BOTH bender (interpreter) and the AOT binary;
   make test battery green; feature commits per slice.

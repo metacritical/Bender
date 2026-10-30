@@ -18,7 +18,7 @@ $ ls ./fuzz_out/parser_aggregated/
 
 ## Fuzz the unmarshaller
 ```
-$ janet ./tools/afl/generate_unmarshal_testcases.janet
+$ bender ./tools/afl/generate_unmarshal_testcases.ben
 $ sh ./tools/afl/prepare_to_fuzz.sh
 $ export NFUZZ=1
 $ sh ./tools/afl/fuzz.sh unmarshal

@@ -9,17 +9,17 @@ Snapshot for every number below:
 - compiler `bafc7e48` (Stream F step 2 landed; the inventory was first
   taken at `545b18f7` and every section below is refreshed to
   `bafc7e48` unless stated)
-- ttfx `janet-port/{src,bin}` aggregate sha256
+- ttfx `bender-port/{src,bin}` aggregate sha256
   `f0253cf4cd8bb44594e187b4759ddb3771374871298466449a8c630b800a17cc`
   (includes the Stream F u64 kernel wiring, now emitting)
-- entry `bin/ttfx-cli.janet`; PGO evidence
+- entry `bin/ttfx-cli.ben`; PGO evidence
   `$T/kernel-fixed-build/ttfx-native/profile.jdn`
 
-Reproduce (temp-only instrumented copy of `tools/callgraph.janet` that
+Reproduce (temp-only instrumented copy of `tools/callgraph.ben` that
 adds a `ti` type/provenance line per def; the repo tool is untouched):
 
 ```sh
-bender tools/callgraph.janet bin/ttfx-cli.janet \
+bender tools/callgraph.ben bin/ttfx-cli.ben \
   --profile <profile.jdn> --emit-native-lib /tmp/diag
 ```
 
@@ -119,8 +119,8 @@ rng/easing/...`) 153, `bin/` harness 22.
 
 Emittable-observed but unproven (proof/seed gap only, no new ABI
 needed): `color-clamp` (23700), `color-fg` (8696, conflict), `?`
-`canvas.janet:179/320` (790), `encode-codepoint` (1046), `hex2` (24),
-`effect-kind`, `flag-set?`, `color.janet:145` (1580, array/tuple).
+`canvas.ben:179/320` (790), `encode-codepoint` (1046), `hex2` (24),
+`effect-kind`, `flag-set?`, `color.ben:145` (1580, array/tuple).
 
 ## 4. Immediate levers, ranked
 
@@ -147,7 +147,7 @@ While the Stream F wiring was landing, both CLI and GUI entries
 refused the new hinted kernel with `slot s23 mixes u64 with non-u64:
 u64/u64ok/number` (diag ids 442/471, dup 791/807), even though a GUI
 build a minute earlier had emitted `k_next_word_u64_bang` from the
-same `rng-kernels.janet`. The flip tracked which registration channel
+same `rng-kernels.ben`. The flip tracked which registration channel
 became canonical (analysis copy vs real module copy) and its per-copy
 bytecode, not the kernel source. `bafc7e48` (u64-domain declaration +
 arg-walk fixes) resolves it: the kernel now emits on both entries and

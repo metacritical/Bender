@@ -13,7 +13,7 @@ nested, literal defaults, nil-triggers-default); multimethods
 exact dispatch + `:default`, single-arity, no hierarchies);
 same-VM atoms (`atom`/`deref`/`swap!`/`reset!`/`compare-and-set!`
 + validators, no locking); futures/promises over the pool
-(`examples/future.janet`); lazy sequences (`lazy-cell`,
+(`examples/future.ben`); lazy sequences (`lazy-cell`,
 `lazy-range`, `lazy-repeat`, `lazy-iterate`, `lazy-map`,
 `lazy-filter`, `lazy-take`, `lazy-drop`, `lazy-take-while`,
 `lazy-drop-while`, `lazy-cat`, `lazy-mapcat`, `lazy-from-array`,
@@ -27,7 +27,7 @@ Deliberate omissions with cause:
   (bind `(get m :as)`), which `import*`'s calling convention depends
   on (`(def {:as as :prefix prefix ...} kargs)`). Redefining it broke
   every import (caught by suite-array); pinned in
-  test/suite-destructure.janet.
+  test/suite-destructure.ben.
 - No cross-thread atoms (would need mutex + copy discipline —
   channels carry state across, futures/promises carry results).
 - No agents/refs/STM yet (designed, unbuilt): single-VM STM (refs as
@@ -66,16 +66,16 @@ Clojure programmers re-traverse sequences routinely. Shipping a fiber as
 with the sequence value staying re-traversable so a fresh view per pass is the
 idiom.
 
-**Janet's `map` was rejected as a building block.** It is eager over every
+**Bender's `map` was rejected as a building block.** It is eager over every
 source — it consumes a fiber to exhaustion and returns an array — so
 `(map f (lazy-range))` realizes everything, and over an infinite source it
 simply hangs. A probe against an infinite generator had to be killed.
 
 **An abstract type was the third option and was declined for now.** A
-`JanetAbstractType` with `get`/`next` slots would make a sequence a first-class
+`BenderAbstractType` with `get`/`next` slots would make a sequence a first-class
 iterable with native `each`/`length`/marshal support, but abstract types are
-defined in C only — there is no Janet-level constructor. That is a larger and
-less reversible change than a boot.janet implementation, so it stays available
+defined in C only — there is no Bender-level constructor. That is a larger and
+less reversible change than a boot.ben implementation, so it stays available
 if a sequence ever needs to cross a process boundary. Today it must not:
 closures do not marshal, so pass an array across, not a sequence.
 
@@ -92,19 +92,19 @@ closures do not marshal, so pass an array across, not a sequence.
 Implementing lazy sequences exposed a collector defect that has nothing to do
 with lazy sequences: a lazily-built chain is a deep chain of closures, and
 marking recursed one C frame per edge
-(`janet_mark` -> `mark_function` -> `mark_funcenv` -> `mark_many` ->
-`janet_mark`). A deep chain exhausted the C stack inside a collection and
-crashed on the guard page — lldb showed `EXC_BAD_ACCESS` in `janet_mark`. Onset
+(`bender_mark` -> `mark_function` -> `mark_funcenv` -> `mark_many` ->
+`bender_mark`). A deep chain exhausted the C stack inside a collection and
+crashed on the guard page — lldb showed `EXC_BAD_ACCESS` in `bender_mark`. Onset
 was ~150k–180k links; the same graph built shallowly, and a plain 200k tuple
 chain, were both fine, so the trigger is **depth, not count**.
 
-`JANET_RECURSION_GUARD` did not help: at 1024 nested marks it deferred values to
-`janet_gcroot`, which only *appends* to the root list for the drain loop at
+`BENDER_RECURSION_GUARD` did not help: at 1024 nested marks it deferred values to
+`bender_gcroot`, which only *appends* to the root list for the drain loop at
 `gc.c:2435`. That is 1024 C frames too late, and it is near the point where an
 8 MB stack is already gone.
 
 The fix marks **closure environments** iteratively through a
-mark-operation-scoped queue (`janet_drain_env_queue`). Only the environment edge
+mark-operation-scoped queue (`bender_drain_env_queue`). Only the environment edge
 needs this: every other container marker recurses through a fixed number of
 frames, and its children are bounded by that container's own size, whereas an
 environment chain is unbounded by construction.
@@ -112,13 +112,13 @@ environment chain is unbounded by construction.
 Three constraints shaped it, each learned the hard way:
 
 - **The queue is saved and restored around every drain.** Marking re-enters:
-  `janet_env_maybe_detach` allocates, which can itself collect. An earlier
+  `bender_env_maybe_detach` allocates, which can itself collect. An earlier
   attempt kept one worklist in the VM and reset it at collection entry; an inner
   collection then discarded the outer pass's pending work and swept live
   objects. That corrupted reachability and crashed `suite-lanes` inside
-  `janet_dict_find`.
-- **Growth uses raw `realloc`**, following `janet_gcroot` and
-  `janet_gcshadow_push`; a push must never be able to trigger the collection it
+  `bender_dict_find`.
+- **Growth uses raw `realloc`**, following `bender_gcroot` and
+  `bender_gcshadow_push`; a push must never be able to trigger the collection it
   protects.
 - **The drain is owned by the outermost caller**; nested calls only enqueue, so
   C stack depth stays constant however long the chain is.

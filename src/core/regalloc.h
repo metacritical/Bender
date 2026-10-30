@@ -22,22 +22,22 @@
 
 /* Implements a simple first fit register allocator for the compiler. */
 
-#ifndef JANET_REGALLOC_H
-#define JANET_REGALLOC_H
+#ifndef BENDER_REGALLOC_H
+#define BENDER_REGALLOC_H
 
 #include <stdint.h>
 
 /* Placeholder for allocating temporary registers */
 typedef enum {
-    JANETC_REGTEMP_0,
-    JANETC_REGTEMP_1,
-    JANETC_REGTEMP_2,
-    JANETC_REGTEMP_3,
-    JANETC_REGTEMP_4,
-    JANETC_REGTEMP_5,
-    JANETC_REGTEMP_6,
-    JANETC_REGTEMP_7
-} JanetcRegisterTemp;
+    BENDERC_REGTEMP_0,
+    BENDERC_REGTEMP_1,
+    BENDERC_REGTEMP_2,
+    BENDERC_REGTEMP_3,
+    BENDERC_REGTEMP_4,
+    BENDERC_REGTEMP_5,
+    BENDERC_REGTEMP_6,
+    BENDERC_REGTEMP_7
+} BendercRegisterTemp;
 
 typedef struct {
     uint32_t *chunks;
@@ -45,19 +45,19 @@ typedef struct {
     int32_t capacity; /* amount allocated for chunks */
     int32_t max; /* The maximum allocated register so far */
     int32_t regtemps; /* Hold which temp. registers are allocated. */
-} JanetcRegisterAllocator;
+} BendercRegisterAllocator;
 
-void janetc_regalloc_init(JanetcRegisterAllocator *ra);
-void janetc_regalloc_deinit(JanetcRegisterAllocator *ra);
+void benderc_regalloc_init(BendercRegisterAllocator *ra);
+void benderc_regalloc_deinit(BendercRegisterAllocator *ra);
 
-int32_t janetc_regalloc_1(JanetcRegisterAllocator *ra);
-void janetc_regalloc_free(JanetcRegisterAllocator *ra, int32_t reg);
-int32_t janetc_regalloc_temp(JanetcRegisterAllocator *ra, JanetcRegisterTemp nth);
-void janetc_regalloc_freetemp(JanetcRegisterAllocator *ra, int32_t reg, JanetcRegisterTemp nth);
-void janetc_regalloc_clone(JanetcRegisterAllocator *dest, JanetcRegisterAllocator *src);
-void janetc_regalloc_touch(JanetcRegisterAllocator *ra, int32_t reg);
-int janetc_regalloc_check(JanetcRegisterAllocator *ra, int32_t reg);
-int32_t janetc_regalloc_n(JanetcRegisterAllocator *ra, int32_t n);
-void janetc_regalloc_free_n(JanetcRegisterAllocator *ra, int32_t loc, int32_t n);
+int32_t benderc_regalloc_1(BendercRegisterAllocator *ra);
+void benderc_regalloc_free(BendercRegisterAllocator *ra, int32_t reg);
+int32_t benderc_regalloc_temp(BendercRegisterAllocator *ra, BendercRegisterTemp nth);
+void benderc_regalloc_freetemp(BendercRegisterAllocator *ra, int32_t reg, BendercRegisterTemp nth);
+void benderc_regalloc_clone(BendercRegisterAllocator *dest, BendercRegisterAllocator *src);
+void benderc_regalloc_touch(BendercRegisterAllocator *ra, int32_t reg);
+int benderc_regalloc_check(BendercRegisterAllocator *ra, int32_t reg);
+int32_t benderc_regalloc_n(BendercRegisterAllocator *ra, int32_t n);
+void benderc_regalloc_free_n(BendercRegisterAllocator *ra, int32_t loc, int32_t n);
 
 #endif

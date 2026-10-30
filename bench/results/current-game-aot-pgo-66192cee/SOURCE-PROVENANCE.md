@@ -10,7 +10,7 @@ git archive --format=tar.gz --output=bench/results/current-game-aot-pgo-66192cee
 - Source tree: `a9e757129652cea1715f0a4c4d1f512bf48c168c`.
 - Archive SHA256: `14be68f38d8b045029ae25cdbc36698a04b88d328713b6c615d1eaa1afaea844`.
 - Isolated runtime executable after initial build SHA256: `ecebd20631d6b2da15447ee21c14e6240f709607341b65952c04cc891995eed9`.
-- Isolated `build/libjanet.a` SHA256: `52b0544603bbd435ad1b675edc6a0362d64e62ecbfd0758ed88d8afd1e7c517a`.
+- Isolated `build/libbender.a` SHA256: `52b0544603bbd435ad1b675edc6a0362d64e62ecbfd0758ed88d8afd1e7c517a`.
 
 ## Build-label caveat
 
@@ -18,7 +18,7 @@ The first isolated source extraction was nested within the parent checkout under
 
 ## Authoritative pinned build for subsequent arms
 
-The initial display-label issue was corrected by a forced rebuild, captured in `runtime-build-pinned-v3/`. Two unsuccessful quoting attempts are retained in `runtime-build-pinned/` and `runtime-build-pinned-v2/`; neither is a successful build. The successful make argv contains a value with literal backslash-escaped quotes: `JANET_BUILD=\"66192cee\"`. See `runtime-build-pinned-v3/capture.json` for the exact JSON-escaped argv.
+The initial display-label issue was corrected by a forced rebuild, captured in `runtime-build-pinned-v3/`. Two unsuccessful quoting attempts are retained in `runtime-build-pinned/` and `runtime-build-pinned-v2/`; neither is a successful build. The successful make argv contains a value with literal backslash-escaped quotes: `BENDER_BUILD=\"66192cee\"`. See `runtime-build-pinned-v3/capture.json` for the exact JSON-escaped argv.
 
 - Verified version output: `1.43.0-dev-66192cee`.
 - Authoritative runtime executable SHA256: `6e5639fdaf08e49dafeb61a08170e2c9db3a48447465fcb5a49c8b5afe50c436`.

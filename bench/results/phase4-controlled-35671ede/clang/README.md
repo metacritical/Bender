@@ -2,7 +2,7 @@
 
 ## Scope
 
-This is **C-compiler optimization of the shell plus Janet runtime**, not Janet-level `--native --pgo` specialization. Source pinned clean at `a69c09843714e1733660e5335b285dd383680d23`, after the no-reclaim scoped collector fix, in `/tmp/janet-wave-postfix-a69c0984`.
+This is **C-compiler optimization of the shell plus Bender runtime**, not Bender-level `--native --pgo` specialization. Source pinned clean at `a69c09843714e1733660e5335b285dd383680d23`, after the no-reclaim scoped collector fix, in `/tmp/bender-wave-postfix-a69c0984`.
 
 `bench/build-wave-clang-variants.py` built four matching shell/static-library pairs sequentially, cleaning between variants because Make does not track flag changes:
 
@@ -21,7 +21,7 @@ Exactly four sequential runs of the instrumented shell: original asserted wave, 
 
 ## Measurement
 
-Five repetitions per arm, rotating baseline/profile-use/LTO order across rounds, sequential processes. Original `bench/cross-runtime/wave.janet` (unchangedSHAe07d1f25...), N2000 and8000, lanes0 and2. Instrumentation/profile env removed for timed runs. **All60 trials exited0 and asserted result=N.** Full per-trial stdout/stderr, executable hashes, exact argv and timing phases retained. No Go comparison.
+Five repetitions per arm, rotating baseline/profile-use/LTO order across rounds, sequential processes. Original `bench/cross-runtime/wave.ben` (unchangedSHAe07d1f25...), N2000 and8000, lanes0 and2. Instrumentation/profile env removed for timed runs. **All60 trials exited0 and asserted result=N.** Full per-trial stdout/stderr, executable hashes, exact argv and timing phases retained. No Go comparison.
 
 Wave-only milliseconds, median [min,max]:
 
@@ -40,4 +40,4 @@ No default build flags were changed. A production recommendation requires broade
 
 `build-and-trial-evidence.tar.gz`:33files, full compiler/training logs, manifest with artifact/archive hashes and tool versions, four raw profiles, merged profile and all60 trial records. Every member was verified byte-for-byte to the original. SHA256 `40aa8d4b8653be2d565bc6d05d18c8759d931e0e0f9626132f13c8fd3391c26e`.
 
-Binary snapshots remain outside repository under `/tmp/janet-wave-clang-sdk-a69c0984/{baseline,instrumented,profile-use,lto}`; each bender/archive hash is in the manifest. No instrumented binary supplies a timing row.
+Binary snapshots remain outside repository under `/tmp/bender-wave-clang-sdk-a69c0984/{baseline,instrumented,profile-use,lto}`; each bender/archive hash is in the manifest. No instrumented binary supplies a timing row.

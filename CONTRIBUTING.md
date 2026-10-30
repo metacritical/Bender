@@ -1,6 +1,6 @@
-# Guidelines for contributing to Janet
+# Guidelines for contributing to Bender
 
-Thanks for taking time to contribute to Janet!
+Thanks for taking time to contribute to Bender!
 
 Please read this document before making contributions.
 
@@ -24,7 +24,7 @@ may require changes before being merged.
 * Include a description of the changes.
 * If there are changes to the compiler or the language, please include tests in the test folder.
   The test suites are not organized in any particular way now, so simply add your tests
-  to one of the test suite files (test/suite0.janet, test/suite1.janet, etc.). You can
+  to one of the test suite files (test/suite0.ben, test/suite1.ben, etc.). You can
   run tests with `make test`. If you want to add a new test suite, simply add a file to
   the test folder and make sure it is run when`make test` is invoked.
 * Be consistent with the style. For C this means follow the indentation and style in
@@ -33,9 +33,9 @@ may require changes before being merged.
   [astyle](http://astyle.sourceforge.net/astyle.html). You will probably need
   to install this, but it can be installed with most package managers.
 
-  For janet code, use lisp indentation with 2 spaces. One can use janet.vim to
-  do this indentation, or approximate as close as possible. There is a janet formatter
-  in [spork](https://github.com/janet-lang/spork.git) that can be used to format code as well.
+  For bender code, use lisp indentation with 2 spaces. One can use bender.vim to
+  do this indentation, or approximate as close as possible. There is a bender formatter
+  in [spork](https://github.com/bender-lang/spork.git) that can be used to format code as well.
 
 Bot pull requests will not be accepted, and anonymous submissions, including
 new accounts, unknown emails, and first time contributors will be subjected
@@ -45,7 +45,7 @@ OSSFuzz or well constructed CI pipelines.
 
 ## C style
 
-For changes to the VM and Core code, you will probably need to know C. Janet is programmed with
+For changes to the VM and Core code, you will probably need to know C. Bender is programmed with
 a subset of C99 that works with Microsoft Visual C++. This means most of C99 but with the following
 omissions.
 
@@ -65,10 +65,10 @@ valgrind errors, run `make valtest` and check the output for undefined or flagge
 Use [astyle](http://astyle.sourceforge.net/astyle.html) via `make format` to
 ensure a consistent code style for C.
 
-## Janet style
+## Bender style
 
-All janet code in the project should be formatted similar to the code in src/boot/boot.janet.
-The auto formatting from janet.vim will work well.
+All bender code in the project should be formatted similar to the code in src/boot/boot.ben.
+The auto formatting from bender.vim will work well.
 
 ## Typo Fixing and One-Line changes
 
@@ -102,9 +102,9 @@ timely manner. In short, if you want extra functionality now, then build it.
 All usage of Large Language Models (LLMs), Neural Networks, "AI" tools, and
 other tools such as software fuzzers or static analyzers must be disclosed.
 This applies to pull requests, email patches, bug reports, and any other
-meaningful contribution to Janet's source code. Please also refrain from using
-generative AI for code that will be embedded in the Janet runtime, which include
-all C source files as well as boot.janet. All code should be well
+meaningful contribution to Bender's source code. Please also refrain from using
+generative AI for code that will be embedded in the Bender runtime, which include
+all C source files as well as boot.ben. All code should be well
 and completely understood by the human author, including test cases. Large and
 obviously AI-driven changes will be rejected. Be mindful and transparent on the
 copyright implications of any submitted code. We will use discretion when

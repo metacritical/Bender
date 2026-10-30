@@ -1,5 +1,5 @@
 {
-  "schema": "janet-bench-workload-verification/1",
+  "schema": "bender-bench-workload-verification/1",
   "generated_at": "2026-10-30T09:03:54Z",
   "purpose": "Durable, hash-pinned frozen game + saved-world bytes for the current-game AOT/PGO benchmark. Evidence must not depend on /tmp.",
   "reference_commit": "66192ceed5f2545e14546e12505eda4d31e6cca5",
@@ -18,32 +18,32 @@
     "statement": "The live worktree is NOT the workload and was not copied, in whole or in part, into these bytes.",
     "drifted_recorded_files_count": 8,
     "drifted_paths": [
-      "main.janet",
+      "main.ben",
       "run.sh",
-      "src/player.janet",
-      "src/world-provider.janet",
-      "test/player-test.janet",
-      "test/world-provider-test.janet",
+      "src/player.ben",
+      "src/world-provider.ben",
+      "test/player-test.ben",
+      "test/world-provider-test.ben",
       "test/test_progressive_worker.py",
       "tools/progressive_worker.py"
     ],
     "note": "The live worktree advanced past the freeze. Frozen bytes were validated against the committed manifests before copying; no live file was substituted."
   },
   "runtime": {
-    "kind": "frozen Janet game source (interpreted workload)",
+    "kind": "frozen Bender game source (interpreted workload)",
     "manifest_reference": {
       "path": "bench/results/current-game-6a4f008b-c07042a7/runtime-source-manifest.json",
       "sha256": "8d3fc0c3fee811ad5b14f8e4141e5cd4522687dc9ce885b43b754acd37b7ef48",
       "entries": 228
     },
     "source_manifest": {
-      "path": "/tmp/janet-current-game-ab-evidence/SOURCE-MANIFEST.txt",
+      "path": "/tmp/bender-current-game-ab-evidence/SOURCE-MANIFEST.txt",
       "sha256": "dfc64b0eafe36b414a39b075cf578238c1b9bc408d73e751283c6716fd472709",
       "entries": 228
     },
     "durable_copy": {
       "path": "build/current-game-aot-pgo-66192cee/game-source",
-      "absolute_path": "/Users/pankajdoharey/Development/Projects/janet/build/current-game-aot-pgo-66192cee/game-source",
+      "absolute_path": "/Users/pankajdoharey/Development/Projects/bender/build/current-game-aot-pgo-66192cee/game-source",
       "files_total": 442,
       "bytes_total": 61328480,
       "gitignored": true
@@ -125,9 +125,9 @@
     }
   },
   "environment_contract": {
-    "launch_cwd": "the game-source directory (data/appearance.janet and data/materials.janet resolve relative to cwd)",
+    "launch_cwd": "the game-source directory (data/appearance.ben and data/materials.ben resolve relative to cwd)",
     "window_required": true,
-    "env_scrub": "all JANET_* and BENDER_* removed, then JANET_NO_PROFILE=1, JANET_LANES=0, XDG_CACHE_HOME=<per-arm cache>",
+    "env_scrub": "all BENDER_* and BENDER_* removed, then BENDER_NO_PROFILE=1, BENDER_LANES=0, XDG_CACHE_HOME=<per-arm cache>",
     "game_arguments": "--frames N --uncapped --world-slot 15f2268da8ec2a4105ef2deaf6ae0b19 --world-root <frozen world root>",
     "writes_nothing": "a bounded --frames run skips save-on-exit; the frozen tree is read-only input"
   },

@@ -1,25 +1,25 @@
 # M5 design review: shareable immutable values across VMs
 
 Status: IMPLEMENTED 2026-10-06 (`core/shared` in src/core/ev.c +
-test/suite-shared.janet, 34 pins). This document is the review that
+test/suite-shared.ben, 34 pins). This document is the review that
 preceded it; §5 verdicts below each carry their outcome.
 
 ## 1. GC facts (this tree)
 
-- Heaps are per-VM arenas: `janet_vm.blocks`, `janet_vm.string_blocks`,
-  `janet_vm.weak_blocks` (gc.c), backed by a per-VM slab directory
-  (`JanetVM.slab_state`; 16 KiB pages, `JANET_SLAB_PAGE_MASK`).
+- Heaps are per-VM arenas: `bender_vm.blocks`, `bender_vm.string_blocks`,
+  `bender_vm.weak_blocks` (gc.c), backed by a per-VM slab directory
+  (`BenderVM.slab_state`; 16 KiB pages, `BENDER_SLAB_PAGE_MASK`).
 - Mark resolves ownership through the CURRENT VM's directory only
-  (`janet_slab_page_for` returns NULL for foreign pointers; mark
+  (`bender_slab_page_for` returns NULL for foreign pointers; mark
   functions additionally check page magic). Generations are
   page-granular with a remembered discipline (minor collections +
-  barriers, `janet_gc_barrier`).
+  barriers, `bender_gc_barrier`).
 - Threaded abstracts live OUTSIDE this system: atomic refcount
-  (`janet_atomic_inc/dec`, abstract.c/capi.c), type finalizer on
-  zero (`janet_abstract_decref_maybe_free`), slab-aware release.
+  (`bender_atomic_inc/dec`, abstract.c/capi.c), type finalizer on
+  zero (`bender_abstract_decref_maybe_free`), slab-aware release.
   Channels are the working proof: shared across threads, never
   GC-managed, transferred by pointer under UNSAFE marshal
-  (`JANET_MEMORY_THREADED_ABSTRACT` check, marsh.c) with a transit
+  (`BENDER_MEMORY_THREADED_ABSTRACT` check, marsh.c) with a transit
   incref. Sweep only touches them to drop references.
 
 ## 2. Why cross-heap pointers are unsound (no protocol)
@@ -50,7 +50,7 @@ Follow the threaded-abstract pattern instead of integrating with
 the GC at all (this is Erlang's refc-binary shape, not shared-heap):
 
 - New abstract type, e.g. `core/shared`, allocated threaded
-  (`janet_abstract_threaded`): `{atomic refcount, flattened payload
+  (`bender_abstract_threaded`): `{atomic refcount, flattened payload
   in malloc'd memory}`. The payload is a SELF-CONTAINED encoding —
   never GC pointers.
 - `shareable?` predicate at construction: allow nil/boolean/number,
@@ -60,7 +60,7 @@ the GC at all (this is Erlang's refc-binary shape, not shared-heap):
   protos included). Anything else is a type error, fail-closed.
 - Reads copy out: `(shared/get s k)` materializes fresh caller-heap
   values (numbers directly, strings as new strings). Interior
-  pointers are never exposed as Janets.
+  pointers are never exposed as Benders.
 - Lifetime: every marshal transfer increfs (free via the existing
   UNSAFE threaded passthrough — cross-thread movement needs NO new
   marshal code); every wrapper collection decrefs through the
@@ -85,11 +85,11 @@ the GC at all (this is Erlang's refc-binary shape, not shared-heap):
    transfer works with zero new marshal code; safe-mode
    marshal/unmarshal implemented via payload bytes (plus abstract
    registry registration, which the first cut missed — safe
-   unmarshal needs `janet_register_abstract_type`, and the
-   framework requires `janet_unmarshal_abstract_reuse`).
+   unmarshal needs `bender_register_abstract_type`, and the
+   framework requires `bender_unmarshal_abstract_reuse`).
 4. Predicate edge cases: CONFIRMED with one real trap found in
    testing — structs are open-addressed hash tables, so iteration
-   MUST go to `janet_struct_capacity` skipping nil keys (iterating
+   MUST go to `bender_struct_capacity` skipping nil keys (iterating
    to `length` silently skips entries whose slots hash past the
    front — single-entry structs validated vacuously and encoded
    garbage). Fixed + pinned. Protos rejected (fail-closed).
