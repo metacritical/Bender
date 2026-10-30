@@ -1,0 +1,6 @@
+block-index
+fract
+lerp
+wrap
+clamp
+ground-support?

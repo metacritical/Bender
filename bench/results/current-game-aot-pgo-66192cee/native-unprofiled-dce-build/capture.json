@@ -1,0 +1,82 @@
+{
+  "schema": "janet/benchmark-capture/1",
+  "label": "native-unprofiled-dce-build",
+  "complete": true,
+  "evidence_dir": "/Users/pankajdoharey/Development/Projects/janet/bench/results/current-game-aot-pgo-66192cee/native-unprofiled-dce-build",
+  "command": {
+    "argv": [
+      "/Users/pankajdoharey/Development/Projects/janet/build/current-game-aot-pgo-66192cee/runtime/build/bender",
+      "--aot",
+      "/Users/pankajdoharey/Development/Projects/janet/build/current-game-aot-pgo-66192cee/game-source/main.janet",
+      "--native",
+      "--no-auto-pgo",
+      "--dce",
+      "-o",
+      "/Users/pankajdoharey/Development/Projects/janet/build/current-game-aot-pgo-66192cee/artifacts/native-unprofiled-dce"
+    ],
+    "cwd": "/Users/pankajdoharey/Development/Projects/janet/build/current-game-aot-pgo-66192cee/game-source",
+    "stdin": "devnull",
+    "env_overrides": {
+      "JANET_NO_PROFILE": "1",
+      "JANET_LANES": "0",
+      "JANET_NATIVE_EXECUTORS": "1",
+      "JANET_TOOLS": "/Users/pankajdoharey/Development/Projects/janet/build/current-game-aot-pgo-66192cee/runtime/tools",
+      "XDG_CACHE_HOME": "/Users/pankajdoharey/Development/Projects/janet/build/current-game-aot-pgo-66192cee/cache-native-unprofiled-dce-build"
+    },
+    "executable": {
+      "path": "/Users/pankajdoharey/Development/Projects/janet/build/current-game-aot-pgo-66192cee/runtime/build/bender",
+      "sha256": "6e5639fdaf08e49dafeb61a08170e2c9db3a48447465fcb5a49c8b5afe50c436",
+      "bytes": 1392776,
+      "error": null
+    }
+  },
+  "timing": {
+    "started_at": "2026-10-30T09:08:47.592455+00:00",
+    "finished_at": "2026-10-30T09:08:49.158568+00:00",
+    "wall_s": 1.565677,
+    "wall_includes_wrapper": false
+  },
+  "result": {
+    "kind": "exited",
+    "exit_status": 1,
+    "signal": null,
+    "signal_name": null,
+    "spawn_error": null
+  },
+  "timeout": {
+    "seconds": null,
+    "expired": false,
+    "kill_signal": null,
+    "kill_error": null
+  },
+  "streams": {
+    "stdout": {
+      "file": "stdout.log",
+      "sha256": "f511a88e717e1394414557895f053b456ae18aa952571da463c05bd4b9dc7672",
+      "bytes": 448752
+    },
+    "stderr": {
+      "file": "stderr.log",
+      "sha256": "b468717bf4a6df5676ecc07c5f2702ae1e9dcfcd342f54465785715b14c45ecd",
+      "bytes": 7914
+    }
+  },
+  "resource": {
+    "source": "wait4 rusage",
+    "maxrss_raw": 341000192,
+    "maxrss_unit": "bytes",
+    "maxrss_bytes": 341000192,
+    "utime_s": 1.155184,
+    "stime_s": 0.227496,
+    "page_reclaims": 43862,
+    "page_faults": 4,
+    "swaps": 0,
+    "block_input_ops": 0,
+    "block_output_ops": 0,
+    "messages_sent": 0,
+    "messages_received": 0,
+    "signals_received": 0,
+    "voluntary_context_switches": 81,
+    "involuntary_context_switches": 6533
+  }
+}
