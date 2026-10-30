@@ -50,6 +50,29 @@ then `debug/profile-dump`; the next widening cycle seeds from evidence
 instead of `:unknown`. What the compiler can't prove stays in the VM;
 hints move more into static kernels; higher-level values stay boxed.
 
+## Why Bender
+
+Bender is a high-performance, Clojuresque (Clojure-like) compiler for game
+development. It keeps the ergonomics of a dynamic language, but it does not
+stop at interpretation: it infers types, feeds typed code through an AOT
+compiler, and lowers it to native machine code.
+
+Ahead-of-time compilation is a deliberate choice, not a fallback. Most
+mainstream devices — iOS and Nintendo Switch among them — do not permit JIT
+compilation, so Bender treats AOT as the primary path to speed.
+
+Profile-guided optimisation (PGO) closes the loop. As you develop and run
+your game, the compiler records call counts, value shapes, and unboxed type
+information observed at runtime. It uses that profile to generate native
+executors: specialised, unboxed kernels for the hot paths. The next build
+consumes that profile and produces a faster binary.
+
+On high-level game workloads, Bender is slower than C, close to LuaJIT, and
+competitive with Rust on many drawing tasks — while remaining a dynamic
+language. The design has headroom: in principle it can approach C or Rust
+speeds. It is already substantially faster than Unity (.NET) or the JVM,
+whose bulky runtimes are, on these workloads, orders of magnitude slower.
+
 <br>
 
 ## How Bender got 18x faster (a true story)
