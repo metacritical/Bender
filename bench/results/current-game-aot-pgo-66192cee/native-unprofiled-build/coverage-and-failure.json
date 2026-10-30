@@ -1,0 +1,36 @@
+{
+  "status": "failed before executable link; generated code is not executed coverage",
+  "exit_status": 1,
+  "failure": "captured upvalue slot 256 exceeds bytecode limit 255, save-on-exit!",
+  "manifest_line_counts": {
+    "native-names.txt": 6,
+    "native-executors.txt": 78,
+    "native-continuations.txt": 0,
+    "native-ffi-aliases.txt": 77
+  },
+  "tier_a_kernels_reported": 6,
+  "native_skip_lines": 1660,
+  "native_executable_produced": false,
+  "generated_files": {
+    "native-executors.txt": {
+      "sha256": "1d3b7d44e647c88881357def524a7c097ac073d939dc7df372e8016a1df8adac",
+      "bytes": 1228
+    },
+    "native-names.txt": {
+      "sha256": "9905f217d15c9409d750bab3f6277a9569c653b874526ad77b3829945ff54e13",
+      "bytes": 50
+    },
+    "native-continuations.txt": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    "native.c": {
+      "sha256": "ef6d40454a04c872a8150d4ec15d4ce27678e034c819899c9b5e15e77ca20219",
+      "bytes": 2619953
+    },
+    "native-ffi-aliases.txt": {
+      "sha256": "42d0411fe0c12665c56297bcb1b22c3dcdbd114cfb0cfc9ce7f4f3425e8bccca",
+      "bytes": 2282
+    }
+  }
+}
