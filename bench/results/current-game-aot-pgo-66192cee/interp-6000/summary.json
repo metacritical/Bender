@@ -1,0 +1,201 @@
+{
+  "schema": "janet/run-matched/1",
+  "label": "interp-6000",
+  "mode": "bench",
+  "passed": true,
+  "failures": [],
+  "game_dir": "/Users/pankajdoharey/Development/Projects/janet/build/current-game-aot-pgo-66192cee/game-source",
+  "command": {
+    "argv": [
+      "/Users/pankajdoharey/Development/Projects/janet/build/current-game-aot-pgo-66192cee/runtime/build/bender",
+      "/Users/pankajdoharey/Development/Projects/janet/build/current-game-aot-pgo-66192cee/game-source/main.janet",
+      "--frames",
+      "6000",
+      "--uncapped",
+      "--world-slot",
+      "15f2268da8ec2a4105ef2deaf6ae0b19",
+      "--world-root",
+      "/Users/pankajdoharey/Development/Projects/janet/build/current-game-aot-pgo-66192cee/game-source/worlds-v1"
+    ],
+    "cwd": "/Users/pankajdoharey/Development/Projects/janet/build/current-game-aot-pgo-66192cee/game-source",
+    "stdin": "devnull",
+    "env_overrides": {
+      "JANET_LANES": "0",
+      "XDG_CACHE_HOME": "/Users/pankajdoharey/Development/Projects/janet/build/current-game-aot-pgo-66192cee/cache-interp-6000",
+      "JANET_NO_PROFILE": "1"
+    },
+    "executable": {
+      "path": "/Users/pankajdoharey/Development/Projects/janet/build/current-game-aot-pgo-66192cee/runtime/build/bender",
+      "sha256": "6e5639fdaf08e49dafeb61a08170e2c9db3a48447465fcb5a49c8b5afe50c436",
+      "bytes": 1392776,
+      "error": null
+    }
+  },
+  "capture_utility": {
+    "path": "/Users/pankajdoharey/Development/Projects/janet/tools/benchmark_capture.py",
+    "sha256": "ac1b5ff70cebe9c839db151074bd994e458d00c66ac3a9ff3fa3a2c84bc8bbe2"
+  },
+  "workload": {
+    "before": {
+      "runtime_source_manifest": {
+        "path": "/Users/pankajdoharey/Development/Projects/janet/bench/results/current-game-6a4f008b-c07042a7/runtime-source-manifest.json",
+        "sha256": "8d3fc0c3fee811ad5b14f8e4141e5cd4522687dc9ce885b43b754acd37b7ef48",
+        "root": "/Users/pankajdoharey/Development/Projects/janet/build/current-game-aot-pgo-66192cee/game-source",
+        "expected": 228,
+        "ok": 228,
+        "missing": [],
+        "mismatched": [],
+        "passed": true
+      },
+      "saved_world_manifest": {
+        "path": "/Users/pankajdoharey/Development/Projects/janet/bench/results/current-game-6a4f008b-c07042a7/saved-world-manifest.json",
+        "sha256": "2bb4e82a48b9cadb801ba3a747492d92f3db5eef0d3a07912513b859cacf806f",
+        "path_root": "worlds-v1/15f2268da8ec2a4105ef2deaf6ae0b19",
+        "root": "/Users/pankajdoharey/Development/Projects/janet/build/current-game-aot-pgo-66192cee/game-source/worlds-v1/15f2268da8ec2a4105ef2deaf6ae0b19",
+        "expected": 214,
+        "ok": 214,
+        "missing": [],
+        "mismatched": [],
+        "passed": true
+      },
+      "passed": true
+    },
+    "after": {
+      "runtime_source_manifest": {
+        "path": "/Users/pankajdoharey/Development/Projects/janet/bench/results/current-game-6a4f008b-c07042a7/runtime-source-manifest.json",
+        "sha256": "8d3fc0c3fee811ad5b14f8e4141e5cd4522687dc9ce885b43b754acd37b7ef48",
+        "root": "/Users/pankajdoharey/Development/Projects/janet/build/current-game-aot-pgo-66192cee/game-source",
+        "expected": 228,
+        "ok": 228,
+        "missing": [],
+        "mismatched": [],
+        "passed": true
+      },
+      "saved_world_manifest": {
+        "path": "/Users/pankajdoharey/Development/Projects/janet/bench/results/current-game-6a4f008b-c07042a7/saved-world-manifest.json",
+        "sha256": "2bb4e82a48b9cadb801ba3a747492d92f3db5eef0d3a07912513b859cacf806f",
+        "path_root": "worlds-v1/15f2268da8ec2a4105ef2deaf6ae0b19",
+        "root": "/Users/pankajdoharey/Development/Projects/janet/build/current-game-aot-pgo-66192cee/game-source/worlds-v1/15f2268da8ec2a4105ef2deaf6ae0b19",
+        "expected": 214,
+        "ok": 214,
+        "missing": [],
+        "mismatched": [],
+        "passed": true
+      },
+      "passed": true
+    }
+  },
+  "environment": {
+    "scrubbed_prefixes": [
+      "JANET_",
+      "BENDER_"
+    ],
+    "scrubbed_variables_dropped": [],
+    "overrides": {
+      "JANET_LANES": "0",
+      "XDG_CACHE_HOME": "/Users/pankajdoharey/Development/Projects/janet/build/current-game-aot-pgo-66192cee/cache-interp-6000",
+      "JANET_NO_PROFILE": "1"
+    }
+  },
+  "cache": {
+    "root": "/Users/pankajdoharey/Development/Projects/janet/build/current-game-aot-pgo-66192cee/cache-interp-6000",
+    "prior_entries": 0,
+    "fresh_at_start": true
+  },
+  "profile": null,
+  "host": {
+    "before": {
+      "loadavg": {
+        "1m": 9.7412109375,
+        "5m": 9.447265625,
+        "15m": 11.31005859375
+      },
+      "cpu_count": 12,
+      "platform": "macOS-26.6.2-arm64-arm-64bit",
+      "machine": "arm64"
+    },
+    "after": {
+      "loadavg": {
+        "1m": 9.3388671875,
+        "5m": 9.3125,
+        "15m": 11.169921875
+      },
+      "cpu_count": 12,
+      "platform": "macOS-26.6.2-arm64-arm-64bit",
+      "machine": "arm64"
+    }
+  },
+  "resource": {
+    "peak_rss": {
+      "threshold_bytes": 1073741824,
+      "observed_peak_bytes": 218054656,
+      "enforced_mid_run": false,
+      "note": "peak RSS is read from wait4 rusage AFTER the child exits; the capture utility offers no live sampling, so a breach is detected here as a verdict, not prevented during the run",
+      "verdict": "within"
+    }
+  },
+  "timing": {
+    "started_at": "2026-10-30T09:36:07.854579+00:00",
+    "finished_at": "2026-10-30T09:36:45.266750+00:00",
+    "wall_s": 37.410654,
+    "wall_includes_wrapper": true
+  },
+  "capture_result": {
+    "kind": "exited",
+    "exit_status": 0,
+    "signal": null,
+    "signal_name": null,
+    "spawn_error": null,
+    "reaped_process": "time-wrapper",
+    "child_status_reported_by": "wrapper"
+  },
+  "capture_timeout": {
+    "seconds": 180.0,
+    "expired": false,
+    "kill_signal": null,
+    "kill_error": null
+  },
+  "parsed": {
+    "startup": {
+      "worldgen": {
+        "chunks": 25,
+        "ms": 72.0,
+        "source": "(tile cache)"
+      }
+    },
+    "frames": {
+      "frames": 6000,
+      "avg_fps": 173.5,
+      "avg_ms": 5.76,
+      "best_ms": 3.58,
+      "worst_ms": 190.9,
+      "spikes": 29,
+      "spike_pct": 0.48,
+      "edits": 0,
+      "cap_mode": "uncapped"
+    },
+    "steady": {
+      "fps": 173.3,
+      "ms": 5.77,
+      "frames": 5958,
+      "reached_at_frame": 11
+    },
+    "worst_frame": {
+      "frame": 5639,
+      "wall_ms": 190.9,
+      "cpu_ms": 21.9,
+      "busy_pct": 11,
+      "mesh_queue": 0
+    },
+    "stalls_over_100ms": 3,
+    "scene": {
+      "radius": 16,
+      "loaded": 64,
+      "drawn": 64,
+      "wanted": 64,
+      "streamed_in": 0,
+      "streamed_out": 0,
+      "culling": "frustum culled"
+    }
+  }
+}

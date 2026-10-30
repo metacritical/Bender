@@ -1,0 +1,116 @@
+{
+  "schema": "janet/benchmark-capture/1",
+  "label": "interp-6000",
+  "complete": true,
+  "evidence_dir": "/Users/pankajdoharey/Development/Projects/janet/bench/results/current-game-aot-pgo-66192cee/interp-6000",
+  "command": {
+    "argv": [
+      "/Users/pankajdoharey/Development/Projects/janet/build/current-game-aot-pgo-66192cee/runtime/build/bender",
+      "/Users/pankajdoharey/Development/Projects/janet/build/current-game-aot-pgo-66192cee/game-source/main.janet",
+      "--frames",
+      "6000",
+      "--uncapped",
+      "--world-slot",
+      "15f2268da8ec2a4105ef2deaf6ae0b19",
+      "--world-root",
+      "/Users/pankajdoharey/Development/Projects/janet/build/current-game-aot-pgo-66192cee/game-source/worlds-v1"
+    ],
+    "cwd": "/Users/pankajdoharey/Development/Projects/janet/build/current-game-aot-pgo-66192cee/game-source",
+    "stdin": "devnull",
+    "env_overrides": {
+      "JANET_LANES": "0",
+      "XDG_CACHE_HOME": "/Users/pankajdoharey/Development/Projects/janet/build/current-game-aot-pgo-66192cee/cache-interp-6000",
+      "JANET_NO_PROFILE": "1"
+    },
+    "executable": {
+      "path": "/Users/pankajdoharey/Development/Projects/janet/build/current-game-aot-pgo-66192cee/runtime/build/bender",
+      "sha256": "6e5639fdaf08e49dafeb61a08170e2c9db3a48447465fcb5a49c8b5afe50c436",
+      "bytes": 1392776,
+      "error": null
+    }
+  },
+  "timing": {
+    "started_at": "2026-10-30T09:36:07.854579+00:00",
+    "finished_at": "2026-10-30T09:36:45.266750+00:00",
+    "wall_s": 37.410654,
+    "wall_includes_wrapper": true
+  },
+  "result": {
+    "kind": "exited",
+    "exit_status": 0,
+    "signal": null,
+    "signal_name": null,
+    "spawn_error": null,
+    "reaped_process": "time-wrapper",
+    "child_status_reported_by": "wrapper"
+  },
+  "timeout": {
+    "seconds": 180.0,
+    "expired": false,
+    "kill_signal": null,
+    "kill_error": null
+  },
+  "streams": {
+    "stdout": {
+      "file": "stdout.log",
+      "sha256": "cf4de802b4bf52f46d63749d93e95bec69ff24b3107e7a275c8a7d3cd86ea2ed",
+      "bytes": 7354
+    },
+    "stderr": {
+      "file": "stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    }
+  },
+  "resource": {
+    "source": "wait4 rusage",
+    "maxrss_raw": 218054656,
+    "maxrss_unit": "bytes",
+    "maxrss_bytes": 218054656,
+    "utime_s": 31.721058,
+    "stime_s": 2.310648,
+    "page_reclaims": 46394,
+    "page_faults": 2046,
+    "swaps": 0,
+    "block_input_ops": 0,
+    "block_output_ops": 0,
+    "messages_sent": 1,
+    "messages_received": 0,
+    "signals_received": 2,
+    "voluntary_context_switches": 1122,
+    "involuntary_context_switches": 113756
+  },
+  "wrapper_supervision": {
+    "wrapped": true,
+    "reaped_process": "time-wrapper",
+    "child_status_reported_by": "wrapper",
+    "stderr_noise": {
+      "present": false
+    },
+    "child_signal_unrecoverable": false
+  },
+  "resource_detail": {
+    "file": "resource.time.txt",
+    "metrics": {
+      "maximum resident set size": 218054656,
+      "average shared memory size": 0,
+      "average unshared data size": 0,
+      "average unshared stack size": 0,
+      "page reclaims": 46100,
+      "page faults": 2039,
+      "swaps": 0,
+      "block input operations": 0,
+      "block output operations": 0,
+      "messages sent": 1,
+      "messages received": 0,
+      "signals received": 1,
+      "voluntary context switches": 1119,
+      "involuntary context switches": 113742,
+      "instructions retired": 364336028791,
+      "cycles elapsed": 111793355100,
+      "peak memory footprint": 297256040
+    },
+    "elapsed_line": "37.39 real        31.72 user         2.30 sys",
+    "error": null
+  }
+}
