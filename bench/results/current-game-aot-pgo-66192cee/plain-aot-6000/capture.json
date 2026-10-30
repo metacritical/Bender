@@ -1,0 +1,115 @@
+{
+  "schema": "janet/benchmark-capture/1",
+  "label": "plain-aot-6000",
+  "complete": true,
+  "evidence_dir": "/Users/pankajdoharey/Development/Projects/janet/bench/results/current-game-aot-pgo-66192cee/plain-aot-6000",
+  "command": {
+    "argv": [
+      "/Users/pankajdoharey/Development/Projects/janet/build/current-game-aot-pgo-66192cee/artifacts/plain-aot",
+      "--frames",
+      "6000",
+      "--uncapped",
+      "--world-slot",
+      "15f2268da8ec2a4105ef2deaf6ae0b19",
+      "--world-root",
+      "/Users/pankajdoharey/Development/Projects/janet/build/current-game-aot-pgo-66192cee/game-source/worlds-v1"
+    ],
+    "cwd": "/Users/pankajdoharey/Development/Projects/janet/build/current-game-aot-pgo-66192cee/game-source",
+    "stdin": "devnull",
+    "env_overrides": {
+      "JANET_LANES": "0",
+      "XDG_CACHE_HOME": "/Users/pankajdoharey/Development/Projects/janet/build/current-game-aot-pgo-66192cee/cache-plain-aot-6000",
+      "JANET_NO_PROFILE": "1"
+    },
+    "executable": {
+      "path": "/Users/pankajdoharey/Development/Projects/janet/build/current-game-aot-pgo-66192cee/artifacts/plain-aot",
+      "sha256": "10f151040e521383446c3a146fedd6cd10db78cc3e830e022160f4f15eed0660",
+      "bytes": 2164664,
+      "error": null
+    }
+  },
+  "timing": {
+    "started_at": "2026-10-30T09:36:52.409190+00:00",
+    "finished_at": "2026-10-30T09:37:31.898731+00:00",
+    "wall_s": 39.487183,
+    "wall_includes_wrapper": true
+  },
+  "result": {
+    "kind": "exited",
+    "exit_status": 0,
+    "signal": null,
+    "signal_name": null,
+    "spawn_error": null,
+    "reaped_process": "time-wrapper",
+    "child_status_reported_by": "wrapper"
+  },
+  "timeout": {
+    "seconds": 180.0,
+    "expired": false,
+    "kill_signal": null,
+    "kill_error": null
+  },
+  "streams": {
+    "stdout": {
+      "file": "stdout.log",
+      "sha256": "b6811c5cdaf9b7098595e4898cfaa85b1684a191092a88818804548eb39e9bb4",
+      "bytes": 7293
+    },
+    "stderr": {
+      "file": "stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    }
+  },
+  "resource": {
+    "source": "wait4 rusage",
+    "maxrss_raw": 142655488,
+    "maxrss_unit": "bytes",
+    "maxrss_bytes": 142655488,
+    "utime_s": 29.202341,
+    "stime_s": 2.321625,
+    "page_reclaims": 22974,
+    "page_faults": 3972,
+    "swaps": 0,
+    "block_input_ops": 0,
+    "block_output_ops": 0,
+    "messages_sent": 1,
+    "messages_received": 0,
+    "signals_received": 2,
+    "voluntary_context_switches": 2085,
+    "involuntary_context_switches": 110168
+  },
+  "wrapper_supervision": {
+    "wrapped": true,
+    "reaped_process": "time-wrapper",
+    "child_status_reported_by": "wrapper",
+    "stderr_noise": {
+      "present": false
+    },
+    "child_signal_unrecoverable": false
+  },
+  "resource_detail": {
+    "file": "resource.time.txt",
+    "metrics": {
+      "maximum resident set size": 142655488,
+      "average shared memory size": 0,
+      "average unshared data size": 0,
+      "average unshared stack size": 0,
+      "page reclaims": 22680,
+      "page faults": 3964,
+      "swaps": 0,
+      "block input operations": 0,
+      "block output operations": 0,
+      "messages sent": 1,
+      "messages received": 0,
+      "signals received": 1,
+      "voluntary context switches": 2077,
+      "involuntary context switches": 110152,
+      "instructions retired": 360164334271,
+      "cycles elapsed": 103396041964,
+      "peak memory footprint": 227558336
+    },
+    "elapsed_line": "39.47 real        29.20 user         2.31 sys",
+    "error": null
+  }
+}
