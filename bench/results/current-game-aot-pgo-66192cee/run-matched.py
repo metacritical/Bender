@@ -388,6 +388,14 @@ def main(argv=None):
         default=None,
         help="frozen game directory (defaults to the durable copy under build/)",
     )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help=(
+            "validate the workload and print the exact argv, environment and "
+            "gates, then exit WITHOUT spawning anything"
+        ),
+    )
     args = parser.parse_args(argv)
 
     game_dir = args.game_dir or os.path.join(
@@ -434,6 +442,41 @@ def main(argv=None):
     ]
 
     host_before = host_snapshot()
+
+    if args.dry_run:
+        # Prove the plan before a GPU-second is spent: the exact argv, the exact
+        # environment, and the gates that will be applied. Nothing is spawned.
+        plan = {
+            "label": args.label,
+            "mode": "train" if args.train else "bench",
+            "dry_run": True,
+            "argv": child_argv,
+            "cwd": game_dir,
+            "environment_overrides": env_overrides,
+            "scrubbed_environment_names": dropped,
+            "resource_tool": "time",
+            "wall_cap_seconds": WALL_CAP_S,
+            "rss_threshold_bytes": RSS_CAP_BYTES,
+            "rss_enforced_mid_run": False,
+            "gates": {
+                "exit_status": 0,
+                "frames": FRAMES,
+                "cap_mode": "uncapped",
+                "scene": EXPECTED_SCENE,
+                "steady_line_present": True,
+                "profile_dump_required": bool(args.train),
+            },
+            "workload_passed": pre["passed"],
+            "executable": os.path.abspath(args.executable),
+            "executable_sha256": (
+                sha256_file(os.path.abspath(args.executable))
+                if os.path.isfile(os.path.abspath(args.executable))
+                else None
+            ),
+        }
+        print(json.dumps(plan, indent=2))
+        return 0
+
     request = benchmark_capture.CaptureRequest(
         argv=tuple(child_argv),
         cwd=game_dir,

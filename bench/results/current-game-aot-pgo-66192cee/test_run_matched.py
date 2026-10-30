@@ -435,5 +435,50 @@ class CaptureIntegration(unittest.TestCase):
             shutil.rmtree(tmp)
 
 
+
+# ---------------------------------------------------------------------------
+# --dry-run must plan without spawning anything
+# ---------------------------------------------------------------------------
+
+
+class DryRun(unittest.TestCase):
+    def test_dry_run_spawns_nothing_and_creates_no_evidence(self):
+        tmp = tempfile.mkdtemp()
+        try:
+            evidence = os.path.join(tmp, "ev")
+            result = subprocess.run(
+                [sys.executable, DRIVER, "--label", "plan", "--executable", "/bin/true",
+                 "--evidence-dir", evidence, "--cache-root", os.path.join(tmp, "c"),
+                 "--dry-run"],
+                capture_output=True, text=True,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            plan = json.loads(result.stdout)
+            self.assertTrue(plan["dry_run"])
+            self.assertEqual(plan["gates"]["frames"], 6000)
+            self.assertEqual(plan["gates"]["scene"]["radius"], 16)
+            self.assertFalse(plan["rss_enforced_mid_run"])
+            self.assertFalse(os.path.exists(evidence), "dry run must not create evidence")
+            self.assertIn("--frames", plan["argv"])
+            self.assertEqual(plan["argv"][-2], "--world-root")
+        finally:
+            shutil.rmtree(tmp)
+
+    def test_dry_run_still_refuses_a_bad_workload(self):
+        tmp = tempfile.mkdtemp()
+        try:
+            result = subprocess.run(
+                [sys.executable, DRIVER, "--label", "plan", "--executable", "/bin/true",
+                 "--evidence-dir", os.path.join(tmp, "ev"),
+                 "--cache-root", os.path.join(tmp, "c"),
+                 "--game-dir", tmp, "--dry-run"],
+                capture_output=True, text=True,
+            )
+            self.assertEqual(result.returncode, 2)
+            self.assertIn("mismatch", result.stderr)
+        finally:
+            shutil.rmtree(tmp)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
