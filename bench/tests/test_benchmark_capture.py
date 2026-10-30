@@ -10,10 +10,13 @@ import hashlib
 import json
 import os
 import shutil
+import signal
+import subprocess
 import sys
 import tempfile
 import time
 import unittest
+import uuid
 from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
 
@@ -22,6 +25,8 @@ from io import StringIO
 sys.dont_write_bytecode = True
 
 from tools import benchmark_capture as capture_tool
+
+REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
 def py(source):
@@ -521,6 +526,113 @@ class WrapperSupervisionTests(CaptureHarness):
             py("import sys; sys.stderr.write('x\\n'); sys.exit(1)"), resource_tool="time"
         )
         self.assertIn(record["result"]["kind"], ("exited", "signaled"))
+
+
+class InterruptionTests(CaptureHarness):
+    """Ctrl-C mid-run must leave an account of itself, and no live child.
+
+    The interrupt is delivered to a child process that owns the capture, so the
+    test runner is never signalled itself.
+    """
+
+    def _interrupted_capture(self, child_seconds=30):
+        """Run a capture in a subprocess, SIGINT it, return the visible marker.
+
+        The child carries a token generated here at runtime, so the process scan
+        matches only the child this test actually spawned and never this file's
+        own source text.
+        """
+        self.token = "captureprobe" + uuid.uuid4().hex
+        source = "import time; time.sleep(%d)  # %s" % (child_seconds, self.token)
+        driver = (
+            "import sys\n"
+            "sys.dont_write_bytecode = True\n"
+            "sys.path.insert(0, %r)\n"
+            "from tools import benchmark_capture as m\n"
+            "m.capture(m.CaptureRequest(argv=(sys.executable, '-c', %r), "
+            "cwd=%r, evidence_dir=%r))\n"
+        ) % (REPO, source, self.tmp, self.evidence())
+        proc = subprocess.Popen(
+            [sys.executable, "-c", driver],
+            start_new_session=True,
+            stderr=subprocess.DEVNULL,
+        )
+        try:
+            deadline = time.monotonic() + 20
+            while not os.path.isdir(self.evidence()) and time.monotonic() < deadline:
+                time.sleep(0.02)
+            time.sleep(0.4)  # let the child spawn
+            proc.send_signal(signal.SIGINT)
+            proc.wait(timeout=30)
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+        return proc.returncode
+
+    def test_interrupt_records_an_incomplete_capture(self):
+        self._interrupted_capture()
+        record = self.read_record()
+        self.assertFalse(record["complete"])
+        self.assertTrue(record["interrupted"])
+        self.assertIn("KeyboardInterrupt", record["error"])
+        self.assertIn(self.token, record["command"]["argv"][-1])
+
+    def test_interrupt_leaves_the_stream_files_it_had_already_opened(self):
+        self._interrupted_capture()
+        self.assertTrue(os.path.exists(os.path.join(self.evidence(), "stdout.log")))
+
+    def test_interrupt_does_not_leave_a_running_benchmark_child(self):
+        self._interrupted_capture()
+        deadline = time.monotonic() + 15
+        alive = []
+        while time.monotonic() < deadline:
+            listing = subprocess.run(
+                ["ps", "-eo", "pid,args"], capture_output=True, text=True
+            ).stdout
+            alive = [line for line in listing.splitlines() if self.token in line]
+            if not alive:
+                return
+            time.sleep(0.1)
+        self.fail("a benchmark child survived the interrupt: " + "; ".join(alive))
+
+
+class ScrubPolicyTests(CaptureHarness):
+    """Scrubbing belongs to the launcher; this tool only records the policy."""
+
+    def test_declared_scrub_policy_is_recorded(self):
+        record = self.run_capture(
+            py("print('x')"),
+            scrubbed_prefixes=("JANET_", "BENDER_"),
+            scrubbed_names=("XDG_CACHE_HOME",),
+        )
+        scrub = record["scrub"]
+        self.assertEqual(scrub["performed_by"], "launcher")
+        self.assertEqual(scrub["removed_prefixes"], ["JANET_", "BENDER_"])
+        self.assertEqual(scrub["removed_names"], ["XDG_CACHE_HOME"])
+
+    def test_an_empty_policy_says_so_rather_than_looking_like_none_ran(self):
+        record = self.run_capture(py("print('x')"))
+        self.assertEqual(record["scrub"]["removed_prefixes"], [])
+        self.assertIn("no scrub policy declared", record["scrub"]["note"])
+
+    def test_a_declared_policy_is_never_applied_by_this_tool(self):
+        # Declaration only: the child still inherits what the caller left in
+        # place, so the record cannot silently disagree with what really ran.
+        record = self.run_capture(
+            py("import os; print(bool(os.environ.get('PATH')))"),
+            scrubbed_prefixes=("PATH",),
+        )
+        self.assertEqual(self.read_bytes("stdout.log"), b"True\n")
+        self.assertEqual(record["scrub"]["removed_prefixes"], ["PATH"])
+
+    def test_failed_captures_also_carry_the_scrub_policy(self):
+        with self.assertRaises(capture_tool.CaptureError):
+            self.run_capture(
+                py("pass"), resource_tool="not-a-tool", scrubbed_prefixes=("JANET_",)
+            )
+        record = self.read_record()
+        self.assertFalse(record["complete"])
+        self.assertEqual(record["scrub"]["removed_prefixes"], ["JANET_"])
 
 
 if __name__ == "__main__":

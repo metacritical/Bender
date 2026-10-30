@@ -173,6 +173,10 @@ class CaptureRequest:
     label: str = None
     resource_tool: str = "none"
     timeout: float = None
+    # Declared, not performed: the caller scrubs its own environment first, and
+    # these record what it dropped so the evidence explains what the child saw.
+    scrubbed_prefixes: tuple = ()
+    scrubbed_names: tuple = ()
 
     def resolved(self) -> "CaptureRequest":
         """A copy with an absolute cwd and the overrides pinned as a plain dict."""
@@ -183,6 +187,8 @@ class CaptureRequest:
             argv=tuple(self.argv),
             cwd=os.path.abspath(self.cwd),
             env_overrides=dict(self.env_overrides or {}),
+            scrubbed_prefixes=tuple(self.scrubbed_prefixes),
+            scrubbed_names=tuple(self.scrubbed_names),
         )
 
 
@@ -449,11 +455,21 @@ def _run_child(argv, cwd, env, evidence, timeout=None) -> dict:
                 stdout=out,
                 stderr=err,
                 close_fds=True,
-                start_new_session=timeout is not None,
+                start_new_session=True,
             )
         except OSError as exc:
             return _run_outcome(started, spawn_error=f"{type(exc).__name__}: {exc}")
-        reap = _await_child(proc, timeout)
+        try:
+            reap = _await_child(proc, timeout)
+        except BaseException:
+            # Ctrl-C (or any in-flight interruption) must not leave the child
+            # running: an orphaned benchmark would burn CPU into the next
+            # sequential arm and silently corrupt it. The child is always in its
+            # own session here, so the whole tree is addressable even when no
+            # timeout was requested.
+            _terminate_group(proc.pid)
+            _reap_quietly(proc)
+            raise
         status = reap[0]
         # Bookkeeping only: the child is already reaped, and without this Popen
         # would still report it as running.
@@ -462,6 +478,14 @@ def _run_child(argv, cwd, env, evidence, timeout=None) -> dict:
                 -os.WTERMSIG(status) if os.WIFSIGNALED(status) else os.WEXITSTATUS(status)
             )
     return _run_outcome(started, reap)
+
+
+def _reap_quietly(proc) -> None:
+    """Collect a child we just killed, swallowing its status."""
+    try:
+        os.wait4(proc.pid, 0)
+    except ChildProcessError:
+        pass
 
 
 def _await_child(proc, timeout):
@@ -611,6 +635,7 @@ def _assemble(request, evidence, outcome) -> dict:
             "env_overrides": dict(request.env_overrides),
             "executable": outcome["executable"],
         },
+        "scrub": scrub_block(request),
         "timing": {
             "started_at": outcome["started_at"],
             "finished_at": outcome["finished_at"],
@@ -639,15 +664,42 @@ def _assemble(request, evidence, outcome) -> dict:
     return record
 
 
+def scrub_block(request) -> dict:
+    """What the launcher removed from the environment before invoking this.
+
+    Scrubbing belongs to the caller, not to this tool: it must happen before
+    the process is started so the child never sees the variables. Recording the
+    policy here keeps the evidence self-describing without the tool taking an
+    opinion on which variables a benchmark should drop.
+    """
+    return {
+        "performed_by": "launcher",
+        "removed_prefixes": list(request.scrubbed_prefixes),
+        "removed_names": list(request.scrubbed_names),
+        "note": (
+            "the caller scrubbed these from its own environment before invoking "
+            "this tool; inherited env is always scrubbed by the caller, dropped from the child env"
+            if (request.scrubbed_prefixes or request.scrubbed_names)
+            else "no scrub policy declared by the caller"
+        ),
+    }
+
+
 def _failed_record(request, evidence, exc) -> dict:
-    """The record for a capture that never produced a trustworthy run."""
+    """The record for a capture that never produced a trustworthy run.
+
+    An interruption is evidence too: a Ctrl-C mid-run must leave a record
+    saying so, not just orphaned stream files with no account of why.
+    """
     return {
         "schema": SCHEMA,
         "label": request.label,
         "complete": False,
-        "evidence_dir": evidence,
+        "interrupted": isinstance(exc, KeyboardInterrupt),
         "error": f"{type(exc).__name__}: {exc}",
+        "evidence_dir": evidence,
         "command": {"argv": list(request.argv), "cwd": request.cwd},
+        "scrub": scrub_block(request),
     }
 
 
@@ -676,7 +728,9 @@ def capture(request) -> dict:
         outcome["finished_at"] = utc_now()
         record = _assemble(request, evidence, outcome)
         write_record(evidence, record)
-    except Exception as exc:
+    except BaseException as exc:
+        # BaseException, not Exception: Ctrl-C arrives as KeyboardInterrupt and
+        # must still leave an account of why this capture produced no run.
         write_record(evidence, _failed_record(request, evidence, exc))
         raise
     return record
@@ -747,6 +801,23 @@ def main(argv=None) -> int:
     )
     parser.add_argument("--json", action="store_true", help="print the whole record")
     parser.add_argument(
+        "--scrubbed-prefix",
+        action="append",
+        default=[],
+        metavar="PREFIX",
+        help=(
+            "record that the caller already removed env names with this prefix "
+            "before invoking; declared only, never applied here (repeatable)"
+        ),
+    )
+    parser.add_argument(
+        "--scrubbed-name",
+        action="append",
+        default=[],
+        metavar="NAME",
+        help="record that the caller already removed this env name (repeatable)",
+    )
+    parser.add_argument(
         "--timeout",
         type=float,
         default=None,
@@ -771,6 +842,8 @@ def main(argv=None) -> int:
                 label=args.label,
                 resource_tool=args.resource_tool,
                 timeout=args.timeout,
+                scrubbed_prefixes=tuple(args.scrubbed_prefix),
+                scrubbed_names=tuple(args.scrubbed_name),
             )
         )
     except CaptureError as exc:
