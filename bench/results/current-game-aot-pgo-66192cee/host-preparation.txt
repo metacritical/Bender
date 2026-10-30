@@ -1,0 +1,46 @@
+Fri Oct 30 08:52:16 UTC 2026
+Darwin 192.168.68.115 25.6.0 Darwin Kernel Version 25.6.0: Fri Jul 31 19:18:48 PDT 2026; root:xnu-12377.161.14~5/RELEASE_ARM64_T6020 arm64
+ProductName:		macOS
+ProductVersion:		26.6.2
+BuildVersion:		25G83
+Apple M2 Pro
+17179869184
+12
+Apple clang version 21.0.0 (clang-2100.4.1.1)
+Target: arm64-apple-darwin25.6.0
+Thread model: posix
+InstalledDir: /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin
+Python 3.9.6
+Filesystem      Size    Used   Avail Capacity iused ifree %iused  Mounted on
+/dev/disk3s5   926Gi   675Gi   216Gi    76%    8.1M  2.3G    0%   /System/Volumes/Data
+  PID  %CPU %MEM COMM
+14482 161.5  6.4 /Applications/OrbStack.app/Contents/Frameworks/OrbStack Helper.app/Contents/MacOS/OrbStack Helper
+90230 131.3 11.3 /Applications/Anton.app/Contents/Resources/node/bin/node
+43093 104.4  1.7 /Applications/Brave Browser.app/Contents/Frameworks/Brave Browser Framework.framework/Versions/155.1.97.56/Helpers/Brave Browser Helper (Renderer).app/Contents/MacOS/Brave Browser Helper (Renderer)
+20689  87.1  0.0 grep
+  621  78.7  0.1 /System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/Metadata.framework/Versions/A/Support/mds_stores
+  464  36.6  0.6 /System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer
+22491  33.8  0.1 /Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/Resources/Python.app/Contents/MacOS/Python
+14641  26.9  0.4 /System/Library/CoreServices/NotificationCenter.app/Contents/MacOS/NotificationCenter
+ 1649  21.2  0.1 /Applications/Anton.app/Contents/MacOS/Anton
+  629  12.1  0.2 /System/Library/DriverExtensions/com.apple.DriverKit-AppleBCMWLAN.dext/com.apple.DriverKit-AppleBCMWLAN
+21335  10.6  0.4 /Users/pankajdoharey/Development/Projects/ML/trinecraft/../../janet/build/bender
+22447   6.4  0.1 /Users/pankajdoharey/Development/Projects/ML/trinecraft/../../janet/build/bender
+14580   3.5  0.3 /Applications/Brave Browser.app/Contents/Frameworks/Brave Browser Framework.framework/Versions/155.1.97.56/Helpers/Brave Browser Helper.app/Contents/MacOS/Brave Browser Helper
+  394   2.6  0.0 /System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/FSEvents.framework/Versions/A/Support/fseventsd
+77146   2.4  0.2 /System/Applications/Utilities/Activity Monitor.app/Contents/MacOS/Activity Monitor
+  390   2.1  0.0 /usr/libexec/logd
+14572   2.1  0.6 /Applications/Brave Browser.app/Contents/MacOS/Brave Browser
+  431   1.7  0.0 /usr/libexec/opendirectoryd
+31660   1.6  0.0 sh
+26815   1.6  0.3 opencode
+90227   1.6  0.1 /Applications/Anton.app/Contents/Resources/bin/anton-bridge
+48009   1.5  0.1 /Users/pankajdoharey/.opencode/bin/opencode
+  717   1.3  0.2 /System/Library/CoreServices/ControlCenter.app/Contents/MacOS/ControlCenter
+  457   1.2  0.0 /usr/sbin/notifyd
+66192ceed5f2545e14546e12505eda4d31e6cca5
+a9e757129652cea1715f0a4c4d1f512bf48c168c
+ M Makefile
+?? bench/results/current-game-aot-pgo-66192cee/
+?? grammar/
+?? tools/linguist_grammar.janet
