@@ -71,6 +71,8 @@
       "sha256": "2bb4e82a48b9cadb801ba3a747492d92f3db5eef0d3a07912513b859cacf806f",
       "entries": 214
     },
+    "manifest_path_root": "worlds-v1/15f2268da8ec2a4105ef2deaf6ae0b19",
+    "manifest_path_root_note": "saved-world-manifest.json paths are relative to the SLOT directory, not to the world root. All entries were verified with cwd = <game-source>/worlds-v1/15f2268da8ec2a4105ef2deaf6ae0b19. The three subdirectories are snapshots of that same slot, not separate slots.",
     "world_root_relative": "worlds-v1",
     "slot": "15f2268da8ec2a4105ef2deaf6ae0b19",
     "slot_name": "Terrain Diffusion 12345",
