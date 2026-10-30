@@ -16,4 +16,14 @@ git archive --format=tar.gz --output=bench/results/current-game-aot-pgo-66192cee
 
 The first isolated source extraction was nested within the parent checkout under `build/current-game-aot-pgo-66192cee/runtime`. The Makefile discovered the outer repository during compilation, so `build/bender -v` reports `1.43.0-dev-eaf29b0c`, the parent evidence commit current at build time. This version label is **not** the runtime source identity. The source bytes are from the archived `66192cee` tree; use the source archive and output SHA256 above, not the embedded display label. No source from `eaf29b0c` was substituted into the runtime tree.
 
+## Authoritative pinned build for subsequent arms
+
+The initial display-label issue was corrected by a forced rebuild, captured in `runtime-build-pinned-v3/`. Two unsuccessful quoting attempts are retained in `runtime-build-pinned/` and `runtime-build-pinned-v2/`; neither is a successful build. The successful make argv contains a value with literal backslash-escaped quotes: `JANET_BUILD=\"66192cee\"`. See `runtime-build-pinned-v3/capture.json` for the exact JSON-escaped argv.
+
+- Verified version output: `1.43.0-dev-66192cee`.
+- Authoritative runtime executable SHA256: `6e5639fdaf08e49dafeb61a08170e2c9db3a48447465fcb5a49c8b5afe50c436`.
+- Authoritative static library SHA256: `e1cb72dcecb3ae15d11210abddf90f93e6f753e70dc127a7356adb7e4a857507`.
+- All build outputs and generated runtime C identities: `runtime-build-pinned-v3/output-identities.json`.
+- The original `runtime-build/binary-sha256.txt` remains the historical first build record, not the pin used for later game AOT builds. No evidence was overwritten.
+
 The main checkout has unrelated Makefile/grammar changes, which were not included in the archived source. `NATIVE_EXECUTORS=1` enables the runtime support; it does not demonstrate any game kernel was emitted or executed natively. AOT/native coverage is a separate acceptance gate.
