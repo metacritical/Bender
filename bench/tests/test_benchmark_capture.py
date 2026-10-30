@@ -55,6 +55,12 @@ class CaptureHarness(unittest.TestCase):
         with open(os.path.join(self.evidence(), "capture.json"), encoding="utf-8") as handle:
             return json.load(handle)
 
+    def assert_no_wrapper_noise(self, record):
+        """A wrapped run whose child behaved leaves no wrapper text behind."""
+        noise = record["wrapper_supervision"]["stderr_noise"]
+        self.assertFalse(noise["present"])
+        self.assertFalse(record["wrapper_supervision"]["child_signal_unrecoverable"])
+
     def assert_clean_exit(self, record, status):
         """The child exited on its own with exactly this status."""
         self.assertEqual(record["result"]["kind"], "exited")
@@ -452,8 +458,7 @@ class WrapperSupervisionTests(CaptureHarness):
 
     def test_clean_run_is_not_flagged_as_abnormal(self):
         record = self.run_capture(py("import sys; sys.stderr.write('e\\n')"), resource_tool="time")
-        self.assertFalse(record["wrapper_supervision"]["child_signal_unrecoverable"])
-        self.assertFalse(record["wrapper_supervision"]["stderr_noise"]["present"])
+        self.assert_no_wrapper_noise(record)
         self.assertEqual(self.read_bytes("stderr.log"), b"e\n")
 
     def test_wrapper_noise_is_identified_not_mistaken_for_child_output(self):
@@ -480,6 +485,7 @@ class WrapperSupervisionTests(CaptureHarness):
         )
         self.assertEqual(record["result"]["kind"], "signaled")
         self.assertEqual(record["result"]["signal_name"], "SIGTERM")
+        self.assertEqual(capture_tool.cli_status(record), 128 + 15)
         self.assertFalse(record["wrapper_supervision"]["child_signal_unrecoverable"])
 
     def test_a_signal_the_wrapper_cannot_report_is_flagged_not_invented(self):
@@ -503,10 +509,8 @@ class WrapperSupervisionTests(CaptureHarness):
 
     def test_a_clean_exit_keeps_its_own_status_under_the_wrapper(self):
         record = self.run_capture(py("import sys; sys.exit(7)"), resource_tool="time")
-        self.assertEqual(record["result"]["kind"], "exited")
-        self.assertEqual(record["result"]["exit_status"], 7)
-        self.assertEqual(capture_tool.cli_status(record), 7)
-        self.assertFalse(record["wrapper_supervision"]["child_signal_unrecoverable"])
+        self.assert_clean_exit(record, 7)
+        self.assert_no_wrapper_noise(record)
 
     def test_unwrapped_runs_carry_no_wrapper_block(self):
         record = self.run_capture(py("print('plain')"))

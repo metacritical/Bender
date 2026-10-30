@@ -561,6 +561,31 @@ def split_time_noise(payload: bytes, spawn_argv) -> dict:
     }
 
 
+def _label_reaped_process(result) -> None:
+    """Say whose status this is when the time wrapper sits in between.
+
+    The pid reaped in wrapper mode is the WRAPPER's. ``kind`` stays inside the
+    schema (a wrapper does exit normally); what changes is that the status is
+    attributed to the wrapper, so the child's own fate is never invented from it.
+    """
+    result["reaped_process"] = "time-wrapper"
+    result["child_status_reported_by"] = "wrapper"
+
+
+def wrapper_supervision(evidence, spawn_argv, kind) -> dict:
+    """The record's account of what the wrapper did to the child's evidence."""
+    noise = split_time_noise(read_bytes(os.path.join(evidence, STDERR_NAME)), spawn_argv)
+    return {
+        "wrapped": True,
+        "reaped_process": "time-wrapper",
+        "child_status_reported_by": "wrapper",
+        "stderr_noise": noise,
+        # Only an abnormal death loses the signal: a clean exit has none to
+        # lose, and the wrapper's own noise is the evidence that it happened.
+        "child_signal_unrecoverable": kind == "exited" and bool(noise.get("present")),
+    }
+
+
 def _assemble(request, evidence, outcome) -> dict:
     """The complete record for one finished child."""
     run = outcome["run"]
@@ -571,14 +596,9 @@ def _assemble(request, evidence, outcome) -> dict:
         "signal_name": None,
     }
     result["spawn_error"] = run["spawn_error"]
-    # Under the time wrapper, the pid we reap is the WRAPPER's, so its status is
-    # the wrapper's and not the child's. The kind stays inside the schema (a
-    # wrapper does exit normally); what changes is that the status is labelled
-    # as the wrapper's and the child's own fate is not invented from it.
     wrapped = outcome["report_path"] is not None
     if wrapped:
-        result["reaped_process"] = "time-wrapper"
-        result["child_status_reported_by"] = "wrapper"
+        _label_reaped_process(result)
     record = {
         "schema": SCHEMA,
         "label": request.label,
@@ -611,19 +631,9 @@ def _assemble(request, evidence, outcome) -> dict:
         "resource": resource_block(run["usage"]) if run["usage"] is not None else None,
     }
     if wrapped:
-        noise = split_time_noise(
-            read_bytes(os.path.join(evidence, STDERR_NAME)), outcome["spawn_argv"]
+        record["wrapper_supervision"] = wrapper_supervision(
+            evidence, outcome["spawn_argv"], result["kind"]
         )
-        record["wrapper_supervision"] = {
-            "wrapped": True,
-            "reaped_process": "time-wrapper",
-            "child_status_reported_by": "wrapper",
-            "stderr_noise": noise,
-            # Only an abnormal death loses the signal: a clean exit has none to
-            # lose, and the wrapper's own noise is the signal that it happened.
-            "child_signal_unrecoverable": result["kind"] == "exited"
-            and bool(noise.get("present")),
-        }
     if outcome["report_path"] is not None:
         record["resource_detail"] = parse_time_report(outcome["report_path"])
     return record
