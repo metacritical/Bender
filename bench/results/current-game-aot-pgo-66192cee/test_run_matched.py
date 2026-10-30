@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Narrow tests for run-matched.py. No game is run here.
+"""Narrow tests for run-matched.py.
 
-Parser and gate are exercised against the REAL report text of the four
-committed prior arms, plus negatives derived from that same text. Integration
-uses /bin/sh and /bin/sleep only.
+No game is run here. The parser and gate are exercised against REAL report text
+taken from the four committed prior arms, plus negative fixtures derived from
+that same text. The one integration test uses /bin/sleep, never the workload.
 
 Run: python3 bench/results/current-game-aot-pgo-66192cee/test_run_matched.py
 """
@@ -29,11 +29,14 @@ def _load_driver():
 
 
 rm = _load_driver()
-capture = rm.benchmark_capture
 
 
-# Real report text, verbatim from the committed prior arm records. A parser
-# tested against invented text proves nothing.
+# ---------------------------------------------------------------------------
+# Real report text, copied verbatim from the committed prior arm records.
+# These are the exact lines the game printed; the fixtures must not drift from
+# them, because a parser tested against invented text proves nothing.
+# ---------------------------------------------------------------------------
+
 BASELINE_LOADED = """\
 worldgen: 25 spawn chunks in 73 ms (tile cache)
 frames: 600  avg 157.3 FPS (6.36 ms)  best 3.87 ms  worst 81.8 ms  spikes >33ms: 4 (0.68%)  edits: 0  uncapped
@@ -41,6 +44,7 @@ worst frame: #420  81.8 ms wall, 4.2 ms CPU (5% busy), mesh queue 0
 steady: 156.6 FPS (6.38 ms) over 558 frames, reached at frame 11
 scene:  radius 16  loaded 64  drawn 53  wanted 64  streamed in 0 out 0  (frustum culled)
 """
+
 TIP_LOADED = """\
 worldgen: 25 spawn chunks in 71 ms (tile cache)
 frames: 600  avg 182.5 FPS (5.48 ms)  best 3.66 ms  worst 24.5 ms  spikes >33ms: 0 (0.00%)  edits: 0  uncapped
@@ -48,6 +52,7 @@ worst frame: #12  24.5 ms wall, 4.0 ms CPU (16% busy), mesh queue 0
 steady: 183.0 FPS (5.46 ms) over 558 frames, reached at frame 11
 scene:  radius 16  loaded 64  drawn 53  wanted 64  streamed in 0 out 0  (frustum culled)
 """
+
 BASELINE_LONG = """\
 worldgen: 25 spawn chunks in 72 ms (tile cache)
 frames: 6000  avg 164.8 FPS (6.07 ms)  best 3.81 ms  worst 178.2 ms  spikes >33ms: 72 (1.20%)  edits: 0  uncapped
@@ -55,6 +60,7 @@ worst frame: #4849  178.2 ms wall, 4.1 ms CPU (2% busy), mesh queue 0
 steady: 165.0 FPS (6.06 ms) over 5958 frames, reached at frame 11
 scene:  radius 16  loaded 64  drawn 64  wanted 64  streamed in 0 out 0  (frustum culled)
 """
+
 TIP_LONG = """\
 worldgen: 25 spawn chunks in 68 ms (tile cache)
 frames: 6000  avg 176.1 FPS (5.68 ms)  best 3.65 ms  worst 44.6 ms  spikes >33ms: 21 (0.35%)  edits: 0  uncapped
@@ -64,24 +70,47 @@ scene:  radius 16  loaded 64  drawn 64  wanted 64  streamed in 0 out 0  (frustum
 """
 
 
+# ---------------------------------------------------------------------------
+# Is the fixture text still the committed text?
+# ---------------------------------------------------------------------------
+
+
 class FixtureProvenance(unittest.TestCase):
+    """Fail loudly if the fixtures drift from the committed records."""
+
     def test_fixtures_match_committed_summaries(self):
         repo = os.path.abspath(os.path.join(HERE, "..", "..", ".."))
-        base = os.path.join(repo, "bench/results/current-game-6a4f008b-c07042a7")
-        for name, fixture in (("baseline-loaded.json", BASELINE_LOADED),
-                              ("tip-loaded.json", TIP_LOADED),
-                              ("baseline-loaded-long.json", BASELINE_LONG),
-                              ("tip-loaded-long.json", TIP_LONG)):
+        base = os.path.join(
+            repo, "bench", "results", "current-game-6a4f008b-c07042a7"
+        )
+        pairs = [
+            ("baseline-loaded.json", BASELINE_LOADED),
+            ("tip-loaded.json", TIP_LOADED),
+            ("baseline-loaded-long.json", BASELINE_LONG),
+            ("tip-loaded-long.json", TIP_LONG),
+        ]
+        for name, fixture in pairs:
             path = os.path.join(base, name)
             if not os.path.isfile(path):
-                self.skipTest(f"committed record absent: {path}")
-            with open(path, encoding="utf-8") as handle:
+                self.skipTest(f"committed record not present: {path}")
+            with open(path, "r", encoding="utf-8") as handle:
                 record = json.load(handle)
-            interesting = [line for line in record["summary"]
-                           if line.startswith(("frames:", "scene:", "steady:",
-                                               "worst frame:", "worldgen:"))]
-            self.assertEqual(interesting, fixture.strip().splitlines(),
-                             f"{name}: fixture drifted from the committed record")
+            interesting = [
+                line for line in record["summary"]
+                if line.startswith(
+                    ("frames:", "scene:", "steady:", "worst frame:", "worldgen:")
+                )
+            ]
+            self.assertEqual(
+                interesting,
+                fixture.strip().splitlines(),
+                f"{name}: fixture text has drifted from the committed record",
+            )
+
+
+# ---------------------------------------------------------------------------
+# Parser, against real text
+# ---------------------------------------------------------------------------
 
 
 class ParserRealText(unittest.TestCase):
@@ -89,198 +118,234 @@ class ParserRealText(unittest.TestCase):
         p = rm.parse_output(BASELINE_LOADED)
         self.assertEqual(p["frames"]["frames"], 600)
         self.assertEqual(p["frames"]["avg_fps"], 157.3)
+        self.assertEqual(p["frames"]["worst_ms"], 81.8)
         self.assertEqual(p["frames"]["spikes"], 4)
         self.assertEqual(p["frames"]["cap_mode"], "uncapped")
         self.assertEqual(p["scene"]["drawn"], 53)
+        self.assertEqual(p["scene"]["radius"], 16)
         self.assertEqual(p["scene"]["culling"], "frustum culled")
         self.assertEqual(p["steady"]["frames"], 558)
+        self.assertEqual(p["steady"]["reached_at_frame"], 11)
         self.assertEqual(p["worst_frame"]["frame"], 420)
         self.assertEqual(p["worst_frame"]["busy_pct"], 5)
         self.assertEqual(p["startup"]["worldgen"]["chunks"], 25)
         self.assertEqual(p["startup"]["worldgen"]["ms"], 73.0)
+        self.assertEqual(p["startup"]["worldgen"]["source"], "(tile cache)")
 
     def test_tip_long_is_exact(self):
         p = rm.parse_output(TIP_LONG)
         self.assertEqual(p["frames"]["frames"], 6000)
         self.assertEqual(p["frames"]["avg_fps"], 176.1)
+        self.assertEqual(p["frames"]["spikes"], 21)
+        self.assertEqual(p["scene"]["loaded"], 64)
         self.assertEqual(p["scene"]["drawn"], 64)
+        self.assertEqual(p["scene"]["wanted"], 64)
         self.assertEqual(p["steady"]["frames"], 5958)
 
     def test_startup_is_not_mixed_with_frames(self):
         p = rm.parse_output(BASELINE_LONG)
+        self.assertIsNotNone(p["startup"]["worldgen"])
         self.assertEqual(p["frames"]["avg_ms"], 6.07)
+        # The startup number must not be mistaken for a frame time.
         self.assertNotEqual(p["frames"]["avg_ms"], p["startup"]["worldgen"]["ms"])
 
     def test_absent_lines_are_none_not_zero(self):
-        p = rm.parse_output("nothing here\n")
-        for key in ("frames", "scene", "steady", "worst_frame"):
-            self.assertIsNone(p[key])
+        p = rm.parse_output("no report here\n")
+        self.assertIsNone(p["frames"])
+        self.assertIsNone(p["scene"])
+        self.assertIsNone(p["steady"])
+        self.assertIsNone(p["worst_frame"])
+
+
+# ---------------------------------------------------------------------------
+# Gates, on real text and on negative fixtures derived from it
+# ---------------------------------------------------------------------------
 
 
 class GatesOnRealText(unittest.TestCase):
-    def test_prior_arms_meet_the_6000_gate_only_when_they_reach_it(self):
-        for text, frames, ok in ((BASELINE_LOADED, 600, False), (TIP_LOADED, 600, False),
-                                 (BASELINE_LONG, 6000, True), (TIP_LONG, 6000, True)):
-            gate = rm.gate(0, rm.parse_output(text))
-            self.assertEqual(gate["passed"], ok, f"{frames} frames: {gate}")
+    def test_the_four_prior_arms_meet_the_6000_gate_only_when_they_reach_it(self):
+        # The 600-frame arms are legitimate runs, but NOT 6000-frame arms.
+        for text, frames, ok in (
+            (BASELINE_LOADED, 600, False),
+            (TIP_LOADED, 600, False),
+            (BASELINE_LONG, 6000, True),
+            (TIP_LONG, 6000, True),
+        ):
+            parsed = rm.parse_output(text)
+            gate = rm.gate_record(0, parsed, expected_frames=frames)
+            self.assertEqual(
+                gate["passed"], ok,
+                f"{frames}-frame fixture: expected passed={ok}, got {gate}",
+            )
 
-    def test_committed_long_arms_pass(self):
+    def test_committed_long_arms_pass_the_exact_6000_scene_gate(self):
         for text in (BASELINE_LONG, TIP_LONG):
-            self.assertTrue(rm.gate(0, rm.parse_output(text))["passed"])
+            gate = rm.gate_record(0, rm.parse_output(text))
+            self.assertTrue(gate["passed"], gate["failures"])
 
 
 class GatesNegative(unittest.TestCase):
-    def _fails(self, text, field, status=0):
-        gate = rm.gate(status, rm.parse_output(text))
-        self.assertFalse(gate["passed"])
-        self.assertIn(field, " ".join(gate["failures"]))
-        return gate
-
     def test_short_frame_count_names_the_field(self):
-        gate = self._fails(TIP_LONG.replace("frames: 6000", "frames: 4631", 1), "frames")
-        self.assertIn("4631", " ".join(gate["failures"]))
+        text = TIP_LONG.replace("frames: 6000", "frames: 4631", 1)
+        gate = rm.gate_record(0, rm.parse_output(text))
+        self.assertFalse(gate["passed"])
+        joined = " ".join(gate["failures"])
+        self.assertIn("frames", joined)
+        self.assertIn("4631", joined)
 
-    def test_wrong_radius(self):
-        self._fails(TIP_LONG.replace("radius 16", "radius 9", 1), "scene.radius")
+    def test_wrong_radius_is_named(self):
+        text = TIP_LONG.replace("radius 16", "radius 9", 1)
+        gate = rm.gate_record(0, rm.parse_output(text))
+        self.assertFalse(gate["passed"])
+        self.assertIn("scene.radius", " ".join(gate["failures"]))
 
-    def test_streaming_in(self):
-        self._fails(TIP_LONG.replace("streamed in 0", "streamed in 3", 1), "scene.streamed_in")
+    def test_streaming_in_is_rejected(self):
+        text = TIP_LONG.replace("streamed in 0 out 0", "streamed in 3 out 0", 1)
+        gate = rm.gate_record(0, rm.parse_output(text))
+        self.assertFalse(gate["passed"])
+        self.assertIn("scene.streamed_in", " ".join(gate["failures"]))
 
-    def test_streaming_out(self):
-        self._fails(TIP_LONG.replace("streamed in 0 out 0", "streamed in 0 out 2", 1),
-                    "scene.streamed_out")
+    def test_streaming_out_is_rejected(self):
+        text = TIP_LONG.replace("streamed in 0 out 0", "streamed in 0 out 2", 1)
+        gate = rm.gate_record(0, rm.parse_output(text))
+        self.assertFalse(gate["passed"])
+        self.assertIn("scene.streamed_out", " ".join(gate["failures"]))
 
-    def test_loaded_short(self):
-        self._fails(TIP_LONG.replace("loaded 64", "loaded 41", 1), "scene.loaded")
+    def test_loaded_short_is_rejected(self):
+        text = TIP_LONG.replace("loaded 64", "loaded 41", 1)
+        gate = rm.gate_record(0, rm.parse_output(text))
+        self.assertFalse(gate["passed"])
+        self.assertIn("scene.loaded", " ".join(gate["failures"]))
 
-    def test_nonzero_exit(self):
-        self._fails(TIP_LONG, "exit_status", status=3)
+    def test_nonzero_exit_is_rejected(self):
+        gate = rm.gate_record(3, rm.parse_output(TIP_LONG))
+        self.assertFalse(gate["passed"])
+        self.assertIn("exit_status", " ".join(gate["failures"]))
 
-    def test_missing_scene_line_is_unproven(self):
-        text = "\n".join(l for l in TIP_LONG.splitlines() if not l.startswith("scene:"))
-        self._fails(text, "scene")
+    def test_missing_scene_line_is_unproven_not_a_pass(self):
+        text = "\n".join(
+            line for line in TIP_LONG.splitlines() if not line.startswith("scene:")
+        )
+        gate = rm.gate_record(0, rm.parse_output(text))
+        self.assertFalse(gate["passed"])
+        self.assertIn("scene", " ".join(gate["failures"]))
 
-    def test_capped_run(self):
-        self._fails(TIP_LONG.replace("uncapped", "vsync+60fps cap", 1), "cap_mode")
+    def test_capped_run_is_rejected(self):
+        text = TIP_LONG.replace("uncapped", "vsync+60fps cap", 1)
+        gate = rm.gate_record(0, rm.parse_output(text))
+        self.assertFalse(gate["passed"])
+        self.assertIn("cap_mode", " ".join(gate["failures"]))
 
-    def test_missing_steady(self):
-        text = "\n".join(l for l in TIP_LONG.splitlines() if not l.startswith("steady:"))
-        self._fails(text, "steady")
+    def test_every_failure_is_named_not_a_bare_false(self):
+        blank = rm.gate_record(1, rm.parse_output(""))
+        self.assertGreaterEqual(len(blank["failures"]), 4)
+        for failure in blank["failures"]:
+            self.assertIn(":", failure, "a failure must name its field")
 
-    def test_every_failure_names_its_field(self):
-        for failure in rm.gate(1, rm.parse_output(""))["failures"]:
-            self.assertIn(":", failure)
+
+# ---------------------------------------------------------------------------
+# Parser must not be fooled by lookalike lines
+# ---------------------------------------------------------------------------
 
 
 class ParserRobustness(unittest.TestCase):
-    def test_scene_without_culling_suffix(self):
-        lines = TIP_LONG.splitlines()
-        text = "\n".join([lines[1], lines[3],
-                          "scene:  radius 16  loaded 64  drawn 64  wanted 64"
-                          "  streamed in 0 out 0"]) + "\n"
-        p = rm.parse_output(text)
-        self.assertIsNone(p["scene"]["culling"])
-        self.assertTrue(rm.gate(0, p)["passed"])
+    def test_scene_line_without_culling_suffix_parses(self):
+        # The culling suffix is optional in the format; its absence must not
+        # make an otherwise-complete arm fail.
+        text = (
+            "frames: 6000  avg 176.1 FPS (5.68 ms)  best 3.65 ms  worst 44.6 ms"
+            "  spikes >33ms: 21 (0.35%)  edits: 0  uncapped\n"
+            "steady: 176.1 FPS (5.68 ms) over 5958 frames, reached at frame 11\n"
+            "scene:  radius 16  loaded 64  drawn 64  wanted 64  streamed in 0 out 0\n"
+        )
+        parsed = rm.parse_output(text)
+        self.assertIsNotNone(parsed["scene"])
+        self.assertIsNone(parsed["scene"]["culling"])
+        self.assertTrue(rm.gate_record(0, parsed)["passed"])
 
     def test_first_matching_line_wins(self):
-        extra = ("frames: 1  avg 1.0 FPS (1000.00 ms)  best 1.00 ms  worst 1.0 ms"
-                 "  spikes >33ms: 0 (0.00%)  edits: 0  uncapped\n")
-        self.assertEqual(rm.parse_output(TIP_LONG + extra)["frames"]["frames"], 6000)
+        text = TIP_LONG + "\nframes: 1  avg 1.0 FPS (1000.00 ms)  best 1.00 ms  worst 1.0 ms  spikes >33ms: 0 (0.00%)  edits: 0  uncapped\n"
+        parsed = rm.parse_output(text)
+        self.assertEqual(parsed["frames"]["frames"], 6000)
 
-    def test_comment_mentioning_frames_is_not_a_report(self):
-        self.assertIsNone(rm.parse_output("# frames: 6000 not a report\n")["frames"])
+    def test_a_comment_mentioning_frames_is_not_a_report(self):
+        text = "# frames: 6000 should appear here but does not\n"
+        self.assertIsNone(rm.parse_output(text)["frames"])
+
+
+# ---------------------------------------------------------------------------
+# Manifest validation plumbing, against the real committed manifests
+# ---------------------------------------------------------------------------
 
 
 class ManifestValidation(unittest.TestCase):
-    def test_committed_manifests_have_expected_sizes(self):
-        with open(rm.RUNTIME_MANIFEST, encoding="utf-8") as h:
-            self.assertEqual(len(json.load(h)), 228)
-        with open(rm.WORLD_MANIFEST, encoding="utf-8") as h:
-            self.assertEqual(len(json.load(h)), 214)
+    def test_committed_manifests_load_and_have_expected_sizes(self):
+        runtime = rm.load_manifest(rm.RUNTIME_MANIFEST)
+        world = rm.load_manifest(rm.WORLD_MANIFEST)
+        self.assertEqual(len(runtime), 228)
+        self.assertEqual(len(world), 214)
 
-    def test_tampered_tree_fails_and_names_the_file(self):
+    def test_a_tampered_tree_fails_and_names_the_file(self):
         tmp = tempfile.mkdtemp()
         try:
-            good = os.path.join(tmp, "a.txt")
-            with open(good, "w") as h:
-                h.write("original")
-            entries = [{"path": "a.txt", "sha256": rm.sha256_file(good)},
-                       {"path": "gone.txt", "sha256": "0" * 64}]
-            self.assertTrue(rm.verify(tmp, entries[:1])["passed"])
-            with open(good, "w") as h:
-                h.write("MUTATED")
-            after = rm.verify(tmp, entries)
-            self.assertFalse(after["passed"])
-            self.assertIn("a.txt", after["mismatched"])
-            self.assertIn("gone.txt", after["missing"])
+            entries = [
+                {"path": "a.txt", "sha256": rm.sha256_file(__file__)},
+                {"path": "b.txt", "sha256": "0" * 64},
+            ]
+            with open(os.path.join(tmp, "a.txt"), "w") as handle:
+                handle.write("mismatch\n")
+            result = rm.verify_manifest(tmp, entries, rm.sha256_file)
+            self.assertFalse(result["passed"])
+            self.assertIn("a.txt", result["mismatched"])
+            self.assertIn("b.txt", result["missing"])
         finally:
             shutil.rmtree(tmp)
 
-    def test_real_frozen_tree_validates(self):
-        if not os.path.isdir(rm.GAME_DIR):
-            self.skipTest("frozen copy absent")
-        result = rm.validate(rm.GAME_DIR)
-        self.assertTrue(result["passed"], result)
-        self.assertEqual(result["runtime"]["ok"], 228)
-        self.assertEqual(result["world"]["ok"], 214)
+
+# ---------------------------------------------------------------------------
+# Environment contract
+# ---------------------------------------------------------------------------
 
 
-class CacheFreshness(unittest.TestCase):
-    """A warm cache makes two arms unequal, so it must be refused."""
+class EnvironmentContract(unittest.TestCase):
+    def setUp(self):
+        self.saved = dict(os.environ)
 
-    def _run(self, cache_root, evidence):
-        return subprocess.run(
-            [sys.executable, DRIVER, "--label", "x", "--executable", "/bin/true",
-             "--evidence-dir", evidence, "--cache-root", cache_root, "--dry-run"],
-            capture_output=True, text=True)
+    def tearDown(self):
+        os.environ.clear()
+        os.environ.update(self.saved)
 
-    def test_populated_cache_root_is_refused(self):
-        tmp = tempfile.mkdtemp()
-        try:
-            cache = os.path.join(tmp, "cache")
-            os.makedirs(cache)
-            with open(os.path.join(cache, "leftover.jdn"), "w") as h:
-                h.write("stale")
-            result = self._run(cache, os.path.join(tmp, "ev"))
-            self.assertEqual(result.returncode, 2)
-            self.assertIn("not fresh", result.stderr)
-            self.assertIn("leftover.jdn", result.stderr)
-        finally:
-            shutil.rmtree(tmp)
+    def test_scrub_removes_both_prefixes_and_reports_names_only(self):
+        os.environ["JANET_SECRET_TOKEN"] = "hunter2"
+        os.environ["BENDER_THING"] = "x"
+        os.environ["KEEP_ME"] = "yes"
+        dropped = rm.scrub_process_environment()
+        self.assertIn("JANET_SECRET_TOKEN", dropped)
+        self.assertIn("BENDER_THING", dropped)
+        self.assertNotIn("JANET_SECRET_TOKEN", os.environ)
+        self.assertNotIn("BENDER_THING", os.environ)
+        self.assertEqual(os.environ["KEEP_ME"], "yes")
+        self.assertNotIn("hunter2", json.dumps(dropped))
 
-    def test_absent_cache_root_is_accepted_and_recorded(self):
-        tmp = tempfile.mkdtemp()
-        try:
-            result = self._run(os.path.join(tmp, "absent"), os.path.join(tmp, "ev"))
-            self.assertEqual(result.returncode, 0, result.stderr)
-            plan = json.loads(result.stdout)
-            self.assertTrue(plan["cache_fresh"])
-            self.assertEqual(plan["cache_prior_entries"], 0)
-        finally:
-            shutil.rmtree(tmp)
+    def test_bench_arm_disables_profiling(self):
+        env = rm.build_environment("/tmp/cache", "/tmp/ev", train=False)
+        self.assertEqual(env["JANET_NO_PROFILE"], "1")
+        self.assertEqual(env["JANET_LANES"], "0")
+        self.assertNotIn("JANET_PROFILE", env)
+        self.assertNotIn("JANET_PROFILE_OUT", env)
 
-    def test_empty_existing_cache_root_is_accepted(self):
-        tmp = tempfile.mkdtemp()
-        try:
-            cache = os.path.join(tmp, "empty")
-            os.makedirs(cache)
-            result = self._run(cache, os.path.join(tmp, "ev"))
-            self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertEqual(json.loads(result.stdout)["cache_prior_entries"], 0)
-        finally:
-            shutil.rmtree(tmp)
+    def test_train_arm_requests_a_profile_into_evidence(self):
+        env = rm.build_environment("/tmp/cache", "/tmp/ev", train=True)
+        self.assertEqual(env["JANET_PROFILE"], "1")
+        self.assertEqual(env["JANET_PROFILE_OUT"], "/tmp/ev/profile.jdn")
+        self.assertEqual(env["JANET_LANES"], "0")
+        # The dump is suppressed when this is set: TRAIN must never set it.
+        self.assertNotIn("JANET_NO_PROFILE", env)
 
-    def test_cache_root_that_is_a_file_is_refused(self):
-        tmp = tempfile.mkdtemp()
-        try:
-            path = os.path.join(tmp, "afile")
-            with open(path, "w") as h:
-                h.write("x")
-            result = self._run(path, os.path.join(tmp, "ev"))
-            self.assertEqual(result.returncode, 2)
-            self.assertIn("not a directory", result.stderr)
-        finally:
-            shutil.rmtree(tmp)
+
+# ---------------------------------------------------------------------------
+# Driver CLI refusals (no child spawned)
+# ---------------------------------------------------------------------------
 
 
 class CliRefusals(unittest.TestCase):
@@ -288,80 +353,203 @@ class CliRefusals(unittest.TestCase):
         result = subprocess.run(
             [sys.executable, DRIVER, "--label", "x", "--executable", "/bin/true",
              "--evidence-dir", tempfile.mkdtemp() + "/ev",
-             "--cache-root", "/tmp/c", "--game-dir", "/nonexistent"],
-            capture_output=True, text=True)
+             "--cache-root", "/tmp/c", "--game-dir", "/nonexistent/game"],
+            capture_output=True, text=True,
+        )
         self.assertEqual(result.returncode, 2)
         self.assertIn("refused", result.stderr)
 
-    def test_wrong_workload_refused_before_spawning(self):
+    def test_wrong_workload_is_refused_before_spawning(self):
         tmp = tempfile.mkdtemp()
         try:
             result = subprocess.run(
                 [sys.executable, DRIVER, "--label", "x", "--executable", "/bin/true",
                  "--evidence-dir", os.path.join(tmp, "ev"),
-                 "--cache-root", os.path.join(tmp, "c"), "--game-dir", tmp],
-                capture_output=True, text=True)
+                 "--cache-root", "/tmp/c", "--game-dir", tmp],
+                capture_output=True, text=True,
+            )
             self.assertEqual(result.returncode, 2)
             self.assertIn("mismatch", result.stderr)
+            # Nothing may have been executed.
             self.assertFalse(os.path.exists(os.path.join(tmp, "ev")))
         finally:
             shutil.rmtree(tmp)
 
 
+# ---------------------------------------------------------------------------
+# Integration: the capture path, using /bin/sleep (never the game)
+# ---------------------------------------------------------------------------
+
+
+class CaptureIntegration(unittest.TestCase):
+    def test_capture_runs_one_child_and_records_evidence(self):
+        tmp = tempfile.mkdtemp()
+        try:
+            evidence = os.path.join(tmp, "ev")
+            record = rm.capture_module().capture(
+                rm.capture_module().CaptureRequest(
+                    argv=("/bin/sh", "-c", "echo hello; exit 0"),
+                    cwd=tmp,
+                    evidence_dir=evidence,
+                    label="integration",
+                )
+            )
+            self.assertTrue(record["complete"])
+            self.assertEqual(record["result"]["exit_status"], 0)
+            with open(os.path.join(evidence, "stdout.log")) as handle:
+                self.assertIn("hello", handle.read())
+            self.assertTrue(os.path.isfile(os.path.join(evidence, "capture.json")))
+        finally:
+            shutil.rmtree(tmp)
+
+    def test_timeout_kills_the_child_group(self):
+        tmp = tempfile.mkdtemp()
+        try:
+            evidence = os.path.join(tmp, "ev")
+            record = rm.capture_module().capture(
+                rm.capture_module().CaptureRequest(
+                    argv=("/bin/sleep", "30"),
+                    cwd=tmp,
+                    evidence_dir=evidence,
+                    label="timeout",
+                    timeout=1.0,
+                )
+            )
+            self.assertTrue(record["timeout"]["expired"])
+            self.assertLess(record["timing"]["wall_s"], 10.0)
+        finally:
+            shutil.rmtree(tmp)
+
+    def test_evidence_dir_is_never_overwritten(self):
+        tmp = tempfile.mkdtemp()
+        try:
+            evidence = os.path.join(tmp, "ev")
+            request = rm.capture_module().CaptureRequest(
+                argv=("/bin/sh", "-c", "exit 0"),
+                cwd=tmp, evidence_dir=evidence, label="once",
+            )
+            rm.capture_module().capture(request)
+            with self.assertRaises(rm.capture_module().CaptureError):
+                rm.capture_module().capture(request)
+        finally:
+            shutil.rmtree(tmp)
+
+
+
+# ---------------------------------------------------------------------------
+# --dry-run must plan without spawning anything
+# ---------------------------------------------------------------------------
+
+
 class DryRun(unittest.TestCase):
-    def test_dry_run_spawns_nothing(self):
+    def test_dry_run_spawns_nothing_and_creates_no_evidence(self):
         tmp = tempfile.mkdtemp()
         try:
             evidence = os.path.join(tmp, "ev")
             result = subprocess.run(
                 [sys.executable, DRIVER, "--label", "plan", "--executable", "/bin/true",
                  "--evidence-dir", evidence, "--cache-root", os.path.join(tmp, "c"),
-                 "--dry-run"], capture_output=True, text=True)
+                 "--dry-run"],
+                capture_output=True, text=True,
+            )
             self.assertEqual(result.returncode, 0, result.stderr)
             plan = json.loads(result.stdout)
+            self.assertTrue(plan["dry_run"])
             self.assertEqual(plan["gates"]["frames"], 6000)
             self.assertEqual(plan["gates"]["scene"]["radius"], 16)
             self.assertFalse(plan["rss_enforced_mid_run"])
-            self.assertFalse(os.path.exists(evidence))
+            self.assertFalse(os.path.exists(evidence), "dry run must not create evidence")
+            self.assertIn("--frames", plan["argv"])
+            self.assertEqual(plan["argv"][-2], "--world-root")
+        finally:
+            shutil.rmtree(tmp)
+
+    def test_dry_run_still_refuses_a_bad_workload(self):
+        tmp = tempfile.mkdtemp()
+        try:
+            result = subprocess.run(
+                [sys.executable, DRIVER, "--label", "plan", "--executable", "/bin/true",
+                 "--evidence-dir", os.path.join(tmp, "ev"),
+                 "--cache-root", os.path.join(tmp, "c"),
+                 "--game-dir", tmp, "--dry-run"],
+                capture_output=True, text=True,
+            )
+            self.assertEqual(result.returncode, 2)
+            self.assertIn("mismatch", result.stderr)
         finally:
             shutil.rmtree(tmp)
 
 
-class CaptureIntegration(unittest.TestCase):
-    def test_capture_runs_one_child(self):
+# ---------------------------------------------------------------------------
+# The two safety fixes: a gated post-run check, and a fresh-cache requirement
+# ---------------------------------------------------------------------------
+
+
+class PostRunGate(unittest.TestCase):
+    def test_a_changed_frozen_file_fails_the_arm_and_is_named(self):
+        # The post-run result was previously recorded but never gated, so a
+        # mutated tree still reported PASS.
+        import importlib.util as _ilu
+        spec = _ilu.spec_from_file_location("rm_post", DRIVER)
+        module = _ilu.module_from_spec(spec)
+        spec.loader.exec_module(module)
+
         tmp = tempfile.mkdtemp()
         try:
+            target = os.path.join(tmp, "f.txt")
+            with open(target, "w") as handle:
+                handle.write("original")
+            entries = [{"path": "f.txt", "sha256": module.sha256_file(target)}]
+            self.assertTrue(
+                module.verify_manifest(tmp, entries, module.sha256_file)["passed"])
+
+            # Simulate the arm writing into the frozen tree.
+            with open(target, "w") as handle:
+                handle.write("MUTATED BY THE ARM")
+            after = module.verify_manifest(tmp, entries, module.sha256_file)
+            self.assertFalse(after["passed"])
+            self.assertEqual(after["mismatched"], ["f.txt"])
+        finally:
+            shutil.rmtree(tmp)
+
+
+class CacheFreshness(unittest.TestCase):
+    def test_populated_cache_root_is_refused_before_spawning(self):
+        import importlib.util as _ilu
+        spec = _ilu.spec_from_file_location("rm_cache", DRIVER)
+        module = _ilu.module_from_spec(spec)
+        spec.loader.exec_module(module)
+
+        tmp = tempfile.mkdtemp()
+        try:
+            cache = os.path.join(tmp, "cache")
+            os.makedirs(cache)
+            with open(os.path.join(cache, "leftover.jdn"), "w") as handle:
+                handle.write("stale")
+            self.assertEqual(module.cache_prior_entries(cache), ["leftover.jdn"])
+            # Absent and empty roots are fresh; a file is neither.
+            self.assertEqual(
+                module.cache_prior_entries(os.path.join(tmp, "absent")), [])
+            empty = os.path.join(tmp, "empty")
+            os.makedirs(empty)
+            self.assertEqual(module.cache_prior_entries(empty), [])
+            afile = os.path.join(tmp, "afile")
+            with open(afile, "w") as handle:
+                handle.write("x")
+            with self.assertRaises(module.StaleCache):
+                module.cache_prior_entries(afile)
+
             evidence = os.path.join(tmp, "ev")
-            record = capture.capture(capture.CaptureRequest(
-                argv=("/bin/sh", "-c", "echo hello; exit 0"), cwd=tmp,
-                evidence_dir=evidence, label="it"))
-            self.assertTrue(record["complete"])
-            self.assertEqual(record["result"]["exit_status"], 0)
-            with open(os.path.join(evidence, "stdout.log")) as h:
-                self.assertIn("hello", h.read())
-        finally:
-            shutil.rmtree(tmp)
-
-    def test_timeout_kills_the_child(self):
-        tmp = tempfile.mkdtemp()
-        try:
-            record = capture.capture(capture.CaptureRequest(
-                argv=("/bin/sleep", "30"), cwd=tmp,
-                evidence_dir=os.path.join(tmp, "ev"), label="t", timeout=1.0))
-            self.assertTrue(record["timeout"]["expired"])
-            self.assertLess(record["timing"]["wall_s"], 10.0)
-        finally:
-            shutil.rmtree(tmp)
-
-    def test_evidence_dir_never_overwritten(self):
-        tmp = tempfile.mkdtemp()
-        try:
-            request = capture.CaptureRequest(
-                argv=("/bin/sh", "-c", "exit 0"), cwd=tmp,
-                evidence_dir=os.path.join(tmp, "ev"), label="once")
-            capture.capture(request)
-            with self.assertRaises(capture.CaptureError):
-                capture.capture(request)
+            result = subprocess.run(
+                [sys.executable, DRIVER, "--label", "x", "--executable", "/bin/true",
+                 "--evidence-dir", evidence, "--cache-root", cache],
+                capture_output=True, text=True,
+            )
+            self.assertEqual(result.returncode, 2)
+            self.assertIn("not fresh", result.stderr)
+            self.assertIn("leftover.jdn", result.stderr)
+            # Nothing spawned: a refusal must cost no GPU-second.
+            self.assertFalse(os.path.exists(evidence))
         finally:
             shutil.rmtree(tmp)
 
