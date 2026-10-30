@@ -326,6 +326,7 @@ struct BenderVM {
      * class). Quarantine is a list of BenderAbstractHead linked via
      * gc.data.next. */
     int is_lane_vm;
+    int lane_id; /* 0 main VM, 1..N worker lane */
     void *home_quarantine;
 
     /* Shadow root stack for generated/C code (Phase 2b-i). Strictly LIFO;

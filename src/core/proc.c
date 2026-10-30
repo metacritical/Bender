@@ -91,6 +91,7 @@ typedef struct BenderLaneLaunch {
     int exited;
     BenderBuffer *buf;
     uint32_t sandbox_flags;
+    int32_t lane_id;
 } BenderLaneLaunch;
 
 static BENDER_THREAD_LOCAL BenderLaneLaunch **bender_lane_launches;
@@ -103,6 +104,7 @@ static BENDER_THREAD_LOCAL BenderLaneLaunch **bender_lane_launches;
 static void *bender_lane_thread_body(void *p) {
     bender_vm.is_lane_vm = 1;
     BenderLaneLaunch *L = p;
+    bender_vm.lane_id = L->lane_id;
     BenderEVGenericMessage args;
     memset(&args, 0, sizeof(args));
     args.tag = 0x1 /* :n — the caller never awaits us */
@@ -116,6 +118,7 @@ static void *bender_lane_thread_body(void *p) {
     pthread_cond_broadcast(&L->cond);
     pthread_mutex_unlock(&L->lock);
         bender_vm.is_lane_vm = 0;
+        bender_vm.lane_id = 0;
 return NULL;
 }
 
@@ -287,6 +290,12 @@ static Bender bender_proc_spawn_routed(BenderFunction *func, int32_t cap) {
             fprintf(stderr, "[proc-spawn] shared capture -> local placement "
                             "(a lane would marshal the closure and detach it)\n");
         }
+        return cfun_proc_spawn_impl(func, cap, 0);
+    }
+    /* OTP placement: a process spawning from a scheduler/lane keeps the
+     * child on that lane. No closure marshal, no control-channel round
+     * trip. Cross-lane distribution remains an explicit policy/API. */
+    if (bender_vm.is_lane_vm && bender_vm.lane_id > 0) {
         return cfun_proc_spawn_impl(func, cap, 0);
     }
     int32_t preferred = bender_proc_find_pid_lane(func);
@@ -688,6 +697,7 @@ static int32_t bender_lanes_start_impl(int32_t count, int affinity) {
             if (NULL == L) BENDER_OUT_OF_MEMORY;
             L->buf = buf;
             L->sandbox_flags = (uint32_t) bender_vm.sandbox_flags;
+            L->lane_id = i + 1;
             pthread_mutex_init(&L->lock, NULL);
             pthread_cond_init(&L->cond, NULL);
             bender_lane_launches[i] = L;
