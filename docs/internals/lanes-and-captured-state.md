@@ -216,8 +216,29 @@ After sharing young pages across ordinary proc construction (3401dc30):
 | **1000000** | **1311 MB** | **1.31 KB** |
 
 All 1000000 bodies executed (verified by a shared counter reaching 1000000).
-For comparison: Erlang measured 2.7-3.2 KB/proc, so Bender is now BELOW BEAM's
-per-process footprint, and comfortably inside a 16 GB machine.
+
+> **CORRECTION (measured later).** These are bytes per proc **SPAWNED**, not per
+> proc concurrently **LIVE**. `examples/five-million.ben` batches results, so a
+> member proc sends its value and exits; a shared counter reaching 1000000
+> proves every body ran, NOT that 1000000 were alive at once. Pages from
+> completed procs are recycled into later ones, so this measures spawn-throughput
+> footprint.
+>
+> Per concurrently-live proc, measured where liveness is provable
+> (`bench/cross-runtime/wave.ben`, whose result equals N only if all N are still
+> parked, and `bench/proc-footprint.ben`, which holds every proc in an array):
+>
+> | workload | B per LIVE proc |
+> |---|---:|
+> | wave chain, marginal RSS 200k->500k | **7,078** |
+> | parked fan `(fn [] (proc/recv))` @200k | 5,856 |
+> | inert `(fn [] nil)` @200k | 5,041 |
+> | Erlang, same chain, marginal RSS 200k->500k | **1,709** |
+>
+> So "BELOW BEAM's per-process footprint" does **not** hold for a live set: it is
+> 4.1x ABOVE BEAM there. Both numbers are real and measure different things. 84%
+> of the live cost is slab-page slack (1.45 private 4 KiB pages per proc); see
+> docs/internals/proc-spawn-scaling.md.
 
 The win came from a specific defect, not a general rewrite. Instrumenting the
 slab allocator showed 2.20 pages claimed per proc, with

@@ -391,7 +391,49 @@ abstract, sup channel and a 16-slot stack is on the order of **1.1 KB**, which
 would be *below* Erlang's 1,709 B marginal. The slack is recoverable, not
 inherent.
 
-### Why it is not a one-line fix
+### Merging BenderProcess and BenderFiber is NOT the memory lever
+
+Asked whether the two were ever coupled into one structure to cut GC pressure
+and pointer hopping. They were not. `proc.h:27` holds `BenderFiber *fiber` and
+`bender.h:1118` holds `struct BenderProcess *proc` -- two separately allocated
+GC objects joined by a mutual-pin cycle (`bender_mark_fiber` marks
+`fiber->proc`, `bender_procat_mark` marks `proc->fiber`). `fa158856`
+("fibers-inside-procs beats either tier alone") is about the two concurrency
+TIERS composing, not about merging the structs.
+
+Measured sizes, so the trade is arithmetic rather than opinion:
+
+| allocation | head | payload | total |
+|---|---:|---:|---:|
+| fiber GC block | 16 | 392 | 408 |
+| `fiber->data` stack (a separate `bender_realloc`, 16 slots) | 0 | 128 | 128 |
+| proc abstract | 64 | 80 | 144 |
+| sup channel abstract (eager) | 64 | 176 | 240 |
+| | **144** | **776** | **920** |
+
+That ~1 KB of structs matches `f54eab0b`'s accounting. Merging the fiber into
+the proc saves **one 16-byte GCObject header**; folding the sup channel in too
+saves **one 64-byte AbstractHead** -- note an AbstractHead (64 B) costs most of
+a `BenderProcess` payload (80 B). So the ceiling on struct merging is ~80
+B/proc, i.e. **1.1% of the measured 7,078 B per live proc**, against the
+**78%** that is page slack.
+
+What merging DOES buy is mark work and indirection, not bytes: one fewer GC
+object among the ~5.9 blocks marked per proc is **~17% of per-proc mark
+visits**, it removes the proc<->fiber cycle the collector must keep consistent,
+and it removes a pointer hop on every `proc->fiber` access. Since
+`bender_procat_mark` was 60-69% of scoped-minor mark time, that is real.
+
+It is not free. A fiber must remain a first-class standalone GC object --
+`ev/go` tasklets, generators, the root fiber and compiler fibers all have no
+proc -- so merging means `BenderProcess` EMBEDS a `BenderFiber`, after which
+every site that treats a `BenderFiber *` as its own GC object
+(`bender_gc_mark`, `bender_gc_reachable`, `bender_slab_obj_owner`,
+`bender_gc_type(obj) == BENDER_MEMORY_FIBER`, `heap_lists` filing,
+`bender_census_remove`) must tolerate a fiber with no header of its own. Worth
+doing for the mark-work win; it must not be sold as the footprint fix.
+
+### Why the page slack is not a one-line fix
 
 Private pages are load-bearing for the GC work above: a scoped minor sweeps
 `f->heap_lists[]` filtered by `bender_slab_obj_owner(obj) == f->gc_owner`, and
