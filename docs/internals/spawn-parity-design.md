@@ -1,0 +1,106 @@
+# Why BEAM's spawn is flat, and what Bender must change
+
+Read from OTP source at `/Users/pankajdoharey/Development/Projects/ML/otp`
+(read-only), not inferred from benchmarks. Companion to
+`docs/internals/proc-spawn-scaling.md`, which holds the measurements.
+
+## Measured starting point
+
+Trampoline wave (`bench/cross-runtime/wave.ben`), matched alternating runs at
+~3.5 GiB swap, `BENDER_LANES=11`:
+
+| path | Bender | BEAM (OTP 17.1.1) | gap |
+|---|---:|---:|---:|
+| spawn, routed across lanes | 8.56 us | 0.58 us | **14.8x** |
+| spawn, local (`BENDER_LANES=0`) | 1.87 us | 0.58 us | **3.2x** |
+| per live proc | 2,847 B | 1,709 B | 1.67x |
+
+Two different gaps with two different causes. Treating them as one is how the
+earlier "routed spawn does extra work" note stayed unactionable.
+
+## Why BEAM is flat: three source-level facts
+
+**1. A pid is an immediate, not a pointer.** `erts_ptab_make_id`
+(`erl_ptab.h:319-326`) shifts the data and ORs a tag; `erts_ptab_id2pix`
+shifts back to recover the table slot. A pid is a tagged integer term, so
+holding one creates **no GC edge** and one process's heap can never join
+another's traced object graph. `erl_gc.c` contains zero references to the
+process table, so collecting one process cannot walk another.
+
+**2. The process table is pre-allocated and never resizes.**
+`erts_ptab_init_table` performs a single
+`erts_alloc_permanent_cache_aligned` for the configured maximum
+(`erl_ptab.c:385-397`); our benchmark passes `+P 8000000`, so the slot array
+is reserved up front. `erts_ptab_new_element` is an atomic counter increment
+plus a free-id slot exchange (`erts_atomic32_inc_read_acqb` on `count`, then
+`aid_ix`, then `erts_atomic_xchg_nob` on `free_id_data[ix]`) -- O(1), with no
+list walk, no rehash and no growth.
+
+**3. A process heap is ONE right-sized allocation.** In
+`erl_create_process`, `sz = erts_next_heap_size(heap_need, 0)` binary-searches
+a precomputed size table (`erl_gc.c`), then
+`p->heap = ERTS_HEAP_ALLOC(ERTS_ALC_T_HEAP, sizeof(Eterm)*sz)`.
+`H_DEFAULT_SIZE` is 233 words = **1,864 bytes** on 64-bit, which is
+essentially the 1,709 B/proc marginal measured for BEAM -- the per-process
+footprint IS the initial heap, with no page-granularity tax.
+
+So flatness has one cause in two halves: **identity is decoupled from
+reachability**, so the live set never enters the spawn path; and **allocation
+is right-sized per process**, so footprint does not round up to a page.
+
+## What Bender does differently
+
+| concern | BEAM | Bender |
+|---|---|---|
+| pid | immediate, tagged integer | heap 4-tuple `[:pid lane serial ctl-chan]` carrying a channel abstract -- a real GC edge |
+| pid -> process | shift to a slot in a pre-sized array | per-lane `serials` table, plus a walk of the closure's captures (`bender_proc_find_pid_lane`) to pick a lane |
+| per-process allocations | 2 (PCB slot from the fixed table, one heap block) | 4 (fiber block 408 B, a separate `bender_realloc` stack 128 B, proc abstract 144 B, eager sup channel 240 B) |
+| spawn placement | always the current scheduler | the current lane IF the spawner is a lane (`proc.c:295-300`); otherwise marshal + lane-control message |
+
+The placement row is the important one. Bender **already implements BEAM's
+rule** -- `proc.c:295-300`: "a process spawning from a scheduler/lane keeps
+the child on that lane. No closure marshal, no control-channel round trip."
+The main VM is simply not a lane, so a top-level script can never reach it. In
+BEAM, the context the main program runs in IS a scheduler.
+
+## Candidates, in measured-value order
+
+**(a) Let top-level spawns take the local path.** Run the main script on a
+lane, or let the main VM act as one, with migration to distribute. Targets the
+whole 8.56 -> ~1.87 us, a ~4.5x spawn win on this workload, and is the
+BEAM-shaped answer rather than a workaround.
+Gate: the wave phase, not just spawn. `BENDER_LANES=0` shows same-VM hops are
+pathological (0.149 -> 1.86 ms/hop as N grows, a separate O(N^2) tracked as
+Phase 10), so co-location currently buys the wave what it costs the spawn.
+That interaction must be measured before this is adopted.
+
+**(b) Batch routed spawns per target lane.** Both measured components of the
+routed constant -- the self-pipe drain at 58% and the closure marshal plus
+pipe post at 40% -- are per-EVENT, so coalescing consecutive same-lane spawns
+into one control message attacks both at once. `bender_proc_find_pid_lane`
+already sends an entire chain to one lane, which is the ideal case. Lower
+ceiling than (a), much lower risk. Measure against the 1.87 us local floor,
+not against zero.
+
+**(c) Make a pid an immediate.** The deepest fix and the one that makes the
+model genuinely BEAM-shaped: a pid becomes a tagged index into a pre-sized
+lane/serial table rather than a heap tuple holding a channel pointer. It
+removes a per-spawn allocation, removes a GC edge per pid, and removes the
+reason `find_pid_lane` must walk closure captures at all. It is also an
+observable change to `proc/spawn`'s return value, so it needs its own
+compatibility story -- `docs/internals/lanes-and-captured-state.md:69` already
+documents that enabling lanes changes that return type.
+
+**(d) Shrink the per-proc allocation count from 4 toward 2.** Make the
+supervisor channel lazy the way the mailbox already is (240 B; it is eager
+only for the late-monitor semantic that `suite-proc` test 11 pins), and fold
+the fiber into the proc (~80 B plus ~17% of per-proc mark visits -- see the
+merge analysis in `proc-spawn-scaling.md`). This is the footprint and
+mark-work lever, not the spawn-latency lever.
+
+## Non-goals
+
+Not a claim that BEAM has no global synchronisation, nor that every BEAM spawn
+is strictly constant-time. The claim is narrow and sourced: BEAM's ordinary
+spawn/GC design makes neither the live process set nor the parent's heap part
+of a spawn's cost, and Bender's routed path makes both of them part of it.
