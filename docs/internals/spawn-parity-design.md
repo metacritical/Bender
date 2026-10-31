@@ -141,14 +141,68 @@ both failed:
 i.e. a longjmp, so calling it from inside `bender_channel_push` unwinds out of
 a push in progress.
 
-**What the next attempt needs.** Not a bigger batch or a different interval --
-a correct way for a flush to exert backpressure from a C frame that has
-already handed out pids. The candidates are: flush only at points where no pid
-is outstanding (so the plan mechanism remains usable for the one in flight);
-or give the lane ctl enough capacity that a 1/16-rate producer provably cannot
-outrun it, and prove the bound rather than assume it; or move the flush to the
-boot wrapper so a parked write has a Bender frame to suspend. The prototype's
-segfault must be understood before any of these, not patched around.
+### The segfault: DIAGNOSED -- mode 2 is not a try-push
+
+Attempt 2's crash had nothing to do with batching. Backtrace under `lldb`
+(ASAN is useless here: it warns "ASan is ignoring requested
+`__asan_handle_no_return`" because Bender switches fiber stacks itself, and its
+reports land inside `bender_continue_no_check`):
+
+    thread #2  EXC_BAD_ACCESS (address=0xffffffff)
+      frame #0  0x00000000ffffffff                       <- called garbage
+      frame #1  bender_mark                 gc.c:251     <- mark_abstract
+      frame #2  bender_mark_fiber           gc.c:614     <- mark(fiber->proc)
+      frame #3  bender_mark                 gc.c:248
+      frame #4  bender_mark_roots           gc.c:2712
+      frame #5  bender_collect              gc.c:3444
+
+A global collect on a LANE thread marks a rooted fiber, follows
+`fiber->proc`, and calls that abstract's mark function through a garbage type
+pointer. The proc abstract was already freed: a premature free, not a wild
+write.
+
+Bisected with everything else held constant:
+
+| variant | N=5 | N=1,000 |
+|---|---|---|
+| `BENDER_SPAWN_BATCH_MAX` 16, push mode 2 | segfault | segfault |
+| `BENDER_SPAWN_BATCH_MAX` **1**, push mode 2 | segfault | segfault |
+| `BENDER_SPAWN_BATCH_MAX` 1, push **mode 3** | ok | ok |
+
+A batch of ONE still crashes, so the dispatcher's multi-spawn `each` loop is
+innocent. The variable is the push MODE.
+
+Mechanism, from `bender_channel_push_with_lock`: **mode 3 is the try-push.**
+It is the branch that reports a full queue "without buffering" and calls
+`bender_chan_unpack(channel, &x, 1)` so a refused push does not leave the
+marshal buffer unreconciled. **Mode 2 is choice-write**
+(`BENDER_CP_MODE_CHOICE_WRITE`, select semantics) and its own comment says
+those pushes "ignore the return value". Using mode 2 as a try-push therefore
+leaves a packed payload whose ownership was never settled; the lane's
+unmarshalled copy points into a dead marshal buffer, and the first collection
+that walks it dies exactly as above. The original single-spawn code used
+mode 3 for the ctl; attempt 2 swapped a correct mode for a select primitive.
+
+**So the next attempt is unblocked and small:** keep mode 3, and give its
+"full" return a frame to suspend on by flushing BEFORE appending the current
+entry. At that instant no pid is outstanding, so the existing
+`:proc-spawn-write` plan tuple can carry the batch exactly as it carries a
+single spawn today -- and the message must stay a tuple SNAPSHOT, since a plan
+that aliased the live array would re-push zero entries after the flush cleared
+it. The ordering flush belongs in the named callers (`proc/send`, kill,
+monitor, stop), each of which already owns an `bender_await`-capable frame,
+rather than in `bender_channel_push`, which has none.
+
+### Possibly pre-existing: the `:steal` overflow push also uses mode 2
+
+`proc.c` pushes a closure-bearing `[:spawn serial cap entry]` tuple to the
+threaded `bender_lane_overflow` channel with mode 2, and reads the result as
+"0 = refused, nonzero = enqueued" -- the try-push convention, which the mode-2
+branch does not implement. That is the same misuse this prototype died on,
+in shipped code, though it is reached only under the non-default `:steal`
+lane policy (`2 == bender_lane_policy`), which is why no suite covers it.
+NOT verified as a live defect here, and deliberately not fixed as a drive-by:
+it needs its own reproducer under the `:steal` policy before any change.
 
 **(c) Make a pid an immediate.** The deepest fix and the one that makes the
 model genuinely BEAM-shaped: a pid becomes a tagged index into a pre-sized
