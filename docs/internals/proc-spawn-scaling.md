@@ -85,7 +85,35 @@ round-robin cursor scanning a FIXED number of entries per sweep so the work is
 O(1) amortized per spawn. And it would only help workloads where procs die; it
 cannot help the chain, where the live set is the cost.
 
-## The actual fix, not yet attempted
+## Second failed attempt: generational scoped minor — do not repeat
+
+Attempted in an isolated worktree off `fa0c78dd`. Two changes, both reverted:
+
+1. **Age pages in `bender_collect_fiber_minor`**, restricted to pages the fiber
+   exclusively owns (`owner == gc_owner && !mixed`), with the same
+   dirty-once-at-young->old promotion barrier the global path uses.
+2. **Re-enable the table case** in the old+clean traversal-skip predicate
+   (`gc.c:2238-2242`), where a `#if 0 /* TEMPORARY 2b-iii bisect */` had left
+   tables always traversing. Table stores *are* fully barriered
+   (`table.c:297-298, :376-377, :389-390, :441-442, :583`), so this looked safe.
+
+Result: **58x WORSE.** The 20,000 chain went 268 ms -> 15,678 ms, and 200,000
+failed outright. Isolating the halves, **the aging change alone** accounts for
+it: 16,054 ms at 20,000 with the table skip reverted.
+
+Why it fails: a scoped minor's sweep only covers the fiber's own young blocks,
+and minors deliberately skip old sweeping. Promoting those pages to old means a
+scoped minor can never reclaim them again, so garbage accumulates until a full
+collect is forced. The existing comment in `bender_collect_process` —
+"No aging, no global pressure reset, no weak dropping (minor rules)" — is a
+deliberate and correct constraint, not an oversight.
+
+Corollary: the table-skip change is a **no-op on its own**, because without
+aging nothing ever reaches `BENDER_SLAB_OLD_AGE`. It should not be enabled
+without a working promotion story, and the stale `#if 0` bisect should be
+annotated rather than flipped.
+
+## The actual fix, still not found
 
 Make the scoped minor generational: promote surviving pages so a minor stops
 re-marking the established live set (`gc.c:2318` gate plus page aging). This is
