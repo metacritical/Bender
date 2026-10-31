@@ -25,7 +25,53 @@ Spread is ~6% and the maxima (243/211 ms) are first-run page-in artifacts, so
 **all four arms are equal within this box's noise**. PGO was trained at the same
 `400` the measurement used, so this is not a profile-mismatch result.
 
-## Why: loops are never emitted as kernels
+## CORRECTION: loops ARE emitted — by the frame-executor tier
+
+The section below is accurate only about the **kernel** tier, and the matrix
+above is wrong to conclude AOT cannot help. Re-measured with the frame-executor
+tier requested at emission:
+
+```
+BENDER_NATIVE_EXECUTORS=1 ./build/bender --aot num.ben --native --no-auto-pgo -o e400
+  native-skip 0 thunk       loop requires resumable VM quantum polls   <- kernel tier
+  native-skip 1 mandel-iter loop requires resumable VM quantum polls   <- kernel tier
+  native-executor 1 mandel-iter                                        <- EMITTED
+  native-lib 0 kernels
+```
+
+and at run time: `native_init: available 1 frame executors`.
+
+So the loop compiles. The kernel-tier refusal is real but is not the whole
+picture, and "native-lib 0 kernels" does not mean nothing was emitted — the two
+tiers are counted separately. I read only the kernel count and drew the wrong
+conclusion.
+
+Measured, 3-5 repetitions per cell, order alternated, all checksums agreeing:
+
+| n | script | native (no exec) | native + executor |
+|---|---|---|---|
+| 400 | 51 ms | 48 ms (1.07x) | **33 ms (1.58x)** |
+| 1000 | 144 ms | 127 ms (1.14x) | **98 ms (1.47x)** |
+| 2000 | 483 ms | 411 ms (1.17x) | **339 ms (1.43x)** |
+
+Packaging alone is worth ~1.1x; the loop executor roughly doubles that to
+**~1.45x**, and the ratio holds as compute grows, so it is not a startup
+artifact.
+
+### Why it did not engage in the matrix above
+
+The tier is **off by default and needs two opt-ins** (documented in
+`native-loop-executors.md:1-8`): the runtime built with
+`-DBENDER_NATIVE_EXECUTORS` (this build has it — stamp `enabled`, 9 symbols)
+**and** `BENDER_NATIVE_EXECUTORS=1` set in the environment when running the
+`--aot --native` driver. The matrix arms B/C/D set neither, so they measured the
+interpreter's own loop path and the ~1.1x packaging win only.
+
+That makes the default the actual problem, not the codegen: a user who runs
+`--aot --native --release` with no environment variable gets no loop
+compilation and no indication that a tier was available.
+
+## Why the KERNEL tier refuses loops
 
 Every arm reported `native-lib 0 kernels` with the same refusal:
 
