@@ -1,0 +1,22 @@
+# Numeric AOT probe: tight float loop, deterministic checksum.
+# Run: ./build/bender bench/cross-runtime/num-kernel.ben 400  -> checksum=837095
+# Used by aot-matrix-results.md. Refuses native emission: every definition
+# contains a backward branch, which tools/callgraph.ben:5302-5317 excludes
+# from the kernel tier ("loop requires resumable VM quantum polls").
+(defn mandel-iter [cr ci]
+  (var zr 0.0) (var zi 0.0) (var i 0)
+  (while (and (< i 255) (< (+ (* zr zr) (* zi zi)) 4.0))
+    (def t (+ (- (* zr zr) (* zi zi)) cr))
+    (set zi (+ (* 2.0 (* zr zi)) ci))
+    (set zr t)
+    (set i (+ i 1)))
+  i)
+(def n (scan-number (get (dyn :args) 1)))
+(var acc 0) (var y 0)
+(while (< y n)
+  (var x 0)
+  (while (< x n)
+    (set acc (+ acc (mandel-iter (- (/ x 40.0) 2.0) (- (/ y 40.0) 1.5))))
+    (set x (+ x 1)))
+  (set y (+ y 1)))
+(printf "n=%d checksum=%d" n acc)

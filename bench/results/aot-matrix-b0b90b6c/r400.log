@@ -1,0 +1,29 @@
+profile-merge: 23 rows -> /tmp/aotm/n400-native/profile.jdn (home=23)
+bender --aot: verifying 1 cached workloads
+bender --aot: pgo parity ok, installed /tmp/aotm/n400
+def 0 thunk arity 0 slots 11 instrs 35
+def 1 mandel-iter arity 2 slots 11 instrs 28
+contains 0 1
+extern 0 dyn
+extern 0 scan-number
+calls 0 1
+extern 0 printf
+stats 2 4 1 3 0
+reach 0 1
+callers 1 1 0
+fix 2 0 0
+called-as 1 2
+arity 0 0
+hints 0 0
+hint-call
+profile 23 rows
+ret 1 long
+ptypes 1 double double
+rets 1 0 0 rounds 2
+profile-seed mandel-iter 0 number home
+profile-seed mandel-iter 1 number home
+dce safe reachable 0 1 excluded -
+native-skip 0 thunk loop requires resumable VM quantum polls
+native-skip 1 mandel-iter loop requires resumable VM quantum polls
+native-lib 0 kernels /tmp/aotm/n400-native
+mkimage: 606 bytes, 828 registry names -> /tmp/aotm/n400.c
