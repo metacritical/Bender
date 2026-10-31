@@ -1,0 +1,491 @@
+for f in test/suite*.ben; do  ./build/bender "$f" || exit; done
+Starting suite test/suite-aot-multiseed.ben...
+bender --aot: pgo collect: /tmp/bender-multiseed-suite-48063/app.ben 42
+bender --aot: pgo collected profile
+native_init: registered 1 wrappers
+native-telemetry id=00000002 name=sample calls=1 arity-guard-failures=0 type-guard-failures=0
+profile-merge: 22 rows -> /tmp/bender-multiseed-suite-48063/cache/bender/pgo/app.rev-48064-0/aggregate.jdn (home=22)
+bender --aot: cached PGO profiles for 1 workloads
+bender --aot: pgo parity ok, installed /tmp/bender-multiseed-suite-48063/app
+def 0 thunk arity 0 slots 7 instrs 37
+def 1 varied arity 1 slots 3 instrs 10
+def 2 sample arity 1 slots 2 instrs 2
+contains 0 1
+contains 0 2
+extern 0 dyn
+calls 0 1
+calls 0 2
+arity-unknown 0
+extern 0 print
+extern 1 number?
+extern 1 string
+stats 3 6 2 4 0
+reach 0 1 2
+callers 1 1 0
+callers 2 1 0
+fix 3 0 0
+called-as 1 1
+arity 0 1
+hints 0 0
+hint-call
+profile 22 rows
+ret 1 long
+ret 2 long
+ptypes 1 long
+rets 2 0 0 rounds 2
+profile-seed varied 0 number home
+profile-seed sample 0 array home
+dce safe reachable 0 1 2 excluded -
+native-skip 0 thunk types not proven: params [] ret ?
+native-skip 1 varied slot s1 mixes string/long
+native-lib 1 kernels /tmp/bender-multiseed-suite-48063/app-native
+mkimage: 521 bytes, 828 registry names -> /tmp/bender-multiseed-suite-48063/app.c
+bender --aot: pgo collect: /tmp/bender-multiseed-suite-48063/app.ben 7
+pgo-divergence: @["/tmp/bender-multiseed-suite-48063/app.ben" 2 "sample"] workload 0 vs 1 elems @[@[:number] @[] @[] @[] @[] @[] @[] @[]] != @[@[:string] @[] @[] @[] @[] @[] @[] @[]] (sampled only)
+pgo-divergence: @["/tmp/bender-multiseed-suite-48063/app.ben" 1 "varied"] workload 0 vs 1 params @[@[:number]] != @[@[:string]]
+pgo-divergence: @["/tmp/bender-multiseed-suite-48063/app.ben" 1 "varied"] workload 0 vs 1 rets @[:number] != @[]
+pgo-divergence: @["boot.ben" 168 "number?"] workload 0 vs 1 params @[@[:number]] != @[@[:string]]
+profile-merge: 22 rows -> /tmp/bender-multiseed-suite-48063/app-native/profile.joined.jdn (home=44)
+bender --aot: pgo collected profile
+native_init: registered 1 wrappers
+native-telemetry id=00000002 name=sample calls=1 arity-guard-failures=0 type-guard-failures=0
+bender --aot: PGO PARITY FAILED workload 0 argv=42 (artifacts in /tmp/bender-multiseed-suite-48063/app-native)
+bender --aot: PGO workload parity failed; no binary installed
+def 0 thunk arity 0 slots 7 instrs 37
+def 1 varied arity 1 slots 3 instrs 10
+def 2 sample arity 1 slots 2 instrs 2
+contains 0 1
+contains 0 2
+extern 0 dyn
+calls 0 1
+calls 0 2
+arity-unknown 0
+extern 0 print
+extern 1 number?
+extern 1 string
+stats 3 6 2 4 0
+reach 0 1 2
+callers 1 1 0
+callers 2 1 0
+fix 3 0 0
+called-as 1 1
+arity 0 1
+hints 0 0
+hint-call
+profile 22 rows
+ret 1 long
+ret 2 long
+ptypes 1 long
+rets 2 0 0 rounds 2
+profile-conflict varied 0 number:home string:home
+profile-seed sample 0 array home
+dce safe reachable 0 1 2 excluded -
+native-skip 0 thunk types not proven: params [] ret ?
+native-skip 1 varied slot s1 mixes string/long
+native-lib 1 kernels /tmp/bender-multiseed-suite-48063/app-native
+mkimage: 521 bytes, 828 registry names -> /tmp/bender-multiseed-suite-48063/app.c
+bender --aot: pgo collect: /tmp/bender-multiseed-suite-48063/app.ben 7
+pgo-divergence: @["/tmp/bender-multiseed-suite-48063/app.ben" 2 "sample"] workload 0 vs 1 elems @[@[:number] @[] @[] @[] @[] @[] @[] @[]] != @[@[:string] @[] @[] @[] @[] @[] @[] @[]] (sampled only)
+pgo-divergence: @["/tmp/bender-multiseed-suite-48063/app.ben" 1 "varied"] workload 0 vs 1 params @[@[:number]] != @[@[:string]]
+pgo-divergence: @["/tmp/bender-multiseed-suite-48063/app.ben" 1 "varied"] workload 0 vs 1 rets @[:number] != @[]
+pgo-divergence: @["boot.ben" 168 "number?"] workload 0 vs 1 params @[@[:number]] != @[@[:string]]
+profile-merge: 22 rows -> /tmp/bender-multiseed-suite-48063/app-native/profile.joined.jdn (home=44)
+bender --aot: pgo collected profile
+native_init: registered 1 wrappers
+native-telemetry id=00000002 name=sample calls=1 arity-guard-failures=0 type-guard-failures=0
+native_init: registered 1 wrappers
+native-telemetry id=00000002 name=sample calls=1 arity-guard-failures=0 type-guard-failures=0
+profile-merge: 22 rows -> /tmp/bender-multiseed-suite-48063/cache/bender/pgo/app.rev-48112-0/aggregate.jdn (home=44)
+bender --aot: cached PGO profiles for 2 workloads
+bender --aot: pgo parity ok, installed /tmp/bender-multiseed-suite-48063/app
+def 0 thunk arity 0 slots 7 instrs 37
+def 1 varied arity 1 slots 3 instrs 10
+def 2 sample arity 1 slots 2 instrs 2
+contains 0 1
+contains 0 2
+extern 0 dyn
+calls 0 1
+calls 0 2
+arity-unknown 0
+extern 0 print
+extern 1 number?
+extern 1 string
+stats 3 6 2 4 0
+reach 0 1 2
+callers 1 1 0
+callers 2 1 0
+fix 3 0 0
+called-as 1 1
+arity 0 1
+hints 0 0
+hint-call
+profile 22 rows
+ret 1 long
+ret 2 long
+ptypes 1 long
+rets 2 0 0 rounds 2
+profile-conflict varied 0 number:home string:home
+profile-seed sample 0 array home
+dce safe reachable 0 1 2 excluded -
+native-skip 0 thunk types not proven: params [] ret ?
+native-skip 1 varied slot s1 mixes string/long
+native-lib 1 kernels /tmp/bender-multiseed-suite-48063/app-native
+mkimage: 521 bytes, 828 registry names -> /tmp/bender-multiseed-suite-48063/app.c
+bender --aot: pgo collect: /tmp/bender-multiseed-suite-48063/app.ben 42
+pgo-divergence: @["/tmp/bender-multiseed-suite-48063/app.ben" 2 "sample"] workload 0 vs 1 elems @[@[:number] @[] @[] @[] @[] @[] @[] @[]] != @[@[:string] @[] @[] @[] @[] @[] @[] @[]] (sampled only)
+pgo-divergence: @["/tmp/bender-multiseed-suite-48063/app.ben" 2 "sample"] workload 1 vs 2 elems @[@[:string] @[] @[] @[] @[] @[] @[] @[]] != @[@[:number] @[] @[] @[] @[] @[] @[] @[]] (sampled only)
+pgo-divergence: @["/tmp/bender-multiseed-suite-48063/app.ben" 1 "varied"] workload 0 vs 1 params @[@[:number]] != @[@[:string]]
+pgo-divergence: @["/tmp/bender-multiseed-suite-48063/app.ben" 1 "varied"] workload 0 vs 1 rets @[:number] != @[]
+pgo-divergence: @["/tmp/bender-multiseed-suite-48063/app.ben" 1 "varied"] workload 1 vs 2 params @[@[:string]] != @[@[:number]]
+pgo-divergence: @["/tmp/bender-multiseed-suite-48063/app.ben" 1 "varied"] workload 1 vs 2 rets @[] != @[:number]
+pgo-divergence: @["boot.ben" 168 "number?"] workload 0 vs 1 params @[@[:number]] != @[@[:string]]
+pgo-divergence: @["boot.ben" 168 "number?"] workload 1 vs 2 params @[@[:string]] != @[@[:number]]
+profile-merge: 22 rows -> /tmp/bender-multiseed-suite-48063/app-native/profile.joined.jdn (home=66)
+bender --aot: pgo collected profile
+native_init: registered 1 wrappers
+native-telemetry id=00000002 name=sample calls=1 arity-guard-failures=0 type-guard-failures=0
+native_init: registered 1 wrappers
+native-telemetry id=00000002 name=sample calls=1 arity-guard-failures=0 type-guard-failures=0
+native_init: registered 1 wrappers
+native-telemetry id=00000002 name=sample calls=1 arity-guard-failures=0 type-guard-failures=0
+profile-merge: 22 rows -> /tmp/bender-multiseed-suite-48063/cache/bender/pgo/app.rev-48141-0/profile.jdn (home=44)
+profile-merge: 22 rows -> /tmp/bender-multiseed-suite-48063/cache/bender/pgo/app.rev-48141-0/aggregate.jdn (home=44)
+bender --aot: cached PGO profiles for 2 workloads
+bender --aot: pgo parity ok, installed /tmp/bender-multiseed-suite-48063/app
+def 0 thunk arity 0 slots 7 instrs 37
+def 1 varied arity 1 slots 3 instrs 10
+def 2 sample arity 1 slots 2 instrs 2
+contains 0 1
+contains 0 2
+extern 0 dyn
+calls 0 1
+calls 0 2
+arity-unknown 0
+extern 0 print
+extern 1 number?
+extern 1 string
+stats 3 6 2 4 0
+reach 0 1 2
+callers 1 1 0
+callers 2 1 0
+fix 3 0 0
+called-as 1 1
+arity 0 1
+hints 0 0
+hint-call
+profile 22 rows
+ret 1 long
+ret 2 long
+ptypes 1 long
+rets 2 0 0 rounds 2
+profile-conflict varied 0 number:home string:home
+profile-seed sample 0 array home
+dce safe reachable 0 1 2 excluded -
+native-skip 0 thunk types not proven: params [] ret ?
+native-skip 1 varied slot s1 mixes string/long
+native-lib 1 kernels /tmp/bender-multiseed-suite-48063/app-native
+mkimage: 521 bytes, 828 registry names -> /tmp/bender-multiseed-suite-48063/app.c
+pgo-divergence: @["/tmp/bender-multiseed-suite-48063/app.ben" 2 "sample"] workload 0 vs 1 elems @[@[:number] @[] @[] @[] @[] @[] @[] @[]] != @[@[:string] @[] @[] @[] @[] @[] @[] @[]] (sampled only)
+pgo-divergence: @["/tmp/bender-multiseed-suite-48063/app.ben" 1 "varied"] workload 0 vs 1 params @[@[:number]] != @[@[:string]]
+pgo-divergence: @["/tmp/bender-multiseed-suite-48063/app.ben" 1 "varied"] workload 0 vs 1 rets @[:number] != @[]
+pgo-divergence: @["boot.ben" 168 "number?"] workload 0 vs 1 params @[@[:number]] != @[@[:string]]
+profile-merge: 22 rows -> /tmp/bender-multiseed-suite-48063/app-native/profile.jdn (home=44)
+bender --aot: verifying 2 cached workloads
+native_init: registered 1 wrappers
+native_init: registered 1 wrappers
+bender --aot: pgo parity ok, installed /tmp/bender-multiseed-suite-48063/app
+def 0 thunk arity 0 slots 7 instrs 37
+def 1 varied arity 1 slots 3 instrs 10
+def 2 sample arity 1 slots 2 instrs 2
+contains 0 1
+contains 0 2
+extern 0 dyn
+calls 0 1
+calls 0 2
+arity-unknown 0
+extern 0 print
+extern 1 number?
+extern 1 string
+stats 3 6 2 4 0
+reach 0 1 2
+callers 1 1 0
+callers 2 1 0
+fix 3 0 0
+called-as 1 1
+arity 0 1
+hints 0 0
+hint-call
+profile 22 rows
+ret 1 long
+ret 2 long
+ptypes 1 long
+rets 2 0 0 rounds 2
+profile-conflict varied 0 number:home string:home
+profile-seed sample 0 array home
+dce safe reachable 0 1 2 excluded -
+native-skip 0 thunk types not proven: params [] ret ?
+native-skip 1 varied slot s1 mixes string/long
+native-lib 1 kernels /tmp/bender-multiseed-suite-48063/app-native
+mkimage: 521 bytes, 828 registry names -> /tmp/bender-multiseed-suite-48063/app.c
+bender --aot: pgo collect: /tmp/bender-multiseed-suite-48063/app.ben 42
+bender --aot: corrupt compatible v3 PGO cache; refusing collection
+bender --aot: pgo collect: /tmp/bender-multiseed-suite-48063/app.ben 42
+pgo-divergence: @["/tmp/bender-multiseed-suite-48063/app.ben" 2 "sample"] workload 0 vs 1 elems @[@[:number] @[] @[] @[] @[] @[] @[] @[]] != @[@[:string] @[] @[] @[] @[] @[] @[] @[]] (sampled only)
+pgo-divergence: @["/tmp/bender-multiseed-suite-48063/app.ben" 2 "sample"] workload 1 vs 2 elems @[@[:string] @[] @[] @[] @[] @[] @[] @[]] != @[@[:number] @[] @[] @[] @[] @[] @[] @[]] (sampled only)
+pgo-divergence: @["/tmp/bender-multiseed-suite-48063/app.ben" 1 "varied"] workload 0 vs 1 params @[@[:number]] != @[@[:string]]
+pgo-divergence: @["/tmp/bender-multiseed-suite-48063/app.ben" 1 "varied"] workload 0 vs 1 rets @[:number] != @[]
+pgo-divergence: @["/tmp/bender-multiseed-suite-48063/app.ben" 1 "varied"] workload 1 vs 2 params @[@[:string]] != @[@[:number]]
+pgo-divergence: @["/tmp/bender-multiseed-suite-48063/app.ben" 1 "varied"] workload 1 vs 2 rets @[] != @[:number]
+pgo-divergence: @["boot.ben" 168 "number?"] workload 0 vs 1 params @[@[:number]] != @[@[:string]]
+pgo-divergence: @["boot.ben" 168 "number?"] workload 1 vs 2 params @[@[:string]] != @[@[:number]]
+profile-merge: 22 rows -> /tmp/bender-multiseed-suite-48063/app-native/profile.joined.jdn (home=66)
+bender --aot: pgo collected profile
+native_init: registered 1 wrappers
+native-telemetry id=00000002 name=sample calls=1 arity-guard-failures=0 type-guard-failures=0
+native_init: registered 1 wrappers
+native-telemetry id=00000002 name=sample calls=1 arity-guard-failures=0 type-guard-failures=0
+native_init: registered 1 wrappers
+native-telemetry id=00000002 name=sample calls=1 arity-guard-failures=0 type-guard-failures=0
+profile-merge: 22 rows -> /tmp/bender-multiseed-suite-48063/cache/bender/pgo/app.rev-48193-0/profile.jdn (home=44)
+profile-merge: 22 rows -> /tmp/bender-multiseed-suite-48063/cache/bender/pgo/app.rev-48193-0/aggregate.jdn (home=44)
+bender --aot: cached PGO profiles for 2 workloads
+bender --aot: pgo parity ok, installed /tmp/bender-multiseed-suite-48063/app
+def 0 thunk arity 0 slots 7 instrs 37
+def 1 varied arity 1 slots 3 instrs 10
+def 2 sample arity 1 slots 2 instrs 2
+contains 0 1
+contains 0 2
+extern 0 dyn
+calls 0 1
+calls 0 2
+arity-unknown 0
+extern 0 print
+extern 1 number?
+extern 1 string
+stats 3 6 2 4 0
+reach 0 1 2
+callers 1 1 0
+callers 2 1 0
+fix 3 0 0
+called-as 1 1
+arity 0 1
+hints 0 0
+hint-call
+profile 22 rows
+ret 1 long
+ret 2 long
+ptypes 1 long
+rets 2 0 0 rounds 2
+profile-conflict varied 0 number:home string:home
+profile-seed sample 0 array home
+dce safe reachable 0 1 2 excluded -
+native-skip 0 thunk types not proven: params [] ret ?
+native-skip 1 varied slot s1 mixes string/long
+native-lib 1 kernels /tmp/bender-multiseed-suite-48063/app-native
+mkimage: 521 bytes, 828 registry names -> /tmp/bender-multiseed-suite-48063/app.c
+bender --aot: pgo collect: /tmp/bender-multiseed-suite-48063/app.ben 42
+pgo-divergence: @["/tmp/bender-multiseed-suite-48063/app.ben" 2 "sample"] workload 0 vs 1 elems @[@[:number] @[] @[] @[] @[] @[] @[] @[]] != @[@[:string] @[] @[] @[] @[] @[] @[] @[]] (sampled only)
+pgo-divergence: @["/tmp/bender-multiseed-suite-48063/app.ben" 2 "sample"] workload 1 vs 2 elems @[@[:string] @[] @[] @[] @[] @[] @[] @[]] != @[@[:number] @[] @[] @[] @[] @[] @[] @[]] (sampled only)
+pgo-divergence: @["/tmp/bender-multiseed-suite-48063/app.ben" 1 "varied"] workload 0 vs 1 params @[@[:number]] != @[@[:string]]
+pgo-divergence: @["/tmp/bender-multiseed-suite-48063/app.ben" 1 "varied"] workload 0 vs 1 rets @[:number] != @[]
+pgo-divergence: @["/tmp/bender-multiseed-suite-48063/app.ben" 1 "varied"] workload 1 vs 2 params @[@[:string]] != @[@[:number]]
+pgo-divergence: @["/tmp/bender-multiseed-suite-48063/app.ben" 1 "varied"] workload 1 vs 2 rets @[] != @[:number]
+pgo-divergence: @["boot.ben" 168 "number?"] workload 0 vs 1 params @[@[:number]] != @[@[:string]]
+pgo-divergence: @["boot.ben" 168 "number?"] workload 1 vs 2 params @[@[:string]] != @[@[:number]]
+profile-merge: 22 rows -> /tmp/bender-multiseed-suite-48063/app-native/profile.joined.jdn (home=66)
+bender --aot: pgo collected profile
+native_init: registered 1 wrappers
+native-telemetry id=00000002 name=sample calls=1 arity-guard-failures=0 type-guard-failures=0
+native_init: registered 1 wrappers
+native-telemetry id=00000002 name=sample calls=1 arity-guard-failures=0 type-guard-failures=0
+native_init: registered 1 wrappers
+native-telemetry id=00000002 name=sample calls=1 arity-guard-failures=0 type-guard-failures=0
+profile-merge: 22 rows -> /tmp/bender-multiseed-suite-48063/cache/bender/pgo/app.rev-48223-0/profile.jdn (home=44)
+profile-merge: 22 rows -> /tmp/bender-multiseed-suite-48063/cache/bender/pgo/app.rev-48223-0/aggregate.jdn (home=44)
+bender --aot: PGO cache publication failed: injected pre-manifest PGO cache failure
+bender --aot: PGO cache publication failed; no binary installed
+def 0 thunk arity 0 slots 7 instrs 37
+def 1 varied arity 1 slots 3 instrs 10
+def 2 sample arity 1 slots 2 instrs 2
+contains 0 1
+contains 0 2
+extern 0 dyn
+calls 0 1
+calls 0 2
+arity-unknown 0
+extern 0 print
+extern 1 number?
+extern 1 string
+stats 3 6 2 4 0
+reach 0 1 2
+callers 1 1 0
+callers 2 1 0
+fix 3 0 0
+called-as 1 1
+arity 0 1
+hints 0 0
+hint-call
+profile 22 rows
+ret 1 long
+ret 2 long
+ptypes 1 long
+rets 2 0 0 rounds 2
+profile-conflict varied 0 number:home string:home
+profile-seed sample 0 array home
+dce safe reachable 0 1 2 excluded -
+native-skip 0 thunk types not proven: params [] ret ?
+native-skip 1 varied slot s1 mixes string/long
+native-lib 1 kernels /tmp/bender-multiseed-suite-48063/app-native
+mkimage: 521 bytes, 828 registry names -> /tmp/bender-multiseed-suite-48063/app.c
+pgo-divergence: @["/tmp/bender-multiseed-suite-48063/app.ben" 2 "sample"] workload 0 vs 1 elems @[@[:number] @[] @[] @[] @[] @[] @[] @[]] != @[@[:string] @[] @[] @[] @[] @[] @[] @[]] (sampled only)
+pgo-divergence: @["/tmp/bender-multiseed-suite-48063/app.ben" 1 "varied"] workload 0 vs 1 params @[@[:number]] != @[@[:string]]
+pgo-divergence: @["/tmp/bender-multiseed-suite-48063/app.ben" 1 "varied"] workload 0 vs 1 rets @[:number] != @[]
+pgo-divergence: @["boot.ben" 168 "number?"] workload 0 vs 1 params @[@[:number]] != @[@[:string]]
+profile-merge: 22 rows -> /tmp/bender-multiseed-suite-48063/app-native/profile.jdn (home=44)
+bender --aot: verifying 2 cached workloads
+native_init: registered 1 wrappers
+native_init: registered 1 wrappers
+bender --aot: pgo parity ok, installed /tmp/bender-multiseed-suite-48063/app
+def 0 thunk arity 0 slots 7 instrs 37
+def 1 varied arity 1 slots 3 instrs 10
+def 2 sample arity 1 slots 2 instrs 2
+contains 0 1
+contains 0 2
+extern 0 dyn
+calls 0 1
+calls 0 2
+arity-unknown 0
+extern 0 print
+extern 1 number?
+extern 1 string
+stats 3 6 2 4 0
+reach 0 1 2
+callers 1 1 0
+callers 2 1 0
+fix 3 0 0
+called-as 1 1
+arity 0 1
+hints 0 0
+hint-call
+profile 22 rows
+ret 1 long
+ret 2 long
+ptypes 1 long
+rets 2 0 0 rounds 2
+profile-conflict varied 0 number:home string:home
+profile-seed sample 0 array home
+dce safe reachable 0 1 2 excluded -
+native-skip 0 thunk types not proven: params [] ret ?
+native-skip 1 varied slot s1 mixes string/long
+native-lib 1 kernels /tmp/bender-multiseed-suite-48063/app-native
+mkimage: 521 bytes, 828 registry names -> /tmp/bender-multiseed-suite-48063/app.c
+pgo-divergence: @["/tmp/bender-multiseed-suite-48063/app.ben" 2 "sample"] workload 0 vs 1 elems @[@[:number] @[] @[] @[] @[] @[] @[] @[]] != @[@[:string] @[] @[] @[] @[] @[] @[] @[]] (sampled only)
+pgo-divergence: @["/tmp/bender-multiseed-suite-48063/app.ben" 1 "varied"] workload 0 vs 1 params @[@[:number]] != @[@[:string]]
+pgo-divergence: @["/tmp/bender-multiseed-suite-48063/app.ben" 1 "varied"] workload 0 vs 1 rets @[:number] != @[]
+pgo-divergence: @["boot.ben" 168 "number?"] workload 0 vs 1 params @[@[:number]] != @[@[:string]]
+profile-merge: 22 rows -> /tmp/bender-multiseed-suite-48063/app-native/profile.jdn (home=44)
+bender --aot: verifying 2 cached workloads
+native_init: registered 1 wrappers
+native_init: registered 1 wrappers
+bender --aot: PGO PARITY FAILED workload 1 argv=7 (artifacts in /tmp/bender-multiseed-suite-48063/app-native)
+bender --aot: PGO workload parity failed; no binary installed
+def 0 thunk arity 0 slots 7 instrs 37
+def 1 varied arity 1 slots 3 instrs 10
+def 2 sample arity 1 slots 2 instrs 2
+contains 0 1
+contains 0 2
+extern 0 dyn
+calls 0 1
+calls 0 2
+arity-unknown 0
+extern 0 print
+extern 1 number?
+extern 1 string
+stats 3 6 2 4 0
+reach 0 1 2
+callers 1 1 0
+callers 2 1 0
+fix 3 0 0
+called-as 1 1
+arity 0 1
+hints 0 0
+hint-call
+profile 22 rows
+ret 1 long
+ret 2 long
+ptypes 1 long
+rets 2 0 0 rounds 2
+profile-conflict varied 0 number:home string:home
+profile-seed sample 0 array home
+dce safe reachable 0 1 2 excluded -
+native-skip 0 thunk types not proven: params [] ret ?
+native-skip 1 varied slot s1 mixes string/long
+native-lib 1 kernels /tmp/bender-multiseed-suite-48063/app-native
+mkimage: 521 bytes, 828 registry names -> /tmp/bender-multiseed-suite-48063/app.c
+bender --aot: cached profile has no replayable workload; pass --pgo once
+bender --aot: --release needs compatible cached PGO evidence and a replayable workload; run --pgo first
+bender --aot: pgo collect: /tmp/bender-multiseed-suite-48063/app.ben 
+bender --aot: pgo collected profile
+profile-merge: 14 rows -> /tmp/bender-multiseed-suite-48063/cache/bender/pgo/stdin-app.rev-48394-0/aggregate.jdn (home=14)
+bender --aot: cached PGO profiles for 1 workloads
+bender --aot: pgo parity ok, installed /tmp/bender-multiseed-suite-48063/stdin-app
+def 0 thunk arity 0 slots 1 instrs 4
+extern 0 print
+stats 1 1 0 1 0
+reach 0
+fix 1 0 0
+arity 0 0
+hints 0 0
+hint-call
+profile 14 rows
+rets 0 0 0 rounds 1
+dce safe reachable 0 excluded -
+native-skip 0 thunk types not proven: params [] ret ?
+native-lib 0 kernels /tmp/bender-multiseed-suite-48063/stdin-app-native
+mkimage: 99 bytes, 828 registry names -> /tmp/bender-multiseed-suite-48063/stdin-app.c
+bender --aot: pgo collect: /tmp/bender-multiseed-suite-48063/app.ben 
+profile-merge: 14 rows -> /tmp/bender-multiseed-suite-48063/stdin-app-native/profile.joined.jdn (home=28)
+bender --aot: pgo collected profile
+profile-merge: 14 rows -> /tmp/bender-multiseed-suite-48063/cache/bender/pgo/stdin-app.rev-48462-0/aggregate.jdn (home=28)
+bender --aot: cached PGO profiles for 2 workloads
+bender --aot: pgo parity ok, installed /tmp/bender-multiseed-suite-48063/stdin-app
+def 0 thunk arity 0 slots 1 instrs 4
+extern 0 print
+stats 1 1 0 1 0
+reach 0
+fix 1 0 0
+arity 0 0
+hints 0 0
+hint-call
+profile 14 rows
+rets 0 0 0 rounds 1
+dce safe reachable 0 excluded -
+native-skip 0 thunk types not proven: params [] ret ?
+native-lib 0 kernels /tmp/bender-multiseed-suite-48063/stdin-app-native
+mkimage: 99 bytes, 828 registry names -> /tmp/bender-multiseed-suite-48063/stdin-app.c
+profile-merge: 14 rows -> /tmp/bender-multiseed-suite-48063/stdin-app-native/profile.jdn (home=28)
+bender --aot: verifying 2 cached workloads
+bender --aot: pgo parity ok, installed /tmp/bender-multiseed-suite-48063/stdin-app
+def 0 thunk arity 0 slots 1 instrs 4
+extern 0 print
+stats 1 1 0 1 0
+reach 0
+fix 1 0 0
+arity 0 0
+hints 0 0
+hint-call
+profile 14 rows
+rets 0 0 0 rounds 1
+dce safe reachable 0 excluded -
+native-skip 0 thunk types not proven: params [] ret ?
+native-lib 0 kernels /tmp/bender-multiseed-suite-48063/stdin-app-native
+mkimage: 99 bytes, 828 registry names -> /tmp/bender-multiseed-suite-48063/stdin-app.c
+Finished suite test/suite-aot-multiseed.ben in 9.074 seconds - 36 of 36 tests passed (0 skipped).
+Starting suite test/suite-aot-profile-env.ben...
+mkimage: 364 bytes, 828 registry names -> /tmp/bender-aot-profile-env-binary.c
+built /tmp/bender-aot-profile-env-binary
+[31m✘[0m test/suite-aot-profile-env.ben:31: "normal-return auto-PGO dump exists": false
+error: could not open file /tmp/bender-aot-profile-env-cache/bender/pgo/bender-aot-profile-env-binary.jdn
+  in slurp [boot.ben] on line 2522, column 13
+  in thunk [test/suite-aot-profile-env.ben] (tail call) on line 32, column 27
+make: *** [test] Error 1

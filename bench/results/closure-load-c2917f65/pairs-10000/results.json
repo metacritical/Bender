@@ -1,0 +1,116 @@
+[
+  {
+    "rep": 0,
+    "tag": "boxed",
+    "argv": [
+      "/private/tmp/clo-load/boxed/closure-load",
+      "10000",
+      "100"
+    ],
+    "exit": 0,
+    "wall_ms": 832.05075,
+    "work_ms": 65.4,
+    "sha256": "5a1e3eb011c5e52fe94d73f9a27978da6431cdcdb9d42b3088d46c28e43fbb16",
+    "bytes": 1406304,
+    "stdout": "n=10000 rounds=100 checksum=10009000000\n",
+    "machine": {
+      "/usr/sbin/sysctl -n vm.swapusage": "total = 7168.00M  used = 5992.06M  free = 1175.94M  (encrypted)",
+      "/usr/bin/uptime": "16:11  up 18 days, 20:15, 2 users, load averages: 5.72 10.15 7.82"
+    }
+  },
+  {
+    "rep": 0,
+    "tag": "native",
+    "argv": [
+      "/private/tmp/clo-load/native/closure-load",
+      "10000",
+      "100"
+    ],
+    "exit": 0,
+    "wall_ms": 41.17670800000006,
+    "work_ms": 23.617,
+    "sha256": "95f910e3199f7d60114fd47a96e7a7d83159a8e4ad1e7319014a8bc4bfeed208",
+    "bytes": 1423760,
+    "stdout": "n=10000 rounds=100 checksum=10009000000\n",
+    "machine": {
+      "/usr/sbin/sysctl -n vm.swapusage": "total = 7168.00M  used = 5992.06M  free = 1175.94M  (encrypted)",
+      "/usr/bin/uptime": "16:11  up 18 days, 20:15, 2 users, load averages: 5.72 10.15 7.82"
+    }
+  },
+  {
+    "rep": 1,
+    "tag": "native",
+    "argv": [
+      "/private/tmp/clo-load/native/closure-load",
+      "10000",
+      "100"
+    ],
+    "exit": 0,
+    "wall_ms": 38.269167000000046,
+    "work_ms": 19.337,
+    "sha256": "95f910e3199f7d60114fd47a96e7a7d83159a8e4ad1e7319014a8bc4bfeed208",
+    "bytes": 1423760,
+    "stdout": "n=10000 rounds=100 checksum=10009000000\n",
+    "machine": {
+      "/usr/sbin/sysctl -n vm.swapusage": "total = 7168.00M  used = 5992.06M  free = 1175.94M  (encrypted)",
+      "/usr/bin/uptime": "16:11  up 18 days, 20:15, 2 users, load averages: 5.72 10.15 7.82"
+    }
+  },
+  {
+    "rep": 1,
+    "tag": "boxed",
+    "argv": [
+      "/private/tmp/clo-load/boxed/closure-load",
+      "10000",
+      "100"
+    ],
+    "exit": 0,
+    "wall_ms": 76.46424999999991,
+    "work_ms": 45.368,
+    "sha256": "5a1e3eb011c5e52fe94d73f9a27978da6431cdcdb9d42b3088d46c28e43fbb16",
+    "bytes": 1406304,
+    "stdout": "n=10000 rounds=100 checksum=10009000000\n",
+    "machine": {
+      "/usr/sbin/sysctl -n vm.swapusage": "total = 7168.00M  used = 5992.06M  free = 1175.94M  (encrypted)",
+      "/usr/bin/uptime": "16:11  up 18 days, 20:15, 2 users, load averages: 5.72 10.15 7.82"
+    }
+  },
+  {
+    "rep": 2,
+    "tag": "boxed",
+    "argv": [
+      "/private/tmp/clo-load/boxed/closure-load",
+      "10000",
+      "100"
+    ],
+    "exit": 0,
+    "wall_ms": 77.02029099999996,
+    "work_ms": 44.835,
+    "sha256": "5a1e3eb011c5e52fe94d73f9a27978da6431cdcdb9d42b3088d46c28e43fbb16",
+    "bytes": 1406304,
+    "stdout": "n=10000 rounds=100 checksum=10009000000\n",
+    "machine": {
+      "/usr/sbin/sysctl -n vm.swapusage": "total = 7168.00M  used = 5992.06M  free = 1175.94M  (encrypted)",
+      "/usr/bin/uptime": "16:11  up 18 days, 20:15, 2 users, load averages: 5.72 10.15 7.82"
+    }
+  },
+  {
+    "rep": 2,
+    "tag": "native",
+    "argv": [
+      "/private/tmp/clo-load/native/closure-load",
+      "10000",
+      "100"
+    ],
+    "exit": 0,
+    "wall_ms": 39.85995900000017,
+    "work_ms": 19.182,
+    "sha256": "95f910e3199f7d60114fd47a96e7a7d83159a8e4ad1e7319014a8bc4bfeed208",
+    "bytes": 1423760,
+    "stdout": "n=10000 rounds=100 checksum=10009000000\n",
+    "machine": {
+      "/usr/sbin/sysctl -n vm.swapusage": "total = 7168.00M  used = 5992.06M  free = 1175.94M  (encrypted)",
+      "/usr/bin/uptime": "16:11  up 18 days, 20:15, 2 users, load averages: 5.72 10.15 7.82"
+    }
+  }
+]

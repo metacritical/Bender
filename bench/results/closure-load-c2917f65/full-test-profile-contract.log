@@ -1,0 +1,2852 @@
+for f in test/suite*.ben; do  ./build/bender "$f" || exit; done
+Starting suite test/suite-aot-multiseed.ben...
+bender --aot: pgo collect: /tmp/bender-multiseed-suite-49366/app.ben 42
+bender --aot: pgo collected profile
+native_init: registered 1 wrappers
+native-telemetry id=00000002 name=sample calls=1 arity-guard-failures=0 type-guard-failures=0
+profile-merge: 22 rows -> /tmp/bender-multiseed-suite-49366/cache/bender/pgo/app.rev-49367-0/aggregate.jdn (home=22)
+bender --aot: cached PGO profiles for 1 workloads
+bender --aot: pgo parity ok, installed /tmp/bender-multiseed-suite-49366/app
+def 0 thunk arity 0 slots 7 instrs 37
+def 1 varied arity 1 slots 3 instrs 10
+def 2 sample arity 1 slots 2 instrs 2
+contains 0 1
+contains 0 2
+extern 0 dyn
+calls 0 1
+calls 0 2
+arity-unknown 0
+extern 0 print
+extern 1 number?
+extern 1 string
+stats 3 6 2 4 0
+reach 0 1 2
+callers 1 1 0
+callers 2 1 0
+fix 3 0 0
+called-as 1 1
+arity 0 1
+hints 0 0
+hint-call
+profile 22 rows
+ret 1 long
+ret 2 long
+ptypes 1 long
+rets 2 0 0 rounds 2
+profile-seed varied 0 number home
+profile-seed sample 0 array home
+dce safe reachable 0 1 2 excluded -
+native-skip 0 thunk types not proven: params [] ret ?
+native-skip 1 varied slot s1 mixes string/long
+native-lib 1 kernels /tmp/bender-multiseed-suite-49366/app-native
+mkimage: 521 bytes, 828 registry names -> /tmp/bender-multiseed-suite-49366/app.c
+bender --aot: pgo collect: /tmp/bender-multiseed-suite-49366/app.ben 7
+pgo-divergence: @["/tmp/bender-multiseed-suite-49366/app.ben" 2 "sample"] workload 0 vs 1 elems @[@[:number] @[] @[] @[] @[] @[] @[] @[]] != @[@[:string] @[] @[] @[] @[] @[] @[] @[]] (sampled only)
+pgo-divergence: @["/tmp/bender-multiseed-suite-49366/app.ben" 1 "varied"] workload 0 vs 1 params @[@[:number]] != @[@[:string]]
+pgo-divergence: @["/tmp/bender-multiseed-suite-49366/app.ben" 1 "varied"] workload 0 vs 1 rets @[:number] != @[]
+pgo-divergence: @["boot.ben" 168 "number?"] workload 0 vs 1 params @[@[:number]] != @[@[:string]]
+profile-merge: 22 rows -> /tmp/bender-multiseed-suite-49366/app-native/profile.joined.jdn (home=44)
+bender --aot: pgo collected profile
+native_init: registered 1 wrappers
+native-telemetry id=00000002 name=sample calls=1 arity-guard-failures=0 type-guard-failures=0
+bender --aot: PGO PARITY FAILED workload 0 argv=42 (artifacts in /tmp/bender-multiseed-suite-49366/app-native)
+bender --aot: PGO workload parity failed; no binary installed
+def 0 thunk arity 0 slots 7 instrs 37
+def 1 varied arity 1 slots 3 instrs 10
+def 2 sample arity 1 slots 2 instrs 2
+contains 0 1
+contains 0 2
+extern 0 dyn
+calls 0 1
+calls 0 2
+arity-unknown 0
+extern 0 print
+extern 1 number?
+extern 1 string
+stats 3 6 2 4 0
+reach 0 1 2
+callers 1 1 0
+callers 2 1 0
+fix 3 0 0
+called-as 1 1
+arity 0 1
+hints 0 0
+hint-call
+profile 22 rows
+ret 1 long
+ret 2 long
+ptypes 1 long
+rets 2 0 0 rounds 2
+profile-conflict varied 0 number:home string:home
+profile-seed sample 0 array home
+dce safe reachable 0 1 2 excluded -
+native-skip 0 thunk types not proven: params [] ret ?
+native-skip 1 varied slot s1 mixes string/long
+native-lib 1 kernels /tmp/bender-multiseed-suite-49366/app-native
+mkimage: 521 bytes, 828 registry names -> /tmp/bender-multiseed-suite-49366/app.c
+bender --aot: pgo collect: /tmp/bender-multiseed-suite-49366/app.ben 7
+pgo-divergence: @["/tmp/bender-multiseed-suite-49366/app.ben" 2 "sample"] workload 0 vs 1 elems @[@[:number] @[] @[] @[] @[] @[] @[] @[]] != @[@[:string] @[] @[] @[] @[] @[] @[] @[]] (sampled only)
+pgo-divergence: @["/tmp/bender-multiseed-suite-49366/app.ben" 1 "varied"] workload 0 vs 1 params @[@[:number]] != @[@[:string]]
+pgo-divergence: @["/tmp/bender-multiseed-suite-49366/app.ben" 1 "varied"] workload 0 vs 1 rets @[:number] != @[]
+pgo-divergence: @["boot.ben" 168 "number?"] workload 0 vs 1 params @[@[:number]] != @[@[:string]]
+profile-merge: 22 rows -> /tmp/bender-multiseed-suite-49366/app-native/profile.joined.jdn (home=44)
+bender --aot: pgo collected profile
+native_init: registered 1 wrappers
+native-telemetry id=00000002 name=sample calls=1 arity-guard-failures=0 type-guard-failures=0
+native_init: registered 1 wrappers
+native-telemetry id=00000002 name=sample calls=1 arity-guard-failures=0 type-guard-failures=0
+profile-merge: 22 rows -> /tmp/bender-multiseed-suite-49366/cache/bender/pgo/app.rev-49424-0/aggregate.jdn (home=44)
+bender --aot: cached PGO profiles for 2 workloads
+bender --aot: pgo parity ok, installed /tmp/bender-multiseed-suite-49366/app
+def 0 thunk arity 0 slots 7 instrs 37
+def 1 varied arity 1 slots 3 instrs 10
+def 2 sample arity 1 slots 2 instrs 2
+contains 0 1
+contains 0 2
+extern 0 dyn
+calls 0 1
+calls 0 2
+arity-unknown 0
+extern 0 print
+extern 1 number?
+extern 1 string
+stats 3 6 2 4 0
+reach 0 1 2
+callers 1 1 0
+callers 2 1 0
+fix 3 0 0
+called-as 1 1
+arity 0 1
+hints 0 0
+hint-call
+profile 22 rows
+ret 1 long
+ret 2 long
+ptypes 1 long
+rets 2 0 0 rounds 2
+profile-conflict varied 0 number:home string:home
+profile-seed sample 0 array home
+dce safe reachable 0 1 2 excluded -
+native-skip 0 thunk types not proven: params [] ret ?
+native-skip 1 varied slot s1 mixes string/long
+native-lib 1 kernels /tmp/bender-multiseed-suite-49366/app-native
+mkimage: 521 bytes, 828 registry names -> /tmp/bender-multiseed-suite-49366/app.c
+bender --aot: pgo collect: /tmp/bender-multiseed-suite-49366/app.ben 42
+pgo-divergence: @["/tmp/bender-multiseed-suite-49366/app.ben" 2 "sample"] workload 0 vs 1 elems @[@[:number] @[] @[] @[] @[] @[] @[] @[]] != @[@[:string] @[] @[] @[] @[] @[] @[] @[]] (sampled only)
+pgo-divergence: @["/tmp/bender-multiseed-suite-49366/app.ben" 2 "sample"] workload 1 vs 2 elems @[@[:string] @[] @[] @[] @[] @[] @[] @[]] != @[@[:number] @[] @[] @[] @[] @[] @[] @[]] (sampled only)
+pgo-divergence: @["/tmp/bender-multiseed-suite-49366/app.ben" 1 "varied"] workload 0 vs 1 params @[@[:number]] != @[@[:string]]
+pgo-divergence: @["/tmp/bender-multiseed-suite-49366/app.ben" 1 "varied"] workload 0 vs 1 rets @[:number] != @[]
+pgo-divergence: @["/tmp/bender-multiseed-suite-49366/app.ben" 1 "varied"] workload 1 vs 2 params @[@[:string]] != @[@[:number]]
+pgo-divergence: @["/tmp/bender-multiseed-suite-49366/app.ben" 1 "varied"] workload 1 vs 2 rets @[] != @[:number]
+pgo-divergence: @["boot.ben" 168 "number?"] workload 0 vs 1 params @[@[:number]] != @[@[:string]]
+pgo-divergence: @["boot.ben" 168 "number?"] workload 1 vs 2 params @[@[:string]] != @[@[:number]]
+profile-merge: 22 rows -> /tmp/bender-multiseed-suite-49366/app-native/profile.joined.jdn (home=66)
+bender --aot: pgo collected profile
+native_init: registered 1 wrappers
+native-telemetry id=00000002 name=sample calls=1 arity-guard-failures=0 type-guard-failures=0
+native_init: registered 1 wrappers
+native-telemetry id=00000002 name=sample calls=1 arity-guard-failures=0 type-guard-failures=0
+native_init: registered 1 wrappers
+native-telemetry id=00000002 name=sample calls=1 arity-guard-failures=0 type-guard-failures=0
+profile-merge: 22 rows -> /tmp/bender-multiseed-suite-49366/cache/bender/pgo/app.rev-49455-0/profile.jdn (home=44)
+profile-merge: 22 rows -> /tmp/bender-multiseed-suite-49366/cache/bender/pgo/app.rev-49455-0/aggregate.jdn (home=44)
+bender --aot: cached PGO profiles for 2 workloads
+bender --aot: pgo parity ok, installed /tmp/bender-multiseed-suite-49366/app
+def 0 thunk arity 0 slots 7 instrs 37
+def 1 varied arity 1 slots 3 instrs 10
+def 2 sample arity 1 slots 2 instrs 2
+contains 0 1
+contains 0 2
+extern 0 dyn
+calls 0 1
+calls 0 2
+arity-unknown 0
+extern 0 print
+extern 1 number?
+extern 1 string
+stats 3 6 2 4 0
+reach 0 1 2
+callers 1 1 0
+callers 2 1 0
+fix 3 0 0
+called-as 1 1
+arity 0 1
+hints 0 0
+hint-call
+profile 22 rows
+ret 1 long
+ret 2 long
+ptypes 1 long
+rets 2 0 0 rounds 2
+profile-conflict varied 0 number:home string:home
+profile-seed sample 0 array home
+dce safe reachable 0 1 2 excluded -
+native-skip 0 thunk types not proven: params [] ret ?
+native-skip 1 varied slot s1 mixes string/long
+native-lib 1 kernels /tmp/bender-multiseed-suite-49366/app-native
+mkimage: 521 bytes, 828 registry names -> /tmp/bender-multiseed-suite-49366/app.c
+pgo-divergence: @["/tmp/bender-multiseed-suite-49366/app.ben" 2 "sample"] workload 0 vs 1 elems @[@[:number] @[] @[] @[] @[] @[] @[] @[]] != @[@[:string] @[] @[] @[] @[] @[] @[] @[]] (sampled only)
+pgo-divergence: @["/tmp/bender-multiseed-suite-49366/app.ben" 1 "varied"] workload 0 vs 1 params @[@[:number]] != @[@[:string]]
+pgo-divergence: @["/tmp/bender-multiseed-suite-49366/app.ben" 1 "varied"] workload 0 vs 1 rets @[:number] != @[]
+pgo-divergence: @["boot.ben" 168 "number?"] workload 0 vs 1 params @[@[:number]] != @[@[:string]]
+profile-merge: 22 rows -> /tmp/bender-multiseed-suite-49366/app-native/profile.jdn (home=44)
+bender --aot: verifying 2 cached workloads
+native_init: registered 1 wrappers
+native_init: registered 1 wrappers
+bender --aot: pgo parity ok, installed /tmp/bender-multiseed-suite-49366/app
+def 0 thunk arity 0 slots 7 instrs 37
+def 1 varied arity 1 slots 3 instrs 10
+def 2 sample arity 1 slots 2 instrs 2
+contains 0 1
+contains 0 2
+extern 0 dyn
+calls 0 1
+calls 0 2
+arity-unknown 0
+extern 0 print
+extern 1 number?
+extern 1 string
+stats 3 6 2 4 0
+reach 0 1 2
+callers 1 1 0
+callers 2 1 0
+fix 3 0 0
+called-as 1 1
+arity 0 1
+hints 0 0
+hint-call
+profile 22 rows
+ret 1 long
+ret 2 long
+ptypes 1 long
+rets 2 0 0 rounds 2
+profile-conflict varied 0 number:home string:home
+profile-seed sample 0 array home
+dce safe reachable 0 1 2 excluded -
+native-skip 0 thunk types not proven: params [] ret ?
+native-skip 1 varied slot s1 mixes string/long
+native-lib 1 kernels /tmp/bender-multiseed-suite-49366/app-native
+mkimage: 521 bytes, 828 registry names -> /tmp/bender-multiseed-suite-49366/app.c
+bender --aot: pgo collect: /tmp/bender-multiseed-suite-49366/app.ben 42
+bender --aot: corrupt compatible v3 PGO cache; refusing collection
+bender --aot: pgo collect: /tmp/bender-multiseed-suite-49366/app.ben 42
+pgo-divergence: @["/tmp/bender-multiseed-suite-49366/app.ben" 2 "sample"] workload 0 vs 1 elems @[@[:number] @[] @[] @[] @[] @[] @[] @[]] != @[@[:string] @[] @[] @[] @[] @[] @[] @[]] (sampled only)
+pgo-divergence: @["/tmp/bender-multiseed-suite-49366/app.ben" 2 "sample"] workload 1 vs 2 elems @[@[:string] @[] @[] @[] @[] @[] @[] @[]] != @[@[:number] @[] @[] @[] @[] @[] @[] @[]] (sampled only)
+pgo-divergence: @["/tmp/bender-multiseed-suite-49366/app.ben" 1 "varied"] workload 0 vs 1 params @[@[:number]] != @[@[:string]]
+pgo-divergence: @["/tmp/bender-multiseed-suite-49366/app.ben" 1 "varied"] workload 0 vs 1 rets @[:number] != @[]
+pgo-divergence: @["/tmp/bender-multiseed-suite-49366/app.ben" 1 "varied"] workload 1 vs 2 params @[@[:string]] != @[@[:number]]
+pgo-divergence: @["/tmp/bender-multiseed-suite-49366/app.ben" 1 "varied"] workload 1 vs 2 rets @[] != @[:number]
+pgo-divergence: @["boot.ben" 168 "number?"] workload 0 vs 1 params @[@[:number]] != @[@[:string]]
+pgo-divergence: @["boot.ben" 168 "number?"] workload 1 vs 2 params @[@[:string]] != @[@[:number]]
+profile-merge: 22 rows -> /tmp/bender-multiseed-suite-49366/app-native/profile.joined.jdn (home=66)
+bender --aot: pgo collected profile
+native_init: registered 1 wrappers
+native-telemetry id=00000002 name=sample calls=1 arity-guard-failures=0 type-guard-failures=0
+native_init: registered 1 wrappers
+native-telemetry id=00000002 name=sample calls=1 arity-guard-failures=0 type-guard-failures=0
+native_init: registered 1 wrappers
+native-telemetry id=00000002 name=sample calls=1 arity-guard-failures=0 type-guard-failures=0
+profile-merge: 22 rows -> /tmp/bender-multiseed-suite-49366/cache/bender/pgo/app.rev-49545-0/profile.jdn (home=44)
+profile-merge: 22 rows -> /tmp/bender-multiseed-suite-49366/cache/bender/pgo/app.rev-49545-0/aggregate.jdn (home=44)
+bender --aot: cached PGO profiles for 2 workloads
+bender --aot: pgo parity ok, installed /tmp/bender-multiseed-suite-49366/app
+def 0 thunk arity 0 slots 7 instrs 37
+def 1 varied arity 1 slots 3 instrs 10
+def 2 sample arity 1 slots 2 instrs 2
+contains 0 1
+contains 0 2
+extern 0 dyn
+calls 0 1
+calls 0 2
+arity-unknown 0
+extern 0 print
+extern 1 number?
+extern 1 string
+stats 3 6 2 4 0
+reach 0 1 2
+callers 1 1 0
+callers 2 1 0
+fix 3 0 0
+called-as 1 1
+arity 0 1
+hints 0 0
+hint-call
+profile 22 rows
+ret 1 long
+ret 2 long
+ptypes 1 long
+rets 2 0 0 rounds 2
+profile-conflict varied 0 number:home string:home
+profile-seed sample 0 array home
+dce safe reachable 0 1 2 excluded -
+native-skip 0 thunk types not proven: params [] ret ?
+native-skip 1 varied slot s1 mixes string/long
+native-lib 1 kernels /tmp/bender-multiseed-suite-49366/app-native
+mkimage: 521 bytes, 828 registry names -> /tmp/bender-multiseed-suite-49366/app.c
+bender --aot: pgo collect: /tmp/bender-multiseed-suite-49366/app.ben 42
+pgo-divergence: @["/tmp/bender-multiseed-suite-49366/app.ben" 2 "sample"] workload 0 vs 1 elems @[@[:number] @[] @[] @[] @[] @[] @[] @[]] != @[@[:string] @[] @[] @[] @[] @[] @[] @[]] (sampled only)
+pgo-divergence: @["/tmp/bender-multiseed-suite-49366/app.ben" 2 "sample"] workload 1 vs 2 elems @[@[:string] @[] @[] @[] @[] @[] @[] @[]] != @[@[:number] @[] @[] @[] @[] @[] @[] @[]] (sampled only)
+pgo-divergence: @["/tmp/bender-multiseed-suite-49366/app.ben" 1 "varied"] workload 0 vs 1 params @[@[:number]] != @[@[:string]]
+pgo-divergence: @["/tmp/bender-multiseed-suite-49366/app.ben" 1 "varied"] workload 0 vs 1 rets @[:number] != @[]
+pgo-divergence: @["/tmp/bender-multiseed-suite-49366/app.ben" 1 "varied"] workload 1 vs 2 params @[@[:string]] != @[@[:number]]
+pgo-divergence: @["/tmp/bender-multiseed-suite-49366/app.ben" 1 "varied"] workload 1 vs 2 rets @[] != @[:number]
+pgo-divergence: @["boot.ben" 168 "number?"] workload 0 vs 1 params @[@[:number]] != @[@[:string]]
+pgo-divergence: @["boot.ben" 168 "number?"] workload 1 vs 2 params @[@[:string]] != @[@[:number]]
+profile-merge: 22 rows -> /tmp/bender-multiseed-suite-49366/app-native/profile.joined.jdn (home=66)
+bender --aot: pgo collected profile
+native_init: registered 1 wrappers
+native-telemetry id=00000002 name=sample calls=1 arity-guard-failures=0 type-guard-failures=0
+native_init: registered 1 wrappers
+native-telemetry id=00000002 name=sample calls=1 arity-guard-failures=0 type-guard-failures=0
+native_init: registered 1 wrappers
+native-telemetry id=00000002 name=sample calls=1 arity-guard-failures=0 type-guard-failures=0
+profile-merge: 22 rows -> /tmp/bender-multiseed-suite-49366/cache/bender/pgo/app.rev-49610-0/profile.jdn (home=44)
+profile-merge: 22 rows -> /tmp/bender-multiseed-suite-49366/cache/bender/pgo/app.rev-49610-0/aggregate.jdn (home=44)
+bender --aot: PGO cache publication failed: injected pre-manifest PGO cache failure
+bender --aot: PGO cache publication failed; no binary installed
+def 0 thunk arity 0 slots 7 instrs 37
+def 1 varied arity 1 slots 3 instrs 10
+def 2 sample arity 1 slots 2 instrs 2
+contains 0 1
+contains 0 2
+extern 0 dyn
+calls 0 1
+calls 0 2
+arity-unknown 0
+extern 0 print
+extern 1 number?
+extern 1 string
+stats 3 6 2 4 0
+reach 0 1 2
+callers 1 1 0
+callers 2 1 0
+fix 3 0 0
+called-as 1 1
+arity 0 1
+hints 0 0
+hint-call
+profile 22 rows
+ret 1 long
+ret 2 long
+ptypes 1 long
+rets 2 0 0 rounds 2
+profile-conflict varied 0 number:home string:home
+profile-seed sample 0 array home
+dce safe reachable 0 1 2 excluded -
+native-skip 0 thunk types not proven: params [] ret ?
+native-skip 1 varied slot s1 mixes string/long
+native-lib 1 kernels /tmp/bender-multiseed-suite-49366/app-native
+mkimage: 521 bytes, 828 registry names -> /tmp/bender-multiseed-suite-49366/app.c
+pgo-divergence: @["/tmp/bender-multiseed-suite-49366/app.ben" 2 "sample"] workload 0 vs 1 elems @[@[:number] @[] @[] @[] @[] @[] @[] @[]] != @[@[:string] @[] @[] @[] @[] @[] @[] @[]] (sampled only)
+pgo-divergence: @["/tmp/bender-multiseed-suite-49366/app.ben" 1 "varied"] workload 0 vs 1 params @[@[:number]] != @[@[:string]]
+pgo-divergence: @["/tmp/bender-multiseed-suite-49366/app.ben" 1 "varied"] workload 0 vs 1 rets @[:number] != @[]
+pgo-divergence: @["boot.ben" 168 "number?"] workload 0 vs 1 params @[@[:number]] != @[@[:string]]
+profile-merge: 22 rows -> /tmp/bender-multiseed-suite-49366/app-native/profile.jdn (home=44)
+bender --aot: verifying 2 cached workloads
+native_init: registered 1 wrappers
+native_init: registered 1 wrappers
+bender --aot: pgo parity ok, installed /tmp/bender-multiseed-suite-49366/app
+def 0 thunk arity 0 slots 7 instrs 37
+def 1 varied arity 1 slots 3 instrs 10
+def 2 sample arity 1 slots 2 instrs 2
+contains 0 1
+contains 0 2
+extern 0 dyn
+calls 0 1
+calls 0 2
+arity-unknown 0
+extern 0 print
+extern 1 number?
+extern 1 string
+stats 3 6 2 4 0
+reach 0 1 2
+callers 1 1 0
+callers 2 1 0
+fix 3 0 0
+called-as 1 1
+arity 0 1
+hints 0 0
+hint-call
+profile 22 rows
+ret 1 long
+ret 2 long
+ptypes 1 long
+rets 2 0 0 rounds 2
+profile-conflict varied 0 number:home string:home
+profile-seed sample 0 array home
+dce safe reachable 0 1 2 excluded -
+native-skip 0 thunk types not proven: params [] ret ?
+native-skip 1 varied slot s1 mixes string/long
+native-lib 1 kernels /tmp/bender-multiseed-suite-49366/app-native
+mkimage: 521 bytes, 828 registry names -> /tmp/bender-multiseed-suite-49366/app.c
+pgo-divergence: @["/tmp/bender-multiseed-suite-49366/app.ben" 2 "sample"] workload 0 vs 1 elems @[@[:number] @[] @[] @[] @[] @[] @[] @[]] != @[@[:string] @[] @[] @[] @[] @[] @[] @[]] (sampled only)
+pgo-divergence: @["/tmp/bender-multiseed-suite-49366/app.ben" 1 "varied"] workload 0 vs 1 params @[@[:number]] != @[@[:string]]
+pgo-divergence: @["/tmp/bender-multiseed-suite-49366/app.ben" 1 "varied"] workload 0 vs 1 rets @[:number] != @[]
+pgo-divergence: @["boot.ben" 168 "number?"] workload 0 vs 1 params @[@[:number]] != @[@[:string]]
+profile-merge: 22 rows -> /tmp/bender-multiseed-suite-49366/app-native/profile.jdn (home=44)
+bender --aot: verifying 2 cached workloads
+native_init: registered 1 wrappers
+native_init: registered 1 wrappers
+bender --aot: PGO PARITY FAILED workload 1 argv=7 (artifacts in /tmp/bender-multiseed-suite-49366/app-native)
+bender --aot: PGO workload parity failed; no binary installed
+def 0 thunk arity 0 slots 7 instrs 37
+def 1 varied arity 1 slots 3 instrs 10
+def 2 sample arity 1 slots 2 instrs 2
+contains 0 1
+contains 0 2
+extern 0 dyn
+calls 0 1
+calls 0 2
+arity-unknown 0
+extern 0 print
+extern 1 number?
+extern 1 string
+stats 3 6 2 4 0
+reach 0 1 2
+callers 1 1 0
+callers 2 1 0
+fix 3 0 0
+called-as 1 1
+arity 0 1
+hints 0 0
+hint-call
+profile 22 rows
+ret 1 long
+ret 2 long
+ptypes 1 long
+rets 2 0 0 rounds 2
+profile-conflict varied 0 number:home string:home
+profile-seed sample 0 array home
+dce safe reachable 0 1 2 excluded -
+native-skip 0 thunk types not proven: params [] ret ?
+native-skip 1 varied slot s1 mixes string/long
+native-lib 1 kernels /tmp/bender-multiseed-suite-49366/app-native
+mkimage: 521 bytes, 828 registry names -> /tmp/bender-multiseed-suite-49366/app.c
+bender --aot: cached profile has no replayable workload; pass --pgo once
+bender --aot: --release needs compatible cached PGO evidence and a replayable workload; run --pgo first
+bender --aot: pgo collect: /tmp/bender-multiseed-suite-49366/app.ben 
+bender --aot: pgo collected profile
+profile-merge: 14 rows -> /tmp/bender-multiseed-suite-49366/cache/bender/pgo/stdin-app.rev-49753-0/aggregate.jdn (home=14)
+bender --aot: cached PGO profiles for 1 workloads
+bender --aot: pgo parity ok, installed /tmp/bender-multiseed-suite-49366/stdin-app
+def 0 thunk arity 0 slots 1 instrs 4
+extern 0 print
+stats 1 1 0 1 0
+reach 0
+fix 1 0 0
+arity 0 0
+hints 0 0
+hint-call
+profile 14 rows
+rets 0 0 0 rounds 1
+dce safe reachable 0 excluded -
+native-skip 0 thunk types not proven: params [] ret ?
+native-lib 0 kernels /tmp/bender-multiseed-suite-49366/stdin-app-native
+mkimage: 99 bytes, 828 registry names -> /tmp/bender-multiseed-suite-49366/stdin-app.c
+bender --aot: pgo collect: /tmp/bender-multiseed-suite-49366/app.ben 
+profile-merge: 14 rows -> /tmp/bender-multiseed-suite-49366/stdin-app-native/profile.joined.jdn (home=28)
+bender --aot: pgo collected profile
+profile-merge: 14 rows -> /tmp/bender-multiseed-suite-49366/cache/bender/pgo/stdin-app.rev-49816-0/aggregate.jdn (home=28)
+bender --aot: cached PGO profiles for 2 workloads
+bender --aot: pgo parity ok, installed /tmp/bender-multiseed-suite-49366/stdin-app
+def 0 thunk arity 0 slots 1 instrs 4
+extern 0 print
+stats 1 1 0 1 0
+reach 0
+fix 1 0 0
+arity 0 0
+hints 0 0
+hint-call
+profile 14 rows
+rets 0 0 0 rounds 1
+dce safe reachable 0 excluded -
+native-skip 0 thunk types not proven: params [] ret ?
+native-lib 0 kernels /tmp/bender-multiseed-suite-49366/stdin-app-native
+mkimage: 99 bytes, 828 registry names -> /tmp/bender-multiseed-suite-49366/stdin-app.c
+profile-merge: 14 rows -> /tmp/bender-multiseed-suite-49366/stdin-app-native/profile.jdn (home=28)
+bender --aot: verifying 2 cached workloads
+bender --aot: pgo parity ok, installed /tmp/bender-multiseed-suite-49366/stdin-app
+def 0 thunk arity 0 slots 1 instrs 4
+extern 0 print
+stats 1 1 0 1 0
+reach 0
+fix 1 0 0
+arity 0 0
+hints 0 0
+hint-call
+profile 14 rows
+rets 0 0 0 rounds 1
+dce safe reachable 0 excluded -
+native-skip 0 thunk types not proven: params [] ret ?
+native-lib 0 kernels /tmp/bender-multiseed-suite-49366/stdin-app-native
+mkimage: 99 bytes, 828 registry names -> /tmp/bender-multiseed-suite-49366/stdin-app.c
+Finished suite test/suite-aot-multiseed.ben in 12.892 seconds - 36 of 36 tests passed (0 skipped).
+profile-merge: 183 rows -> /Users/pankajdoharey/.cache/bender/pgo/interpreter/source-2012644359/cumulative-49366.pending (run=183)
+Starting suite test/suite-aot-profile-env.ben...
+mkimage: 364 bytes, 828 registry names -> /tmp/bender-aot-profile-env-binary.c
+built /tmp/bender-aot-profile-env-binary
+mkimage: 407 bytes, 828 registry names -> /tmp/bender-aot-profile-env-exit-binary.c
+built /tmp/bender-aot-profile-env-exit-binary
+Finished suite test/suite-aot-profile-env.ben in 1.681 seconds - 16 of 16 tests passed (0 skipped).
+profile-merge: 109 rows -> /Users/pankajdoharey/.cache/bender/pgo/interpreter/source-1972737202/cumulative-49902.pending (run=109)
+Starting suite test/suite-aot-quantum.ben...
+def 0 thunk arity 0 slots 7 instrs 26
+def 1 loop-sum arity 1 slots 4 instrs 8
+def 2 caller arity 1 slots 2 instrs 3
+def 3 straight arity 1 slots 2 instrs 2
+contains 0 1
+contains 0 2
+contains 0 3
+calls 0 2
+calls 0 3
+calls 2 1
+stats 4 3 3 0 0
+reach 0 1 2 3
+callers 1 1 2
+callers 2 1 0
+callers 3 1 0
+fix 4 0 0
+called-as 1 1
+called-as 2 1
+called-as 3 1
+arity 0 0
+hints 0 0
+hint-call
+ret 1 long
+ret 2 long
+ret 3 long
+ptypes 1 long
+ptypes 2 long
+ptypes 3 long
+rets 3 0 0 rounds 2
+dce safe reachable 0 1 2 3 excluded -
+native-skip 0 thunk types not proven: params [] ret bool
+native-skip 1 loop-sum loop requires resumable VM quantum polls
+native-skip 2 caller call to non-native or type mismatch
+native-lib 1 kernels /tmp/bender-aot-quantum-49985/app-native
+mkimage: 595 bytes, 828 registry names -> /tmp/bender-aot-quantum-49985/app.c
+built /tmp/bender-aot-quantum-49985/app
+native_init: registered 1 wrappers
+native-telemetry id=00000003 name=straight calls=1 arity-guard-failures=0 type-guard-failures=0
+Finished suite test/suite-aot-quantum.ben in 0.697 seconds - 5 of 5 tests passed (0 skipped).
+profile-merge: 88 rows -> /Users/pankajdoharey/.cache/bender/pgo/interpreter/source-1340172819/cumulative-49985.pending (run=88)
+Starting suite test/suite-aot-release.ben...
+bender --aot: --release requires --native
+bender --aot: --release requires existing verified PGO evidence; incompatible with --pgo/--pgo-auto/--no-auto-pgo/-c/-S/-E
+bender --aot: cached profile has no replayable workload; pass --pgo once
+bender --aot: --release needs compatible cached PGO evidence and a replayable workload; run --pgo first
+bender --aot: pgo collect: /tmp/bender-release-suite-50008/app.ben 
+bender --aot: pgo collected profile
+native_init: registered 1 wrappers
+native-telemetry id=00000001 name=hot calls=1 arity-guard-failures=0 type-guard-failures=0
+profile-merge: 18 rows -> /tmp/bender-release-suite-50008/cache/bender/pgo/app.rev-50013-0/aggregate.jdn (home=18)
+bender --aot: cached PGO profiles for 1 workloads
+bender --aot: pgo parity ok, installed /tmp/bender-release-suite-50008/app
+def 0 thunk arity 0 slots 3 instrs 8
+def 1 hot arity 1 slots 2 instrs 2
+contains 0 1
+calls 0 1
+extern 0 print
+stats 2 2 1 1 0
+reach 0 1
+callers 1 1 0
+fix 2 0 0
+called-as 1 1
+arity 0 0
+hints 0 0
+hint-call
+profile 18 rows
+ret 1 long
+ptypes 1 long
+rets 1 0 0 rounds 2
+profile-seed hot 0 number home
+dce safe reachable 0 1 excluded -
+native-skip 0 thunk types not proven: params [] ret ?
+native-lib 1 kernels /tmp/bender-release-suite-50008/app-native
+mkimage: 184 bytes, 828 registry names -> /tmp/bender-release-suite-50008/app.c
+profile-merge: 18 rows -> /tmp/bender-release-suite-50008/app-native/profile.jdn (home=18)
+bender --aot: verifying 1 cached workloads
+native_init: registered 1 wrappers
+bender --aot: pgo parity ok, installed /tmp/bender-release-suite-50008/app
+def 0 thunk arity 0 slots 3 instrs 8
+def 1 hot arity 1 slots 2 instrs 2
+contains 0 1
+calls 0 1
+extern 0 print
+stats 2 2 1 1 0
+reach 0 1
+callers 1 1 0
+fix 2 0 0
+called-as 1 1
+arity 0 0
+hints 0 0
+hint-call
+profile 18 rows
+ret 1 long
+ptypes 1 long
+rets 1 0 0 rounds 2
+profile-seed hot 0 number home
+dce safe reachable 0 1 excluded -
+native-skip 0 thunk types not proven: params [] ret ?
+native-lib 1 kernels /tmp/bender-release-suite-50008/app-native
+mkimage: 184 bytes, 828 registry names -> /tmp/bender-release-suite-50008/app.c
+native_init: registered 1 wrappers
+42
+bender --aot: applying cached PGO profile; verifying with recorded workload
+native_init: registered 1 wrappers
+bender --aot: pgo parity ok, installed /tmp/bender-release-suite-50008/app
+def 0 thunk arity 0 slots 3 instrs 8
+def 1 hot arity 1 slots 2 instrs 2
+contains 0 1
+calls 0 1
+extern 0 print
+stats 2 2 1 1 0
+reach 0 1
+callers 1 1 0
+fix 2 0 0
+called-as 1 1
+arity 0 0
+hints 0 0
+hint-call
+profile 18 rows
+ret 1 long
+ptypes 1 long
+rets 1 0 0 rounds 2
+profile-seed hot 0 number home
+dce safe reachable 0 1 excluded -
+native-skip 0 thunk types not proven: params [] ret ?
+native-lib 1 kernels /tmp/bender-release-suite-50008/app-native
+mkimage: 184 bytes, 828 registry names -> /tmp/bender-release-suite-50008/app.c
+bender --aot: pgo collect: /tmp/bender-release-suite-50008/app.ben 
+profile-merge: 18 rows -> /tmp/bender-release-suite-50008/app-native/profile.joined.jdn (home=36)
+bender --aot: pgo collected profile
+native_init: registered 1 wrappers
+native-telemetry id=00000001 name=hot calls=1 arity-guard-failures=0 type-guard-failures=0
+native_init: registered 1 wrappers
+native-telemetry id=00000001 name=hot calls=1 arity-guard-failures=0 type-guard-failures=0
+profile-merge: 18 rows -> /tmp/bender-release-suite-50008/cache/bender/pgo/app.rev-50083-0/profile.jdn (home=36)
+profile-merge: 18 rows -> /tmp/bender-release-suite-50008/cache/bender/pgo/app.rev-50083-0/aggregate.jdn (home=18)
+bender --aot: cached PGO profiles for 1 workloads
+bender --aot: pgo parity ok, installed /tmp/bender-release-suite-50008/app
+def 0 thunk arity 0 slots 3 instrs 8
+def 1 hot arity 1 slots 2 instrs 2
+contains 0 1
+calls 0 1
+extern 0 print
+stats 2 2 1 1 0
+reach 0 1
+callers 1 1 0
+fix 2 0 0
+called-as 1 1
+arity 0 0
+hints 0 0
+hint-call
+profile 18 rows
+ret 1 long
+ptypes 1 long
+rets 1 0 0 rounds 2
+profile-seed hot 0 number home
+dce safe reachable 0 1 excluded -
+native-skip 0 thunk types not proven: params [] ret ?
+native-lib 1 kernels /tmp/bender-release-suite-50008/app-native
+mkimage: 184 bytes, 828 registry names -> /tmp/bender-release-suite-50008/app.c
+bender --aot: cached profile has no replayable workload; pass --pgo once
+bender --aot: --release needs compatible cached PGO evidence and a replayable workload; run --pgo first
+Finished suite test/suite-aot-release.ben in 3.094 seconds - 14 of 14 tests passed (0 skipped).
+profile-merge: 116 rows -> /Users/pankajdoharey/.cache/bender/pgo/interpreter/source-603351394/cumulative-50008.pending (run=116)
+Starting suite test/suite-aot-size.ben...
+mkimage: 165 bytes, 828 registry names -> /tmp/bender-aot-size-regular.c
+built /tmp/bender-aot-size-regular
+bender --aot: -Oz binary /tmp/bender-aot-size-small.size-tmp 1144720 bytes
+mkimage: 165 bytes, 828 registry names -> /tmp/bender-aot-size-small.c
+built /tmp/bender-aot-size-small
+bender --aot: -Oz binary /tmp/bender-aot-size-hybrid.size-tmp 1161744 bytes
+def 0 thunk arity 0 slots 3 instrs 8
+def 1 twice arity 1 slots 2 instrs 2
+contains 0 1
+calls 0 1
+extern 0 print
+stats 2 2 1 1 0
+reach 0 1
+callers 1 1 0
+fix 2 0 0
+called-as 1 1
+arity 0 0
+hints 0 0
+hint-call
+ret 1 long
+ptypes 1 long
+rets 1 0 0 rounds 2
+dce safe reachable 0 1 excluded -
+native-skip 0 thunk types not proven: params [] ret ?
+native-lib 1 kernels /tmp/bender-aot-size-hybrid-native
+mkimage: 178 bytes, 828 registry names -> /tmp/bender-aot-size-hybrid.c
+built /tmp/bender-aot-size-hybrid
+bender --aot: pgo collect: /tmp/bender-aot-size-source.ben 
+profile-merge: 18 rows -> /tmp/bender-aot-size-gated-native/profile.joined.jdn (home=36)
+bender --aot: pgo collected profile
+native_init: registered 1 wrappers
+native-telemetry id=00000001 name=twice calls=1 arity-guard-failures=0 type-guard-failures=0
+native_init: registered 1 wrappers
+native-telemetry id=00000001 name=twice calls=1 arity-guard-failures=0 type-guard-failures=0
+bender --aot: -Oz binary /tmp/bender-aot-size-gated.pgo-tmp 1161744 bytes
+profile-merge: 18 rows -> /Users/pankajdoharey/.cache/bender/pgo/bender-aot-size-gated.rev-50161-0/profile.jdn (home=36)
+profile-merge: 18 rows -> /Users/pankajdoharey/.cache/bender/pgo/bender-aot-size-gated.rev-50161-0/aggregate.jdn (home=18)
+bender --aot: cached PGO profiles for 1 workloads
+bender --aot: pgo parity ok, installed /tmp/bender-aot-size-gated
+def 0 thunk arity 0 slots 3 instrs 8
+def 1 twice arity 1 slots 2 instrs 2
+contains 0 1
+calls 0 1
+extern 0 print
+stats 2 2 1 1 0
+reach 0 1
+callers 1 1 0
+fix 2 0 0
+called-as 1 1
+arity 0 0
+hints 0 0
+hint-call
+profile 18 rows
+ret 1 long
+ptypes 1 long
+rets 1 0 0 rounds 2
+profile-seed twice 0 number home
+dce safe reachable 0 1 excluded -
+native-skip 0 thunk types not proven: params [] ret ?
+native-lib 1 kernels /tmp/bender-aot-size-gated-native
+mkimage: 178 bytes, 828 registry names -> /tmp/bender-aot-size-gated.c
+native_init: registered 1 wrappers
+native-telemetry id=00000001 name=twice calls=1 arity-guard-failures=0 type-guard-failures=0
+native_init: registered 1 wrappers
+native-telemetry id=00000001 name=twice calls=1 arity-guard-failures=0 type-guard-failures=0
+bender --aot: -Oz needs a real binary build (no -c/-S/-E)
+bender --aot: --upx requires a supported Linux ELF target
+Finished suite test/suite-aot-size.ben in 4.095 seconds - 13 of 13 tests passed (0 skipped).
+profile-merge: 98 rows -> /Users/pankajdoharey/.cache/bender/pgo/interpreter/source--1710671831/cumulative-50116.pending (run=98)
+Starting suite test/suite-array.ben...
+Finished suite test/suite-array.ben in 0.003 seconds - 49 of 49 tests passed (0 skipped).
+profile-merge: 130 rows -> /Users/pankajdoharey/.cache/bender/pgo/interpreter/source-814213437/cumulative-50270.pending (run=130)
+Starting suite test/suite-asm.ben...
+Finished suite test/suite-asm.ben in 0.002 seconds - 7 of 7 tests passed (0 skipped).
+profile-merge: 93 rows -> /Users/pankajdoharey/.cache/bender/pgo/interpreter/source--1264434232/cumulative-50273.pending (run=94)
+Starting suite test/suite-atom.ben...
+Finished suite test/suite-atom.ben in 0.001 seconds - 20 of 20 tests passed (0 skipped).
+profile-merge: 93 rows -> /Users/pankajdoharey/.cache/bender/pgo/interpreter/source--2044269398/cumulative-50275.pending (run=93)
+Starting suite test/suite-autopgo.ben...
+native_init: registered 1 wrappers
+native-telemetry id=00000001 name=half calls=500 arity-guard-failures=0 type-guard-failures=0
+native_init: registered 1 wrappers
+native-telemetry id=00000001 name=half calls=500 arity-guard-failures=0 type-guard-failures=0
+Finished suite test/suite-autopgo.ben in 12.715 seconds - 98 of 98 tests passed (0 skipped).
+profile-merge: 253 rows -> /Users/pankajdoharey/.cache/bender/pgo/interpreter/source-134030167/cumulative-50278.pending (run=253)
+Starting suite test/suite-boot.ben...
+Finished suite test/suite-boot.ben in 0.025 seconds - 1629 of 1629 tests passed (0 skipped).
+profile-merge: 769 rows -> /Users/pankajdoharey/.cache/bender/pgo/interpreter/source--1158578993/cumulative-50674.pending (run=772)
+Starting suite test/suite-buffer.ben...
+Finished suite test/suite-buffer.ben in 0.002 seconds - 77 of 77 tests passed (0 skipped).
+profile-merge: 182 rows -> /Users/pankajdoharey/.cache/bender/pgo/interpreter/source-1039263692/cumulative-50678.pending (run=182)
+Starting suite test/suite-bundle.ben...
+Finished suite test/suite-bundle.ben in 0.023 seconds - 46 of 46 tests passed (0 skipped).
+profile-merge: 233 rows -> /Users/pankajdoharey/.cache/bender/pgo/interpreter/source-937709466/cumulative-50681.pending (run=242)
+Starting suite test/suite-callgraph.ben...
+profile-merge: 449 rows -> /Users/pankajdoharey/.cache/bender/pgo/interpreter/source-244827310/cumulative-50687.pending (run=449)
+profile-merge: 449 rows -> /Users/pankajdoharey/.cache/bender/pgo/interpreter/source-244827310/cumulative-50692.pending (run=892)
+profile-merge: 449 rows -> /Users/pankajdoharey/.cache/bender/pgo/interpreter/source-244827310/cumulative-50699.pending (run=1327)
+profile-merge: 449 rows -> /Users/pankajdoharey/.cache/bender/pgo/interpreter/source-244827310/cumulative-50726.pending (run=2217)
+profile-merge: 449 rows -> /Users/pankajdoharey/.cache/bender/pgo/interpreter/source-244827310/cumulative-50737.pending (run=2665)
+profile-merge: 452 rows -> /Users/pankajdoharey/.cache/bender/pgo/interpreter/source-244827310/cumulative-50749.pending (run=3115)
+profile-merge: 452 rows -> /Users/pankajdoharey/.cache/bender/pgo/interpreter/source-244827310/cumulative-50760.pending (run=3562)
+profile-merge: 452 rows -> /Users/pankajdoharey/.cache/bender/pgo/interpreter/source-244827310/cumulative-50772.pending (run=4008)
+profile-merge: 452 rows -> /Users/pankajdoharey/.cache/bender/pgo/interpreter/source-244827310/cumulative-50812.pending (run=4456)
+profile-merge: 452 rows -> /Users/pankajdoharey/.cache/bender/pgo/interpreter/source-244827310/cumulative-50826.pending (run=4904)
+profile-merge: 454 rows -> /Users/pankajdoharey/.cache/bender/pgo/interpreter/source-244827310/cumulative-50862.pending (run=5326)
+profile-merge: 454 rows -> /Users/pankajdoharey/.cache/bender/pgo/interpreter/source-244827310/cumulative-50896.pending (run=5777)
+profile-merge: 454 rows -> /Users/pankajdoharey/.cache/bender/pgo/interpreter/source-244827310/cumulative-50922.pending (run=6228)
+test/suite-callgraph.ben:250:1: compile warning (strict): top-level binding htext is shadowing another top-level binding
+profile-merge: 497 rows -> /Users/pankajdoharey/.cache/bender/pgo/interpreter/source-244827310/cumulative-50944.pending (run=6722)
+hint 1 long -> long
+hint 4 number double -> double
+def 0 thunk arity 0 slots 5 instrs 10
+def 1 inc-l arity 1 slots 2 instrs 2
+def 2 twice arity 1 slots 3 instrs 6
+def 3 quad arity 1 slots 3 instrs 6
+def 4 scale arity 2 slots 5 instrs 4
+def 5 main arity 0 slots 4 instrs 16
+contains 0 1
+contains 0 2
+contains 0 3
+contains 0 4
+contains 0 5
+calls 2 1
+calls 2 1
+calls 3 2
+calls 3 2
+calls 5 3
+calls 5 4
+calls 5 2
+extern 5 print
+stats 6 8 7 1 0
+reach 0 1 2 3 4 5
+callers 1 1 2
+callers 2 2 3 5
+callers 3 1 5
+callers 4 1 5
+fix 6 0 0
+called-as 1 1
+called-as 2 1
+called-as 3 1
+called-as 4 2
+arity 0 0
+hints 2 0
+hint-call 1 4
+ret 1 long
+ret 2 long
+ret 3 long
+ret 4 double
+ptypes 1 long
+ptypes 2 long
+ptypes 3 long
+ptypes 4 number double
+rets 3 1 0 rounds 2
+dce safe reachable 0 1 2 3 4 5 excluded -
+native-skip 0 thunk types not proven: params [] ret ?
+native-skip 5 main types not proven: params [] ret ?
+native 4 fns 31 samples /tmp/cg-em
+profile-merge: 504 rows -> /Users/pankajdoharey/.cache/bender/pgo/interpreter/source-244827310/cumulative-50986.pending (run=7216)
+hint 1 long -> long
+hint 3 long long long -> long
+def 0 thunk arity 0 slots 4 instrs 8
+def 1 iabs arity 1 slots 4 instrs 6
+def 2 maxi arity 2 slots 3 instrs 4
+def 3 clamp arity 3 slots 5 instrs 7
+def 4 main arity 0 slots 5 instrs 18
+contains 0 1
+contains 0 2
+contains 0 3
+contains 0 4
+calls 4 1
+calls 4 2
+calls 4 3
+extern 4 print
+stats 5 4 3 1 0
+reach 0 1 2 3 4
+callers 1 1 4
+callers 2 1 4
+callers 3 1 4
+fix 5 0 0
+called-as 1 1
+called-as 2 2
+called-as 3 3
+arity 0 0
+hints 2 0
+hint-call 1 3
+ret 1 long
+ret 2 long
+ret 3 long
+ptypes 1 long
+ptypes 2 long long
+ptypes 3 long long long
+rets 3 0 0 rounds 3
+dce safe reachable 0 1 2 3 4 excluded -
+native-skip 0 thunk types not proven: params [] ret ?
+native-skip 4 main types not proven: params [] ret ?
+native 3 fns 155 samples /tmp/cg-br
+test/suite-callgraph.ben:286:1: compile warning (strict): top-level binding btext is shadowing another top-level binding
+emit-native: no emittable functions
+profile-merge: 510 rows -> /Users/pankajdoharey/.cache/bender/pgo/interpreter/source-244827310/cumulative-51037.pending (run=7708)
+hint 1 long -> long
+hint 2 long -> long
+def 0 thunk arity 0 slots 3 instrs 6
+def 1 sum-to arity 1 slots 4 instrs 8
+def 2 fact arity 1 slots 4 instrs 8
+def 3 main arity 0 slots 3 instrs 11
+contains 0 1
+contains 0 2
+contains 0 3
+calls 3 1
+calls 3 2
+extern 3 print
+stats 4 3 2 1 0
+reach 0 1 2 3
+callers 1 1 3
+callers 2 1 3
+fix 4 0 0
+called-as 1 1
+called-as 2 1
+arity 0 0
+hints 2 0
+hint-call 1 2
+ret 1 long
+ret 2 long
+ptypes 1 long
+ptypes 2 long
+rets 2 0 0 rounds 1
+dce safe reachable 0 1 2 3 excluded -
+native-skip 0 thunk types not proven: params [] ret ?
+native-skip 3 main types not proven: params [] ret ?
+native 2 fns 10 samples /tmp/cg-lp
+profile-merge: 515 rows -> /Users/pankajdoharey/.cache/bender/pgo/interpreter/source-244827310/cumulative-51091.pending (run=8194)
+hint 1 double double -> double
+hint 2 double double -> double
+hint 3 double double -> double
+def 0 thunk arity 0 slots 4 instrs 8
+def 1 fdiv arity 2 slots 3 instrs 2
+def 2 fmod arity 2 slots 3 instrs 2
+def 3 frem arity 2 slots 3 instrs 2
+def 4 main arity 0 slots 8 instrs 41
+contains 0 1
+contains 0 2
+contains 0 3
+contains 0 4
+calls 4 1
+calls 4 2
+calls 4 3
+calls 4 2
+calls 4 3
+calls 4 2
+extern 4 print
+stats 5 7 6 1 0
+reach 0 1 2 3 4
+callers 1 1 4
+callers 2 1 4
+callers 3 1 4
+fix 5 0 0
+called-as 1 2
+called-as 2 2
+called-as 3 2
+arity 0 0
+hints 3 0
+hint-call 1 2 3
+ret 1 double
+ret 2 double
+ret 3 double
+ptypes 1 double double
+ptypes 2 double double
+ptypes 3 double double
+rets 0 3 0 rounds 1
+dce safe reachable 0 1 2 3 4 excluded -
+native-skip 0 thunk types not proven: params [] ret ?
+native-skip 4 main types not proven: params [] ret ?
+native 3 fns 48 samples /tmp/cg-fm
+profile-merge: 518 rows -> /Users/pankajdoharey/.cache/bender/pgo/interpreter/source-244827310/cumulative-51186.pending (run=8669)
+emit-native: no emittable functions
+profile-merge: 519 rows -> /Users/pankajdoharey/.cache/bender/pgo/interpreter/source-244827310/cumulative-51238.pending (run=9142)
+hint 1 double -> double
+def 0 thunk arity 0 slots 2 instrs 4
+def 1 halve arity 1 slots 2 instrs 2
+def 2 main arity 0 slots 2 instrs 7
+contains 0 1
+contains 0 2
+calls 2 1
+extern 2 print
+stats 3 2 1 1 0
+reach 0 1 2
+callers 1 1 2
+fix 3 0 0
+called-as 1 1
+arity 0 0
+hints 1 0
+hint-call 1
+ret 1 double
+ptypes 1 double
+rets 0 1 0 rounds 1
+dce safe reachable 0 1 2 excluded -
+native-skip 0 thunk types not proven: params [] ret ?
+native-skip 2 main types not proven: params [] ret ?
+native 1 fns 4 samples /tmp/cg-di
+emit-native: no emittable functions
+profile-merge: 520 rows -> /Users/pankajdoharey/.cache/bender/pgo/interpreter/source-244827310/cumulative-51298.pending (run=9624)
+hint 1 long double -> double
+def 0 thunk arity 0 slots 2 instrs 4
+def 1 fdivm arity 2 slots 3 instrs 2
+def 2 main arity 0 slots 2 instrs 8
+contains 0 1
+contains 0 2
+calls 2 1
+extern 2 print
+stats 3 2 1 1 0
+reach 0 1 2
+callers 1 1 2
+fix 3 0 0
+called-as 1 2
+arity 0 0
+hints 1 0
+hint-call 1
+ret 1 double
+ptypes 1 long double
+rets 0 1 0 rounds 1
+dce safe reachable 0 1 2 excluded -
+native-skip 0 thunk types not proven: params [] ret ?
+native-skip 2 main types not proven: params [] ret ?
+native 1 fns 20 samples /tmp/cg-dc
+bender --aot: pgo collect: /tmp/cg-nneg.ben 
+profile-merge: 18 rows -> /tmp/cg-nn-bin-native/profile.joined.jdn (home=36)
+bender --aot: pgo collected profile
+native_init: registered 1 wrappers
+native-telemetry id=00000001 name=half calls=2 arity-guard-failures=0 type-guard-failures=0
+native_init: registered 1 wrappers
+native-telemetry id=00000001 name=half calls=2 arity-guard-failures=0 type-guard-failures=0
+profile-merge: 18 rows -> /Users/pankajdoharey/.cache/bender/pgo/cg-nn-bin.rev-51348-0/profile.jdn (home=36)
+profile-merge: 18 rows -> /Users/pankajdoharey/.cache/bender/pgo/cg-nn-bin.rev-51348-0/aggregate.jdn (home=18)
+bender --aot: cached PGO profiles for 1 workloads
+bender --aot: pgo parity ok, installed /tmp/cg-nn-bin
+hint 1 long long -> long
+def 0 thunk arity 0 slots 4 instrs 14
+def 1 half arity 2 slots 3 instrs 2
+contains 0 1
+calls 0 1
+calls 0 1
+extern 0 print
+stats 2 3 2 1 0
+reach 0 1
+callers 1 1 0
+fix 2 0 0
+called-as 1 2
+arity 0 0
+hints 1 0
+hint-call 1
+profile 18 rows
+ret 1 long
+ptypes 1 long long
+rets 1 0 0 rounds 1
+dce safe reachable 0 1 excluded -
+native-skip 0 thunk types not proven: params [] ret ?
+native-lib 1 kernels /tmp/cg-nn-bin-native
+mkimage: 201 bytes, 828 registry names -> /tmp/cg-nn-bin.c
+profile-merge: 530 rows -> /Users/pankajdoharey/.cache/bender/pgo/interpreter/source-244827310/cumulative-51385.pending (run=10124)
+hint 1 array -> double
+hint 2 tuple -> double
+def 0 thunk arity 0 slots 3 instrs 6
+def 1 asum-c arity 1 slots 6 instrs 12
+def 2 tfirst arity 1 slots 2 instrs 3
+def 3 main arity 0 slots 4 instrs 18
+contains 0 1
+contains 0 2
+contains 0 3
+extern 1 a
+extern 2 t
+calls 3 1
+arity-unknown 3
+extern 3 tuple
+calls 3 2
+extern 3 print
+stats 4 6 2 4 0
+reach 0 1 2 3
+callers 1 1 3
+callers 2 1 3
+fix 4 0 0
+called-as 2 1
+arity 0 1
+hints 2 0
+hint-call 2
+ret 1 double
+ret 2 double
+rets 0 2 0 rounds 1
+dce safe reachable 0 1 2 3 excluded -
+native-skip 0 thunk types not proven: params [] ret ?
+native-skip 3 main types not proven: params [] ret ?
+native 2 fns 4 samples /tmp/cg-sh
+profile-merge: 530 rows -> /Users/pankajdoharey/.cache/bender/pgo/interpreter/source-244827310/cumulative-51484.pending (run=10624)
+hint 1 array -> double
+hint 2 tuple -> double
+def 0 thunk arity 0 slots 3 instrs 6
+def 1 asum-c arity 1 slots 6 instrs 12
+def 2 tfirst arity 1 slots 2 instrs 3
+def 3 main arity 0 slots 4 instrs 18
+contains 0 1
+contains 0 2
+contains 0 3
+extern 1 a
+extern 2 t
+calls 3 1
+arity-unknown 3
+extern 3 tuple
+calls 3 2
+extern 3 print
+stats 4 6 2 4 0
+reach 0 1 2 3
+callers 1 1 3
+callers 2 1 3
+fix 4 0 0
+called-as 2 1
+arity 0 1
+hints 2 0
+hint-call 2
+ret 1 double
+ret 2 double
+rets 0 2 0 rounds 1
+dce safe reachable 0 1 2 3 excluded -
+native-skip 0 thunk types not proven: params [] ret ?
+native-skip 3 main types not proven: params [] ret ?
+native 2 fns 4 samples /tmp/cg-el
+profile-merge: 532 rows -> /Users/pankajdoharey/.cache/bender/pgo/interpreter/source-244827310/cumulative-51522.pending (run=11125)
+hint 1 double -> double
+hint 2 array -> double
+def 0 thunk arity 0 slots 3 instrs 6
+def 1 inc1 arity 1 slots 2 instrs 2
+def 2 nsum arity 1 slots 8 instrs 15
+def 3 main arity 0 slots 3 instrs 10
+contains 0 1
+contains 0 2
+contains 0 3
+extern 2 a
+calls 2 1
+calls 3 2
+arity-unknown 3
+extern 3 print
+stats 4 4 2 2 0
+reach 0 1 2 3
+callers 1 1 2
+callers 2 1 3
+fix 4 0 0
+called-as 1 1
+arity 0 1
+hints 2 0
+hint-call 1
+ret 1 double
+ret 2 double
+ptypes 1 double
+rets 0 2 0 rounds 1
+dce safe reachable 0 1 2 3 excluded -
+native-skip 0 thunk types not proven: params [] ret ?
+native-skip 3 main types not proven: params [] ret ?
+native 2 fns 6 samples /tmp/cg-ne
+profile-merge: 550 rows -> /Users/pankajdoharey/.cache/bender/pgo/interpreter/source-244827310/cumulative-51754.pending (run=13050)
+hint 1 double -> double
+hint 2 double double -> double
+hint 3 double -> double
+def 0 thunk arity 0 slots 4 instrs 8
+def 1 fl arity 1 slots 2 instrs 3
+def 2 hy arity 2 slots 5 instrs 6
+def 3 blogd arity 1 slots 6 instrs 11
+def 4 main arity 0 slots 4 instrs 16
+contains 0 1
+contains 0 2
+contains 0 3
+contains 0 4
+extern 1 math/floor
+extern 2 math/sqrt
+extern 3 math/floor
+calls 4 1
+calls 4 2
+calls 4 3
+extern 4 print
+stats 5 7 3 4 0
+reach 0 1 2 3 4
+callers 1 1 4
+callers 2 1 4
+callers 3 1 4
+fix 5 0 0
+called-as 1 1
+called-as 2 2
+called-as 3 1
+arity 0 0
+hints 3 0
+hint-call 1 2 3
+ret 1 double
+ret 2 double
+ret 3 double
+ptypes 1 double
+ptypes 2 double double
+ptypes 3 double
+rets 0 3 0 rounds 1
+dce safe reachable 0 1 2 3 4 excluded -
+native-skip 0 thunk types not proven: params [] ret ?
+native-skip 4 main types not proven: params [] ret ?
+native 3 fns 24 samples /tmp/cg-pu
+profile-merge: 552 rows -> /Users/pankajdoharey/.cache/bender/pgo/interpreter/source-244827310/cumulative-51836.pending (run=13551)
+hint 1 double -> double
+hint 2 array -> double
+def 0 thunk arity 0 slots 3 instrs 6
+def 1 dbl arity 1 slots 2 instrs 2
+def 2 usen arity 1 slots 8 instrs 15
+def 3 main arity 0 slots 3 instrs 10
+contains 0 1
+contains 0 2
+contains 0 3
+extern 2 a
+calls 2 1
+calls 3 2
+arity-unknown 3
+extern 3 print
+stats 4 4 2 2 0
+reach 0 1 2 3
+callers 1 1 2
+callers 2 1 3
+fix 4 0 0
+called-as 1 1
+arity 0 1
+hints 2 0
+hint-call 1
+ret 1 double
+ret 2 double
+ptypes 1 double
+rets 0 2 0 rounds 1
+dce safe reachable 0 1 2 3 excluded -
+native-skip 0 thunk types not proven: params [] ret ?
+native-skip 3 main types not proven: params [] ret ?
+native 2 fns 6 samples /tmp/cg-co
+profile-merge: 564 rows -> /Users/pankajdoharey/.cache/bender/pgo/interpreter/source-244827310/cumulative-51905.pending (run=14070)
+hint 2 array array array array -> array
+hint 3 double array array array array array array array -> array
+hint 4 array array array array array array array -> double
+def 0 thunk arity 0 slots 20 instrs 124
+def 1 make-vec arity 1 slots 8 instrs 19
+def 2 offset-momentum arity 4 slots 13 instrs 40
+def 3 advance arity 8 slots 23 instrs 120
+def 4 energy arity 7 slots 24 instrs 72
+def 5 main arity 0 slots 10 instrs 76
+contains 0 1
+contains 0 2
+contains 0 3
+contains 0 4
+contains 0 5
+calls 0 1
+arity-unknown 0
+calls 0 1
+calls 0 1
+calls 0 1
+calls 0 1
+calls 0 1
+calls 0 1
+calls 0 5
+extern 0 os/exit
+extern 1 array/new-filled
+extern 1 init-data
+unknown 1 7
+extern 2 vxs
+extern 2 ms
+extern 2 vys
+extern 2 ms
+extern 2 vzs
+extern 2 ms
+extern 3 xs
+extern 3 xs
+extern 3 ys
+extern 3 ys
+extern 3 zs
+extern 3 zs
+extern 3 math/sqrt
+extern 3 vxs
+extern 3 ms
+extern 3 vys
+arity-unknown 3
+extern 3 ms
+extern 3 vzs
+arity-unknown 3
+extern 3 ms
+extern 3 vxs
+arity-unknown 3
+extern 3 ms
+extern 3 vys
+arity-unknown 3
+extern 3 ms
+extern 3 vzs
+arity-unknown 3
+extern 3 ms
+extern 3 xs
+extern 3 vxs
+extern 3 ys
+arity-unknown 3
+extern 3 vys
+extern 3 zs
+arity-unknown 3
+extern 3 vzs
+extern 4 ms
+extern 4 vxs
+extern 4 vxs
+extern 4 vys
+extern 4 vys
+extern 4 vzs
+extern 4 vzs
+extern 4 xs
+extern 4 xs
+extern 4 ys
+extern 4 ys
+extern 4 zs
+extern 4 zs
+extern 4 ms
+extern 4 ms
+extern 4 math/sqrt
+extern 5 dyn
+extern 5 scan-number
+calls 5 2
+calls 5 4
+extern 5 string/format
+extern 5 print
+calls 5 3
+calls 5 4
+extern 5 string/format
+extern 5 print
+stats 6 69 12 56 1
+reach 0 1 2 3 4 5
+callers 1 1 0
+callers 2 1 5
+callers 3 1 5
+callers 4 1 5
+callers 5 1 0
+fix 6 0 0
+called-as 1 1
+called-as 2 4
+called-as 3 8
+called-as 4 7
+called-as 5 0
+arity 0 8
+hints 3 0
+hint-call 2 3 4
+ret 4 double
+ptypes 1 long
+rets 0 1 0 rounds 2
+dce safe reachable 0 1 2 3 4 5 excluded -
+native-skip 0 thunk types not proven: params [] ret ?
+native-skip 1 make-vec types not proven: params [long] ret ?
+native-skip 5 main types not proven: params [] ret ?
+native-skip 2 offset-momentum div needs float-compatible operands and dest (policy TBD)
+native 2 fns 640 samples /tmp/cg-nb
+profile-merge: 568 rows -> /Users/pankajdoharey/.cache/bender/pgo/interpreter/source-244827310/cumulative-52022.pending (run=14558)
+hint 2 double double double double -> double
+def 0 thunk arity 0 slots 3 instrs 6
+def 1 game-clamp arity 3 slots 5 instrs 7
+def 2 physics arity 4 slots 6 instrs 6
+def 3 main arity 0 slots 2 instrs 10
+contains 0 1
+contains 0 2
+contains 0 3
+unknown-edge <tuple 0x000894059448>
+calls 3 2
+extern 3 print
+stats 4 3 1 1 0
+reach 0 1 2 3
+callers 2 1 3
+fix 4 0 0
+called-as 2 4
+arity 0 0
+hints 1 0
+hint-call 2
+ret 2 double
+ptypes 2 double double double double
+rets 0 1 0 rounds 1
+dce safe reachable 0 1 2 3 excluded -
+native-skip 0 thunk types not proven: params [] ret ?
+native-skip 1 game-clamp types not proven: params [? ? ?] ret ?
+native-skip 3 main types not proven: params [] ret ?
+native 1 fns 256 samples /tmp/cg-ex
+profile-merge: 571 rows -> /Users/pankajdoharey/.cache/bender/pgo/interpreter/source-244827310/cumulative-52103.pending (run=15045)
+hint 1 i32 i32 -> i32
+hint 2 float float -> float
+hint 3 i32 double -> double
+def 0 thunk arity 0 slots 4 instrs 8
+def 1 add-i32 arity 2 slots 3 instrs 2
+def 2 mulf arity 2 slots 3 instrs 2
+def 3 mix arity 2 slots 3 instrs 2
+def 4 main arity 0 slots 4 instrs 21
+contains 0 1
+contains 0 2
+contains 0 3
+contains 0 4
+calls 4 1
+calls 4 2
+calls 4 3
+extern 4 print
+stats 5 4 3 1 0
+reach 0 1 2 3 4
+callers 1 1 4
+callers 2 1 4
+callers 3 1 4
+fix 5 0 0
+called-as 1 2
+called-as 2 2
+called-as 3 2
+arity 0 0
+hints 3 0
+hint-call 1 2 3
+ret 1 i32
+ret 2 float
+ret 3 double
+ptypes 1 i32 i32
+ptypes 2 float float
+ptypes 3 i32 double
+rets 0 1 0 rounds 1
+dce safe reachable 0 1 2 3 4 excluded -
+native-skip 0 thunk types not proven: params [] ret ?
+native-skip 4 main types not proven: params [] ret ?
+native 3 fns 61 samples /tmp/cg-w
+profile-merge: 574 rows -> /Users/pankajdoharey/.cache/bender/pgo/interpreter/source-244827310/cumulative-52175.pending (run=15543)
+hint 1 array -> double
+hint 2 array double -> double
+def 0 thunk arity 0 slots 3 instrs 6
+def 1 asum arity 1 slots 6 instrs 11
+def 2 ascale arity 2 slots 7 instrs 13
+def 3 main arity 0 slots 4 instrs 19
+contains 0 1
+contains 0 2
+contains 0 3
+calls 3 1
+arity-unknown 3
+calls 3 2
+arity-unknown 3
+extern 3 print
+stats 4 3 2 1 0
+reach 0 1 2 3
+callers 1 1 3
+callers 2 1 3
+fix 4 0 0
+arity 0 2
+hints 2 0
+hint-call
+ret 1 double
+ret 2 double
+rets 0 2 0 rounds 1
+dce safe reachable 0 1 2 3 excluded -
+native-skip 0 thunk types not proven: params [] ret ?
+native-skip 3 main types not proven: params [] ret ?
+native 2 fns 10 samples /tmp/cg-arr
+test/suite-callgraph.ben:741:1: compile warning (strict): top-level binding atext is shadowing another top-level binding
+profile-merge: 575 rows -> /Users/pankajdoharey/.cache/bender/pgo/interpreter/source-244827310/cumulative-52264.pending (run=16026)
+hint 1 long long -> long
+def 0 thunk arity 0 slots 2 instrs 4
+def 1 padd arity 2 slots 3 instrs 2
+def 2 main arity 0 slots 2 instrs 8
+contains 0 1
+contains 0 2
+calls 2 1
+extern 2 print
+stats 3 2 1 1 0
+reach 0 1 2
+callers 1 1 2
+fix 3 0 0
+called-as 1 2
+arity 0 0
+hints 1 0
+hint-call 1
+ret 1 long
+ptypes 1 long long
+rets 1 0 0 rounds 1
+dce safe reachable 0 1 2 excluded -
+native-skip 0 thunk types not proven: params [] ret ?
+native-skip 2 main types not proven: params [] ret ?
+native 1 fns 25 samples /tmp/cg-pr
+profile-merge: 575 rows -> /Users/pankajdoharey/.cache/bender/pgo/interpreter/source-244827310/cumulative-52376.pending (run=16509)
+hint 1 long long -> long
+def 0 thunk arity 0 slots 2 instrs 4
+def 1 padd arity 2 slots 3 instrs 2
+def 2 main arity 0 slots 2 instrs 8
+contains 0 1
+contains 0 2
+calls 2 1
+extern 2 print
+stats 3 2 1 1 0
+reach 0 1 2
+callers 1 1 2
+fix 3 0 0
+called-as 1 2
+arity 0 0
+hints 1 0
+hint-call 1
+ret 1 long
+ptypes 1 long long
+rets 1 0 0 rounds 1
+dce safe reachable 0 1 2 excluded -
+native-skip 0 thunk types not proven: params [] ret ?
+native-skip 2 main types not proven: params [] ret ?
+native 1 fns 25 samples /tmp/cg-wr
+profile-merge: 580 rows -> /Users/pankajdoharey/.cache/bender/pgo/interpreter/source-244827310/cumulative-52450.pending (run=17006)
+hint 1 array array array -> array
+def 0 thunk arity 0 slots 2 instrs 4
+def 1 k-xor8 arity 3 slots 6 instrs 41
+def 2 main arity 0 slots 5 instrs 37
+contains 0 1
+contains 0 2
+calls 2 1
+arity-unknown 2
+extern 2 print
+stats 3 2 1 1 0
+reach 0 1 2
+callers 1 1 2
+fix 3 0 0
+arity 0 1
+hints 1 0
+hint-call
+rets 0 0 0 rounds 1
+dce safe reachable 0 1 2 excluded -
+native-skip 0 thunk types not proven: params [] ret ?
+native-skip 2 main types not proven: params [] ret ?
+native 1 fns 8 samples /tmp/cg-bit
+profile-merge: 581 rows -> /Users/pankajdoharey/.cache/bender/pgo/interpreter/source-244827310/cumulative-52545.pending (run=17504)
+hint 1 array array array -> array
+def 0 thunk arity 0 slots 2 instrs 9
+def 1 k-xor8o arity 3 slots 6 instrs 41
+def 2 main arity 0 slots 5 instrs 37
+contains 0 1
+contains 0 2
+extern 0 setdyn
+calls 2 1
+arity-unknown 2
+extern 2 print
+stats 3 3 1 2 0
+reach 0 1 2
+callers 1 1 2
+fix 3 0 0
+arity 0 1
+hints 1 0
+hint-call
+rets 0 0 0 rounds 1
+dce safe reachable 0 1 2 excluded -
+native-skip 0 thunk types not proven: params [] ret ?
+native-skip 2 main types not proven: params [] ret ?
+native 1 fns 8 samples /tmp/cg-opt1
+profile-merge: 584 rows -> /Users/pankajdoharey/.cache/bender/pgo/interpreter/source-244827310/cumulative-52703.pending (run=18489)
+hint 1 array array long -> array
+def 0 thunk arity 0 slots 2 instrs 4
+def 1 k-shl2 arity 3 slots 14 instrs 39
+def 2 main arity 0 slots 4 instrs 22
+contains 0 1
+contains 0 2
+calls 2 1
+arity-unknown 2
+extern 2 print
+stats 3 2 1 1 0
+reach 0 1 2
+callers 1 1 2
+fix 3 0 0
+arity 0 1
+hints 1 0
+hint-call
+rets 0 0 0 rounds 1
+dce safe reachable 0 1 2 excluded -
+native-skip 0 thunk types not proven: params [] ret ?
+native-skip 2 main types not proven: params [] ret ?
+native 1 fns 8 samples /tmp/cg-shl
+profile-merge: 585 rows -> /Users/pankajdoharey/.cache/bender/pgo/interpreter/source-244827310/cumulative-52799.pending (run=18985)
+def 0 thunk arity 0 slots 2 instrs 4
+def 1 k-xor8u arity 3 slots 6 instrs 41
+def 2 main arity 0 slots 5 instrs 37
+contains 0 1
+contains 0 2
+calls 2 1
+arity-unknown 2
+extern 2 print
+stats 3 2 1 1 0
+reach 0 1 2
+callers 1 1 2
+fix 3 0 0
+arity 0 1
+hints 0 0
+hint-call
+rets 0 0 0 rounds 3
+dce safe reachable 0 1 2 excluded -
+native-skip 0 thunk types not proven: params [] ret ?
+native-skip 2 main types not proven: params [] ret ?
+native 1 fns 8 samples /tmp/cg-wide
+profile-merge: 608 rows -> /Users/pankajdoharey/.cache/bender/pgo/interpreter/source-244827310/cumulative-52903.pending (run=19504)
+def 0 thunk arity 0 slots 2 instrs 4
+def 1 k-xor8u arity 3 slots 6 instrs 41
+def 2 main arity 0 slots 5 instrs 37
+contains 0 1
+contains 0 2
+calls 2 1
+arity-unknown 2
+extern 2 print
+stats 3 2 1 1 0
+reach 0 1 2
+callers 1 1 2
+fix 3 0 0
+arity 0 1
+hints 0 0
+hint-call
+profile 19 rows
+rets 0 0 0 rounds 2
+profile-seed k-xor8u 0 array home
+profile-seed k-xor8u 1 array home
+profile-seed k-xor8u 2 array home
+dce safe reachable 0 1 2 excluded -
+native-skip 0 thunk types not proven: params [] ret ?
+native-skip 2 main types not proven: params [] ret ?
+native 1 fns 8 samples /tmp/cg-widep
+profile-merge: 610 rows -> /Users/pankajdoharey/.cache/bender/pgo/interpreter/source-244827310/cumulative-53016.pending (run=20005)
+hint 1 tuple tuple -> double
+hint 2 tuple -> double
+def 0 thunk arity 0 slots 3 instrs 6
+def 1 k-dot arity 2 slots 10 instrs 13
+def 2 k-first arity 1 slots 3 instrs 3
+def 3 main arity 0 slots 4 instrs 29
+contains 0 1
+contains 0 2
+contains 0 3
+extern 3 tuple
+extern 3 tuple
+calls 3 1
+extern 3 print
+extern 3 tuple
+calls 3 2
+extern 3 print
+stats 4 7 2 5 0
+reach 0 1 2 3
+callers 1 1 3
+callers 2 1 3
+fix 4 0 0
+called-as 1 2
+called-as 2 1
+arity 0 0
+hints 2 0
+hint-call 1 2
+ret 1 double
+ret 2 double
+rets 0 2 0 rounds 1
+dce safe reachable 0 1 2 3 excluded -
+native-skip 0 thunk types not proven: params [] ret ?
+native-skip 3 main types not proven: params [] ret ?
+native 2 fns 6 samples /tmp/cg-tup
+profile-merge: 637 rows -> /Users/pankajdoharey/.cache/bender/pgo/interpreter/source-244827310/cumulative-53157.pending (run=20536)
+hint 3 pointer -> double
+hint 4 pointer double -> double
+hint 5 pointer -> double
+hint 6 pointer double -> double
+hint 7 pointer double double -> double
+def 0 thunk arity 0 slots 12 instrs 16
+def 1 Point/malloc arity 2 slots 5 instrs 19
+def 2 Point/free arity 1 slots 2 instrs 3
+def 3 Point/x arity 1 slots 3 instrs 5
+def 4 Point/set-x arity 2 slots 4 instrs 7
+def 5 Point/y arity 1 slots 3 instrs 5
+def 6 Point/set-y arity 2 slots 4 instrs 7
+def 7 k-move arity 3 slots 8 instrs 22
+def 8 main arity 0 slots 5 instrs 16
+contains 0 1
+contains 0 2
+contains 0 3
+contains 0 4
+contains 0 5
+contains 0 6
+contains 0 7
+contains 0 8
+extern 1 unsafe/calloc
+extern 1 unsafe/poke
+extern 1 unsafe/poke
+extern 2 unsafe/free
+extern 3 ffi/read
+extern 4 unsafe/poke
+extern 5 ffi/read
+extern 6 unsafe/poke
+calls 7 3
+calls 7 4
+calls 7 5
+calls 7 6
+calls 7 3
+calls 7 5
+calls 8 1
+calls 8 7
+extern 8 print
+calls 8 2
+stats 9 18 9 9 0
+reach 0 1 2 3 4 5 6 7 8
+callers 1 1 8
+callers 2 1 8
+callers 3 1 7
+callers 4 1 7
+callers 5 1 7
+callers 6 1 7
+callers 7 1 8
+fix 9 0 0
+called-as 1 2
+called-as 2 1
+called-as 3 1
+called-as 4 2
+called-as 5 1
+called-as 6 2
+called-as 7 3
+arity 0 0
+hints 5 0
+hint-call 3 4 5 6 7
+ret 3 double
+ret 4 double
+ret 5 double
+ret 6 double
+ret 7 double
+ptypes 1 long long
+rets 0 5 0 rounds 2
+dce unsafe pattern 1 def 1 (Point/malloc) pc 8: function value pending across non-consuming op ldi -- stripping nothing
+native-skip 0 thunk types not proven: params [] ret ?
+native-skip 1 Point/malloc types not proven: params [long long] ret ?
+native-skip 2 Point/free types not proven: params [?] ret ?
+native-skip 8 main types not proven: params [] ret ?
+native-skip 3 Point/x call to non-native or type mismatch
+native-skip 4 Point/set-x call to non-native or type mismatch
+native-skip 5 Point/y call to non-native or type mismatch
+native-skip 6 Point/set-y call to non-native or type mismatch
+native 1 fns 32 samples /tmp/cg-st
+native_init: registered 1 wrappers
+native-telemetry id=00000001 name=k_double calls=1 arity-guard-failures=0 type-guard-failures=0
+profile-merge: 640 rows -> /Users/pankajdoharey/.cache/bender/pgo/interpreter/source-244827310/cumulative-53347.pending (run=21024)
+hint 1 array -> double
+hint 2 array long -> double
+def 0 thunk arity 0 slots 3 instrs 6
+def 1 k-sum3 arity 1 slots 5 instrs 6
+def 2 k-sumv arity 2 slots 5 instrs 4
+def 3 main arity 0 slots 4 instrs 21
+contains 0 1
+contains 0 2
+contains 0 3
+calls 3 1
+arity-unknown 3
+calls 3 2
+arity-unknown 3
+extern 3 print
+stats 4 3 2 1 0
+reach 0 1 2 3
+callers 1 1 3
+callers 2 1 3
+fix 4 0 0
+arity 0 2
+hints 2 0
+hint-call
+ret 1 double
+ret 2 double
+rets 0 2 0 rounds 1
+dce unsafe pattern 4 def 1 (k-sum3) pc 0: unrecognized op inim -- stripping nothing
+native-skip 0 thunk types not proven: params [] ret ?
+native-skip 3 main types not proven: params [] ret ?
+native 2 fns 6 samples /tmp/cg-in
+profile-merge: 643 rows -> /Users/pankajdoharey/.cache/bender/pgo/interpreter/source-244827310/cumulative-53472.pending (run=21512)
+hint 1 array array -> number
+def 0 thunk arity 0 slots 2 instrs 4
+def 1 k-u64 arity 2 slots 10 instrs 28
+def 2 main arity 0 slots 4 instrs 13
+contains 0 1
+contains 0 2
+extern 1 int/u64
+extern 1 int/u64
+extern 1 int/u64
+extern 1 int/u64
+extern 1 int/to-number
+calls 2 1
+arity-unknown 2
+extern 2 print
+stats 3 7 1 6 0
+reach 0 1 2
+callers 1 1 2
+fix 3 0 0
+arity 0 1
+hints 1 0
+hint-call
+ret 1 number
+rets 0 0 1 rounds 1
+dce unsafe pattern 4 def 1 (k-u64) pc 0: unrecognized op inim -- stripping nothing
+native-skip 0 thunk types not proven: params [] ret ?
+native-skip 2 main types not proven: params [] ret ?
+native 1 fns 4 samples /tmp/cg-u64
+profile-merge: 644 rows -> /Users/pankajdoharey/.cache/bender/pgo/interpreter/source-244827310/cumulative-53581.pending (run=22000)
+hint 1 array array -> array
+def 0 thunk arity 0 slots 2 instrs 4
+def 1 k-x64 arity 2 slots 12 instrs 132
+def 2 main arity 0 slots 4 instrs 25
+contains 0 1
+contains 0 2
+extern 1 int/u64
+extern 1 int/u64
+extern 1 int/u64
+extern 1 int/u64
+extern 1 int/u64
+extern 1 int/u64
+extern 1 int/u64
+extern 1 int/u64
+extern 1 int/u64
+extern 1 int/to-number
+extern 1 int/u64
+arity-unknown 1
+extern 1 int/to-number
+extern 1 int/u64
+arity-unknown 1
+extern 1 int/to-number
+extern 1 int/u64
+arity-unknown 1
+extern 1 int/to-number
+extern 1 int/u64
+arity-unknown 1
+extern 1 int/to-number
+extern 1 int/u64
+arity-unknown 1
+extern 1 int/to-number
+extern 1 int/u64
+arity-unknown 1
+extern 1 int/to-number
+extern 1 int/u64
+arity-unknown 1
+extern 1 int/to-number
+calls 2 1
+arity-unknown 2
+extern 2 print
+stats 3 26 1 25 0
+reach 0 1 2
+callers 1 1 2
+fix 3 0 0
+arity 0 8
+hints 1 0
+hint-call
+rets 0 0 0 rounds 1
+dce unsafe pattern 4 def 1 (k-x64) pc 0: unrecognized op inim -- stripping nothing
+native-skip 0 thunk types not proven: params [] ret ?
+native-skip 2 main types not proven: params [] ret ?
+native 1 fns 4 samples /tmp/cg-xor64
+Finished suite test/suite-callgraph.ben in 144.005 seconds - 256 of 256 tests passed (0 skipped).
+profile-merge: 484 rows -> /Users/pankajdoharey/.cache/bender/pgo/interpreter/source-349810080/cumulative-50684.pending (run=484)
+Starting suite test/suite-capi.ben...
+Finished suite test/suite-capi.ben in 0.001 seconds - 9 of 9 tests passed (0 skipped).
+profile-merge: 89 rows -> /Users/pankajdoharey/.cache/bender/pgo/interpreter/source--1954914786/cumulative-54103.pending (run=89)
+Starting suite test/suite-cfuns.ben...
+Finished suite test/suite-cfuns.ben in 0.000 seconds - 2 of 2 tests passed (0 skipped).
+profile-merge: 77 rows -> /Users/pankajdoharey/.cache/bender/pgo/interpreter/source-267188783/cumulative-54105.pending (run=77)
+Starting suite test/suite-compile.ben...
+Finished suite test/suite-compile.ben in 0.030 seconds - 196 of 196 tests passed (0 skipped).
+profile-merge: 208 rows -> /Users/pankajdoharey/.cache/bender/pgo/interpreter/source--1855160016/cumulative-54109.pending (run=254)
+Starting suite test/suite-corelib.ben...
+Finished suite test/suite-corelib.ben in 0.024 seconds - 114 of 114 tests passed (0 skipped).
+profile-merge: 267 rows -> /Users/pankajdoharey/.cache/bender/pgo/interpreter/source-1980916908/cumulative-54115.pending (run=267)
+Starting suite test/suite-dce-harness.ben...
+mkimage: 180 bytes, 828 registry names -> /tmp/bender-dce-harness-suite/correct/orig.c
+built /tmp/bender-dce-harness-suite/correct/orig
+mkimage: 192 bytes, 828 registry names -> /tmp/bender-dce-harness-suite/correct/stripped.c
+built /tmp/bender-dce-harness-suite/correct/stripped
+PASS: identical output with unused-fn stripped
+mkimage: 180 bytes, 828 registry names -> /tmp/bender-dce-harness-suite/wrong/orig.c
+built /tmp/bender-dce-harness-suite/wrong/orig
+/tmp/bender-dce-harness-suite/wrong/stripped-src.ben: compile error: unknown symbol used-fn
+FAIL: stripped source did not build (stripping broke compilation -- this is itself evidence the stripped names were load-bearing)
+Finished suite test/suite-dce-harness.ben in 2.534 seconds - 2 of 2 tests passed (0 skipped).
+profile-merge: 84 rows -> /Users/pankajdoharey/.cache/bender/pgo/interpreter/source--1466977191/cumulative-54128.pending (run=84)
+Starting suite test/suite-dce-reachable.ben...
+mkimage: 285 bytes, 828 registry names -> /tmp/bender-dce-reachable-suite/xcheck/orig.c
+built /tmp/bender-dce-reachable-suite/xcheck/orig
+mkimage: 292 bytes, 828 registry names -> /tmp/bender-dce-reachable-suite/xcheck/stripped.c
+built /tmp/bender-dce-reachable-suite/xcheck/stripped
+PASS: identical output with unused-fn stripped
+Finished suite test/suite-dce-reachable.ben in 29.671 seconds - 12 of 12 tests passed (0 skipped).
+profile-merge: 97 rows -> /Users/pankajdoharey/.cache/bender/pgo/interpreter/source-706607677/cumulative-54199.pending (run=97)
+Starting suite test/suite-dce-strip.ben...
+mkimage: 247 bytes, 828 registry names -> /tmp/bender-dce-strip-suite/xcheck/orig.c
+built /tmp/bender-dce-strip-suite/xcheck/orig
+mkimage: 189 bytes, 828 registry names -> /tmp/bender-dce-strip-suite/xcheck/stripped.c
+built /tmp/bender-dce-strip-suite/xcheck/stripped
+PASS: identical output with zzdeadmarker,zzdeadcaller stripped
+Finished suite test/suite-dce-strip.ben in 5.628 seconds - 61 of 61 tests passed (0 skipped).
+profile-merge: 209 rows -> /Users/pankajdoharey/.cache/bender/pgo/interpreter/source--1049075772/cumulative-54800.pending (run=209)
+Starting suite test/suite-debug.ben...
+Finished suite test/suite-debug.ben in 0.000 seconds - 1 of 1 tests passed (0 skipped).
+profile-merge: 80 rows -> /Users/pankajdoharey/.cache/bender/pgo/interpreter/source--2105491387/cumulative-54994.pending (run=80)
+Starting suite test/suite-destructure.ben...
+Finished suite test/suite-destructure.ben in 0.000 seconds - 13 of 13 tests passed (0 skipped).
+profile-merge: 87 rows -> /Users/pankajdoharey/.cache/bender/pgo/interpreter/source--1424566971/cumulative-54997.pending (run=87)
+Starting suite test/suite-dev-profile.ben...
+profile-merge: 20 rows -> /tmp/bender-development-profile-suite/cache/bender/pgo/interpreter/source--1750271882/cumulative-55002.pending (run=20)
+profile-merge: 20 rows -> /tmp/bender-development-profile-suite/cache/bender/pgo/interpreter/source--1750271882/cumulative-55006.pending (run=40)
+profile-merge: 20 rows -> /tmp/bender-development-profile-suite/cache/bender/pgo/interpreter/source--1750271882/cumulative-55010.pending (run=80)
+Finished suite test/suite-dev-profile.ben in 0.090 seconds - 24 of 24 tests passed (0 skipped).
+profile-merge: 137 rows -> /Users/pankajdoharey/.cache/bender/pgo/interpreter/source-285250370/cumulative-55000.pending (run=137)
+Starting suite test/suite-ev-render-loop.ben...
+Finished suite test/suite-ev-render-loop.ben in 0.063 seconds - 10 of 10 tests passed (0 skipped).
+profile-merge: 130 rows -> /Users/pankajdoharey/.cache/bender/pgo/interpreter/source-353749966/cumulative-55015.pending (run=130)
+Starting suite test/suite-ev.ben...
+Finished suite test/suite-ev.ben in 1.002 seconds - 776 of 776 tests passed (0 skipped).
+profile-merge: 388 rows -> /Users/pankajdoharey/.cache/bender/pgo/interpreter/source-2016556648/cumulative-55018.pending (run=391)
+Starting suite test/suite-ev2.ben...
+Finished suite test/suite-ev2.ben in 0.850 seconds - 13 of 13 tests passed (0 skipped).
+profile-merge: 176 rows -> /Users/pankajdoharey/.cache/bender/pgo/interpreter/source--2066124145/cumulative-55102.pending (run=178)
+Starting suite test/suite-ffi.ben...
+test/suite-ffi.ben:58:1: compile warning (strict): binding DsPoint/descriptor is shadowing a top-level binding
+test/suite-ffi.ben:58:1: compile warning (strict): binding DsPoint/size is shadowing a top-level binding
+test/suite-ffi.ben:58:1: compile warning (strict): binding DsPoint/offsets is shadowing a top-level binding
+test/suite-ffi.ben:58:1: compile warning (strict): binding DsPoint/new is shadowing a top-level binding
+test/suite-ffi.ben:58:1: compile warning (strict): binding DsPoint/malloc is shadowing a top-level binding
+test/suite-ffi.ben:58:1: compile warning (strict): binding DsPoint/free is shadowing a top-level binding
+test/suite-ffi.ben:58:1: compile warning (strict): binding DsPoint/x is shadowing a top-level binding
+test/suite-ffi.ben:58:1: compile warning (strict): binding DsPoint/set-x is shadowing a top-level binding
+test/suite-ffi.ben:58:1: compile warning (strict): binding DsPoint/y is shadowing a top-level binding
+test/suite-ffi.ben:58:1: compile warning (strict): binding DsPoint/set-y is shadowing a top-level binding
+test/suite-ffi.ben:58:1: compile warning (strict): binding DsPoint/n is shadowing a top-level binding
+test/suite-ffi.ben:58:1: compile warning (strict): binding DsPoint/set-n is shadowing a top-level binding
+test/suite-ffi.ben:58:1: compile warning (strict): binding DsPoint/descriptor is unused
+test/suite-ffi.ben:58:1: compile warning (strict): binding DsPoint/size is unused
+test/suite-ffi.ben:58:1: compile warning (strict): binding DsPoint/offsets is unused
+test/suite-ffi.ben:58:1: compile warning (strict): binding DsPoint/new is unused
+test/suite-ffi.ben:58:1: compile warning (strict): binding DsPoint/malloc is unused
+test/suite-ffi.ben:58:1: compile warning (strict): binding DsPoint/free is unused
+test/suite-ffi.ben:58:1: compile warning (strict): binding DsPoint/x is unused
+test/suite-ffi.ben:58:1: compile warning (strict): binding DsPoint/set-x is unused
+test/suite-ffi.ben:58:1: compile warning (strict): binding DsPoint/y is unused
+test/suite-ffi.ben:58:1: compile warning (strict): binding DsPoint/set-y is unused
+test/suite-ffi.ben:58:1: compile warning (strict): binding DsPoint/n is unused
+test/suite-ffi.ben:58:1: compile warning (strict): binding DsPoint/set-n is unused
+Finished suite test/suite-ffi.ben in 0.002 seconds - 35 of 35 tests passed (0 skipped).
+profile-merge: 143 rows -> /Users/pankajdoharey/.cache/bender/pgo/interpreter/source--1211336802/cumulative-55138.pending (run=158)
+Starting suite test/suite-fiber-capture.ben...
+Finished suite test/suite-fiber-capture.ben in 0.367 seconds - 7 of 7 tests passed (0 skipped).
+profile-merge: 97 rows -> /Users/pankajdoharey/.cache/bender/pgo/interpreter/source--1353640861/cumulative-55140.pending (run=97)
+Starting suite test/suite-filewatch.ben...
+Finished suite test/suite-filewatch.ben in 0.004 seconds - 23 of 23 tests passed (0 skipped).
+profile-merge: 132 rows -> /Users/pankajdoharey/.cache/bender/pgo/interpreter/source--551487243/cumulative-55149.pending (run=132)
+examples/pool.ben:93:1: compile warning (strict): top-level binding map is shadowing another top-level binding
+examples/future.ben:106:35: compile warning (strict): binding cache is shadowing a binding
+examples/future.ben:145:1: compile warning (strict): top-level binding deref is shadowing another top-level binding
+Starting suite test/suite-future.ben...
+Finished suite test/suite-future.ben in 0.658 seconds - 21 of 21 tests passed (0 skipped).
+profile-merge: 152 rows -> /Users/pankajdoharey/.cache/bender/pgo/interpreter/source--937588381/cumulative-55151.pending (run=152)
+Starting suite test/suite-gc-minor.ben...
+Finished suite test/suite-gc-minor.ben in 0.074 seconds - 12 of 12 tests passed (0 skipped).
+profile-merge: 94 rows -> /Users/pankajdoharey/.cache/bender/pgo/interpreter/source--592357062/cumulative-55165.pending (run=94)
+profile-merge: 42 rows -> /Users/pankajdoharey/.cache/bender/pgo/interpreter/source-1969820471/cumulative-55168.pending (run=42)
+suite-gc-slab-pages PASSED
+Starting suite test/suite-gc-stress.ben...
+Finished suite test/suite-gc-stress.ben in 0.070 seconds - 25 of 25 tests passed (0 skipped).
+profile-merge: 115 rows -> /Users/pankajdoharey/.cache/bender/pgo/interpreter/source--1338414547/cumulative-55175.pending (run=117)
+Starting suite test/suite-hinted-export.ben...
+Finished suite test/suite-hinted-export.ben in 0.007 seconds - 81 of 81 tests passed (0 skipped).
+profile-merge: 131 rows -> /Users/pankajdoharey/.cache/bender/pgo/interpreter/source-2078956607/cumulative-55178.pending (run=155)
+Starting suite test/suite-infer-union.ben...
+Finished suite test/suite-infer-union.ben in 0.000 seconds - 8 of 8 tests passed (0 skipped).
+profile-merge: 110 rows -> /Users/pankajdoharey/.cache/bender/pgo/interpreter/source--1770933808/cumulative-55181.pending (run=110)
+Starting suite test/suite-interrupt.ben...
+Finished suite test/suite-interrupt.ben in 0.114 seconds - 15 of 15 tests passed (0 skipped).
+profile-merge: 88 rows -> /Users/pankajdoharey/.cache/bender/pgo/interpreter/source--356967963/cumulative-55183.pending (run=88)
+Starting suite test/suite-inttypes.ben...
+Finished suite test/suite-inttypes.ben in 0.005 seconds - 381 of 381 tests passed (0 skipped).
+profile-merge: 186 rows -> /Users/pankajdoharey/.cache/bender/pgo/interpreter/source--618382242/cumulative-55188.pending (run=186)
+Starting suite test/suite-io.ben...
+Finished suite test/suite-io.ben in 0.001 seconds - 13 of 13 tests passed (0 skipped).
+profile-merge: 100 rows -> /Users/pankajdoharey/.cache/bender/pgo/interpreter/source-1983397486/cumulative-55190.pending (run=100)
+Starting suite test/suite-lane-chan.ben...
+Finished suite test/suite-lane-chan.ben in 1.505 seconds - 9 of 9 tests passed (0 skipped).
+profile-merge: 119 rows -> /Users/pankajdoharey/.cache/bender/pgo/interpreter/source-2032521520/cumulative-55193.pending (run=119)
+density at200000
+density at400000
+density at600000
+density section passed
+join after 640k-park stop in8.01932597160339s
+suite-lanes: all assertions passed
+Starting suite test/suite-lazy.ben...
+Finished suite test/suite-lazy.ben in 0.688 seconds - 37 of 37 tests passed (0 skipped).
+profile-merge: 176 rows -> /Users/pankajdoharey/.cache/bender/pgo/interpreter/source--620196431/cumulative-55745.pending (run=176)
+Starting suite test/suite-mailbox.ben...
+examples/mailbox.ben:161:1: compile warning (strict): top-level binding quit is shadowing another top-level binding
+error: went-bad
+  in <anonymous> [test/suite-mailbox.ben] on line 120, column 28
+error: seed-boom
+  in <anonymous> [test/suite-mailbox.ben] on line 245, column 48
+error: pair-boom
+  in <anonymous> [test/suite-mailbox.ben] on line 260, column 48
+error: pair-boom
+  in while [examples/mailbox.ben] on line 108, column 17
+  in <anonymous> [examples/mailbox.ben] on line 78, column 9
+error: pair-boom
+  in while [examples/mailbox.ben] on line 108, column 17
+  in <anonymous> [examples/mailbox.ben] on line 78, column 9
+error: deep
+  in <anonymous> [test/suite-mailbox.ben] on line 277, column 48
+error: deep
+  in while [examples/mailbox.ben] on line 108, column 17
+  in <anonymous> [examples/mailbox.ben] on line 78, column 9
+error: deep
+  in while [examples/mailbox.ben] on line 108, column 17
+  in <anonymous> [examples/mailbox.ben] on line 78, column 9
+error: deep
+  in while [examples/mailbox.ben] on line 108, column 17
+  in <anonymous> [examples/mailbox.ben] on line 78, column 9
+error: plain-boom
+  in <anonymous> [test/suite-mailbox.ben] on line 418, column 48
+Finished suite test/suite-mailbox.ben in 1.324 seconds - 76 of 76 tests passed (0 skipped).
+profile-merge: 164 rows -> /Users/pankajdoharey/.cache/bender/pgo/interpreter/source--1526723795/cumulative-55759.pending (run=164)
+Starting suite test/suite-marsh.ben...
+Finished suite test/suite-marsh.ben in 0.006 seconds - 73 of 73 tests passed (0 skipped).
+profile-merge: 300 rows -> /Users/pankajdoharey/.cache/bender/pgo/interpreter/source-1639603970/cumulative-55897.pending (run=302)
+Starting suite test/suite-math.ben...
+Finished suite test/suite-math.ben in 0.023 seconds - 158 of 158 tests passed (0 skipped).
+profile-merge: 108 rows -> /Users/pankajdoharey/.cache/bender/pgo/interpreter/source--1327684714/cumulative-55900.pending (run=108)
+Starting suite test/suite-multimethod.ben...
+test/suite-multimethod.ben:61:1: compile warning (strict): binding x is unused
+Finished suite test/suite-multimethod.ben in 0.001 seconds - 12 of 12 tests passed (0 skipped).
+profile-merge: 120 rows -> /Users/pankajdoharey/.cache/bender/pgo/interpreter/source--177665430/cumulative-55903.pending (run=124)
+examples/proc.ben:187:1: compile warning (strict): top-level binding quit is shadowing another top-level binding
+Starting suite test/suite-named-registry.ben...
+Finished suite test/suite-named-registry.ben in 1.646 seconds - 56 of 56 tests passed (0 skipped).
+profile-merge: 142 rows -> /Users/pankajdoharey/.cache/bender/pgo/interpreter/source-1136760744/cumulative-55905.pending (run=142)
+stress: 50 register/complete/whereis cycles clean
+Starting suite test/suite-native-abi-types.ben...
+hint 1 bool -> bool
+hint 4 table -> table
+hint 5 struct -> struct
+hint 6 tuple -> tuple
+hint 7 string -> string
+hint 8 keyword -> keyword
+hint 9 symbol -> symbol
+hint 10 buffer -> buffer
+hint 11 function -> function
+hint 12 cfunction -> cfunction
+hint 13 fiber -> fiber
+def 0 thunk arity 0 slots 43 instrs 274
+def 1 bool-flip arity 1 slots 2 instrs 5
+def 2 bool-int arity 1 slots 2 instrs 5
+def 3 bool-int-caller arity 1 slots 3 instrs 4
+def 4 table-id arity 1 slots 1 instrs 1
+def 5 struct-id arity 1 slots 1 instrs 1
+def 6 tuple-id arity 1 slots 1 instrs 1
+def 7 string-id arity 1 slots 1 instrs 1
+def 8 keyword-id arity 1 slots 1 instrs 1
+def 9 symbol-id arity 1 slots 1 instrs 1
+def 10 buffer-id arity 1 slots 1 instrs 1
+def 11 function-id arity 1 slots 1 instrs 1
+def 12 cfunction-id arity 1 slots 1 instrs 1
+def 13 fiber-id arity 1 slots 1 instrs 1
+def 14 <anon-14> arity 1 slots 2 instrs 2
+def 15 <anon-15> arity 1 slots 2 instrs 2
+def 16 <anon-16> arity 0 slots 1 instrs 2
+contains 0 1
+contains 0 2
+contains 0 3
+contains 0 4
+contains 0 5
+contains 0 6
+contains 0 7
+contains 0 8
+contains 0 9
+contains 0 10
+contains 0 11
+contains 0 12
+contains 0 13
+contains 0 14
+contains 0 15
+contains 0 16
+calls 0 1
+calls 0 1
+calls 0 1
+extern 0 type
+unknown 0 2
+unknown 0 2
+calls 0 3
+calls 0 3
+calls 0 4
+arity-unknown 0
+extern 0 tbl
+arity-unknown 0
+calls 0 5
+calls 0 5
+calls 0 6
+calls 0 6
+calls 0 7
+calls 0 8
+calls 0 9
+extern 0 buffer
+calls 0 10
+calls 0 10
+calls 0 11
+unknown 0 34
+calls 0 11
+unknown 0 38
+calls 0 12
+unknown 0 38
+extern 0 fiber/new
+calls 0 13
+extern 0 fiber/status
+calls 3 2
+stats 17 30 20 5 5
+reach 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16
+callers 1 1 0
+callers 2 1 3
+callers 3 1 0
+callers 4 1 0
+callers 5 1 0
+callers 6 1 0
+callers 7 1 0
+callers 8 1 0
+callers 9 1 0
+callers 10 1 0
+callers 11 1 0
+callers 12 1 0
+callers 13 1 0
+fix 17 0 0
+called-as 1 1
+called-as 2 1
+called-as 3 1
+called-as 5 1
+called-as 6 1
+called-as 7 1
+called-as 8 1
+called-as 9 1
+called-as 10 1
+called-as 11 1
+called-as 12 1
+called-as 13 1
+arity 0 2
+hints 11 0
+hint-call 1 5 6 7 8 9 10 11 12 13
+table-open 0 thunk slot 20 at pc 104
+table-open 0 thunk slot 21 at pc 119
+ret 2 long
+ret 3 long
+ret 16 long
+ptypes 3 long
+rets 3 0 0 rounds 2
+dce unsafe pattern 2 def 0 (thunk) pc 200: function value pending as call argument -- stripping nothing
+native-skip 0 thunk types not proven: params [] ret bool
+native-skip 14  types not proven: params [?] ret ?
+native-skip 15  types not proven: params [?] ret ?
+native-skip 16  types not proven: params [] ret long
+native-lib 13 kernels /tmp/bender-aot-native-abi-suite/app-native
+mkimage: 3658 bytes, 828 registry names -> /tmp/bender-aot-native-abi-suite/app.c
+built /tmp/bender-aot-native-abi-suite/app
+native_init: registered 13 wrappers
+native-telemetry id=00000001 name=bool_flip calls=3 arity-guard-failures=0 type-guard-failures=0
+native-telemetry id=00000002 name=bool_int calls=2 arity-guard-failures=0 type-guard-failures=0
+native-telemetry id=00000003 name=bool_int_caller calls=2 arity-guard-failures=0 type-guard-failures=0
+native-telemetry id=00000004 name=table_id calls=1 arity-guard-failures=0 type-guard-failures=0
+native-telemetry id=00000005 name=struct_id calls=2 arity-guard-failures=0 type-guard-failures=0
+native-telemetry id=00000006 name=tuple_id calls=2 arity-guard-failures=0 type-guard-failures=0
+native-telemetry id=00000007 name=string_id calls=1 arity-guard-failures=0 type-guard-failures=0
+native-telemetry id=00000008 name=keyword_id calls=1 arity-guard-failures=0 type-guard-failures=0
+native-telemetry id=00000009 name=symbol_id calls=1 arity-guard-failures=0 type-guard-failures=0
+native-telemetry id=0000000A name=buffer_id calls=2 arity-guard-failures=0 type-guard-failures=0
+native-telemetry id=0000000B name=function_id calls=2 arity-guard-failures=0 type-guard-failures=0
+native-telemetry id=0000000C name=cfunction_id calls=1 arity-guard-failures=0 type-guard-failures=0
+native-telemetry id=0000000D name=fiber_id calls=1 arity-guard-failures=0 type-guard-failures=0
+hint 1 bool -> bool
+hint 2 table -> table
+hint 3 string -> string
+def 0 thunk arity 0 slots 14 instrs 84
+def 1 bool-flip arity 1 slots 2 instrs 5
+def 2 table-id arity 1 slots 1 instrs 1
+def 3 string-id arity 1 slots 1 instrs 1
+def 4 protect arity 0 slots 1 instrs 4
+def 5 protect arity 0 slots 1 instrs 4
+def 6 protect arity 0 slots 1 instrs 4
+contains 0 1
+contains 0 2
+contains 0 3
+contains 0 4
+contains 0 5
+contains 0 6
+extern 0 fiber/new
+extern 0 fiber/status
+extern 0 not
+arity-unknown 0
+extern 0 fiber/new
+extern 0 fiber/status
+extern 0 not
+arity-unknown 0
+extern 0 fiber/new
+extern 0 fiber/status
+extern 0 not
+arity-unknown 0
+calls 4 1
+calls 5 2
+calls 6 3
+stats 7 12 3 9 0
+reach 0 1 2 3 4 5 6
+callers 1 1 4
+callers 2 1 5
+callers 3 1 6
+fix 7 0 0
+called-as 1 1
+called-as 2 1
+called-as 3 1
+arity 0 3
+hints 3 0
+hint-call 1 2 3
+rets 0 0 0 rounds 2
+dce unsafe pattern 2 def 0 (thunk) pc 10: function value pending as call argument -- stripping nothing
+native-skip 0 thunk types not proven: params [] ret ?
+native-skip 4 protect types not proven: params [] ret bool
+native-skip 5 protect types not proven: params [] ret table
+native-skip 6 protect types not proven: params [] ret string
+native-lib 3 kernels /tmp/bender-aot-native-abi-suite/guard-native
+mkimage: 1316 bytes, 828 registry names -> /tmp/bender-aot-native-abi-suite/guard.c
+built /tmp/bender-aot-native-abi-suite/guard
+native_init: registered 3 wrappers
+native-telemetry id=00000001 name=bool_flip calls=0 arity-guard-failures=0 type-guard-failures=1
+native-telemetry id=00000002 name=table_id calls=0 arity-guard-failures=0 type-guard-failures=1
+native-telemetry id=00000003 name=string_id calls=0 arity-guard-failures=0 type-guard-failures=1
+Finished suite test/suite-native-abi-types.ben in 3.324 seconds - 18 of 18 tests passed (0 skipped).
+profile-merge: 92 rows -> /Users/pankajdoharey/.cache/bender/pgo/interpreter/source--548902817/cumulative-55936.pending (run=92)
+Starting suite test/suite-native-array-result.ben...
+hint 1 array double -> array
+hint 2 array array double -> array
+hint 3 array double -> double
+hint 4 array array double -> double
+hint 5 array double -> array
+hint 8 array double -> double
+hint 9 array -> double
+def 0 thunk arity 0 slots 33 instrs 270
+def 1 mut-return arity 2 slots 4 instrs 5
+def 2 fresh-return arity 3 slots 3 instrs 2
+def 3 composed arity 2 slots 6 instrs 7
+def 4 distinct arity 3 slots 8 instrs 8
+def 5 exact-tail arity 2 slots 3 instrs 3
+def 6 mut-nil arity 2 slots 2 instrs 2
+def 7 incompatible arity 1 slots 2 instrs 4
+def 8 mixed-slot arity 2 slots 6 instrs 12
+def 9 fold-limbs arity 1 slots 9 instrs 47
+def 10 try arity 0 slots 2 instrs 5
+def 11 try arity 0 slots 2 instrs 8
+def 12 try arity 0 slots 1 instrs 4
+contains 0 1
+contains 0 2
+contains 0 3
+contains 0 4
+contains 0 5
+contains 0 6
+contains 0 7
+contains 0 8
+contains 0 9
+contains 0 10
+contains 0 11
+contains 0 12
+calls 0 3
+arity-unknown 0
+extern 0 a
+calls 0 4
+arity-unknown 0
+extern 0 b
+extern 0 other
+calls 0 5
+arity-unknown 0
+extern 0 c
+calls 0 8
+arity-unknown 0
+calls 0 8
+arity-unknown 0
+calls 0 9
+arity-unknown 0
+calls 0 9
+arity-unknown 0
+calls 0 9
+arity-unknown 0
+extern 0 fiber/new
+extern 0 fiber/status
+extern 0 fiber/new
+extern 0 fiber/status
+extern 0 fiber/new
+extern 0 fiber/status
+calls 3 1
+calls 4 2
+calls 5 1
+calls 7 6
+calls 8 1
+extern 9 math/floor
+calls 10 1
+calls 11 1
+arity-unknown 11
+calls 12 7
+hint-bad 6 bad-returns-hint
+hint-bad 7 bad-returns-hint
+stats 13 27 16 11 0
+reach 0 1 2 3 4 5 6 7 8 9 10 11 12
+callers 1 5 3 5 8 10 11
+callers 2 1 4
+callers 3 1 0
+callers 4 1 0
+callers 5 1 0
+callers 6 1 7
+callers 7 1 12
+callers 8 1 0
+callers 9 1 0
+fix 13 0 0
+called-as 1 2
+called-as 2 3
+called-as 6 2
+called-as 7 1
+arity 0 9
+hints 9 2
+hint-call 1 2 6 7
+ret 3 double
+ret 4 double
+ret 8 double
+ret 9 double
+ptypes 7 double
+rets 0 4 0 rounds 2
+dce unsafe pattern 2 def 0 (thunk) pc 199: function value pending as call argument -- stripping nothing
+native-skip 0 thunk types not proven: params [] ret bool
+native-skip 10 try types not proven: params [] ret array
+native-skip 11 try types not proven: params [] ret array
+native-skip 12 try types not proven: params [] ret nil
+native-skip 7 incompatible call to non-native or type mismatch
+native-skip 8 mixed-slot slot s2 mixes u64ok/array
+native-lib 7 kernels /tmp/bender-native-array-result-suite-56026/app-native
+mkimage: 3792 bytes, 828 registry names -> /tmp/bender-native-array-result-suite-56026/app.c
+built /tmp/bender-native-array-result-suite-56026/app
+native_init: registered 7 wrappers
+native-telemetry id=00000001 name=mut_return calls=1 arity-guard-failures=1 type-guard-failures=1
+native-telemetry id=00000003 name=composed calls=1 arity-guard-failures=0 type-guard-failures=0
+native-telemetry id=00000004 name=distinct calls=1 arity-guard-failures=0 type-guard-failures=0
+native-telemetry id=00000005 name=exact_tail calls=1 arity-guard-failures=0 type-guard-failures=0
+native-telemetry id=00000006 name=mut_nil calls=0 arity-guard-failures=0 type-guard-failures=1
+native-telemetry id=00000009 name=fold_limbs calls=3 arity-guard-failures=0 type-guard-failures=0
+Finished suite test/suite-native-array-result.ben in 1.033 seconds - 16 of 16 tests passed (0 skipped).
+profile-merge: 94 rows -> /Users/pankajdoharey/.cache/bender/pgo/interpreter/source--1673030482/cumulative-56026.pending (run=94)
+Starting suite test/suite-native-dispatch.ben...
+bender --aot: pgo collect: /tmp/bender-aot-native-dispatch-suite/app.ben train
+bender --aot: pgo collected profile
+native_init: registered 2 wrappers
+native-telemetry id=00000001 name=flip_scale calls=200 boxed-fallbacks=0
+native-telemetry id=00000002 name=flip_cmp calls=2 boxed-fallbacks=0
+profile-merge: 32 rows -> /tmp/bender-aot-native-dispatch-suite/cache/bender/pgo/app.rev-56057-0/aggregate.jdn (home=32)
+bender --aot: cached PGO profiles for 1 workloads
+bender --aot: pgo parity ok, installed /tmp/bender-aot-native-dispatch-suite/app
+profile-merge: 30 rows -> /tmp/bender-aot-native-dispatch-suite/cache/bender/pgo/interpreter/source-1676972764/cumulative-56079.pending (run=30)
+native_init: registered 2 wrappers
+native-telemetry id=00000001 name=flip_scale calls=200 boxed-fallbacks=0
+native-telemetry id=00000002 name=flip_cmp calls=2 boxed-fallbacks=0
+profile-merge: 30 rows -> /tmp/bender-aot-native-dispatch-suite/cache/bender/pgo/interpreter/source-1676972764/cumulative-56082.pending (run=59)
+native_init: registered 2 wrappers
+native-telemetry id=00000001 name=flip_scale calls=0 boxed-fallbacks=1
+native-telemetry id=00000002 name=flip_cmp calls=0 boxed-fallbacks=1
+profile-merge: 30 rows -> /tmp/bender-aot-native-dispatch-suite/cache/bender/pgo/interpreter/source-1676972764/cumulative-56086.pending (run=89)
+native_init: registered 2 wrappers
+native-telemetry id=00000001 name=flip_scale calls=2 boxed-fallbacks=1
+native-telemetry id=00000002 name=flip_cmp calls=2 boxed-fallbacks=1
+profile-merge: 25 rows -> /tmp/bender-aot-native-dispatch-suite/cache/bender/pgo/interpreter/source--621756638/cumulative-56100.pending (run=25)
+Finished suite test/suite-native-dispatch.ben in 1.055 seconds - 24 of 24 tests passed (0 skipped).
+profile-merge: 135 rows -> /Users/pankajdoharey/.cache/bender/pgo/interpreter/source-930520070/cumulative-56055.pending (run=135)
+Starting suite test/suite-native-fiber.ben...
+Finished suite test/suite-native-fiber.ben in 0.006 seconds - 52 of 52 tests passed (0 skipped).
+profile-merge: 137 rows -> /Users/pankajdoharey/.cache/bender/pgo/interpreter/source-379237617/cumulative-56103.pending (run=138)
+Starting suite test/suite-native-joint-dispatch.ben...
+Finished suite test/suite-native-joint-dispatch.ben in 0.944 seconds - 28 of 28 tests passed (0 skipped).
+profile-merge: 136 rows -> /Users/pankajdoharey/.cache/bender/pgo/interpreter/source--1915599158/cumulative-56106.pending (run=136)
+Starting suite test/suite-native-keyword.ben...
+def 0 thunk arity 0 slots 7 instrs 57
+def 1 kw-eq-count arity 5 slots 8 instrs 13
+contains 0 1
+calls 0 1
+arity-unknown 0
+extern 0 a
+calls 0 1
+extern 0 a
+calls 0 1
+extern 0 a
+stats 2 6 3 3 0
+reach 0 1
+callers 1 1 0
+fix 2 0 0
+called-as 1 5
+arity 0 1
+hints 0 0
+hint-call
+rets 0 0 0 rounds 2
+dce safe reachable 0 1 excluded -
+native-skip 0 thunk types not proven: params [] ret bool
+native-lib 1 kernels /tmp/bender-aot-native-keyword-suite/kw-param-eq-native
+mkimage: 690 bytes, 828 registry names -> /tmp/bender-aot-native-keyword-suite/kw-param-eq.c
+built /tmp/bender-aot-native-keyword-suite/kw-param-eq
+native_init: registered 1 wrappers
+native-telemetry id=00000001 name=kw_eq_count calls=3 arity-guard-failures=0 type-guard-failures=0
+def 0 thunk arity 0 slots 7 instrs 63
+def 1 sym-eq-count arity 5 slots 8 instrs 13
+contains 0 1
+calls 0 1
+arity-unknown 0
+extern 0 a
+extern 0 symbol
+extern 0 symbol
+calls 0 1
+extern 0 a
+calls 0 1
+extern 0 a
+stats 2 8 3 5 0
+reach 0 1
+callers 1 1 0
+fix 2 0 0
+called-as 1 5
+arity 0 1
+hints 0 0
+hint-call
+rets 0 0 0 rounds 2
+dce safe reachable 0 1 excluded -
+native-skip 0 thunk types not proven: params [] ret bool
+native-lib 1 kernels /tmp/bender-aot-native-keyword-suite/sym-param-eq-native
+mkimage: 740 bytes, 828 registry names -> /tmp/bender-aot-native-keyword-suite/sym-param-eq.c
+built /tmp/bender-aot-native-keyword-suite/sym-param-eq
+native_init: registered 1 wrappers
+native-telemetry id=00000001 name=sym_eq_count calls=3 arity-guard-failures=0 type-guard-failures=0
+def 0 thunk arity 0 slots 6 instrs 32
+def 1 kw-rank arity 1 slots 5 instrs 17
+contains 0 1
+calls 0 1
+calls 0 1
+calls 0 1
+stats 2 3 3 0 0
+reach 0 1
+callers 1 1 0
+fix 2 0 0
+called-as 1 1
+arity 0 0
+hints 0 0
+hint-call
+ret 1 long
+rets 1 0 0 rounds 2
+dce safe reachable 0 1 excluded -
+native-skip 0 thunk types not proven: params [] ret bool
+native-skip 1 kw-rank slot s1 mixes bool/keyword/u64ok
+native-lib 0 kernels /tmp/bender-aot-native-keyword-suite/kw-dispatch-native
+mkimage: 516 bytes, 828 registry names -> /tmp/bender-aot-native-keyword-suite/kw-dispatch.c
+built /tmp/bender-aot-native-keyword-suite/kw-dispatch
+Finished suite test/suite-native-keyword.ben in 2.248 seconds - 12 of 12 tests passed (0 skipped).
+profile-merge: 97 rows -> /Users/pankajdoharey/.cache/bender/pgo/interpreter/source--1341247285/cumulative-56152.pending (run=97)
+Starting suite test/suite-native-string.ben...
+def 0 thunk arity 0 slots 7 instrs 57
+def 1 eq-count arity 5 slots 8 instrs 13
+contains 0 1
+calls 0 1
+arity-unknown 0
+extern 0 a
+calls 0 1
+extern 0 a
+calls 0 1
+extern 0 a
+stats 2 6 3 3 0
+reach 0 1
+callers 1 1 0
+fix 2 0 0
+called-as 1 5
+arity 0 1
+hints 0 0
+hint-call
+rets 0 0 0 rounds 2
+dce safe reachable 0 1 excluded -
+native-skip 0 thunk types not proven: params [] ret bool
+native-lib 1 kernels /tmp/bender-aot-native-string-suite/param-eq-native
+mkimage: 695 bytes, 828 registry names -> /tmp/bender-aot-native-string-suite/param-eq.c
+built /tmp/bender-aot-native-string-suite/param-eq
+native_init: registered 1 wrappers
+native-telemetry id=00000001 name=eq_count calls=3 arity-guard-failures=0 type-guard-failures=0
+def 0 thunk arity 0 slots 5 instrs 22
+def 1 flag-for arity 1 slots 3 instrs 7
+contains 0 1
+calls 0 1
+calls 0 1
+stats 2 2 2 0 0
+reach 0 1
+callers 1 1 0
+fix 2 0 0
+called-as 1 1
+arity 0 0
+hints 0 0
+hint-call
+ret 1 long
+rets 1 0 0 rounds 2
+dce safe reachable 0 1 excluded -
+native-skip 0 thunk types not proven: params [] ret bool
+native-skip 1 flag-for slot s1 mixes string/u64ok
+native-lib 0 kernels /tmp/bender-aot-native-string-suite/literal-reuse-native
+mkimage: 415 bytes, 828 registry names -> /tmp/bender-aot-native-string-suite/literal-reuse.c
+built /tmp/bender-aot-native-string-suite/literal-reuse
+Finished suite test/suite-native-string.ben in 1.452 seconds - 8 of 8 tests passed (0 skipped).
+profile-merge: 92 rows -> /Users/pankajdoharey/.cache/bender/pgo/interpreter/source--1936173577/cumulative-56223.pending (run=92)
+Starting suite test/suite-native-struct-shape.ben...
+test/suite-native-struct-shape.ben:53:3: compile warning (normal): binding match is shadowing a macro
+def 0 thunk arity 0 slots 2 instrs 4
+def 1 flat-sum arity 1 slots 6 instrs 19
+def 2 main arity 0 slots 4 instrs 21
+contains 0 1
+contains 0 2
+unknown 1 1
+arity-unknown 1
+unknown 1 1
+calls 2 1
+extern 2 print
+calls 2 1
+extern 2 print
+calls 2 1
+extern 2 print
+stats 3 8 3 3 2
+reach 0 1 2
+callers 1 1 2
+fix 3 0 0
+called-as 1 1
+arity 0 1
+hints 0 0
+hint-call
+table-flat 1 flat-sum slot 1 x:double,y:double
+ret 1 double
+ptypes 1 double
+rets 0 1 0 rounds 8
+dce safe reachable 0 1 2 excluded -
+native-skip 0 thunk types not proven: params [] ret ?
+native-skip 2 main types not proven: params [] ret ?
+native-lib 1 kernels /tmp/bender-aot-native-struct-shape-suite/flat-doubles-native
+mkimage: 413 bytes, 828 registry names -> /tmp/bender-aot-native-struct-shape-suite/flat-doubles.c
+built /tmp/bender-aot-native-struct-shape-suite/flat-doubles
+native_init: registered 1 wrappers
+native-telemetry id=00000001 name=flat_sum calls=3 arity-guard-failures=0 type-guard-failures=0
+def 0 thunk arity 0 slots 3 instrs 6
+def 1 tail-get arity 1 slots 7 instrs 27
+def 2 tail-read arity 1 slots 4 instrs 12
+def 3 main arity 0 slots 5 instrs 28
+contains 0 1
+contains 0 2
+contains 0 3
+unknown 1 1
+arity-unknown 1
+unknown 1 1
+arity-unknown 1
+unknown 1 1
+unknown 1 1
+unknown 2 1
+arity-unknown 2
+calls 3 1
+extern 3 print
+calls 3 2
+extern 3 print
+calls 3 2
+extern 3 print
+calls 3 1
+extern 3 print
+stats 4 13 4 4 5
+reach 0 1 2 3
+callers 1 1 3
+callers 2 1 3
+fix 4 0 0
+called-as 1 1
+called-as 2 1
+arity 0 3
+hints 0 0
+hint-call
+table-flat 1 tail-get slot 1 n:long,v:double,w:double
+table-flat 2 tail-read slot 1 v:double,w:double
+ret 1 double
+ret 2 double
+ptypes 1 double
+ptypes 2 double
+rets 0 2 0 rounds 3
+dce safe reachable 0 1 2 3 excluded -
+native-skip 0 thunk types not proven: params [] ret ?
+native-skip 3 main types not proven: params [] ret ?
+native-lib 2 kernels /tmp/bender-aot-native-struct-shape-suite/flat-mixed-native
+mkimage: 537 bytes, 828 registry names -> /tmp/bender-aot-native-struct-shape-suite/flat-mixed.c
+built /tmp/bender-aot-native-struct-shape-suite/flat-mixed
+native_init: registered 2 wrappers
+native-telemetry id=00000001 name=tail_get calls=2 arity-guard-failures=0 type-guard-failures=0
+native-telemetry id=00000002 name=tail_read calls=2 arity-guard-failures=0 type-guard-failures=0
+def 0 thunk arity 0 slots 2 instrs 4
+def 1 mixed-use arity 1 slots 7 instrs 15
+def 2 main arity 0 slots 4 instrs 21
+contains 0 1
+contains 0 2
+unknown 1 1
+arity-unknown 1
+calls 2 1
+extern 2 print
+calls 2 1
+extern 2 print
+calls 2 1
+extern 2 print
+stats 3 7 3 3 1
+reach 0 1 2
+callers 1 1 2
+fix 3 0 0
+called-as 1 1
+arity 0 1
+hints 0 0
+hint-call
+table-flat 1 mixed-use slot 1 x:double
+ret 1 double
+rets 0 1 0 rounds 2
+dce safe reachable 0 1 2 excluded -
+native-skip 0 thunk types not proven: params [] ret ?
+native-skip 2 main types not proven: params [] ret ?
+native-lib 1 kernels /tmp/bender-aot-native-struct-shape-suite/live-kw-coexist-native
+mkimage: 410 bytes, 828 registry names -> /tmp/bender-aot-native-struct-shape-suite/live-kw-coexist.c
+built /tmp/bender-aot-native-struct-shape-suite/live-kw-coexist
+native_init: registered 1 wrappers
+native-telemetry id=00000001 name=mixed_use calls=3 arity-guard-failures=0 type-guard-failures=0
+def 0 thunk arity 0 slots 2 instrs 4
+def 1 two-sites arity 2 slots 6 instrs 20
+def 2 main arity 0 slots 3 instrs 16
+contains 0 1
+contains 0 2
+unknown 1 4
+arity-unknown 1
+calls 2 1
+extern 2 print
+calls 2 1
+extern 2 print
+stats 3 5 2 2 1
+reach 0 1 2
+callers 1 1 2
+fix 3 0 0
+called-as 1 2
+arity 0 1
+hints 0 0
+hint-call
+table-open 1 two-sites slot 2 at pc 13
+table-open 1 two-sites slot 4 at pc 17
+rets 0 0 0 rounds 2
+dce safe reachable 0 1 2 excluded -
+native-skip 0 thunk types not proven: params [] ret ?
+native-skip 1 two-sites types not proven: params [bool long] ret ?
+native-skip 2 main types not proven: params [] ret ?
+native-lib 0 kernels /tmp/bender-aot-native-struct-shape-suite/two-sites-native
+mkimage: 497 bytes, 828 registry names -> /tmp/bender-aot-native-struct-shape-suite/two-sites.c
+built /tmp/bender-aot-native-struct-shape-suite/two-sites
+def 0 thunk arity 0 slots 3 instrs 6
+def 1 reflected arity 1 slots 5 instrs 13
+def 2 closed arity 1 slots 6 instrs 16
+def 3 main arity 0 slots 2 instrs 7
+contains 0 1
+contains 0 2
+contains 0 3
+extern 1 keys
+calls 2 1
+arity-unknown 2
+unknown 2 1
+calls 3 2
+extern 3 print
+stats 4 5 2 2 1
+reach 0 1 2 3
+callers 1 1 2
+callers 2 1 3
+fix 4 0 0
+called-as 2 1
+arity 0 1
+hints 0 0
+hint-call
+table-open 2 closed slot 1 at pc 12
+ret 1 long
+ptypes 2 long
+rets 1 0 0 rounds 2
+dce safe reachable 0 1 2 3 excluded -
+native-skip 0 thunk types not proven: params [] ret ?
+native-skip 1 reflected loop requires resumable VM quantum polls
+native-skip 2 closed types not proven: params [long] ret ?
+native-skip 3 main types not proven: params [] ret ?
+native-lib 0 kernels /tmp/bender-aot-native-struct-shape-suite/reflection-escape-native
+mkimage: 596 bytes, 828 registry names -> /tmp/bender-aot-native-struct-shape-suite/reflection-escape.c
+built /tmp/bender-aot-native-struct-shape-suite/reflection-escape
+def 0 thunk arity 0 slots 2 instrs 4
+def 1 str-field arity 1 slots 5 instrs 12
+def 2 main arity 0 slots 2 instrs 7
+contains 0 1
+contains 0 2
+unknown 1 1
+arity-unknown 1
+calls 2 1
+extern 2 print
+stats 3 3 1 1 1
+reach 0 1 2
+callers 1 1 2
+fix 3 0 0
+called-as 1 1
+arity 0 1
+hints 0 0
+hint-call
+ptypes 1 double
+rets 0 0 0 rounds 2
+dce safe reachable 0 1 2 excluded -
+native-skip 0 thunk types not proven: params [] ret ?
+native-skip 1 str-field types not proven: params [double] ret ?
+native-skip 2 main types not proven: params [] ret ?
+native-lib 0 kernels /tmp/bender-aot-native-struct-shape-suite/string-field-native
+mkimage: 400 bytes, 828 registry names -> /tmp/bender-aot-native-struct-shape-suite/string-field.c
+built /tmp/bender-aot-native-struct-shape-suite/string-field
+Finished suite test/suite-native-struct-shape.ben in 6.340 seconds - 30 of 30 tests passed (0 skipped).
+profile-merge: 120 rows -> /Users/pankajdoharey/.cache/bender/pgo/interpreter/source--827383538/cumulative-56272.pending (run=120)
+Starting suite test/suite-native-void.ben...
+def 0 thunk arity 0 slots 15 instrs 102
+def 1 mixed-nil-returns arity 1 slots 2 instrs 4
+def 2 numeric-params-explicit-nil arity 3 slots 4 instrs 3
+def 3 array-param-explicit-nil arity 3 slots 4 instrs 3
+def 4 numeric-only-caller arity 3 slots 5 instrs 5
+contains 0 1
+contains 0 2
+contains 0 3
+contains 0 4
+calls 0 1
+calls 0 1
+calls 0 1
+extern 0 type
+unknown 0 2
+arity-unknown 0
+extern 0 a1
+calls 0 3
+arity-unknown 0
+extern 0 a2
+extern 0 a2
+calls 0 4
+arity-unknown 0
+extern 0 a3
+calls 4 2
+stats 5 12 6 5 1
+reach 0 1 2 3 4
+callers 1 1 0
+callers 2 1 4
+callers 3 1 0
+callers 4 1 0
+fix 5 0 0
+called-as 1 1
+called-as 2 3
+arity 0 3
+hints 0 0
+hint-call
+ret 4 long
+ptypes 1 long
+rets 1 0 0 rounds 2
+dce safe reachable 0 1 2 3 4 excluded -
+native-skip 0 thunk types not proven: params [] ret bool
+native-lib 4 kernels /tmp/bender-aot-native-void-suite/app-native
+mkimage: 1318 bytes, 828 registry names -> /tmp/bender-aot-native-void-suite/app.c
+built /tmp/bender-aot-native-void-suite/app
+native_init: registered 4 wrappers
+native-telemetry id=00000001 name=mixed_nil_returns calls=3 arity-guard-failures=0 type-guard-failures=0
+native-telemetry id=00000002 name=numeric_params_explicit_nil calls=1 arity-guard-failures=0 type-guard-failures=0
+native-telemetry id=00000003 name=array_param_explicit_nil calls=1 arity-guard-failures=0 type-guard-failures=0
+native-telemetry id=00000004 name=numeric_only_caller calls=1 arity-guard-failures=0 type-guard-failures=0
+Finished suite test/suite-native-void.ben in 0.756 seconds - 7 of 7 tests passed (0 skipped).
+profile-merge: 90 rows -> /Users/pankajdoharey/.cache/bender/pgo/interpreter/source--1246202334/cumulative-56463.pending (run=90)
+Starting suite test/suite-net.ben...
+Finished suite test/suite-net.ben in 0.001 seconds - 2 of 2 tests passed (0 skipped).
+profile-merge: 80 rows -> /Users/pankajdoharey/.cache/bender/pgo/interpreter/source-432012703/cumulative-56488.pending (run=80)
+Starting suite test/suite-os.ben...
+Finished suite test/suite-os.ben in 0.065 seconds - 61 of 61 tests passed (0 skipped).
+profile-merge: 182 rows -> /Users/pankajdoharey/.cache/bender/pgo/interpreter/source-84204279/cumulative-56491.pending (run=182)
+Starting suite test/suite-parse.ben...
+Finished suite test/suite-parse.ben in 0.002 seconds - 60 of 60 tests passed (0 skipped).
+profile-merge: 180 rows -> /Users/pankajdoharey/.cache/bender/pgo/interpreter/source-565036138/cumulative-56508.pending (run=180)
+Starting suite test/suite-peg.ben...
+Finished suite test/suite-peg.ben in 0.011 seconds - 366 of 366 tests passed (0 skipped).
+profile-merge: 433 rows -> /Users/pankajdoharey/.cache/bender/pgo/interpreter/source--250643765/cumulative-56511.pending (run=435)
+Starting suite test/suite-pgo-cache-migration.ben...
+Finished suite test/suite-pgo-cache-migration.ben in 2.442 seconds - 14 of 14 tests passed (0 skipped).
+profile-merge: 141 rows -> /Users/pankajdoharey/.cache/bender/pgo/interpreter/source-2052428897/cumulative-56514.pending (run=141)
+Starting suite test/suite-pgo-seed.ben...
+Finished suite test/suite-pgo-seed.ben in 0.001 seconds - 19 of 19 tests passed (0 skipped).
+profile-merge: 155 rows -> /Users/pankajdoharey/.cache/bender/pgo/interpreter/source-1195175452/cumulative-56602.pending (run=155)
+Starting suite test/suite-pool.ben...
+examples/pool.ben:93:1: compile warning (strict): top-level binding map is shadowing another top-level binding
+error: kaboom
+  in <anonymous> [test/suite-pool.ben] on line 106, column 26
+error: nope
+  in <anonymous> [test/suite-pool.ben] on line 138, column 34
+error: nope
+  in <anonymous> [test/suite-pool.ben] on line 141, column 42
+error: pool used from non-owner thread
+  in pool/acquire [src/core/ev.c] on line 5736
+  in pool/call [boot.ben] (tail call) on line 4947, column 5
+Finished suite test/suite-pool.ben in 3.899 seconds - 56 of 56 tests passed (0 skipped).
+profile-merge: 153 rows -> /Users/pankajdoharey/.cache/bender/pgo/interpreter/source-462377761/cumulative-56604.pending (run=153)
+Starting suite test/suite-pp.ben...
+Finished suite test/suite-pp.ben in 0.001 seconds - 32 of 32 tests passed (0 skipped).
+profile-merge: 126 rows -> /Users/pankajdoharey/.cache/bender/pgo/interpreter/source--180974777/cumulative-56700.pending (run=126)
+phase=lanes=1
+phase=table type=:core/proc
+phase=abstract-only type=:tuple
+phase=done lanes=0
+profile-merge: 60 rows -> /Users/pankajdoharey/.cache/bender/pgo/interpreter/source--959717083/cumulative-56702.pending (run=60)
+suite-proc-capture-locality PASSED
+profile-merge: 76 rows -> /Users/pankajdoharey/.cache/bender/pgo/interpreter/source-444557215/cumulative-56704.pending (run=76)
+suite-proc-spawn-return PASSED
+Starting suite test/suite-proc.ben...
+examples/proc.ben:187:1: compile warning (strict): top-level binding quit is shadowing another top-level binding
+examples/tasklet.ben:67:1: compile warning (strict): binding pid is unused
+examples/tasklet.ben:234:1: compile warning (strict): top-level binding quit is shadowing another top-level binding
+test/suite-proc.ben:241:27: compile warning (strict): binding tag is unused
+test/suite-proc.ben:241:27: compile warning (strict): binding payload is unused
+test/suite-proc.ben:259:27: compile warning (strict): binding tag is unused
+test/suite-proc.ben:259:27: compile warning (strict): binding payload is unused
+test/suite-proc.ben:271:29: compile warning (strict): binding tag is unused
+test/suite-proc.ben:271:29: compile warning (strict): binding payload is unused
+test/suite-proc.ben:279:29: compile warning (strict): binding tag is unused
+test/suite-proc.ben:279:29: compile warning (strict): binding payload is unused
+test/suite-proc.ben:306:34: compile warning (strict): binding tag is unused
+test/suite-proc.ben:331:41: compile warning (strict): binding tag is unused
+test/suite-proc.ben:333:13: compile warning (strict): binding tag is unused
+test/suite-proc.ben:333:13: compile warning (strict): binding payload is unused
+error: done
+  in ev/take [src/core/ev.c] on line 1991
+  in <anonymous> [test/suite-proc.ben] on line 437, column 29
+test/suite-proc.ben:493:11: compile warning (strict): binding t is unused
+test/suite-proc.ben:603:28: compile warning (strict): binding tag is unused
+Finished suite test/suite-proc.ben in 11.252 seconds - 99 of 99 tests passed (0 skipped).
+Starting suite test/suite-process-heaps.ben...
+Finished suite test/suite-process-heaps.ben in 0.141 seconds - 28 of 28 tests passed (0 skipped).
+profile-merge: 109 rows -> /Users/pankajdoharey/.cache/bender/pgo/interpreter/source-310853557/cumulative-56912.pending (run=109)
+Starting suite test/suite-profile-merge.ben...
+Finished suite test/suite-profile-merge.ben in 41.997 seconds - 57 of 57 tests passed (0 skipped).
+profile-merge: 183 rows -> /Users/pankajdoharey/.cache/bender/pgo/interpreter/source--1498678301/cumulative-56916.pending (run=183)
+Starting suite test/suite-profile-uaf.ben...
+test/suite-profile-uaf.ben:34:1: compile warning (strict): binding i is unused
+Finished suite test/suite-profile-uaf.ben in 0.003 seconds - 14 of 14 tests passed (0 skipped).
+Starting suite test/suite-profile.ben...
+Finished suite test/suite-profile.ben in 0.007 seconds - 62 of 62 tests passed (0 skipped).
+Starting suite test/suite-quantum.ben...
+Finished suite test/suite-quantum.ben in 11.659 seconds - 16 of 16 tests passed (0 skipped).
+error: done
+  in <anonymous> [test/suite-quantum.ben] on line 138, column 37
+profile-merge: 110 rows -> /Users/pankajdoharey/.cache/bender/pgo/interpreter/source-684067146/cumulative-57704.pending (run=110)
+Starting suite test/suite-shared.ben...
+SKIP suite-shared.ben (needs BENDER_SHARED_STACKS=1)
+Starting suite test/suite-specials.ben...
+Finished suite test/suite-specials.ben in 0.002 seconds - 69 of 69 tests passed (0 skipped).
+profile-merge: 171 rows -> /Users/pankajdoharey/.cache/bender/pgo/interpreter/source-643095108/cumulative-57920.pending (run=171)
+Starting suite test/suite-string.ben...
+Finished suite test/suite-string.ben in 0.002 seconds - 69 of 69 tests passed (0 skipped).
+profile-merge: 147 rows -> /Users/pankajdoharey/.cache/bender/pgo/interpreter/source--1394259736/cumulative-57922.pending (run=147)
+Starting suite test/suite-strtod.ben...
+Finished suite test/suite-strtod.ben in 0.000 seconds - 3 of 3 tests passed (0 skipped).
+profile-merge: 76 rows -> /Users/pankajdoharey/.cache/bender/pgo/interpreter/source-1701954266/cumulative-57925.pending (run=77)
+Starting suite test/suite-struct.ben...
+Finished suite test/suite-struct.ben in 0.001 seconds - 32 of 32 tests passed (0 skipped).
+profile-merge: 120 rows -> /Users/pankajdoharey/.cache/bender/pgo/interpreter/source-425575669/cumulative-57927.pending (run=120)
+examples/proc.ben:187:1: compile warning (strict): top-level binding quit is shadowing another top-level binding
+examples/supervisor.ben:218:13: compile warning (strict): binding next is shadowing a top-level binding
+Starting suite test/suite-supervisor.ben...
+Finished suite test/suite-supervisor.ben in 2.433 seconds - 6 of 6 tests passed (0 skipped).
+profile-merge: 176 rows -> /Users/pankajdoharey/.cache/bender/pgo/interpreter/source--1673020143/cumulative-57929.pending (run=176)
+Starting suite test/suite-symcache.ben...
+Finished suite test/suite-symcache.ben in 0.000 seconds - 4 of 4 tests passed (0 skipped).
+profile-merge: 77 rows -> /Users/pankajdoharey/.cache/bender/pgo/interpreter/source-1439955174/cumulative-58058.pending (run=77)
+Starting suite test/suite-table.ben...
+Finished suite test/suite-table.ben in 0.001 seconds - 15 of 15 tests passed (0 skipped).
+profile-merge: 98 rows -> /Users/pankajdoharey/.cache/bender/pgo/interpreter/source-194920502/cumulative-58060.pending (run=98)
+examples/tasklet.ben:67:1: compile warning (strict): binding pid is unused
+examples/tasklet.ben:234:1: compile warning (strict): top-level binding quit is shadowing another top-level binding
+Starting suite test/suite-tasklet.ben...
+test/suite-tasklet.ben:20:24: compile warning (strict): binding tag is unused
+test/suite-tasklet.ben:46:49: compile warning (strict): binding m is unused
+test/suite-tasklet.ben:46:1: compile warning (strict): binding t is unused
+test/suite-tasklet.ben:48:52: compile warning (strict): binding m is unused
+test/suite-tasklet.ben:67:30: compile warning (strict): binding tag is unused
+test/suite-tasklet.ben:77:24: compile warning (strict): binding tag is unused
+test/suite-tasklet.ben:77:24: compile warning (strict): binding payload is unused
+test/suite-tasklet.ben:93:24: compile warning (strict): binding tag is unused
+test/suite-tasklet.ben:93:24: compile warning (strict): binding payload is unused
+test/suite-tasklet.ben:103:24: compile warning (strict): binding payload is unused
+test/suite-tasklet.ben:132:24: compile warning (strict): binding tag is unused
+test/suite-tasklet.ben:132:24: compile warning (strict): binding payload is unused
+test/suite-tasklet.ben:144:24: compile warning (strict): binding tag is unused
+test/suite-tasklet.ben:144:24: compile warning (strict): binding payload is unused
+test/suite-tasklet.ben:168:24: compile warning (strict): binding tag is unused
+test/suite-tasklet.ben:168:24: compile warning (strict): binding payload is unused
+test/suite-tasklet.ben:189:35: compile warning (strict): binding tag is unused
+test/suite-tasklet.ben:189:35: compile warning (strict): binding payload is unused
+test/suite-tasklet.ben:221:44: compile warning (strict): binding tag is unused
+test/suite-tasklet.ben:221:44: compile warning (strict): binding payload is unused
+Finished suite test/suite-tasklet.ben in 3.496 seconds - 32 of 32 tests passed (0 skipped).
+profile-merge: 201 rows -> /Users/pankajdoharey/.cache/bender/pgo/interpreter/source-1502095950/cumulative-58063.pending (run=203)
+Starting suite test/suite-thread.ben...
+error: kablam
+  in <anonymous> [test/suite-thread.ben] on line 48, column 35
+error: done
+  in ev/take [src/core/ev.c] on line 1991
+  in <anonymous> [test/suite-thread.ben] on line 113, column 29
+Finished suite test/suite-thread.ben in 0.770 seconds - 30 of 30 tests passed (0 skipped).
+profile-merge: 107 rows -> /Users/pankajdoharey/.cache/bender/pgo/interpreter/source-928834579/cumulative-58130.pending (run=107)
+Starting suite test/suite-tuple.ben...
+Finished suite test/suite-tuple.ben in 0.000 seconds - 4 of 4 tests passed (0 skipped).
+profile-merge: 76 rows -> /Users/pankajdoharey/.cache/bender/pgo/interpreter/source--870821646/cumulative-58145.pending (run=76)
+Starting suite test/suite-unknown.ben...
+Finished suite test/suite-unknown.ben in 0.004 seconds - 67 of 67 tests passed (0 skipped).
+profile-merge: 238 rows -> /Users/pankajdoharey/.cache/bender/pgo/interpreter/source--2069338955/cumulative-58148.pending (run=241)
+Starting suite test/suite-value.ben...
+Finished suite test/suite-value.ben in 0.001 seconds - 23 of 23 tests passed (0 skipped).
+profile-merge: 100 rows -> /Users/pankajdoharey/.cache/bender/pgo/interpreter/source-633185697/cumulative-58150.pending (run=100)
+Starting suite test/suite-vm.ben...
+Finished suite test/suite-vm.ben in 0.002 seconds - 36 of 36 tests passed (0 skipped).
+profile-merge: 148 rows -> /Users/pankajdoharey/.cache/bender/pgo/interpreter/source--1549410562/cumulative-58153.pending (run=148)
+for f in examples/*.ben; do  ./build/bender -k "$f"; done

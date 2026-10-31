@@ -1,0 +1,271 @@
+native build mode plain: object refresh and runtime registration verified
+native build mode native: object refresh and runtime registration verified
+native build mode plain: object refresh and runtime registration verified
+9d5caf11a0dcfcd361aa087dccc247159e6ed1f608d3db22f4e6673ea0f780bf  /tmp/clo-tests/forced-quantum-vqhQdOOT/generated/native.c
+c09193d908f9c518a9b776347a8276a1a62d283d04150d6da6dafc862b2d02c2  /tmp/clo-tests/forced-quantum-vqhQdOOT/forced
+forced definition slots=4 seed=17 hits=12 trace=3016c4882c6b1923
+forced definition slots=7 seed=17 hits=12 trace=3bd74ddcf1a83cc3
+forced quantum one-shot replay passed seed=17 scratch=/tmp/clo-tests/forced-quantum-vqhQdOOT
+native executor evidence: /tmp/clo-tests/native-executor-42WUIcG6
+native opcode contract: 61/65 emitter opcodes admitted; sl/slim/sr/srim deliberately emitter-only; sru/sruim excluded
+native closure evidence: /tmp/clo-tests/native-closure-tgjM9a1C
+native-closure parity passed
+native closure entry/parity/setu exclusion passed: /tmp/clo-tests/native-closure-tgjM9a1C
+native closure emitted ldu guard fallback passed
+native closure guard evidence: /tmp/clo-tests/native-closure-guards-eoS59x6p
+10 numeric-sum
+11 numeric-nested
+2 boundary
+4 tail-boundary
+13 unsupported-loop
+image-executor 10 entries=1 backedges=10 guards=0
+image-executor 11 entries=1 backedges=55 guards=0
+image-executor 14 entries=1 backedges=10 guards=0
+image-executor attach attempts=19 attached=5 ambiguous=0 nomatch=14 vmexits=108 registry=9
+image-executor 1 entries=7 backedges=24 guards=0 ops=240 vmexits=6
+image-executor 2 entries=77 backedges=16 guards=0 ops=966 vmexits=36
+image-executor 4 entries=1 backedges=4 guards=0 ops=20 vmexits=1
+image-executor 7 entries=9 backedges=0 guards=0 ops=36 vmexits=5
+image-executor 8 entries=7 backedges=0 guards=0 ops=28 vmexits=4
+image-executor 13 entries=6 backedges=3 guards=0 ops=25 vmexits=3
+2 indexed-loop
+5 scratch-loop
+0 get-loop
+7 buffer-loop
+4 buffer-guard-loop
+native-ops-global (24 6 0 18 1288 6 0 0 13 115)
+native geti/next/scratch/alias/GC image parity passed
+continuation emission: selected=5 emitted=5
+native-continuation image passed
+native-continuation image passed
+continuation identity: on=306 off=306 edges on=86 off=0
+native continuation chain and counter identity passed
+fused numeric-sum id=10 original-pc=2..6 coverage=partial gate=unavailable INCOMPLETE unresolved=unknown
+fused id=10 pc=2 retired=5 overflow=0
+fused id=10 pc=3 retired=5 overflow=0
+fused id=10 pc=4 retired=3 overflow=0
+fused id=10 pc=5 retired=3 overflow=0
+fused id=10 pc=6 retired=2 overflow=0
+trace budget=1 slots=4 interrupts=4 result=45 parity
+trace budget=1 slots=7 interrupts=4 result=870 parity
+trace budget=1 slots=6 interrupts=4 result=6 parity
+fallback once + GC, auto_suspend, cancellation, interleaving, parked marshal: passed
+emitted signed-zero/extreme finite/subnormal constant roundtrip passed
+primitive/conditional/self-edge oracles and 392 IEEE numeric pairs passed
+generated counters: sum entries=26 backedges=71 guards=5; nested entries=5 backedges=59
+VM_EXITS global=596 registry=3
+exit-stat op 3 = 11
+exit-stat op 4 = 1
+exit-stat op 14 = 24
+exit-stat op 53 = 313
+exit-stat op 54 = 3
+exit-stat op 59 = 56
+exit-stat op 60 = 112
+exit-stat op 63 = 58
+exit-stat op 65 = 9
+exit-stat op 73 = 9
+mixed differential parity: interrupts=100
+mixed differential parity: interrupts=100
+mixed differential parity: interrupts=100
+mixed differential parity: interrupts=100
+paired boundary interrupts: 64 identical parked PCs/slots
+opaque constant swap observed live; primitives stay exact
+GC across VM boundaries: stable
+breakpoint/step suppression preserved
+between-resume constant mutation detected by re-entry validation
+parked mixed-frame marshal round trip passed
+later-evaluated function attached and executed natively
+boundary counters: entries=522 ops=6707 vmexits=241 edges=112 guards=0
+global: attempts=12 attached=2 vmexits=596 call-exits=313
+ambiguous descriptors refuse lazy attachment
+fused numeric-sum id=10 original-pc=2..6 coverage=partial gate=unavailable INCOMPLETE unresolved=unknown
+fused id=10 pc=2 retired=6 overflow=0
+fused id=10 pc=3 retired=6 overflow=0
+fused id=10 pc=4 retired=4 overflow=0
+fused id=10 pc=5 retired=4 overflow=0
+fused id=10 pc=6 retired=3 overflow=0
+trace budget=2 slots=4 interrupts=9 result=45 parity
+trace budget=2 slots=7 interrupts=54 result=870 parity
+trace budget=2 slots=6 interrupts=2 result=6 parity
+fallback once + GC, auto_suspend, cancellation, interleaving, parked marshal: passed
+emitted signed-zero/extreme finite/subnormal constant roundtrip passed
+primitive/conditional/self-edge oracles and 392 IEEE numeric pairs passed
+generated counters: sum entries=47 backedges=95 guards=5; nested entries=55 backedges=109
+VM_EXITS global=856 registry=3
+exit-stat op 3 = 11
+exit-stat op 4 = 1
+exit-stat op 14 = 63
+exit-stat op 53 = 454
+exit-stat op 54 = 4
+exit-stat op 59 = 76
+exit-stat op 60 = 152
+exit-stat op 63 = 77
+exit-stat op 65 = 9
+exit-stat op 73 = 9
+mixed differential parity: interrupts=100
+mixed differential parity: interrupts=8
+mixed differential parity: interrupts=15
+mixed differential parity: interrupts=33
+paired boundary interrupts: 47 identical parked PCs/slots
+opaque constant swap observed live; primitives stay exact
+GC across VM boundaries: stable
+breakpoint/step suppression preserved
+between-resume constant mutation detected by re-entry validation
+parked mixed-frame marshal round trip passed
+later-evaluated function attached and executed natively
+boundary counters: entries=762 ops=9115 vmexits=319 edges=200 guards=0
+global: attempts=12 attached=2 vmexits=856 call-exits=454
+ambiguous descriptors refuse lazy attachment
+fused numeric-sum id=10 original-pc=2..6 coverage=partial gate=unavailable INCOMPLETE unresolved=unknown
+fused id=10 pc=2 retired=6 overflow=0
+fused id=10 pc=3 retired=6 overflow=0
+fused id=10 pc=4 retired=4 overflow=0
+fused id=10 pc=5 retired=4 overflow=0
+fused id=10 pc=6 retired=3 overflow=0
+trace budget=2 slots=4 interrupts=9 result=45 parity
+trace budget=2 slots=7 interrupts=54 result=870 parity
+trace budget=2 slots=6 interrupts=2 result=6 parity
+fallback once + GC, auto_suspend, cancellation, interleaving, parked marshal: passed
+emitted signed-zero/extreme finite/subnormal constant roundtrip passed
+primitive/conditional/self-edge oracles and 392 IEEE numeric pairs passed
+generated counters: sum entries=47 backedges=95 guards=5; nested entries=55 backedges=109
+VM_EXITS global=856 registry=3
+exit-stat op 3 = 11
+exit-stat op 4 = 1
+exit-stat op 14 = 63
+exit-stat op 53 = 454
+exit-stat op 54 = 4
+exit-stat op 59 = 76
+exit-stat op 60 = 152
+exit-stat op 63 = 77
+exit-stat op 65 = 9
+exit-stat op 73 = 9
+mixed differential parity: interrupts=100
+mixed differential parity: interrupts=8
+mixed differential parity: interrupts=15
+mixed differential parity: interrupts=33
+paired boundary interrupts: 47 identical parked PCs/slots
+opaque constant swap observed live; primitives stay exact
+GC across VM boundaries: stable
+breakpoint/step suppression preserved
+between-resume constant mutation detected by re-entry validation
+parked mixed-frame marshal round trip passed
+later-evaluated function attached and executed natively
+boundary counters: entries=762 ops=9115 vmexits=319 edges=200 guards=0
+global: attempts=12 attached=2 vmexits=856 call-exits=454
+ambiguous descriptors refuse lazy attachment
+fused numeric-sum id=10 original-pc=2..6 coverage=partial gate=unavailable INCOMPLETE unresolved=unknown
+fused id=10 pc=2 retired=4 overflow=0
+fused id=10 pc=3 retired=4 overflow=0
+fused id=10 pc=4 retired=2 overflow=0
+fused id=10 pc=5 retired=2 overflow=0
+fused id=10 pc=6 retired=2 overflow=0
+emitted signed-zero/extreme finite/subnormal constant roundtrip passed
+primitive/conditional/self-edge oracles and 392 IEEE numeric pairs passed
+generated counters: sum entries=6 backedges=15 guards=1; nested entries=1 backedges=55
+VM_EXITS global=37982 registry=2
+exit-stat op 3 = 11
+exit-stat op 4 = 1
+exit-stat op 14 = 808
+exit-stat op 53 = 21006
+exit-stat op 54 = 1
+exit-stat op 59 = 4036
+exit-stat op 60 = 8072
+exit-stat op 63 = 4029
+exit-stat op 65 = 9
+exit-stat op 73 = 9
+mixed differential parity: interrupts=0
+mixed differential parity: interrupts=0
+mixed differential parity: interrupts=0
+mixed differential parity: interrupts=0
+opaque constant swap observed live; primitives stay exact
+GC across VM boundaries: stable
+breakpoint/step suppression preserved
+between-resume constant mutation detected by re-entry validation
+later-evaluated function attached and executed natively
+boundary counters: entries=36342 ops=476347 vmexits=16153 edges=8072 guards=0
+global: attempts=8 attached=1 vmexits=37982 call-exits=21006
+ambiguous descriptors refuse lazy attachment
+fused numeric-sum id=10 original-pc=2..6 coverage=partial gate=unavailable INCOMPLETE unresolved=unknown
+fused id=10 pc=2 retired=6 overflow=0
+fused id=10 pc=3 retired=6 overflow=0
+fused id=10 pc=4 retired=4 overflow=0
+fused id=10 pc=5 retired=4 overflow=0
+fused id=10 pc=6 retired=3 overflow=0
+native census id=10 coverage=partial gate=unavailable unresolved=calls,branches,other-fused
+trace budget=2 slots=4 interrupts=9 result=45 parity
+trace budget=2 slots=7 interrupts=54 result=870 parity
+trace budget=2 slots=6 interrupts=2 result=6 parity
+fallback once + GC, auto_suspend, cancellation, interleaving, parked marshal: passed
+emitted signed-zero/extreme finite/subnormal constant roundtrip passed
+primitive/conditional/self-edge oracles and 392 IEEE numeric pairs passed
+generated counters: sum entries=49 backedges=97 guards=5; nested entries=55 backedges=109
+VM_EXITS global=856 registry=3
+exit-stat op 3 = 11
+exit-stat op 4 = 1
+exit-stat op 14 = 63
+exit-stat op 53 = 454
+exit-stat op 54 = 4
+exit-stat op 59 = 76
+exit-stat op 60 = 152
+exit-stat op 63 = 77
+exit-stat op 65 = 9
+exit-stat op 73 = 9
+mixed differential parity: interrupts=100
+mixed differential parity: interrupts=8
+mixed differential parity: interrupts=15
+mixed differential parity: interrupts=33
+paired boundary interrupts: 47 identical parked PCs/slots
+opaque constant swap observed live; primitives stay exact
+GC across VM boundaries: stable
+breakpoint/step suppression preserved
+between-resume constant mutation detected by re-entry validation
+parked mixed-frame marshal round trip passed
+later-evaluated function attached and executed natively
+boundary counters: entries=762 ops=9115 vmexits=319 edges=200 guards=0
+global: attempts=12 attached=2 vmexits=856 call-exits=454
+ambiguous descriptors refuse lazy attachment
+default-off registration refused; compiler oracles passed
+default-off: mixed registration and attachment refused
+==52201==WARNING: ASan is ignoring requested __asan_handle_no_return: stack type: default top: 0x00016f9c4000; bottom 0x00010846c000; size: 0x000067558000 (1733656576)
+False positive error reports may follow
+For details see https://github.com/google/sanitizers/issues/189
+fused numeric-sum id=10 original-pc=2..6 coverage=partial gate=unavailable INCOMPLETE unresolved=unknown
+fused id=10 pc=2 retired=6 overflow=0
+fused id=10 pc=3 retired=6 overflow=0
+fused id=10 pc=4 retired=4 overflow=0
+fused id=10 pc=5 retired=4 overflow=0
+fused id=10 pc=6 retired=3 overflow=0
+trace budget=2 slots=4 interrupts=9 result=45 parity
+trace budget=2 slots=7 interrupts=54 result=870 parity
+trace budget=2 slots=6 interrupts=2 result=6 parity
+fallback once + GC, auto_suspend, cancellation, interleaving, parked marshal: passed
+emitted signed-zero/extreme finite/subnormal constant roundtrip passed
+primitive/conditional/self-edge oracles and 392 IEEE numeric pairs passed
+generated counters: sum entries=47 backedges=95 guards=5; nested entries=55 backedges=109
+VM_EXITS global=856 registry=3
+exit-stat op 3 = 11
+exit-stat op 4 = 1
+exit-stat op 14 = 63
+exit-stat op 53 = 454
+exit-stat op 54 = 4
+exit-stat op 59 = 76
+exit-stat op 60 = 152
+exit-stat op 63 = 77
+exit-stat op 65 = 9
+exit-stat op 73 = 9
+mixed differential parity: interrupts=100
+mixed differential parity: interrupts=8
+mixed differential parity: interrupts=15
+mixed differential parity: interrupts=33
+paired boundary interrupts: 47 identical parked PCs/slots
+opaque constant swap observed live; primitives stay exact
+GC across VM boundaries: stable
+breakpoint/step suppression preserved
+between-resume constant mutation detected by re-entry validation
+parked mixed-frame marshal round trip passed
+later-evaluated function attached and executed natively
+boundary counters: entries=762 ops=9115 vmexits=319 edges=200 guards=0
+global: attempts=12 attached=2 vmexits=856 call-exits=454
+ambiguous descriptors refuse lazy attachment
+native executor matrix passed: /tmp/clo-tests/native-executor-42WUIcG6

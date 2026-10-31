@@ -1,0 +1,85 @@
+def 0 thunk arity 0 slots 22 instrs 215
+def 1 make-reader arity 1 slots 2 instrs 2
+def 2 closure-reader arity 1 slots 7 instrs 18
+def 3 live-reader arity 1 slots 6 instrs 24
+def 4 closure-live arity 1 slots 6 instrs 14
+def 5 make-writer arity 1 slots 3 instrs 3
+def 6 closure-mutable arity 1 slots 5 instrs 10
+contains 0 1
+contains 0 3
+contains 0 5
+calls 0 3
+arity-unknown 0
+calls 0 1
+arity-unknown 0
+calls 0 1
+arity-unknown 0
+extern 0 gccollect
+extern 0 a
+extern 0 b
+extern 0 a
+extern 0 gccollect
+extern 0 b
+calls 0 5
+extern 0 mutable
+extern 0 gccollect
+extern 0 mutable
+extern 0 os/getenv
+extern 0 curenv
+extern 0 function?
+extern 0 entry
+extern 0 os/getenv
+extern 0 scan-number
+extern 0 os/getenv
+extern 0 scan-number
+extern 0 stats
+unknown 0 17
+extern 0 a
+extern 0 stats
+unknown 0 18
+extern 0 stats
+unknown 0 18
+extern 0 b
+extern 0 stats
+unknown 0 20
+extern 0 stats
+unknown 0 20
+calls 0 3
+arity-unknown 0
+extern 0 stats
+unknown 0 19
+extern 0 eprint
+extern 0 print
+contains 1 2
+extern 2 array/new
+extern 2 gccollect
+extern 2 captured
+contains 3 4
+extern 3 read-live
+extern 3 read-live
+extern 4 gccollect
+extern 4 captured
+contains 5 6
+stats 7 45 5 34 6
+reach 0 1 2 3 4 5 6
+callers 1 1 0
+callers 3 1 0
+callers 5 1 0
+fix 7 0 0
+called-as 5 1
+arity 0 4
+hints 0 0
+hint-call
+ptypes 5 long
+rets 0 0 0 rounds 2
+dce unsafe pattern 4 def 6 (closure-mutable) pc 5: unrecognized op setu -- stripping nothing
+native-skip 0 thunk types not proven: params [] ret ?
+native-skip 1 make-reader types not proven: params [array] ret ?
+native-skip 2 closure-reader loop requires resumable VM quantum polls
+native-skip 4 closure-live loop requires resumable VM quantum polls
+native-skip 5 make-writer types not proven: params [long] ret ?
+native-skip 6 closure-mutable loop requires resumable VM quantum polls
+native-skip 3 live-reader slot s3 mixes string/u64ok
+native-executor 2 closure-reader
+native-executor 4 closure-live
+native-lib 0 kernels /tmp/clo-tests/native-closure-guards-4tH5c365/generated

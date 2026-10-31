@@ -1,0 +1,8 @@
+In file included from test/c/test-native-closure-guards.c:10:
+/tmp/clo-tests/native-closure-guards-4tH5c365/generated/native.c:317:9: warning: 'NX_CONT' macro redefined [-Wmacro-redefined]
+  317 | #define NX_CONT() (nx_4_conts++)
+      |         ^
+/tmp/clo-tests/native-closure-guards-4tH5c365/generated/native.c:42:9: note: previous definition is here
+   42 | #define NX_CONT() (nx_2_conts++)
+      |         ^
+1 warning generated.

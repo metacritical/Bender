@@ -1,0 +1,73 @@
+mkimage: executor target capturing-loop has no retained top-level defn; relying on lazy structural attachment at runtime
+def 0 thunk arity 0 slots 33 instrs 359
+def 1 make-capturing-loop arity 1 slots 2 instrs 2
+def 2 capturing-loop arity 1 slots 6 instrs 10
+contains 0 1
+extern 0 dyn
+extern 0 scan-number
+extern 0 scan-number
+extern 0 number?
+extern 0 math/floor
+extern 0 number?
+extern 0 math/floor
+extern 0 os/clock
+calls 0 1
+calls 0 1
+extern 0 not
+arity-unknown 0
+extern 0 left
+extern 0 right
+extern 0 left
+extern 0 os/clock
+extern 0 left
+extern 0 right
+extern 0 os/clock
+extern 0 printf
+extern 0 eprintf
+extern 0 curenv
+extern 0 curenv
+extern 0 curenv
+extern 0 curenv
+extern 0 function?
+extern 0 gentry
+unknown 0 22
+extern 0 gs
+extern 0 gs
+extern 0 gs
+extern 0 gs
+extern 0 gs
+extern 0 eprintf
+extern 0 scan-number
+extern 0 number?
+extern 0 math/floor
+extern 0 function?
+extern 0 sentry
+unknown 0 24
+extern 0 counts
+extern 0 counts
+extern 0 counts
+extern 0 counts
+extern 0 counts
+extern 0 eprintf
+extern 0 counts
+extern 0 counts
+extern 0 counts
+contains 1 2
+stats 3 48 2 44 2
+reach 0 1 2
+callers 1 1 0
+fix 3 0 0
+called-as 1 1
+arity 0 1
+hints 0 0
+hint-call
+ptypes 1 long
+rets 0 0 0 rounds 2
+dce safe reachable 0 1 2 excluded -
+native-skip 0 thunk loop requires resumable VM quantum polls
+native-skip 1 make-capturing-loop types not proven: params [long] ret ?
+native-skip 2 capturing-loop loop requires resumable VM quantum polls
+native-executor 2 capturing-loop
+native-lib 0 kernels /tmp/clo-load/native/closure-load-native
+mkimage: 3917 bytes, 828 registry names -> /tmp/clo-load/native/closure-load.c
+built /tmp/clo-load/native/closure-load

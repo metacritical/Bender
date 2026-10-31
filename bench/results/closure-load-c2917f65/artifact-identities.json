@@ -1,0 +1,18 @@
+{
+  "build/bender": {
+    "sha256": "2622b9da3ccaac02fe7d1ff441f921459c188d2e317158a1492f8ecf495bc1bf",
+    "bytes": 1393832
+  },
+  "build/libbender.a": {
+    "sha256": "8846bde23b0efd656f37ecc4ade8f681edfc4451f60f5fc8d11627a1be1eb95c",
+    "bytes": 4124464
+  },
+  "/tmp/clo-load/boxed/closure-load": {
+    "sha256": "5a1e3eb011c5e52fe94d73f9a27978da6431cdcdb9d42b3088d46c28e43fbb16",
+    "bytes": 1406304
+  },
+  "/tmp/clo-load/native/closure-load": {
+    "sha256": "95f910e3199f7d60114fd47a96e7a7d83159a8e4ad1e7319014a8bc4bfeed208",
+    "bytes": 1423760
+  }
+}
