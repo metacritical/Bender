@@ -36,7 +36,7 @@
   (def lo (* b BATCH))
   (def hi (min N (+ lo BATCH)))
   (def cnt (- hi lo))
-  ;; The sink is spawned first so its mailbox exists for the members.
+  # The sink is spawned first so its mailbox exists for the members.
   (def sink (proc/spawn (fn []
                           (var sum 0)
                           (var k 0)
@@ -46,7 +46,7 @@
                           (ev/give done sum))
                         8))
   (proc/send sink cnt)
-  ;; Now the batch's processes, each reporting into the sink's mailbox.
+  # Now the batch's processes, each reporting into the sink's mailbox.
   (var i lo)
   (while (< i hi)
     (def x i)
