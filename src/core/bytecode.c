@@ -1978,8 +1978,8 @@ BenderFuncDef *bender_funcdef_alloc(void) {
  * constant bits, opcode allowlist) and the bytecode well-formedness gate
  * (bender_verify). The structural compare is what the exact-match contract
  * is about and runs at every native entry epoch; bender_verify is
- * deterministic over those same compared fields — only debug symbolmap
- * data falls outside them and no supported path mutates it after
+ * deterministic over those same compared fields and the checked environment
+ * bounds — only debug symbolmap data falls outside them and no supported path mutates it after
  * creation — so the VM amortizes it to the first validation of a
  * (definition, descriptor) pair. bender_native_matches (both parts) stays
  * the full authority for registration, attachment and direct calls. */
@@ -1991,7 +1991,8 @@ static int native_structure_matches(BenderFuncDef *d, const BenderNativeCode *n)
             d->arity != n->arity || d->min_arity != n->min_arity ||
             d->max_arity != n->max_arity || d->flags != n->flags ||
             d->constants_length != n->constants_length ||
-            d->environments_length || d->defs_length || d->named_args_count ||
+            d->environments_length < 0 || d->environments_length > 256 ||
+            d->defs_length || d->named_args_count ||
             (d->flags & (BENDER_FUNCDEF_FLAG_VARARG | BENDER_FUNCDEF_FLAG_NEEDSENV |
                          BENDER_FUNCDEF_FLAG_STRUCTARG | BENDER_FUNCDEF_FLAG_NAMEDARGS))) return 0;
     if (!n->region_mask || n->region_mask_words != (n->length + 63) / 64) return 0;
@@ -2019,6 +2020,13 @@ static int native_structure_matches(BenderFuncDef *d, const BenderNativeCode *n)
         switch (n->words[i] & 0xFF) {
             case JOP_NOOP: case JOP_RETURN: case JOP_RETURN_NIL:
             case JOP_LOAD_NIL: case JOP_LOAD_TRUE: case JOP_LOAD_FALSE:
+                break;
+            case JOP_LOAD_UPVALUE:
+                /* Environment count is instance-independent but not stored in
+                 * the descriptor. Recheck its verifier obligation each epoch;
+                 * captured slot C remains a per-instance execution guard. */
+                if ((int32_t)((n->words[i] >> 16) & 0xFF) >= d->environments_length) return 0;
+                break;
             case JOP_LOAD_INTEGER: case JOP_LOAD_CONSTANT:
             case JOP_MOVE_NEAR: case JOP_MOVE_FAR:
             case JOP_ADD: case JOP_ADD_IMMEDIATE:

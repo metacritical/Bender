@@ -7,6 +7,8 @@ root=$(mktemp -d "$BENDER_AOT_TEST_ROOT/native-executor-XXXXXXXX")
 export BENDER_NO_PROFILE=1
 echo "native executor evidence: $root"
 python3 test/native-executor-allowlist.py
+sh test/suite-native-closure.sh
+sh test/suite-native-closure-guards.sh
 BENDER_NATIVE_EXECUTORS=1 ./build/bender tools/callgraph.ben test/fixtures/native-executor.ben --emit-native-lib "$root/generated" > "$root/emitter.log" 2>&1
 ./build/bender test/native-executor-opcodes.ben "$root/generated/native.c"
 test ! -s "$root/generated/native-names.txt"

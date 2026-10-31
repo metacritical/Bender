@@ -1305,6 +1305,8 @@ typedef struct BenderNativeCode {
 BENDER_API int bender_native_register(BenderFunction *, const BenderNativeCode *);
 BENDER_API int bender_native_matches(BenderFuncDef *, const BenderNativeCode *);
 BENDER_API int bender_native_poll(int condition);
+/* Validate/normalize a closure environment before native read-only access. */
+BENDER_API int bender_env_valid(BenderFuncEnv *env);
 BENDER_API BenderCFunction bender_native_alias_cfun(Bender callee, int32_t argc);
 BENDER_API Bender bender_native_alias_call(BenderFiber *fiber, BenderCFunction cfun,
                                         int32_t argc, uint32_t *pc);

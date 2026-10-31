@@ -28,7 +28,7 @@
 (def shifts {'sl true 'sr true 'slim true 'srim true})
 (def shift-imm {'slim true 'srim true})
 (def simple {'noop true 'ret true 'retn true 'ldn true 'ldt true 'ldf true
-             'ldi true 'ldc true 'movn true 'movf true 'jmp true 'geti true})
+             'ldi true 'ldc true 'ldu true 'movn true 'movf true 'jmp true 'geti true})
 # Explicit VM boundaries: eligible in descriptors, never executed natively.
 # The whole divide/modulo family stays in the VM alongside collection
 # mutation and allocation. Calls, argument pushes, reusable scratch tuples,
@@ -64,7 +64,9 @@
 
 (defn- base-eligible? [d]
   (and (d :bytecode-words) (not (d :vararg)) (not (d :structarg))
-       (not (d :namedargs)) (empty? (or (d :environments) []))
+       # NEEDSENV means this activation exposes its own locals to nested closures.
+       # Reading an existing outer environment does not require that flag.
+       (not (d :namedargs)) (= 0 (band (or (d :flags) 0) 0x20000))
        (empty? (or (d :defs) []))
        (every? (map |(allowed-op? ($0 0)) (d :bytecode)))))
 
@@ -263,6 +265,17 @@
       (and numeric-sum? (= k 1)) (do (out "NX_TICK();")
                                  (out "s[2] = bender_wrap_integer(0); goto L2;"))
       (and numeric-sum? (= k 2)) nil
+      # Read the current closure instance, never a definition-cached env.
+      # Validation may normalize an unmarshalled env; no destination is written
+      # until all guards succeed, and no allocation/poll occurs before rooting.
+      (= op 'ldu)
+       (do
+         (out "{ BenderFunction *nxfn_ = ((BenderStackFrame *)(s - BENDER_FRAME_SIZE))->func;")
+         (out "if (!nxfn_ || nxfn_->def != d || d->environments_length <= " (string c) ") { NX_BOUNDARY(" (string k) "); }")
+         (out "BenderFuncEnv *nxenv_ = nxfn_->envs[" (string c) "];")
+         (out "if (!nxenv_ || nxenv_->length <= " (string z) " || !bender_env_valid(nxenv_)) { NX_BOUNDARY(" (string k) "); }")
+         (out "s[" (string a) "] = nxenv_->offset > 0 ? nxenv_->as.fiber->data[nxenv_->offset + " (string z) "] : nxenv_->as.values[" (string z) "];")
+         (out "NX_TICK(); NX_RETIRE(" (string k) "); }"))
       # Native `in` / `inim`: ARRAY and TUPLE with an in-range
       # non-negative integer index are read directly; EVERYTHING else
       # (tables, structs, strings, buffers, negative or fractional or

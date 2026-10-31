@@ -1,0 +1,71 @@
+# Read-only captures: one definition, distinct live and detached environments.
+(defn make-reader [captured]
+  (fn closure-reader [n]
+    (var i 0)
+    (var total 0)
+    (while (< i n)
+      # Keep an opaque GC-managed capture live across an allocating VM boundary.
+      (def garbage (array/new 16))
+      (gccollect)
+      (+= total (captured 0))
+      (++ i))
+    total))
+
+(defn live-reader [captured]
+  (def read-live
+    (fn closure-live [n]
+      (var i 0)
+      (var total 0)
+      (while (< i n)
+        (gccollect)
+        (+= total (captured 0))
+        (++ i))
+      total))
+  # The defining activation has not returned, so its environment is live.
+  (assert (= (* 7 12) (read-live 12)))
+  (assert (= (* 7 3) (read-live 3))))
+
+(defn make-writer [initial]
+  (var value initial)
+  (fn closure-mutable [n]
+    (var i 0)
+    (while (< i n)
+      (++ value)
+      (++ i))
+    value))
+
+(live-reader @[7])
+(def a (make-reader @[3]))
+(def b (make-reader @[11]))
+# Creator frames are gone. Alternate instances to catch stale env caching or
+# binding a definition's descriptor to the first instance's captured storage.
+(gccollect)
+(assert (= 60 (a 20)))
+(assert (= 220 (b 20)))
+(assert (= 15 (a 5)))
+(gccollect)
+(assert (= 77 (b 7)))
+(def mutable (make-writer 5))
+(assert (= 14 (mutable 9)))
+(gccollect)
+(assert (= 16 (mutable 2)))
+
+# Suite supplies exact manifest IDs. Counter deltas are stronger than a global
+# entry total: unrelated native loops cannot satisfy this acceptance gate.
+(when (os/getenv "NATIVE_CLOSURE_READER_ID")
+  (def entry (get (curenv) 'executor-stats))
+  (assert entry "executor-stats missing in native closure image")
+  (def stats (if (function? entry) entry (entry :value)))
+  (def reader-id (scan-number (os/getenv "NATIVE_CLOSURE_READER_ID")))
+  (def live-id (scan-number (os/getenv "NATIVE_CLOSURE_LIVE_ID")))
+  (def before ((stats reader-id) 0))
+  (assert (= 9 (a 3)))
+  (assert (> ((stats reader-id) 0) before) "first detached closure never entered native executor")
+  (def middle ((stats reader-id) 0))
+  (assert (= 33 (b 3)))
+  (assert (> ((stats reader-id) 0) middle) "second detached closure never entered native executor")
+  (def live-before ((stats live-id) 0))
+  (live-reader @[7])
+  (assert (> ((stats live-id) 0) live-before) "live closure never entered native executor")
+  (eprint "native-closure entries verified"))
+(print "native-closure parity passed")
