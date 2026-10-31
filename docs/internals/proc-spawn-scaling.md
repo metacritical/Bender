@@ -239,17 +239,82 @@ scoped minor's six root subpaths, `bender_mark_fiber(f)` is 71-88% of the
 marks, `bender_ev_mark_shallow` is exactly 3 marks per minor, and the xfb
 bucket is the small remainder.
 
+## Where the remaining cost is -- measured, not assumed
+
+After the fix, GC live-set tracing is no longer the dominant term, and the
+remaining gap to BEAM is **the routed-spawn constant**. Two controls localise
+it.
+
+**Control 1 -- a fan with no pid capture is flat on BOTH arms.**
+`bench/spawn-exit-scaling.ben 200000 20000` holds every proc live but captures
+no downstream pid, so `9d5f7939` does not co-locate and spawns spread over all
+11 lanes. Per-spawn cost is flat near 6 us on baseline *and* on the fix, and
+still flat at N=500,000 (6.2-7.6 us across ten buckets). So the quadratic was
+never "many live procs" as such -- it needed the whole live set on **one**
+lane dispatcher's root path, which the chain's pid capture produces.
+
+Relative to that flat floor at N=500,000:
+
+| arm | us/spawn | vs flat floor |
+|---|---:|---:|
+| baseline chain | 36.79 | 5.6x |
+| fixed chain | 9.12 | **1.4x** |
+| flat fan floor | ~6.6 | 1.0x |
+| Erlang (OTP 17.1.1, same box) | 1.31 | 0.2x |
+
+**Control 2 -- the floor itself is routing, and local spawn is already at
+BEAM parity.** Varying only the lane count on the fan at N=100,000:
+
+| `BENDER_LANES` | us/spawn (min of 4 buckets) | delta |
+|---|---:|---|
+| 0 (local, no routing) | **1.09** | -- |
+| 1 (routed, one lane) | 4.84 | **+3.75, routing** |
+| 2 | 4.92 | +0.08 |
+| 11 | 5.82 | +0.98 |
+
+Going from no routing to one lane costs 3.75 us/spawn; going from one lane to
+eleven costs 1.0 us more. So the constant is the **routed spawn path**, not
+lane count and not contention.
+
+Confirmed on the real chain (`wave.ben`, `BENDER_LANES=0`, correct `result=N`):
+
+| N | local spawn | us/spawn | routed us/spawn |
+|---|---:|---:|---:|
+| 20,000 | 49 ms | 2.45 | 6.30 |
+| 50,000 | 74 ms | 1.48 | 6.22 |
+| 100,000 | 176 ms | 1.76 | 8.42 |
+| 200,000 | 374 ms | **1.87** | 7.00 |
+
+Local spawn is flat at ~1.5-1.9 us/spawn against Erlang's 1.02 us at the same
+N -- **1.8x, not 18x.** Bender's process allocation is not the problem.
+
+> Caveat: `BENDER_LANES=0` is a measurement isolation, NOT a usable
+> configuration for this workload. With no lanes the wave phase at N=200,000
+> takes 372,670 ms, because every hop of the dependency chain becomes a
+> same-VM event-loop round trip. It isolates spawn cost and nothing else.
+
 ## What is still open
 
-The residual is `N^1.11`, not linear, and 7x off BEAM. The remaining term is
-the **marking constant**, i.e. hypothesis H3 in the original plan:
-`bender_procat_mark` re-walks ~6 blocks per proc, so the surviving
-whole-live-set walks (3 at N=200,000, down from 17) are still Theta(N) each.
-Reducing the number of them further is a frequency change like this one;
-reducing their cost means not putting N sibling proc handles on one fiber's
-root path, which is the ownership question BEAM answers structurally (a pid is
-an immediate packing a slot number, `erl_ptab.h:319-326`, not a traced heap
-pointer).
+Two separate items, in value order.
+
+1. **The routed-spawn constant: ~3.8 us/spawn, ~77% of the remaining floor.**
+   This is item 2 of the original report ("routed spawn does extra work"),
+   which had never been measured and now is. The components to attribute next
+   are the ones `cfun_proc_spawn_impl` performs per routed spawn: marshal-copy
+   of the entry closure and captured state across the VM boundary, the
+   lane-control channel message, and routed identity registration. Nothing
+   above says which of those three dominates -- that split is the next
+   measurement, not a conclusion.
+
+2. **A `1.4x` live-set residual on the co-located chain, i.e. `N^1.11`.** The
+   surviving whole-live-set walks (3 at N=200,000, down from 17) are still
+   Theta(N) each, so this is the **marking constant**, hypothesis H3:
+   `bender_procat_mark` re-walks ~6 blocks per proc. Cutting the *number* of
+   walks further is another frequency change like this one; cutting their
+   *cost* means not putting N sibling proc handles on one fiber's root path,
+   which is the ownership question BEAM answers structurally -- a pid is an
+   immediate packing a slot number (`erl_ptab.h:319-326`), not a traced heap
+   pointer. Note this residual is now worth less than item 1.
 
 ## Method notes
 
