@@ -307,16 +307,26 @@ static void bender_site_dump(void) {
     /* Check global major pressure before the scaled nursery branches. */ \
     if (BENDER_UNLIKELY(bender_vm.next_collection >= bender_vm.gc_interval \
             + bender_vm.gc_major_live_blocks * BENDER_FULL_SCALE)) bender_collect(); \
-    else if (BENDER_UNLIKELY(NULL != mcf_ && mcf_->gc_nursery_bytes >= bender_vm.gc_minor_threshold)) { \
-        size_t fth_ = bender_vm.gc_minor_threshold; \
-        if (!(mcf_->heap_strict && NULL != mcf_->proc)) { \
-            fth_ += (size_t) bender_vm.block_count * BENDER_FIBER_MINOR_SCALE; \
-            if (fth_ > BENDER_FIBER_MINOR_CAP) fth_ = BENDER_FIBER_MINOR_CAP; } \
-        if (mcf_->gc_nursery_bytes >= fth_) { \
-            if (mcf_->heap_strict && NULL != mcf_->proc) bender_collect_process(mcf_->proc); \
-            else bender_collect_fiber_minor(mcf_); } } \
-    else if (BENDER_UNLIKELY(bender_vm.gc_young_bytes >= bender_vm.gc_minor_threshold \
-            + (size_t) bender_vm.block_count * BENDER_FIBER_MINOR_SCALE)) bender_collect_minor(); } while (0)
+    else { \
+        /* The scoped branch must not CONSUME the chain when its inner scaled
+         * test declines: the outer test only says the fiber is above the BASE
+         * threshold. Leaving it as an else-if made the global minor
+         * unreachable during any spawn burst (measured: 0 calls at every N),
+         * so pages never aged and every scoped minor re-marked the whole live
+         * set. This is the same defect 7a7d7623 fixed for the major branch
+         * above; mcf_scoped_ now records whether a collection actually ran. */ \
+        int mcf_scoped_ = 0; \
+        if (BENDER_UNLIKELY(NULL != mcf_ && mcf_->gc_nursery_bytes >= bender_vm.gc_minor_threshold)) { \
+            size_t fth_ = bender_vm.gc_minor_threshold; \
+            if (!(mcf_->heap_strict && NULL != mcf_->proc)) { \
+                fth_ += (size_t) bender_vm.block_count * BENDER_FIBER_MINOR_SCALE; \
+                if (fth_ > BENDER_FIBER_MINOR_CAP) fth_ = BENDER_FIBER_MINOR_CAP; } \
+            if (mcf_->gc_nursery_bytes >= fth_) { \
+                if (mcf_->heap_strict && NULL != mcf_->proc) bender_collect_process(mcf_->proc); \
+                else bender_collect_fiber_minor(mcf_); \
+                mcf_scoped_ = 1; } } \
+        if (!mcf_scoped_ && BENDER_UNLIKELY(bender_vm.gc_young_bytes >= bender_vm.gc_minor_threshold \
+                + (size_t) bender_vm.block_count * BENDER_FIBER_MINOR_SCALE)) bender_collect_minor(); } } while (0)
 #define vm_checkgc_next() maybe_collect(); vm_next()
 #define vm_pcnext() pc++; vm_next()
 #define vm_checkgc_pcnext() maybe_collect(); vm_pcnext()
