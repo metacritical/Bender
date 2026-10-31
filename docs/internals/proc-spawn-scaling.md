@@ -293,18 +293,60 @@ N -- **1.8x, not 18x.** Bender's process allocation is not the problem.
 > takes 372,670 ms, because every hop of the dependency chain becomes a
 > same-VM event-loop round trip. It isolates spawn cost and nothing else.
 
+## The routed-spawn constant, attributed
+
+`tools/spawn-routed-probe.patch` times the spawner thread's segments and sums
+them over every routed spawn in one run. This is a within-run sum over 200,000
+samples, not a cross-run wall-clock comparison, so it is robust on a loaded
+box. Only the spawner is timed, which is the correct scope: `spawn_ms` is
+main-thread wall time, so the target lane's unmarshal and fiber/proc creation
+are concurrent and off this clock.
+
+At N=200,000, `BENDER_LANES=11`, per routed spawn:
+
+| component | us/spawn | share |
+|---|---:|---:|
+| `bender_loop1_poll_now` -- the every-4th self-pipe drain (`proc.c:327`) | **3.221** | **58%** |
+| `bender_channel_push` -- contains the closure marshal and the pipe post | 2.189 | 40% |
+| capture scans (`find_mutable_capture` + `find_pid_lane`, both walks) | 0.013 | 0.2% |
+| spawn-msg + pid tuple allocation | 0.036 | 0.7% |
+| total | 5.532 | |
+| (timer floor, for subtraction) | 0.006 | |
+
+Two results worth keeping.
+
+**The drain, not the marshal, is the largest component.** `proc.c:317` asserts
+"One non-blocking poll per 4 spawns is noise next to the marshal cost." That
+is now measured and **wrong**: it is 1.5x the marshal and 58% of the constant.
+Each actual poll costs ~12.9 us, since it only runs every 4th spawn.
+
+**The drain is load-bearing, so its frequency is not a lever.** Sweeping
+`BENDER_SPAWN_POLL_MASK` moves cost rather than removing it -- as the interval
+grows the in-function total falls (7.13 -> 4.29 us at mask 3 -> 255) but
+`push` *rises* (3.02 -> 4.03) and spawn wall time gets worse (1,938 ->
+2,202 ms). Polling more often is not better either: at mask 1/3/7 the
+same-mask spread (2,366 vs 2,997 ms) exceeded the between-mask spread, with
+`wave_ms` swinging 3x independently, on a box at 9.8 GiB of swap. Per this
+file's own method note, that is **not attributable**. Do not "tune" this
+constant; the spawner is paying for delivery work that the architecture gives
+it no other way to discharge, which is what `proc.c:323-324` already says
+("needs real backpressure in the lane dispatcher, not a bigger drain
+frequency").
+
 ## What is still open
 
 Two separate items, in value order.
 
-1. **The routed-spawn constant: ~3.8 us/spawn, ~77% of the remaining floor.**
-   This is item 2 of the original report ("routed spawn does extra work"),
-   which had never been measured and now is. The components to attribute next
-   are the ones `cfun_proc_spawn_impl` performs per routed spawn: marshal-copy
-   of the entry closure and captured state across the VM boundary, the
-   lane-control channel message, and routed identity registration. Nothing
-   above says which of those three dominates -- that split is the next
-   measurement, not a conclusion.
+1. **Batch routed spawns per target lane.** The routed path pays one
+   self-pipe event *and* one closure marshal per spawn, and the drain that
+   keeps the pipe from overflowing is itself the largest component. Both the
+   58% drain and the 40% push are per-event costs, so coalescing consecutive
+   same-lane spawns into one control message carrying K entries attacks both
+   at once -- and the chain workload is the ideal case, because
+   `find_pid_lane` already sends every spawn in a chain to the SAME lane.
+   This is a lane-dispatcher protocol change (`proc.c` plus the dispatcher in
+   `src/boot/boot.ben`), not a constant tweak. Measure against the local-spawn
+   floor of 1.87 us/spawn, not against zero.
 
 2. **A `1.4x` live-set residual on the co-located chain, i.e. `N^1.11`.** The
    surviving whole-live-set walks (3 at N=200,000, down from 17) are still

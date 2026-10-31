@@ -1,0 +1,180 @@
+# Routed-spawn attribution probe (development instrumentation, NOT shipped)
+#
+# Applies to src/core/proc.c. Build with:
+#     make -j12 CFLAGS="-O2 -g -DBENDER_SPAWN_PROBE"
+# Run with BENDER_SPAWN_PROBE=1 to get, on stderr at exit:
+#   [spawn-probe] routed=<N> us/spawn total=.. scan=.. poll=.. alloc=.. push=..
+#                 (timer_floor=..)
+#
+# Times only the SPAWNER thread, which is the correct scope: wave.ben's
+# spawn_ms is main-thread wall time, so the target lane's unmarshal/create
+# work is concurrent and off this clock. timer_floor is the self-measured
+# cost of one mach_absolute_time pair, for subtraction.
+#
+# BENDER_SPAWN_POLL_MASK overrides the every-4th self-pipe drain interval
+# (proc.c:327) so "required for pipe headroom" can be separated from
+# "overhead". Result: not separable by wall clock on a loaded box -- see
+# docs/internals/proc-spawn-scaling.md.
+#
+# Apply with:  patch -p0 < tools/spawn-routed-probe.patch
+--- src/core/proc.c	2026-10-31 17:39:10
++++ /tmp/proc-with-probe.c	2026-10-31 17:39:10
+@@ -266,11 +266,94 @@
+         }
+     }
+     return 0;
++}
++
++/* ---- routed-spawn attribution probe (development only) -------------------
++ * Compiled in solely with -DBENDER_SPAWN_PROBE, armed with
++ * BENDER_SPAWN_PROBE=1. Splits the spawner-side cost of a routed spawn into
++ * its components, because docs/internals/proc-spawn-scaling.md records the
++ * routed-spawn constant (~3.8 us/spawn) as measured but NOT attributed, and
++ * guessing which component dominates is exactly what this file's history
++ * says not to do.
++ *
++ * Only the SPAWNER thread is timed, which is the right scope: wave.ben's
++ * spawn_ms is main-thread wall time, so the lane's unmarshal/create work is
++ * concurrent and off this clock. Timer overhead (one mach_absolute_time pair
++ * per segment) is reported as a self-measured floor so it can be subtracted.
++ */
++#ifdef BENDER_SPAWN_PROBE
++#if defined(BENDER_APPLE)
++#include <mach/mach_time.h>
++static uint64_t bender_sp_now(void) { return mach_absolute_time(); }
++static double bender_sp_scale(void) {
++    static double s = 0.0;
++    if (0.0 == s) {
++        mach_timebase_info_data_t tb;
++        mach_timebase_info(&tb);
++        s = (double) tb.numer / (double) tb.denom;  /* ticks -> ns */
++    }
++    return s;
++}
++#else
++static uint64_t bender_sp_now(void) {
++    struct timespec ts;
++    bender_gettime(&ts, BENDER_TIME_MONOTONIC);
++    return (uint64_t) ts.tv_sec * 1000000000ull + (uint64_t) ts.tv_nsec;
++}
++static double bender_sp_scale(void) { return 1.0; }
++#endif
++
++static uint64_t bender_sp_calls = 0;
++static uint64_t bender_sp_total = 0;
++static uint64_t bender_sp_scan = 0;    /* capture scans (mutable + pid lane) */
++static uint64_t bender_sp_poll = 0;    /* every-4th self-pipe drain */
++static uint64_t bender_sp_alloc = 0;   /* spawn-msg + pid tuple allocation */
++static uint64_t bender_sp_push = 0;    /* channel push: CONTAINS the marshal */
++static uint64_t bender_sp_overhead = 0;
++static int bender_sp_on = -1;
++
++#define BENDER_SP_ADD(p, v) __atomic_fetch_add(&(p), (uint64_t)(v), __ATOMIC_RELAXED)
++
++static void bender_sp_report(void) {
++    if (1 != bender_sp_on) return;
++    uint64_t n = __atomic_load_n(&bender_sp_calls, __ATOMIC_RELAXED);
++    if (0 == n) return;
++    double k = bender_sp_scale() / 1000.0 / (double) n;   /* ticks -> us/spawn */
++    fprintf(stderr,
++            "[spawn-probe] routed=%llu us/spawn total=%.3f scan=%.3f poll=%.3f "
++            "alloc=%.3f push=%.3f (timer_floor=%.3f)\n",
++            (unsigned long long) n,
++            __atomic_load_n(&bender_sp_total, __ATOMIC_RELAXED) * k,
++            __atomic_load_n(&bender_sp_scan, __ATOMIC_RELAXED) * k,
++            __atomic_load_n(&bender_sp_poll, __ATOMIC_RELAXED) * k,
++            __atomic_load_n(&bender_sp_alloc, __ATOMIC_RELAXED) * k,
++            __atomic_load_n(&bender_sp_push, __ATOMIC_RELAXED) * k,
++            __atomic_load_n(&bender_sp_overhead, __ATOMIC_RELAXED) * k);
+ }
+ 
++static int bender_sp_armed(void) {
++    if (bender_sp_on < 0) {
++        const char *e = getenv("BENDER_SPAWN_PROBE");
++        bender_sp_on = (NULL != e && '0' != e[0]) ? 1 : 0;
++        if (bender_sp_on) atexit(bender_sp_report);
++    }
++    return bender_sp_on;
++}
++#define BENDER_SP_T(v) uint64_t v = bender_sp_now()
++#define BENDER_SP_END(bucket, v) BENDER_SP_ADD(bucket, bender_sp_now() - (v))
++#else
++#define BENDER_SP_T(v) ((void)0)
++#define BENDER_SP_END(bucket, v) ((void)0)
++#endif
++
+ static Bender bender_proc_spawn_routed(BenderFunction *func, int32_t cap) {
+     bender_lanes_maybe_autostart();
+     if (0 == bender_lane_count) return cfun_proc_spawn_impl(func, cap, 0);
++#ifdef BENDER_SPAWN_PROBE
++    int sp_on = bender_sp_armed();
++    BENDER_SP_T(sp_t0);
++    if (sp_on) { BENDER_SP_T(sp_o0); BENDER_SP_END(bender_sp_overhead, sp_o0); }
++#endif
+     /* Crossing a lane boundary marshals the closure, so a MUTABLE capture
+      * would arrive as a detached copy: the worker's writes would be invisible
+      * to the spawner. Rather than erroring, place such a proc on THIS VM.
+@@ -285,7 +368,9 @@
+      *
+      * BENDER_PROC_SHARE_TRACE=1 reports the decision for each spawn, since the
+      * placement is otherwise invisible. */
+-    if (bender_proc_find_mutable_capture(func) >= 0) {
++    BENDER_SP_T(sp_scan0);
++    int32_t sp_mut = bender_proc_find_mutable_capture(func);
++    if (sp_mut >= 0) {
+         if (NULL != getenv("BENDER_PROC_SHARE_TRACE")) {
+             fprintf(stderr, "[proc-spawn] shared capture -> local placement "
+                             "(a lane would marshal the closure and detach it)\n");
+@@ -299,6 +384,7 @@
+         return cfun_proc_spawn_impl(func, cap, 0);
+     }
+     int32_t preferred = bender_proc_find_pid_lane(func);
++    BENDER_SP_END(bender_sp_scan, sp_scan0);
+     int32_t lane = (preferred > 0 && preferred <= bender_lane_count)
+         ? (preferred - 1)
+         : (bender_lane_rr % bender_lane_count);
+@@ -324,14 +410,30 @@
+      * backpressure in the lane dispatcher, not a bigger drain frequency. */
+     {
+         static BENDER_THREAD_LOCAL uint32_t spawn_tick = 0;
++        BENDER_SP_T(sp_poll0);
++#ifdef BENDER_SPAWN_PROBE
++        /* Probe-only: sweep the drain interval to separate "this poll is
++         * required for self-pipe headroom" from "this poll is overhead". */
++        static BENDER_THREAD_LOCAL uint32_t sp_mask = 0;
++        if (0 == sp_mask) {
++            const char *m = getenv("BENDER_SPAWN_POLL_MASK");
++            sp_mask = (NULL != m) ? (uint32_t) strtoul(m, NULL, 10) : 3u;
++            if (0 == sp_mask) sp_mask = 3u;
++        }
++        if (0 == (++spawn_tick & sp_mask)) bender_loop1_poll_now();
++#else
+         if (0 == (++spawn_tick & 3)) bender_loop1_poll_now();
++#endif
++        BENDER_SP_END(bender_sp_poll, sp_poll0);
+     }
++    BENDER_SP_T(sp_alloc0);
+     Bender msg[4];
+     msg[0] = bender_ckeywordv("spawn");
+     msg[1] = bender_wrap_number((double) serial);
+     msg[2] = bender_wrap_number(cap);
+     msg[3] = bender_wrap_function(func);
+     Bender spawn_msg = bender_wrap_tuple(bender_tuple_n(msg, 4));
++    BENDER_SP_END(bender_sp_alloc, sp_alloc0);
+     /* Milestone 2c: :steal policy offloads to the overflow queue when
+      * the target ctl is at high water (3/4 capacity). The task runs
+      * wherever a lane pulls it; the spawner's pid tuple keeps the
+@@ -370,7 +472,13 @@
+         /* try-push refused (full): fall through to the ctl path */
+     }
+     /* Try-mode never parks: preserve the immediate path when accepted. */
++    BENDER_SP_T(sp_push0);
+     int needs_write = bender_channel_push(ctl, spawn_msg, 3);
++    BENDER_SP_END(bender_sp_push, sp_push0);
++#ifdef BENDER_SPAWN_PROBE
++    if (sp_on) { BENDER_SP_ADD(bender_sp_calls, 1);
++                 BENDER_SP_END(bender_sp_total, sp_t0); }
++#endif
+     Bender tup[4];
+     tup[0] = bender_ckeywordv("pid");
+     tup[1] = bender_wrap_number((double) (lane + 1));
