@@ -539,6 +539,7 @@ static BenderFiber *fiber_alloc(int32_t capacity) {
          * threshold garbage, so a fiber either never runs a scoped minor or
          * runs one per allocation, nondeterministically per process. */
         fiber->gc_minor_blocks = 0;
+        fiber->gc_total_bytes = 0;
     }
     data = array_allocate(sizeof(Bender), capacity);
     if (NULL == data) {

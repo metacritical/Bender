@@ -1241,6 +1241,14 @@ typedef struct BenderSlabPage {
 typedef struct {
     BenderSlabPage *pages[BENDER_SLAB_NCLASSES];
     BenderSlabPage *cur[BENDER_SLAB_NCLASSES];
+    /* Shared bump pages for the HYBRID route (a fiber that has not yet
+     * allocated a page's worth; see page_shy in bender_slab_alloc). Kept
+     * separate from cur[] on purpose: a hybrid page is stamped owner 0 so the
+     * write barrier stays silent for a fiber whose objects straddle a shared
+     * page and its own, while cur[] keeps the spawn-construction ownership
+     * semantics that test/c/test-gc-proc-minor-no-candidates.c (A3) pins.
+     * One cursor cannot carry both stampings, so the pools are split. */
+    BenderSlabPage *shy_cur[BENDER_SLAB_NCLASSES];
     BenderGCObject *young_free[BENDER_SLAB_NCLASSES];
     BenderGCObject *old_free[BENDER_SLAB_NCLASSES];
     BenderGCObject *strict_free[BENDER_SLAB_NCLASSES];
@@ -1555,7 +1563,10 @@ static void *bender_slab_alloc(int class_index) {
         BenderSlabPage *page = bender_slab_page_for(slot_obj);
         if (NULL != page && page->age < BENDER_SLAB_OLD_AGE) {
             if (0 != page->owner && page->owner != reqid) page->mixed = 1;
-            if (NULL != req) req->gc_nursery_bytes += slot;
+            if (NULL != req) {
+                req->gc_nursery_bytes += slot;
+                req->gc_total_bytes += slot;
+            }
             if (bender_vm.trace_strict && NULL != req &&
                     req->heap_strict) {
                 bender_eprintf("[slab-pop-strict] req_owner=%d "
@@ -1597,8 +1608,47 @@ static void *bender_slab_alloc(int class_index) {
      * the shared cursor applies ONLY to ordinary construction. */
     int constructing = (NULL != req && req == bender_vm.gc_alloc_ctx &&
                         !req->heap_strict);
-    BenderSlabPage **curp = (NULL != req && !constructing) ?
-        &req->nursery_cur[class_index] : &ss->cur[class_index];
+    /* HYBRID CURSOR. The construction case above fixed proc BIRTH, but a proc
+     * that then runs, allocates a little and parks forever went back to a
+     * private page and held it: measured 1.45 private 4 KiB pages per live
+     * proc, 93% of all page claims private, against ~378 bytes of real data
+     * per proc -- 93.6% of per-process memory was empty space inside private
+     * pages, and 84% of the 7,078 B marginal cost per live proc.
+     *
+     * So the gate is not "is this fiber being constructed" but "has this
+     * fiber earned a page". A fiber that has not yet allocated one page's
+     * worth cannot fill a private page, so it draws from the SHARED cursor
+     * and many such procs pack into one page. Once it has allocated
+     * BENDER_SLAB_PAGE_SIZE in total it is a genuine allocator, and purity
+     * starts paying for itself, so it is promoted to its own cursor
+     * permanently (gc_total_bytes never decreases).
+     *
+     * Soundness is the same argument the construction case already relies on:
+     * a scoped sweep walks the ALLOCATING fiber's own heap_lists[], with the
+     * page-owner check as a secondary filter, so a block on a shared page
+     * simply reads owner 0 and is spared -- it floats to a global collection
+     * instead of a scoped one. Nothing can be freed early; the cost is
+     * deferred reclamation, which is why the spawn curve is an acceptance
+     * gate alongside bytes-per-proc.
+     *
+     * STRICT (spawn-isolated) fibers are excluded unconditionally: the P3.3
+     * export rule needs the child's stores on pages only it owns, and sharing
+     * makes an intra-heap store look like a cross-heap escape (measured:
+     * suite-proc's export tests fail). */
+    int page_shy = (NULL != req && !req->heap_strict &&
+                    req->gc_total_bytes < (size_t) BENDER_SLAB_PAGE_SIZE);
+    BenderSlabPage **curp;
+    int shared_page;
+    if (NULL != req && !constructing && page_shy) {
+        curp = &ss->shy_cur[class_index];
+        shared_page = 1;
+    } else if (NULL != req && !constructing) {
+        curp = &req->nursery_cur[class_index];
+        shared_page = 0;
+    } else {
+        curp = &ss->cur[class_index];
+        shared_page = 0;
+    }
     BenderSlabPage *page = *curp;
     if (NULL == page || page->age >= BENDER_SLAB_OLD_AGE ||
             (size_t) page->bump + slot > (size_t) BENDER_SLAB_USABLE) {
@@ -1613,9 +1663,21 @@ static void *bender_slab_alloc(int class_index) {
         page->dirty = 0;
         page->bump = 0;
         /* Step 1: claiming fiber's owner id (0 when host-allocated).
-         * Fresh pages start pure. */
-        page->owner = reqid;
-        page->mixed = 0;
+         * A HYBRID page (shy_cur) is multi-owner by construction, so it is
+         * stamped shared rather than with whichever fiber claimed it first:
+         *  - a scoped sweep then spares every block on it uniformly, instead
+         *    of treating the first claimer's blocks as its own while sparing
+         *    later claimers' blocks on the same page;
+         *  - bender_gc_barrier skips when either side reads shared, so a
+         *    same-fiber store stays silent even when the fiber's objects
+         *    straddle a shared page and its own page. Without this the
+         *    append-only remembered set fills with spurious cross-owner edges
+         *    (caught by suite-process-heaps:139, "same-fiber silent").
+         * Construction pages (cur) and private pages keep the existing
+         * stamping, so the spawn-construction ownership that A3 of
+         * test/c/test-gc-proc-minor-no-candidates.c pins is untouched. */
+        page->owner = shared_page ? 0 : reqid;
+        page->mixed = shared_page ? 1 : 0;
         /* P3.3: claiming fiber's strict flag rides with the owner. */
         page->isolated = (NULL != req && req->heap_strict) ? 1 : 0;
         if (!bender_slab_dir_insert(page)) {
@@ -1627,7 +1689,10 @@ static void *bender_slab_alloc(int class_index) {
     }
     void *out = (char *) BENDER_SLAB_SLOTS(page) + page->bump;
     page->bump += (int32_t) slot;
-    if (NULL != req) req->gc_nursery_bytes += slot;
+    if (NULL != req) {
+        req->gc_nursery_bytes += slot;
+        req->gc_total_bytes += slot;
+    }
     /* P3.5c: strict-owned young is managed per-proc (nursery pressure
      * routes to per-proc collections; deaths float bounded by majors).
      * Counting it toward the global young threshold would fire
@@ -1692,6 +1757,10 @@ static void bender_slab_free_pages(void) {
         }
         ss->pages[i] = NULL;
         ss->cur[i] = NULL;
+        /* Every page above was just freed, so the hybrid cursor must drop
+         * with cur[]: a surviving shy_cur[] entry is a dangling page the next
+         * allocation would bump into. */
+        ss->shy_cur[i] = NULL;
         ss->young_free[i] = NULL;
         ss->old_free[i] = NULL;
         ss->strict_free[i] = NULL;

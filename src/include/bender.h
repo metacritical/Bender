@@ -1108,6 +1108,14 @@ struct BenderFiber {
      * 0 at birth, so a fiber's first scoped minor fires at the base
      * threshold. Kept across resets, like gc_nursery_bytes. */
     size_t gc_minor_blocks;
+    /* Lifetime slab bytes charged to this fiber, never reset (unlike
+     * gc_nursery_bytes, which a collection zeroes). It is the hybrid
+     * nursery-cursor gate: a fiber that has not yet allocated one page's
+     * worth cannot possibly fill a private page, so handing it one wastes
+     * almost all of it. Measured before the hybrid: 1.45 private 4 KiB pages
+     * per live proc, 93% of claims private, against ~378 bytes of actual data
+     * per proc -- 93.6% slack. See docs/internals/proc-spawn-scaling.md. */
+    size_t gc_total_bytes;
     /* P3.3 strict heaps: set for spawn-isolated proc fibers (never
      * inherited, never unmarshalled — re-establish by construction).
      * Slab pages claimed while running one record it (page bit). */

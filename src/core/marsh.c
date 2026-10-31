@@ -1134,6 +1134,7 @@ static const uint8_t *unmarshal_one_fiber(
          * threshold garbage, so a fiber either never runs a scoped minor or
          * runs one per allocation, nondeterministically per process. */
         fiber->gc_minor_blocks = 0;
+        fiber->gc_total_bytes = 0;
     }
     {
         /* P3.5b: heap lists start empty (see fiber_alloc). Unmarshalled
