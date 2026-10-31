@@ -1128,6 +1128,12 @@ static const uint8_t *unmarshal_one_fiber(
         for (nci = 0; nci < BENDER_SLAB_NCLASSES; nci++)
             fiber->nursery_cur[nci] = NULL;
         fiber->gc_nursery_bytes = 0;
+        /* bender_gcalloc does NOT zero, so every field the collector reads
+         * must be set here. gc_minor_blocks scales this fiber's scoped-minor
+         * trigger (see maybe_collect): left uninitialized it makes the
+         * threshold garbage, so a fiber either never runs a scoped minor or
+         * runs one per allocation, nondeterministically per process. */
+        fiber->gc_minor_blocks = 0;
     }
     {
         /* P3.5b: heap lists start empty (see fiber_alloc). Unmarshalled

@@ -533,6 +533,12 @@ static BenderFiber *fiber_alloc(int32_t capacity) {
         for (nci = 0; nci < BENDER_SLAB_NCLASSES; nci++)
             fiber->nursery_cur[nci] = NULL;
         fiber->gc_nursery_bytes = 0;
+        /* bender_gcalloc does NOT zero, so every field the collector reads
+         * must be set here. gc_minor_blocks scales this fiber's scoped-minor
+         * trigger (see maybe_collect): left uninitialized it makes the
+         * threshold garbage, so a fiber either never runs a scoped minor or
+         * runs one per allocation, nondeterministically per process. */
+        fiber->gc_minor_blocks = 0;
     }
     data = array_allocate(sizeof(Bender), capacity);
     if (NULL == data) {
