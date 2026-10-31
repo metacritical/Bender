@@ -1,0 +1,388 @@
+# Spawn-scaling GC probe (development instrumentation, NOT shipped)
+#
+# Applies to src/core/gc.c. Build with:
+#     make -j12 CFLAGS="-O2 -g -DBENDER_GC_PROBE"
+# Run with BENDER_GC_PROBE=1 to get, on stderr at exit:
+#   [gc-probe]        collection counts per kind, mark totals per kind
+#   [gc-probe-sub]    scoped-minor marks split across its six root subpaths
+#   [gc-probe-fib]    fibers marked per scoped minor (avg and max)
+#   [gc-probe-big]    identity of any collection exceeding the proc-chain bound
+#   [gc-probe-bigsum] how many such collections ran, and their total fiber walk
+#
+# This is what separated "many cheap collections" from "a few whole-live-set
+# walks" for docs/internals/proc-spawn-scaling.md. Counters are relaxed-atomic
+# folds of per-collection thread-local counts: attribution-grade, not a
+# determinism contract.
+#
+# Apply with:  patch -p0 < tools/gc-spawn-probe.patch
+--- src/core/gc.c	2026-10-31 16:56:45
++++ /tmp/gc-with-probe.c	2026-10-31 16:56:45
+@@ -182,9 +182,176 @@
+  * cannot resurrect a dead block as a false reachable verdict. */
+ static BENDER_THREAD_LOCAL int32_t bender_gc_epoch = 0;
+ 
++/* Spawn-scaling probe (development only; compiled in solely with
++ * -DBENDER_GC_PROBE, never in a shipped build).
++ *
++ * It exists to separate the only two ways a collector can cost O(N) per
++ * spawn: the NUMBER of collections, or the WORK inside each one. Wall
++ * clock alone cannot tell those apart, and docs/internals/proc-spawn-scaling.md
++ * records two "fixes" that were adopted against wall clock and later
++ * measured 5x and 58x WORSE, so attribution here is deliberately
++ * mechanical rather than inferred.
++ *
++ * Counters are per-collection thread-local (the mark counter sits in the
++ * hottest loop in the collector, so it must not be atomic) and are folded
++ * into process-wide totals once per collection. Lane threads each fold
++ * their own; the totals are therefore relaxed-atomic sums and are
++ * attribution-grade, not a determinism contract. */
++#ifdef BENDER_GC_PROBE
++static BENDER_THREAD_LOCAL uint64_t bender_probe_marks_cur = 0;
++static uint64_t bender_probe_marks = 0;        /* mark-macro hits, all collections */
++static uint64_t bender_probe_marks_max = 0;    /* largest single collection */
++static uint64_t bender_probe_fm = 0;           /* scoped fiber minors that marked */
++static uint64_t bender_probe_fm_skip = 0;      /* scoped minors short-circuited */
++static uint64_t bender_probe_pm = 0;           /* per-process (strict) minors */
++static uint64_t bender_probe_gm = 0;           /* global minors */
++static uint64_t bender_probe_major = 0;        /* full collects */
++static uint64_t bender_probe_blocks = 0;       /* block_count at the last minor */
++static uint64_t bender_probe_thresh = 0;       /* trigger threshold last used */
++/* Marks attributed to the collection KIND that performed them. Without this
++ * split a total mark count cannot distinguish "many cheap scoped minors"
++ * from "a few whole-heap majors", which are opposite diagnoses. */
++static uint64_t bender_probe_marks_fm = 0;
++static uint64_t bender_probe_marks_pm = 0;
++static uint64_t bender_probe_marks_gm = 0;
++static uint64_t bender_probe_marks_major = 0;
++/* Marks attributed to each ROOT SUBPATH of a scoped fiber minor. The scoped
++ * minor has exactly six mark sources; only measuring them separately can say
++ * which one grows with the live process set. */
++static uint64_t bender_probe_sp_own = 0;       /* bender_mark_fiber(f) */
++static uint64_t bender_probe_sp_dyns = 0;      /* top_dyns */
++static uint64_t bender_probe_sp_prof = 0;      /* profile_table */
++static uint64_t bender_probe_sp_reg = 0;       /* proc_registry */
++static uint64_t bender_probe_sp_ev = 0;        /* bender_ev_mark_shallow */
++static uint64_t bender_probe_sp_xfb = 0;       /* bender_xfb_mark_owned */
++/* Fibers marked per collection. The proc-capture depth cap (proc.h:50) is
++ * supposed to keep this O(1) inside a scoped minor; if it grows with the
++ * live process count the cap is not actually binding. */
++static BENDER_THREAD_LOCAL uint64_t bender_probe_fibers_cur = 0;
++static uint64_t bender_probe_fibers_fm = 0;
++static uint64_t bender_probe_fibers_max = 0;
++/* How many collections exceed the documented proc-chain bound, and how much
++ * fiber-walking they account for. This is the quadratic term if it is real. */
++static uint64_t bender_probe_big_count = 0;
++static uint64_t bender_probe_big_fibers = 0;
++static int bender_probe_on = -1;
++
++#define BENDER_PROBE_ADD(p, v) __atomic_fetch_add(&(p), (uint64_t)(v), __ATOMIC_RELAXED)
++#define BENDER_PROBE_SET(p, v) __atomic_store_n(&(p), (uint64_t)(v), __ATOMIC_RELAXED)
++#define BENDER_PROBE_MARK() (++bender_probe_marks_cur)
++
++static void bender_probe_report(void) {
++    if (bender_probe_on != 1) return;
++    uint64_t fm = __atomic_load_n(&bender_probe_fm, __ATOMIC_RELAXED);
++    uint64_t marks = __atomic_load_n(&bender_probe_marks, __ATOMIC_RELAXED);
++    uint64_t mfm = __atomic_load_n(&bender_probe_marks_fm, __ATOMIC_RELAXED);
++    fprintf(stderr,
++            "[gc-probe] fiber_minor=%llu skipped=%llu proc_minor=%llu "
++            "global_minor=%llu major=%llu marks=%llu marks_max=%llu "
++            "m_fm=%llu m_fm_avg=%llu m_pm=%llu m_gm=%llu m_major=%llu "
++            "blocks_last=%llu nursery_last=%llu\n",
++            (unsigned long long) fm,
++            (unsigned long long) __atomic_load_n(&bender_probe_fm_skip, __ATOMIC_RELAXED),
++            (unsigned long long) __atomic_load_n(&bender_probe_pm, __ATOMIC_RELAXED),
++            (unsigned long long) __atomic_load_n(&bender_probe_gm, __ATOMIC_RELAXED),
++            (unsigned long long) __atomic_load_n(&bender_probe_major, __ATOMIC_RELAXED),
++            (unsigned long long) marks,
++            (unsigned long long) __atomic_load_n(&bender_probe_marks_max, __ATOMIC_RELAXED),
++            (unsigned long long) mfm,
++            (unsigned long long) (fm ? mfm / fm : 0),
++            (unsigned long long) __atomic_load_n(&bender_probe_marks_pm, __ATOMIC_RELAXED),
++            (unsigned long long) __atomic_load_n(&bender_probe_marks_gm, __ATOMIC_RELAXED),
++            (unsigned long long) __atomic_load_n(&bender_probe_marks_major, __ATOMIC_RELAXED),
++            (unsigned long long) __atomic_load_n(&bender_probe_blocks, __ATOMIC_RELAXED),
++            (unsigned long long) __atomic_load_n(&bender_probe_thresh, __ATOMIC_RELAXED));
++    fprintf(stderr,
++            "[gc-probe-sub] own=%llu dyns=%llu prof=%llu reg=%llu ev=%llu xfb=%llu\n",
++            (unsigned long long) __atomic_load_n(&bender_probe_sp_own, __ATOMIC_RELAXED),
++            (unsigned long long) __atomic_load_n(&bender_probe_sp_dyns, __ATOMIC_RELAXED),
++            (unsigned long long) __atomic_load_n(&bender_probe_sp_prof, __ATOMIC_RELAXED),
++            (unsigned long long) __atomic_load_n(&bender_probe_sp_reg, __ATOMIC_RELAXED),
++            (unsigned long long) __atomic_load_n(&bender_probe_sp_ev, __ATOMIC_RELAXED),
++            (unsigned long long) __atomic_load_n(&bender_probe_sp_xfb, __ATOMIC_RELAXED));
++    fprintf(stderr,
++            "[gc-probe-fib] fibers_fm=%llu fibers_per_fm=%llu fibers_max=%llu\n",
++            (unsigned long long) __atomic_load_n(&bender_probe_fibers_fm, __ATOMIC_RELAXED),
++            (unsigned long long) (fm ? __atomic_load_n(&bender_probe_fibers_fm, __ATOMIC_RELAXED) / fm : 0),
++            (unsigned long long) __atomic_load_n(&bender_probe_fibers_max, __ATOMIC_RELAXED));
++    fprintf(stderr, "[gc-probe-bigsum] big_collections=%llu big_fiber_marks=%llu\n",
++            (unsigned long long) __atomic_load_n(&bender_probe_big_count, __ATOMIC_RELAXED),
++            (unsigned long long) __atomic_load_n(&bender_probe_big_fibers, __ATOMIC_RELAXED));
++}
++
++/* Arming is lazy because the probe must also see collections that run
++ * before any Bender code does. Checked once; atexit prints from the main
++ * thread after every lane has folded its counters in at lane stop. */
++static int bender_probe_armed(void) {
++    if (bender_probe_on < 0) {
++        const char *e = getenv("BENDER_GC_PROBE");
++        bender_probe_on = (NULL != e && '0' != e[0]) ? 1 : 0;
++        if (bender_probe_on) atexit(bender_probe_report);
++    }
++    return bender_probe_on;
++}
++
++/* Reset the per-collection counters at the ENTRY of a collector, so a path
++ * that marks and then returns early cannot leak its marks into the next
++ * collection's attribution. */
++#define BENDER_PROBE_BEGIN() do { \
++    bender_probe_marks_cur = 0; bender_probe_fibers_cur = 0; } while (0)
++
++/* Report any collection whose fiber walk is far larger than the documented
++ * proc-chain bound, with enough identity to say WHICH fiber's minor it was. */
++static void bender_probe_big(const char *kind, BenderFiber *f) {
++    if (bender_probe_on != 1) return;
++    if (bender_probe_fibers_cur < 1000) return;
++    BENDER_PROBE_ADD(bender_probe_big_count, 1);
++    BENDER_PROBE_ADD(bender_probe_big_fibers, bender_probe_fibers_cur);
++    static BENDER_THREAD_LOCAL long shown = 0;
++    if (++shown > 10) return;
++    fprintf(stderr, "[gc-probe-big] %s fiber=%p owner=%u has_proc=%d strict=%d "
++            "fibers=%llu marks=%llu nursery=%lld blocks=%lld lane=%d\n",
++            kind, (void *) f, (NULL != f) ? f->gc_owner : 0,
++            (NULL != f) ? (NULL != f->proc) : -1,
++            (NULL != f) ? f->heap_strict : -1,
++            (unsigned long long) bender_probe_fibers_cur,
++            (unsigned long long) bender_probe_marks_cur,
++            (long long) ((NULL != f) ? (long long) f->gc_nursery_bytes : -1),
++            (long long) bender_vm.block_count,
++            (int) bender_vm.is_lane_vm);
++}
++
++/* Snapshot/fold helpers for per-subpath attribution inside one collection. */
++#define BENDER_PROBE_SUB_BEGIN(v) uint64_t v = bender_probe_marks_cur
++#define BENDER_PROBE_SUB_END(bucket, v) \
++    BENDER_PROBE_ADD(bucket, bender_probe_marks_cur - (v))
++
++/* Fold this collection's thread-local mark count into the totals. */
++static void bender_probe_close(uint64_t *counter, uint64_t *markbucket) {
++    if (!bender_probe_armed()) {
++        bender_probe_marks_cur = 0;
++        return;
++    }
++    BENDER_PROBE_ADD(*counter, 1);
++    BENDER_PROBE_ADD(*markbucket, bender_probe_marks_cur);
++    BENDER_PROBE_ADD(bender_probe_marks, bender_probe_marks_cur);
++    if (bender_probe_marks_cur >
++            __atomic_load_n(&bender_probe_marks_max, __ATOMIC_RELAXED))
++        BENDER_PROBE_SET(bender_probe_marks_max, bender_probe_marks_cur);
++    bender_probe_marks_cur = 0;
++}
++#else
++#define BENDER_PROBE_MARK() ((void)0)
++#define BENDER_PROBE_ADD(p, v) ((void)0)
++#define BENDER_PROBE_SET(p, v) ((void)0)
++#define BENDER_PROBE_SUB_BEGIN(v) ((void)0)
++#define BENDER_PROBE_SUB_END(bucket, v) ((void)0)
++#define BENDER_PROBE_BEGIN() ((void)0)
++#endif
++
+ #undef bender_gc_mark
+ #undef bender_gc_reachable
+-#define bender_gc_mark(m) (bender_gc_header(m)->flags = \
++#define bender_gc_mark(m) (BENDER_PROBE_MARK(), bender_gc_header(m)->flags = \
+     ((bender_gc_header(m)->flags & ~BENDER_MEM_EPOCH_MASK) \
+      | (bender_gc_epoch << BENDER_MEM_EPOCH_SHIFT)))
+ #define bender_gc_reachable(m) \
+@@ -198,8 +365,8 @@
+      * mark phase (bender_env_maybe_detach allocates, and an allocation
+      * failure panics) would leave the counter high forever, after which
+      * every later scoped minor would shallow-mark proc fibers immediately
+-     * and could free a still-live object. gc_mark_phase is still 0 here for
+-     * a top-level collection and already 1 for one re-entered from inside
++     * and could free a live object. gc_mark_phase is still 0 here for a
++     * top-level collection and already 1 for one re-entered from inside
+      * marking, so a nested collection correctly leaves the outer walk's
+      * depth alone. */
+     if (!bender_vm.gc_mark_phase) bender_proc_mark_depth = 0;
+@@ -606,6 +773,9 @@
+     }
+ #endif
+     bender_gc_mark(fiber);
++#ifdef BENDER_GC_PROBE
++    ++bender_probe_fibers_cur;
++#endif
+ 
+     /* P3.5: proc fibers pin their proc (and procs pin their fibers
+      * in procat_mark), so neither pointer dangles while the other
+@@ -2917,8 +3087,15 @@
+     if (NULL != f->proc && !bender_proc_minor_has_candidates(f)) {
+         bender_proc_minor_clear_stamps(f);
+         f->gc_nursery_bytes = 0;
++        BENDER_PROBE_ADD(bender_probe_fm_skip, 1);
+         return;
+     }
++    /* Probe: gc_nursery_bytes at entry is the trigger level that was
++     * actually reached, so it measures maybe_collect's effective policy
++     * without restating it (the scale/cap constants live in vm.c). */
++    BENDER_PROBE_SET(bender_probe_thresh, f->gc_nursery_bytes);
++    BENDER_PROBE_SET(bender_probe_blocks, bender_vm.block_count);
++    BENDER_PROBE_BEGIN();
+     BENDER_GC_WORK_TICK(work_gc_fiber_minor);
+     bender_gc_epoch_next();
+     depth = BENDER_RECURSION_GUARD;
+@@ -2937,7 +3114,13 @@
+      * degraded to a global minor above. Registered fibers prune
+      * synchronously at deinit (census_remove), so no dangling
+      * registry reads. */
++#ifdef BENDER_GC_PROBE
++    BENDER_PROBE_SUB_BEGIN(sp0);
++#endif
+     bender_mark_fiber(f);
++#ifdef BENDER_GC_PROBE
++    BENDER_PROBE_SUB_END(bender_probe_sp_own, sp0);
++#endif
+     /* C-side VM roots: containers mutated by C code WITHOUT the bender
+      * write barrier — the roots-free design's explicit pin set. The
+      * profile table (PGO auto-collect runs it in every AOT binary)
+@@ -2946,20 +3129,36 @@
+      * profile_dump walks freed keys (the AOT teardown SEGV,
+      * faulting in bender_profile_rows at 0x11). top_dyns is the same
+      * class. Both are small; child minors are rare. */
++#ifdef BENDER_GC_PROBE
++    BENDER_PROBE_SUB_BEGIN(sp1);
++#endif
+     if (bender_vm.top_dyns) {
+         bender_mark(bender_wrap_table(bender_vm.top_dyns));
+     }
++#ifdef BENDER_GC_PROBE
++    BENDER_PROBE_SUB_END(bender_probe_sp_dyns, sp1);
++    BENDER_PROBE_SUB_BEGIN(sp2);
++#endif
+     if (bender_vm.profile_table) {
+         bender_mark(bender_wrap_table(bender_vm.profile_table));
+     }
++#ifdef BENDER_GC_PROBE
++    BENDER_PROBE_SUB_END(bender_probe_sp_prof, sp2);
++#endif
+     /* B7.1 named proc registry: third member of the same pin set. A
+      * proc/register that ran on some fiber stored a proc handle into
+      * this table without a write barrier, so a LATER actor's own minor
+      * would otherwise sweep that handle (the registry entry then holds
+      * a freed proc). Marked here exactly as top_dyns is. */
++#ifdef BENDER_GC_PROBE
++    BENDER_PROBE_SUB_BEGIN(sp3);
++#endif
+     if (bender_vm.proc_registry) {
+         bender_mark(bender_wrap_table(bender_vm.proc_registry));
+     }
++#ifdef BENDER_GC_PROBE
++    BENDER_PROBE_SUB_END(bender_probe_sp_reg, sp3);
++#endif
+     /* Event-loop C roots: the spawn task queue and the timeout queue
+      * are naked C arrays that hold queued wakeups — task fibers and
+      * resume values — allocated young on ANY fiber's heap (a channel
+@@ -2984,7 +3183,13 @@
+      * from being swept if it happens to live on THIS heap, not to
+      * prove its full reachability (that is whichever collection
+      * actually owns and sweeps it) -- use the shallow variant. */
++#ifdef BENDER_GC_PROBE
++    BENDER_PROBE_SUB_BEGIN(sp4);
++#endif
+     bender_ev_mark_shallow();
++#ifdef BENDER_GC_PROBE
++    BENDER_PROBE_SUB_END(bender_probe_sp_ev, sp4);
++#endif
+     /* Erlang-parity messaging fix, part 3 (final form: true owner-
+      * bucketing, see docs/internals/proc-lanes.md): bender_xfb_mark_owned
+      * marks only this owner's bucket (O(1) hash lookup + O(this
+@@ -2994,7 +3199,13 @@
+      * mixed/0, which makes it immune to any single-owner's scoped
+      * sweep regardless of marking, so there is no premature-free
+      * risk from bucketing by it. */
++#ifdef BENDER_GC_PROBE
++    BENDER_PROBE_SUB_BEGIN(sp5);
++#endif
+     bender_xfb_mark_owned(ss, f->gc_owner);
++#ifdef BENDER_GC_PROBE
++    BENDER_PROBE_SUB_END(bender_probe_sp_xfb, sp5);
++#endif
+     bender_vm.gc_mark_phase = 0;
+     /* Erlang-parity messaging fix (docs/internals/proc-lanes.md): the
+      * real O(n^2) root cause, confirmed by direct code inspection (no
+@@ -3034,6 +3245,15 @@
+     }
+ #ifdef BENDER_GC_COUNT
+     g_n_owned++;
++#endif
++#ifdef BENDER_GC_PROBE
++    bender_probe_big("fiber-minor", f);
++    BENDER_PROBE_ADD(bender_probe_fibers_fm, bender_probe_fibers_cur);
++    if (bender_probe_fibers_cur >
++            __atomic_load_n(&bender_probe_fibers_max, __ATOMIC_RELAXED))
++        BENDER_PROBE_SET(bender_probe_fibers_max, bender_probe_fibers_cur);
++    bender_probe_fibers_cur = 0;
++    bender_probe_close(&bender_probe_fm, &bender_probe_marks_fm);
+ #endif
+     bender_vm.gc_minor_phase = 0;
+     f->gc_nursery_bytes = 0;
+@@ -3208,6 +3428,7 @@
+         if (NULL != f) f->gc_nursery_bytes = 0;
+         return;
+     }
++    BENDER_PROBE_BEGIN();
+     BENDER_GC_WORK_TICK(work_gc_process_minor);
+     bender_gc_epoch_next();
+     depth = BENDER_RECURSION_GUARD;
+@@ -3262,6 +3483,10 @@
+ #ifdef BENDER_GC_COUNT
+     g_n_proc++;
+ #endif
++#ifdef BENDER_GC_PROBE
++    bender_probe_fibers_cur = 0;
++    bender_probe_close(&bender_probe_pm, &bender_probe_marks_pm);
++#endif
+     bender_vm.gc_minor_phase = 0;
+     f->gc_nursery_bytes = 0;
+ }
+@@ -3274,6 +3499,7 @@
+  * young pages age (cap old) and dirty flags clear. */
+ void bender_collect_minor(void) {
+     if (bender_vm.gc_suspend) return;
++    BENDER_PROBE_BEGIN();
+     BENDER_GC_WORK_TICK(work_gc_minor);
+ #ifdef BENDER_GC_COUNT
+     g_n_minor++;
+@@ -3322,6 +3548,11 @@
+         }
+         bender_vm.gc_young_bytes = 0;
+     }
++#ifdef BENDER_GC_PROBE
++    bender_probe_big("global-minor", NULL);
++    bender_probe_fibers_cur = 0;
++    bender_probe_close(&bender_probe_gm, &bender_probe_marks_gm);
++#endif
+ }
+ 
+ /* Run garbage collection */
+@@ -3332,6 +3563,7 @@
+     fflush(stderr);
+ #endif
+     if (bender_vm.gc_suspend) return;
++    BENDER_PROBE_BEGIN();
+     BENDER_GC_WORK_TICK(work_gc_major);
+ #ifdef BENDER_GC_COUNT
+     g_n_major++;
+@@ -3373,6 +3605,11 @@
+      * invalidates live scratch (use-after-free, then an "invalid
+      * bender_sfree" abort). Panic-leaked scratch is still recovered at
+      * shutdown in bender_clear_memory. */
++#ifdef BENDER_GC_PROBE
++    bender_probe_big("major", NULL);
++    bender_probe_fibers_cur = 0;
++    bender_probe_close(&bender_probe_major, &bender_probe_marks_major);
++#endif
+ }
+ 
+ /* Add a root value to the GC. This prevents the GC from removing a value
