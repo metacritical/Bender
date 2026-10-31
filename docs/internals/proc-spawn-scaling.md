@@ -433,7 +433,45 @@ every site that treats a `BenderFiber *` as its own GC object
 `bender_census_remove`) must tolerate a fiber with no header of its own. Worth
 doing for the mark-work win; it must not be sold as the footprint fix.
 
-### Why the page slack is not a one-line fix
+### FIXED: the hybrid nursery cursor (`35befbb2`)
+
+The gate was wrong, not the design. `3401dc30` asked "is this fiber being
+constructed"; the right question is "has this fiber earned a page". A fiber now
+draws from a shared cursor until it has allocated `BENDER_SLAB_PAGE_SIZE` in
+total (`BenderFiber.gc_total_bytes`, monotonic), then is promoted to its own
+cursor permanently. A fiber that has not allocated a page's worth cannot fill a
+private page, so many such procs pack into one.
+
+The hybrid uses its OWN shared pool (`shy_cur[]`), stamped owner 0 / mixed. A
+fiber whose objects straddle a shared page and its own page otherwise produces
+spurious cross-owner edges in the append-only remembered set --
+`suite-process-heaps:139` ("same-fiber silent") catches it. `cur[]` keeps the
+construction stamping that A3 of
+`test/c/test-gc-proc-minor-no-candidates.c` pins, and one cursor cannot carry
+both. `shy_cur[]` nulls with `cur[]` in `bender_slab_free_pages` or a freed
+page dangles.
+
+**Gate 1, footprint** (`bench/proc-footprint.ben`, parked procs, marginal from
+the RSS difference, same box back-to-back):
+
+| | 100,000 | 300,000 | marginal B/proc |
+|---|---:|---:|---:|
+| before | 650 MB | 1,784 MB | 5,945 |
+| after | 300 MB | 843 MB | **2,847** (2.09x lighter) |
+| Erlang, same basis | | | 1,709 |
+
+On `wave.ben` at 500,000: 1,523 MB against 3,453 MB, versus Erlang's 1,183 MB.
+
+**Gate 2, the spawn curve** must not regress past `N^1.11`. It does not --
+5.70 / 5.82 / 7.61 / 6.64 / 8.23 us/spawn at N = 20k/50k/100k/200k/500k,
+against 6.75 / 6.52 / 8.88 / 7.78 / 9.12 before. Slightly faster in absolute
+terms: packed pages have better locality than pages 1/64 full.
+
+Both gates had to be measured together because they pull against each other --
+sharing pages defers reclamation to global collections, which is precisely what
+could have re-inflated the spawn curve. It did not.
+
+### Why it was not a one-line fix
 
 Private pages are load-bearing for the GC work above: a scoped minor sweeps
 `f->heap_lists[]` filtered by `bender_slab_obj_owner(obj) == f->gc_owner`, and
@@ -459,16 +497,16 @@ Three items, in value order.
    `src/boot/boot.ben`), not a constant tweak. Measure against the local-spawn
    floor of 1.87 us/spawn, not against zero.
 
-2. **Per-proc footprint: the hybrid nursery cursor.** Route a non-strict proc
-   fiber's steady-state allocation through the SHARED cursor until its own
-   footprint crosses a threshold (on the order of one page), then promote it
-   to a private `nursery_cur[class]`. Small parked procs -- the overwhelming
-   majority in any actor workload -- stay compact; procs that genuinely
-   allocate keep the page purity the scoped sweep depends on. Acceptance must
-   be BOTH gates together, since they pull against each other: marginal
-   B/proc (target: beat 1,709) and the spawn scaling curve (must not regress
-   past `N^1.11`). Strict/isolated procs keep private cursors unconditionally
-   -- the export rule depends on it (`suite-proc` P3.3 export tests).
+2. **Per-proc footprint: close the last 1.67x.** The hybrid cursor took
+   marginal cost from 5,945 to 2,847 B/proc (landed, `35befbb2`), so a live
+   proc is now 1.67x Erlang's 1,709 B rather than 3.5x. What remains is the
+   ~920 B of structs (fiber block 408, its separate 128 B stack realloc, proc
+   abstract 144, eager sup channel 240) plus whatever slack survives at a
+   4 KiB page granularity. The two candidates are making the supervisor
+   channel lazy the way the mailbox already is -- it exists only for the
+   late-monitor semantic that `suite-proc` test 11 pins -- and folding the
+   fiber into the proc, which is worth ~80 B and ~17% of per-proc mark visits
+   (see the merge analysis above). Measure both gates together again.
 
 3. **A `1.4x` live-set residual on the co-located chain, i.e. `N^1.11`.** The
    surviving whole-live-set walks (3 at N=200,000, down from 17) are still
