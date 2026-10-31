@@ -1,0 +1,60 @@
+# Per-process memory footprint.
+#
+# "Lightweight process" is a memory claim as much as a speed claim: if each
+# proc costs kilobytes, a million of them cannot fit and the box swaps, which
+# is exactly what was observed while measuring spawn scaling. This reports the
+# MARGINAL bytes per live proc, measured two ways so slab granularity and
+# one-off boot cost cannot be mistaken for per-proc cost.
+#
+#   ./build/bender bench/proc-footprint.ben <n> [shape]
+#
+# shape (default parked):
+#   parked   - (fn [] (proc/recv)) : runs, then blocks. The wave/chain shape.
+#   inert    - (fn [] nil) captured but never scheduled past birth.
+#   captured - parks AND captures the previous pid, like wave.ben, so the
+#              closure carries a captured value across the spawn.
+#
+# Reports os/proc-rss if available; the caller should ALSO wrap this in
+# /usr/bin/time -l, since an in-process number cannot see allocator overhang.
+
+(def n (or (scan-number (or (get (dyn :args) 1) "")) 100000))
+(def shape (or (get (dyn :args) 2) "parked"))
+
+(defn rss-kb []
+  # No in-VM RSS accessor exists, so read this pid's resident size from ps
+  # through a pipe. os/execute with :p gives the child's stdout.
+  (def [r w] (os/pipe))
+  (os/execute ["ps" "-o" "rss=" "-p" (string (os/getpid))] :px {:out w})
+  (:close w)
+  (def out (:read r :all))
+  (:close r)
+  (or (scan-number (string/trim (or out "0"))) 0))
+
+(def before (rss-kb))
+(def t0 (os/clock))
+
+(def keep @[])
+(var prev nil)
+(var i 0)
+(while (< i n)
+  (def p
+    (case shape
+      "inert" (proc/spawn (fn [] nil) 8)
+      "captured" (let [down prev]
+                   (proc/spawn (fn [] (proc/send down (proc/recv))) 8))
+      (proc/spawn (fn [] (proc/recv)) 8)))
+  (set prev p)
+  (array/push keep p)
+  (set i (+ i 1)))
+
+(def t1 (os/clock))
+(def after (rss-kb))
+(def delta-kb (- after before))
+
+(eprintf (string "procs=%d shape=%s rss_before_kb=%d rss_after_kb=%d "
+                 "delta_kb=%d bytes_per_proc=%.0f spawn_ms=%.0f")
+         n shape before after delta-kb
+         (/ (* 1024.0 delta-kb) n)
+         (* 1000.0 (- t1 t0)))
+(printf "procs=%d alive=%d" n (length keep))
+(when (> (proc/lanes) 0) (proc/lanes-stop))

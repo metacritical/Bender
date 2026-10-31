@@ -333,9 +333,78 @@ it no other way to discharge, which is what `proc.c:323-324` already says
 ("needs real backpressure in the lane dispatcher, not a bigger drain
 frequency").
 
+## Processes are HEAVY: 94% of per-proc memory is slab-page slack
+
+The swap pressure during the measurements above is not a measurement nuisance,
+it is a second defect. A "lightweight process" runtime is making a memory
+claim, and this one does not hold.
+
+Marginal bytes per process, taken from the RSS *difference* between two
+process counts so the runtime's fixed footprint cannot flatter it (peak RSS
+via `/usr/bin/time -l`, `wave.ben`):
+
+| runtime | RSS @200,000 | RSS @500,000 | marginal B/proc |
+|---|---:|---:|---:|
+| Erlang (OTP 17.1.1) | 694 MB | 1,183 MB | **1,709** |
+| Bender | 1,428 MB | 3,453 MB | **7,078** |
+
+**4.1x heavier per process.** Note Erlang's *average* per proc FALLS with N
+(3,640 -> 2,481 bytes) as fixed cost amortises, while Bender's stays pinned
+near 7,000 -- so Bender's cost is genuinely marginal, not boot overhead. At
+1,000,000 procs that is ~7 GB against ~1.7 GB, which is the swap.
+
+### It is not the structs
+
+`BenderProcess` is small, the mailbox is already LAZY (`proc.h:13-23`), and the
+eager supervisor channel is only ~200 bytes because `bender_chan_init` leaves
+all three `BenderQueue`s empty. Replacing the process representation with
+something lighter therefore buys approximately nothing; this was tested and
+refuted. `tools/slab-page-probe.patch` says where the memory actually is:
+
+| N | slab pages | pages/proc | from a fiber-PRIVATE cursor | slab MB | % of RSS |
+|---|---:|---:|---:|---:|---:|
+| 100,000 | 142,961 | 1.43 | **93.0%** | 558 | 78.4% |
+| 200,000 | 287,722 | 1.44 | **92.8%** | 1,124 | 78.7% |
+
+- Marginal: **1.45 slab pages per proc = 5,929 B/proc**, i.e. **84%** of the
+  7,078 B marginal RSS.
+- Real data per proc is ~5.9 blocks (the measured `block_count` per proc) at
+  32-512 byte size classes, so ~378 bytes.
+- **Page slack is therefore ~5,552 B/proc: 93.6% of per-proc memory is empty
+  space inside 4 KiB pages.**
+
+The mechanism is explicit in `bender_slab_alloc`: `BENDER_SLAB_PAGE_SIZE` is
+4096 and every fiber carries `nursery_cur[BENDER_SLAB_NCLASSES]` -- a *private*
+bump page per size class. Spawn *construction* is already routed through the
+shared cursor, and that works (only 7% of claims are shared, but those are the
+construction ones). Steady-state fibers "keep their own cur page exactly as
+before", so a proc that allocates ~378 bytes and then parks forever holds
+1.45 exclusive 4 KiB pages.
+
+Even the cheapest possible proc pays it: measured at N=200,000, an `inert`
+proc (`(fn [] nil)`) costs 5,041 B/proc and a `parked` proc
+(`(fn [] (proc/recv))`) 5,856 B/proc (`bench/proc-footprint.ben`). So this is
+a floor set by page granularity, not by what the body does.
+
+The upside is large and specific: 378 bytes of data plus the fiber, proc
+abstract, sup channel and a 16-slot stack is on the order of **1.1 KB**, which
+would be *below* Erlang's 1,709 B marginal. The slack is recoverable, not
+inherent.
+
+### Why it is not a one-line fix
+
+Private pages are load-bearing for the GC work above: a scoped minor sweeps
+`f->heap_lists[]` filtered by `bender_slab_obj_owner(obj) == f->gc_owner`, and
+a page that takes a second owner is marked `mixed`, reads as owner 0, and then
+"float[s] until a global collection instead of a scoped one". Simply sharing
+pages trades the memory win for the scaling win. The hybrid is the thing to
+measure: use the shared cursor until a fiber's own footprint crosses a
+threshold, then promote it to a private page, so small parked procs stay
+compact while genuinely allocating procs keep page purity.
+
 ## What is still open
 
-Two separate items, in value order.
+Three items, in value order.
 
 1. **Batch routed spawns per target lane.** The routed path pays one
    self-pipe event *and* one closure marshal per spawn, and the drain that
@@ -348,7 +417,18 @@ Two separate items, in value order.
    `src/boot/boot.ben`), not a constant tweak. Measure against the local-spawn
    floor of 1.87 us/spawn, not against zero.
 
-2. **A `1.4x` live-set residual on the co-located chain, i.e. `N^1.11`.** The
+2. **Per-proc footprint: the hybrid nursery cursor.** Route a non-strict proc
+   fiber's steady-state allocation through the SHARED cursor until its own
+   footprint crosses a threshold (on the order of one page), then promote it
+   to a private `nursery_cur[class]`. Small parked procs -- the overwhelming
+   majority in any actor workload -- stay compact; procs that genuinely
+   allocate keep the page purity the scoped sweep depends on. Acceptance must
+   be BOTH gates together, since they pull against each other: marginal
+   B/proc (target: beat 1,709) and the spawn scaling curve (must not regress
+   past `N^1.11`). Strict/isolated procs keep private cursors unconditionally
+   -- the export rule depends on it (`suite-proc` P3.3 export tests).
+
+3. **A `1.4x` live-set residual on the co-located chain, i.e. `N^1.11`.** The
    surviving whole-live-set walks (3 at N=200,000, down from 17) are still
    Theta(N) each, so this is the **marking constant**, hypothesis H3:
    `bender_procat_mark` re-walks ~6 blocks per proc. Cutting the *number* of

@@ -1,0 +1,68 @@
+# Per-proc slab-page footprint probe (development instrumentation, NOT shipped)
+#
+# Applies to src/core/gc.c. Build with:
+#     make -j12 CFLAGS="-O2 -g -DBENDER_PAGE_PROBE"
+# Run with BENDER_PAGE_PROBE=1 to get, on stderr at exit:
+#   [page-probe] pages_alloced=.. peak_live=.. peak_bytes_mb=..
+#                private_claims=.. shared_claims=..
+#
+# private_claims counts pages taken from a fiber's own nursery_cur[class];
+# shared_claims counts pages taken from the shared ss->cur[class]. The split
+# is the point: it says whether per-proc memory is real data or 4 KiB page
+# granularity multiplied by per-fiber page ownership.
+#
+# Apply with:  patch -p0 < tools/slab-page-probe.patch
+--- src/core/gc.c	2026-10-31 17:51:51
++++ /tmp/gc-with-pageprobe.c	2026-10-31 17:51:51
+@@ -157,6 +157,32 @@
+ static uint32_t bender_slab_obj_owner(void *ptr);
+ /* Reset generational slab state after a full sweep; defined below. */
+ static void bender_slab_major_reset(void);
++#ifdef BENDER_PAGE_PROBE
++static uint64_t bender_pp_pages = 0;      /* slab pages ever allocated */
++static uint64_t bender_pp_live = 0;       /* currently allocated */
++static uint64_t bender_pp_peak = 0;
++static uint64_t bender_pp_privclaim = 0;  /* claims from a fiber-private cursor */
++static uint64_t bender_pp_sharedclaim = 0;/* claims from the shared cursor */
++static int bender_pp_on = -1;
++static void bender_pp_report(void) {
++    if (1 != bender_pp_on) return;
++    fprintf(stderr, "[page-probe] pages_alloced=%llu peak_live=%llu "
++            "peak_bytes_mb=%.1f private_claims=%llu shared_claims=%llu\n",
++            (unsigned long long) __atomic_load_n(&bender_pp_pages, __ATOMIC_RELAXED),
++            (unsigned long long) __atomic_load_n(&bender_pp_peak, __ATOMIC_RELAXED),
++            __atomic_load_n(&bender_pp_peak, __ATOMIC_RELAXED) * 4096.0 / 1048576.0,
++            (unsigned long long) __atomic_load_n(&bender_pp_privclaim, __ATOMIC_RELAXED),
++            (unsigned long long) __atomic_load_n(&bender_pp_sharedclaim, __ATOMIC_RELAXED));
++}
++static int bender_pp_armed(void) {
++    if (bender_pp_on < 0) {
++        const char *e = getenv("BENDER_PAGE_PROBE");
++        bender_pp_on = (NULL != e && '0' != e[0]) ? 1 : 0;
++        if (bender_pp_on) atexit(bender_pp_report);
++    }
++    return bender_pp_on;
++}
++#endif
+ /* Step 1.3 census removal at sweep-free; defined with the slab code. */
+ static void bender_census_remove(BenderFiber *f);
+ static void bender_sweep_heaps(int walk_fibers);
+@@ -1602,6 +1628,18 @@
+     BenderSlabPage *page = *curp;
+     if (NULL == page || page->age >= BENDER_SLAB_OLD_AGE ||
+             (size_t) page->bump + slot > (size_t) BENDER_SLAB_USABLE) {
++#ifdef BENDER_PAGE_PROBE
++        if (bender_pp_armed()) {
++            __atomic_fetch_add(&bender_pp_pages, 1, __ATOMIC_RELAXED);
++            uint64_t l = __atomic_add_fetch(&bender_pp_live, 1, __ATOMIC_RELAXED);
++            if (l > __atomic_load_n(&bender_pp_peak, __ATOMIC_RELAXED))
++                __atomic_store_n(&bender_pp_peak, l, __ATOMIC_RELAXED);
++            if (curp == &ss->cur[class_index])
++                __atomic_fetch_add(&bender_pp_sharedclaim, 1, __ATOMIC_RELAXED);
++            else
++                __atomic_fetch_add(&bender_pp_privclaim, 1, __ATOMIC_RELAXED);
++        }
++#endif
+         page = bender_slab_page_alloc();
+         if (NULL == page) {
+             return NULL;
