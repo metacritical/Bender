@@ -1,0 +1,44 @@
+# bench/cross-runtime/wave-fiber.ben
+#
+# Trampoline wave over FIBERS (ev/go + ev/chan), the counterpart to wave.ben
+# which uses processes with mailboxes. Fiber i takes a value from its own
+# channel, adds 1, and gives it to fiber i+1's channel. The sink reports the
+# final value, which MUST equal N.
+#
+# Same dependency chain as the process version: one hop at a time, so this
+# measures fiber spawn cost plus per-hop channel handoff and scheduling.
+# Fibers are VM-local and are NOT distributed across lanes, so this arm is
+# single-VM by construction -- that is the point of comparing it against
+# wave.ben rather than a claim about parallelism.
+#
+# Run: ./build/bender bench/cross-runtime/wave-fiber.ben <n>
+# Emits the same machine-readable line shape as wave.ben/wave.erl/wave.go:
+# deterministic stdout, phase timings on stderr.
+
+(def n (scan-number (get (dyn :args) 1)))
+
+# --- spawn: chain fiber i -> fiber i+1, sink channel at the end -------------
+(def t0 (os/clock))
+(def sink (ev/chan 1))
+(var head sink)
+(var i 0)
+(while (< i n)
+  (def downstream head)
+  (def up (ev/chan 1))
+  (ev/go (fn [] (ev/give downstream (+ 1 (ev/take up)))))
+  (set head up)
+  (set i (+ i 1)))
+(def t1 (os/clock))
+
+# --- wave: push one value through the whole chain ---------------------------
+(ev/give head 0)
+(def result (ev/take sink))
+(def t2 (os/clock))
+
+(assert (= result n) "wave result must equal fiber count")
+(printf "fibers=%d result=%d" n result)
+(eprintf "fibers=%d result=%d spawn_ms=%.0f wave_ms=%.0f total_ms=%.0f"
+         n result
+         (* 1000.0 (- t1 t0))
+         (* 1000.0 (- t2 t1))
+         (* 1000.0 (- t2 t0)))

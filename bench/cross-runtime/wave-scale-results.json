@@ -1,0 +1,90 @@
+[
+  {
+    "tag": "janet-fibers",
+    "unit": "fiber",
+    "n": 1000000,
+    "argv": [
+      "/Users/pankajdoharey/Development/Projects/janet/build/bender",
+      "/Users/pankajdoharey/Development/Projects/janet/bench/cross-runtime/wave-fiber.ben",
+      "1000000"
+    ],
+    "exit": -9,
+    "termination_reason": "wall > 300s",
+    "wall_s": 300.151,
+    "peak_sampled_rss_kib": 570400,
+    "result": null,
+    "correct": false,
+    "spawn_ms": null,
+    "wave_ms": null,
+    "total_ms": null,
+    "stderr_tail": [],
+    "ok": false
+  },
+  {
+    "tag": "janet-procs",
+    "unit": "proc",
+    "n": 1000000,
+    "argv": [
+      "/Users/pankajdoharey/Development/Projects/janet/build/bender",
+      "/Users/pankajdoharey/Development/Projects/janet/bench/cross-runtime/wave.ben",
+      "1000000"
+    ],
+    "exit": -9,
+    "termination_reason": "wall > 300s",
+    "wall_s": 300.273,
+    "peak_sampled_rss_kib": 2856928,
+    "result": null,
+    "correct": false,
+    "spawn_ms": null,
+    "wave_ms": null,
+    "total_ms": null,
+    "stderr_tail": [],
+    "ok": false
+  },
+  {
+    "tag": "erlang",
+    "unit": "process",
+    "n": 1000000,
+    "argv": [
+      "erl",
+      "-noshell",
+      "+P",
+      "8000000",
+      "-pa",
+      "/Users/pankajdoharey/Development/Projects/janet/bench/cross-runtime",
+      "-eval",
+      "wave:main([\"1000000\"]),halt()."
+    ],
+    "exit": 0,
+    "termination_reason": null,
+    "wall_s": 5.461,
+    "peak_sampled_rss_kib": 1006640,
+    "result": 1000000,
+    "correct": true,
+    "spawn_ms": 2071.0,
+    "wave_ms": 2373.0,
+    "total_ms": 4445.0,
+    "stderr_tail": [],
+    "ok": true
+  },
+  {
+    "tag": "go",
+    "unit": "goroutine",
+    "n": 1000000,
+    "argv": [
+      "/Users/pankajdoharey/Development/Projects/janet/bench/cross-runtime/wave-go",
+      "1000000"
+    ],
+    "exit": 0,
+    "termination_reason": null,
+    "wall_s": 5.402,
+    "peak_sampled_rss_kib": 2229552,
+    "result": 1000000,
+    "correct": true,
+    "spawn_ms": 3492.0,
+    "wave_ms": 1810.0,
+    "total_ms": 5303.0,
+    "stderr_tail": [],
+    "ok": true
+  }
+]
