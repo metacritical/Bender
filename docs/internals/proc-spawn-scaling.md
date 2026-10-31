@@ -197,7 +197,23 @@ Spawn phase, min-of-3 per point, fresh process per run, swap checked:
   runs gave 4,573 / 4,562 ms (+-0.2%) against 35,890 / 18,394 ms. Re-marking
   the whole live set repeatedly is swap-sensitive; not doing so is not.
 - Erlang on the same machine (OTP 17.1.1): 204 ms at 200,000, 655 ms at
-  500,000. The gap at 500,000 is **7x, down from 28x**. Not a parity claim.
+  500,000.
+
+> **CORRECTION.** Those Erlang readings were taken while the box carried
+> ~9.8 GiB of swap and are inflated, so the "7x" gap first recorded here was
+> wrong. Re-measured alternating against the same binaries at ~3.5 GiB swap,
+> Erlang spawns at **0.57-0.58 us/spawn** (114 ms at 200,000, 289 ms at
+> 500,000) and is flat. The honest figures are therefore:
+>
+> | N | baseline | fixed | Erlang | gap before -> after |
+> |---|---:|---:|---:|---|
+> | 200,000 | 16.94 us | 7.03 us | 0.57 us | 29.7x -> **12.3x** |
+> | 500,000 | 37.41 us | 8.56 us | 0.58 us | 64.5x -> **14.8x** |
+>
+> The 4.3x improvement stands; the multiple against BEAM does not. This is the
+> method note at the bottom of this file applying to its own author: a
+> cross-runtime ratio is only as good as the machine state of its slowest arm,
+> so both arms must be re-run together.
 
 ## Refuted in this round (do not re-derive)
 
@@ -332,6 +348,30 @@ constant; the spawner is paying for delivery work that the architecture gives
 it no other way to discharge, which is what `proc.c:323-324` already says
 ("needs real backpressure in the lane dispatcher, not a bigger drain
 frequency").
+
+## End-to-end trampoline wave, after both fixes
+
+Matched alternating runs, min of 2, same box at ~3.5 GiB swap, `BENDER_LANES=11`,
+`BENDER_NO_PROFILE=1`. `wave.ben` asserts `result == N`, so every one of the N
+procs provably stayed live for the whole measurement.
+
+| N | arm | spawn ms | wave ms | total ms | peak RSS |
+|---|---|---:|---:|---:|---:|
+| 200,000 | baseline `faff471f` | 3,388 | 538 | 3,926 | 1,377 MB |
+| 200,000 | **fixed** | **1,406** | **256** | **1,662** | **655 MB** |
+| 200,000 | Erlang OTP 17.1.1 | 114 | 185 | 299 | 694 MB |
+| 500,000 | baseline `faff471f` | 18,704 | 2,138 | 20,842 | 2,798 MB |
+| 500,000 | **fixed** | **4,282** | **662** | **4,944** | **1,526 MB** |
+| 500,000 | Erlang OTP 17.1.1 | 289 | 431 | 720 | 1,457 MB |
+
+- End to end: **4.2x faster and 1.8x lighter** at 500,000.
+- **Memory is at parity with BEAM** on this workload: 5.6% lighter at 200,000,
+  4.7% heavier at 500,000.
+- The **wave** phase is within **1.4-1.5x** of BEAM, and improved 2.1-3.2x
+  purely as a side effect of the collector work -- it was never the target.
+- **Spawn remains the gap at 12-15x.** That is the routed-spawn constant
+  attributed above (self-pipe drain 58%, closure marshal + pipe post 40%), not
+  GC and not process creation: local spawn is 1.87 us/spawn flat.
 
 ## Processes are HEAVY: 94% of per-proc memory is slab-page slack
 
