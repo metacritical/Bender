@@ -193,6 +193,58 @@ it. The ordering flush belongs in the named callers (`proc/send`, kill,
 monitor, stop), each of which already owns an `bender_await`-capable frame,
 rather than in `bender_channel_push`, which has none.
 
+### Attempt 3 (mode 3): the win is confirmed at every scale, and the blocker
+### is now exactly one thing -- the liveness trigger
+
+With mode 3 and the message gcrooted across the retry, batching works and the
+measured win is large. Spawn phase, `result == N` verified at every point:
+
+| N | pre-batch | batched | us/spawn | vs pre-batch |
+|---|---:|---:|---:|---:|
+| 20,000 | 113 ms | **34 ms** | 1.70 | 3.4x |
+| 50,000 | 291 ms | **84 ms** | 1.68 | 3.5x |
+| 100,000 | 761 ms | **167 ms** | **1.67** | 4.6x |
+| 200,000 | 1,329 ms | **538 ms** | 2.69 | 2.5x |
+| 500,000 | 4,116 ms | **2,186 ms** | 4.37 | 1.9x |
+| 1,000,000 | 8,487 ms | **4,554 ms** | 4.55 | 1.9x |
+
+1,000,000 processes complete on both arms. At 1,000,000: total 10,410 ->
+6,159 ms, peak RSS 2,972 -> 2,995 MB (unchanged). Erlang on the same box at
+1,000,000 is spawn 675 ms (0.675 us/spawn), wave 937 ms, total 1,612 ms,
+RSS 2,295 MB -- so batching takes the spawn gap from 12.6x to **6.7x**, total
+to 3.8x, memory to 1.31x.
+
+`us/spawn` is flat at ~1.68 to 100,000 and then rises to ~4.5. That is a
+DIFFERENT limit: the whole chain co-locates on ONE lane
+(`bender_proc_find_pid_lane`), so a single lane thread performs every proc
+creation serially. At 1.87 us of local spawn each, 1,000,000 procs is a ~1.9 s
+floor on that one thread, and the measured 4.55 s is about 2.4x it. Observing
+the process confirms it: one busy thread of twelve. Past this point the lever
+is distribution (candidate (a)), not the spawner.
+
+**The blocker is the LIVENESS trigger, and only that.** A batch must be
+flushed before the spawner waits, or its procs never reach their lane. Four
+placements were tried:
+
+| trigger | result |
+|---|---|
+| batch full, different lane, or any push to the same ctl | **deadlock**: `suite-lane-chan.ben` spawns ONE proc then `ev/sleep`s on an unrelated channel; nothing triggers, 0% CPU hang |
+| above, plus a flush at the top of `bender_loop1` | correct, but 200,000 spawn = **7,224 ms**, worse than no batching: it fires on every iteration, collapsing the average batch to ~1 while each flush still pays a snapshot tuple and a gcroot pair |
+| above, moved to the idle point in `bender_loop1` (reached only when nothing was runnable) | still **696 ms at 20,000** (vs 34 ms). During a ROUTED burst the main VM's queue is legitimately empty -- the procs are on the lane -- so "nothing runnable" is not a proxy for "about to wait" |
+| gate on a blocking turn via `bender_loop1_impl(has_timeout, ...)` | `bender_loop1_poll_now` calls `bender_loop1_impl` DIRECTLY, bypassing `bender_loop1`, yet the flush still fired throughout a burst, so `bender_loop1` is itself re-entered constantly |
+
+So the trigger must distinguish "this fiber is about to wait" from "the
+scheduler was entered", and no loop-level predicate tried so far does. The
+promising hook is the fiber SUSPEND path rather than any loop iteration: the
+spawner never suspends during its burst (it runs a `while` loop, and the
+periodic drain does not suspend it), but it does suspend on `ev/sleep` or
+`ev/take`. That is a single, semantically correct hook and it is where the next
+attempt should go -- not another loop predicate.
+
+Reverted rather than shipped: a 4x spawn win is not worth a runtime that
+deadlocks on one spawn followed by a wait. Tree verified after revert: wave
+correct at 200,000, `suite-lane-chan` 9/9.
+
 ### Possibly pre-existing: the `:steal` overflow push also uses mode 2
 
 `proc.c` pushes a closure-bearing `[:spawn serial cap entry]` tuple to the
