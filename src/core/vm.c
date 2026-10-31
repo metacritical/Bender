@@ -300,7 +300,6 @@ static void bender_site_dump(void) {
 
 /* Next instruction variations */
 #define BENDER_FIBER_MINOR_SCALE 256
-#define BENDER_FIBER_MINOR_CAP (16 * 1024 * 1024)
 #define BENDER_FULL_SCALE 1024
 #define maybe_collect() do {\
     BenderFiber *mcf_ = bender_vm.fiber; \
@@ -315,12 +314,50 @@ static void bender_site_dump(void) {
          * so pages never aged and every scoped minor re-marked the whole live
          * set. This is the same defect 7a7d7623 fixed for the major branch
          * above; mcf_scoped_ now records whether a collection actually ran. */ \
+        /* The scaled term is proportional to the live set with NO ceiling,
+         * and is read from the fiber's own SNAPSHOT (gc_minor_blocks, taken
+         * at the end of its last scoped collection) rather than from a live
+         * block_count. Both properties are load-bearing:
+         *
+         * No ceiling: a scoped minor costs Theta(live blocks reachable from
+         * the collecting fiber), so bounding collection work per unit of
+         * allocation -- the whole basis for amortising a collector --
+         * requires the trigger to stay proportional to that live set. An
+         * absolute clamp (this was 16 MiB) freezes the trigger while the
+         * per-collection cost keeps growing, so the number of collections
+         * stays proportional to total allocation and each costs Theta(N);
+         * the product is the measured Theta(N^2) in proc spawn. Measured on
+         * bench/cross-runtime/wave.ben with BENDER_LANES=11: every
+         * lane-dispatcher minor fired at nursery == 16,777,216 bytes (the
+         * clamp, exactly) while that lane's block_count reached 1,172,572 at
+         * N=200,000 -- an unclamped trigger of ~300 MB, so the clamp was
+         * truncating the amplifier by 18x and rising. The clamped build did
+         * 5 whole-live-set walks at N=50,000 and 17 at N=200,000, which is
+         * the quadratic term and 88% of all fiber-mark work.
+         *
+         * Snapshot, not live count: scaling by a block_count read HERE lets
+         * a fiber that retains what it allocates grow the right-hand side at
+         * least as fast as its own nursery grows the left (SCALE is 256
+         * against a mean block of ~48 bytes), making the inequality
+         * unsatisfiable and the scoped collector unreachable -- the defect
+         * class b0b90b6c fixed for the global minor. suite-process-heaps:108
+         * asserts exactly this reachability and does catch it. A snapshot is
+         * constant between two collections while gc_nursery_bytes only
+         * grows, so the trigger is always crossed after a bounded amount of
+         * the fiber's own allocation.
+         *
+         * Only WHEN a collection runs changes; never what is marked or
+         * swept. So this carries none of the soundness risk of the page-
+         * aging and serials-pruning attempts recorded in
+         * docs/internals/proc-spawn-scaling.md. The trade is memory
+         * headroom, which stays proportional to the live set rather than
+         * unbounded, and the global major branch above still bounds total
+         * footprint; peak RSS is an acceptance gate. */ \
         int mcf_scoped_ = 0; \
         if (BENDER_UNLIKELY(NULL != mcf_ && mcf_->gc_nursery_bytes >= bender_vm.gc_minor_threshold)) { \
             size_t fth_ = bender_vm.gc_minor_threshold; \
             if (!(mcf_->heap_strict && NULL != mcf_->proc)) { \
-                fth_ += (size_t) bender_vm.block_count * BENDER_FIBER_MINOR_SCALE; \
-                if (fth_ > BENDER_FIBER_MINOR_CAP) fth_ = BENDER_FIBER_MINOR_CAP; } \
+                fth_ += (size_t) mcf_->gc_minor_blocks * BENDER_FIBER_MINOR_SCALE; } \
             if (mcf_->gc_nursery_bytes >= fth_) { \
                 if (mcf_->heap_strict && NULL != mcf_->proc) bender_collect_process(mcf_->proc); \
                 else bender_collect_fiber_minor(mcf_); \

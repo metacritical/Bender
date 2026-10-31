@@ -2868,6 +2868,17 @@ static void bender_xfb_mark_owned(BenderSlabState *ss, uint32_t owner) {
     }
 }
 
+/* Close a scoped collection's trigger accounting for fiber f: clear the
+ * nursery and re-snapshot the live block count that this fiber's NEXT minor
+ * trigger is scaled by. The two must always move together -- see the
+ * gc_minor_blocks comment in bender.h for why the trigger is scaled by this
+ * snapshot instead of a block_count read at trigger time. */
+static void bender_fiber_minor_reset(BenderFiber *f) {
+    if (NULL == f) return;
+    f->gc_nursery_bytes = 0;
+    f->gc_minor_blocks = bender_vm.block_count;
+}
+
 /* A proc minor can reclaim only young blocks belonging to its owner.
  * Mixed pages, old blocks and disabled objects survive regardless of marks. */
 static int bender_proc_minor_has_candidates(BenderFiber *f) {
@@ -2902,13 +2913,13 @@ void bender_collect_fiber_minor(BenderFiber *f) {
         /* D1 (plain-fiber form): the global minor never clears the
          * caller's gc_nursery_bytes. */
         bender_collect_minor();
-        if (NULL != f) f->gc_nursery_bytes = 0;
+        bender_fiber_minor_reset(f);
         return;
     }
     ss = (BenderSlabState *) bender_vm.slab_state;
     if (NULL != ss && ss->xfb_stuck) {
         bender_collect_minor();
-        f->gc_nursery_bytes = 0;
+        bender_fiber_minor_reset(f);
         return;
     }
     /* No free decision can depend on tracing when the scoped sweep has no
@@ -2916,7 +2927,7 @@ void bender_collect_fiber_minor(BenderFiber *f) {
      * any later collection that can reclaim objects performs its full mark. */
     if (NULL != f->proc && !bender_proc_minor_has_candidates(f)) {
         bender_proc_minor_clear_stamps(f);
-        f->gc_nursery_bytes = 0;
+        bender_fiber_minor_reset(f);
         return;
     }
     BENDER_GC_WORK_TICK(work_gc_fiber_minor);
@@ -3036,7 +3047,7 @@ void bender_collect_fiber_minor(BenderFiber *f) {
     g_n_owned++;
 #endif
     bender_vm.gc_minor_phase = 0;
-    f->gc_nursery_bytes = 0;
+    bender_fiber_minor_reset(f);
 }
 
 /* P3.4 selective C roots for per-proc majors: everything mark_roots
@@ -3190,7 +3201,7 @@ void bender_collect_process(BenderProcess *proc) {
         BenderSlabState *dss = (BenderSlabState *) bender_vm.slab_state;
         if (NULL != dss && dss->xfb_stuck) {
             if (NULL != proc && NULL != (f = proc->fiber)) {
-                f->gc_nursery_bytes = 0;
+                bender_fiber_minor_reset(f);
             }
             bender_collect_minor();
             return;
@@ -3205,7 +3216,7 @@ void bender_collect_process(BenderProcess *proc) {
          * here: pinning a done proc's channels keeps chan_deinit from
          * running, and its parked readers then wait forever.) */
         bender_collect_minor();
-        if (NULL != f) f->gc_nursery_bytes = 0;
+        bender_fiber_minor_reset(f);
         return;
     }
     BENDER_GC_WORK_TICK(work_gc_process_minor);
@@ -3263,7 +3274,7 @@ void bender_collect_process(BenderProcess *proc) {
     g_n_proc++;
 #endif
     bender_vm.gc_minor_phase = 0;
-    f->gc_nursery_bytes = 0;
+    bender_fiber_minor_reset(f);
 }
 
 /* Minor collection (Phase 2b-iii policy): mark from the same roots (old-

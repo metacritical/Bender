@@ -1088,6 +1088,26 @@ struct BenderFiber {
      * birth; kept across resets (pages stay valid). */
     struct BenderSlabPage *nursery_cur[8];
     size_t gc_nursery_bytes;
+    /* Live block count observed at the END of this fiber's last scoped
+     * collection. maybe_collect scales the fiber's minor trigger by this
+     * SNAPSHOT rather than by the current block_count, which is what makes
+     * the trigger both proportional and reachable:
+     *   - proportional: a scoped minor costs Theta(live blocks reachable
+     *     from the collecting fiber), so scaling the trigger by the live
+     *     set is what bounds collection work per unit of allocation. Without
+     *     it the proc spawn path is Theta(N^2).
+     *   - reachable: the snapshot is CONSTANT between two collections while
+     *     gc_nursery_bytes only grows, so the trigger is always crossed
+     *     after a bounded amount of this fiber's own allocation. Scaling by
+     *     the LIVE block count instead makes a fiber that retains everything
+     *     it allocates grow block_count at least as fast as its own nursery
+     *     (BENDER_FIBER_MINOR_SCALE is 256 against a ~48-byte mean block),
+     *     so the inequality becomes unsatisfiable and the scoped collector
+     *     silently goes unreachable -- the defect class b0b90b6c fixed for
+     *     the global minor, caught here by suite-process-heaps:108.
+     * 0 at birth, so a fiber's first scoped minor fires at the base
+     * threshold. Kept across resets, like gc_nursery_bytes. */
+    size_t gc_minor_blocks;
     /* P3.3 strict heaps: set for spawn-isolated proc fibers (never
      * inherited, never unmarshalled — re-establish by construction).
      * Slab pages claimed while running one record it (page bit). */
