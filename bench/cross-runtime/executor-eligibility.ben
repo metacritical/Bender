@@ -1,0 +1,15 @@
+# Executor-tier eligibility probe: four functions differing only in SHAPE.
+# Build: BENDER_NATIVE_EXECUTORS=1 bender --aot executor-eligibility.ben --native --no-auto-pgo -o /tmp/elig
+# Expect: "native-executor" for plain and arr; capturing (closure) and varar
+# (vararg) are refused by base-eligible? (tools/loop-executor.ben:65-69).
+# See docs/internals/native-coverage-vs-inc.md
+# leaf numeric loop: expected ELIGIBLE
+(defn plain [n] (var s 0) (var i 0) (while (< i n) (set s (+ s i)) (set i (+ i 1))) s)
+# captures an outer binding: closure -> expected REFUSED (environments non-empty)
+(def outer 7)
+(defn capturing [n] (var s 0) (var i 0) (while (< i n) (set s (+ s (* i outer))) (set i (+ i 1))) s)
+# vararg -> expected REFUSED
+(defn varar [& xs] (var s 0) (each x xs (set s (+ s x))) s)
+# indexed array get/put loop
+(defn arr [n] (def a (array/new-filled n 1)) (var s 0) (var i 0) (while (< i n) (set s (+ s (in a i))) (set i (+ i 1))) s)
+(printf "plain=%d capturing=%d varar=%d arr=%d" (plain 100) (capturing 100) (varar 1 2 3) (arr 100))
