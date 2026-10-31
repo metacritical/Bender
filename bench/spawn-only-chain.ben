@@ -1,0 +1,45 @@
+# Spawn-only chain: build wave.ben's exact process graph, then STOP.
+#
+#   BENDER_LANES=11 ./build/bender bench/spawn-only-chain.ben <n>
+#
+# Why this exists. wave.ben interleaves two different kinds of channel push:
+# the spawn control message, and the proc/send + proc/recv traffic of the wave
+# itself, in comparable numbers. Any probe that times the push path on wave.ben
+# therefore attributes roughly half its samples to the wrong phase. This builds
+# the identical chain -- same closure shape, same captured downstream pid, so
+# bender_proc_find_pid_lane co-locates it on one lane exactly as wave.ben does
+# -- and never pushes the token, so every routed push in the run is a spawn.
+#
+# The procs are retained in an array and left parked on proc/recv, so the live
+# set is provably N for the whole measurement (nothing completes and recycles).
+# Pair with tools/spawn-routed-probe.patch for the component split.
+
+(def n (or (scan-number (get (dyn :args) 1)) 100000))
+
+(def t0 (os/clock))
+
+# Same shape as wave.ben: a sink, then a chain where each proc captures the
+# downstream pid. The body is never reached -- these all park on proc/recv.
+(def sink (proc/spawn (fn [] (proc/recv)) 8))
+(def keep @[sink])
+(var head sink)
+(var i 0)
+(while (< i n)
+  (def downstream head)
+  (set head (proc/spawn (fn [] (proc/send downstream (+ 1 (proc/recv)))) 8))
+  (array/push keep head)
+  (set i (+ i 1)))
+
+(def t1 (os/clock))
+
+(eprintf "procs=%d alive=%d spawn_ms=%.0f us_per_spawn=%.2f"
+         n (length keep)
+         (* 1000.0 (- t1 t0))
+         (/ (* 1000000.0 (- t1 t0)) n))
+(printf "procs=%d alive=%d" n (length keep))
+
+# Deliberately NO proc/lanes-stop. Every proc here is still parked on
+# proc/recv by design, and tearing down N parked procs is itself an O(N)
+# shutdown that hangs at scale -- it would be measured instead of the spawn
+# path. Exit immediately; the point of this bench is the spawn phase only.
+(os/exit 0)

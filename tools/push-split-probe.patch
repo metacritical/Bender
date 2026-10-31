@@ -1,0 +1,137 @@
+# Channel-push attribution probe (development instrumentation, NOT shipped)
+#
+# Applies to src/core/ev.c. Build with:
+#     make -j12 CFLAGS="-O2 -g -DBENDER_PUSH_PROBE"
+# Run with BENDER_PUSH_PROBE=1 to get, on stderr at exit:
+#   [push-probe] pushes=N us/push marshal=.. post=.. packed=.. posted=..
+#
+# Splits bender_channel_push_with_lock into the closure MARSHAL
+# (bender_chan_pack) and the self-pipe POST (bender_ev_post_event). The two
+# have OPPOSITE consequences for batching: a post is per-MESSAGE and amortises
+# when several spawns ride one control message, while a marshal is per-CLOSURE
+# and does not. Bounding the two separately is what justifies (or kills) a
+# spawn-batching change before it is written.
+#
+# Run it on bench/spawn-only-chain.ben, not wave.ben: the wave interleaves
+# proc/send and proc/recv pushes in numbers comparable to the spawn pushes, so
+# roughly half of any wave.ben sample is attributed to the wrong phase. On the
+# spawn-only chain, pushes == spawns exactly (measured 200,016 for n=200,000),
+# which is the check that the attribution is clean.
+#
+# NOTE on `packed`: bender_chan_pack returns 0 on SUCCESS (nonzero is the
+# failure path that the surrounding code asserts on), so packed=0 means zero
+# pack failures, NOT "no marshalling happened". The marshal time is the timer,
+# not the counter.
+#
+# Measured at N=200,000, BENDER_LANES=11: marshal 1.089 us/push,
+# post 0.119 us/push, with only 12% of pushes posting a pipe event.
+#
+# Apply with:  patch -p0 < tools/push-split-probe.patch
+--- src/core/ev.c	2026-10-31 22:23:21
++++ /tmp/ev-with-pushprobe.c	2026-10-31 22:23:21
+@@ -1609,6 +1609,65 @@
+         bender_abstract_incref((void *) (chan)); } while (0)
+ #define BENDER_CHAN_INFLIGHT_DROP(chan) \
+     do { bender_chan_inflight_release(chan); } while (0)
++
++/* ---- push-path attribution probe (development only) ---------------------
++ * Compiled in solely with -DBENDER_PUSH_PROBE, armed with BENDER_PUSH_PROBE=1.
++ * Splits a channel push into the closure MARSHAL (bender_chan_pack) and the
++ * self-pipe POST (bender_ev_post_event), because the two have opposite
++ * consequences for batching: a post is per-MESSAGE and amortises when several
++ * spawns share one control message, while a marshal is per-CLOSURE and does
++ * not. Run on bench/spawn-only-chain.ben, where every routed push is a spawn,
++ * so no proc/send traffic lands in these counters. */
++#ifdef BENDER_PUSH_PROBE
++#if defined(BENDER_APPLE)
++#include <mach/mach_time.h>
++static uint64_t bender_pu_now(void) { return mach_absolute_time(); }
++static double bender_pu_scale(void) {
++    static double sc = 0.0;
++    if (0.0 == sc) {
++        mach_timebase_info_data_t tb;
++        mach_timebase_info(&tb);
++        sc = (double) tb.numer / (double) tb.denom;
++    }
++    return sc;
++}
++#else
++static uint64_t bender_pu_now(void) {
++    struct timespec ts;
++    bender_gettime(&ts, BENDER_TIME_MONOTONIC);
++    return (uint64_t) ts.tv_sec * 1000000000ull + (uint64_t) ts.tv_nsec;
++}
++static double bender_pu_scale(void) { return 1.0; }
++#endif
++static uint64_t bender_pu_calls = 0;
++static uint64_t bender_pu_pack = 0;
++static uint64_t bender_pu_post = 0;
++static uint64_t bender_pu_packed = 0;
++static uint64_t bender_pu_posted = 0;
++static int bender_pu_on = -1;
++static void bender_pu_report(void) {
++    if (1 != bender_pu_on) return;
++    uint64_t n = __atomic_load_n(&bender_pu_calls, __ATOMIC_RELAXED);
++    if (0 == n) return;
++    double k = bender_pu_scale() / 1000.0 / (double) n;
++    fprintf(stderr, "[push-probe] pushes=%llu us/push marshal=%.3f post=%.3f "
++            "packed=%llu posted=%llu\n",
++            (unsigned long long) n,
++            __atomic_load_n(&bender_pu_pack, __ATOMIC_RELAXED) * k,
++            __atomic_load_n(&bender_pu_post, __ATOMIC_RELAXED) * k,
++            (unsigned long long) __atomic_load_n(&bender_pu_packed, __ATOMIC_RELAXED),
++            (unsigned long long) __atomic_load_n(&bender_pu_posted, __ATOMIC_RELAXED));
++}
++static int bender_pu_armed(void) {
++    if (bender_pu_on < 0) {
++        const char *e = getenv("BENDER_PUSH_PROBE");
++        bender_pu_on = (NULL != e && '0' != e[0]) ? 1 : 0;
++        if (bender_pu_on) atexit(bender_pu_report);
++    }
++    return bender_pu_on;
++}
++#define BENDER_PU_ADD(p, v) __atomic_fetch_add(&(p), (uint64_t)(v), __ATOMIC_RELAXED)
++#endif
+ 
+ static int bender_channel_push_with_lock(BenderChannel *channel, Bender x, int mode) {
+     BenderChannelPending reader;
+@@ -1668,8 +1727,20 @@
+                             "ev/thread-chan)");
+             }
+         }
++    }
++#ifdef BENDER_PUSH_PROBE
++    int pu_on = bender_pu_armed();
++    if (pu_on) BENDER_PU_ADD(bender_pu_calls, 1);
++    uint64_t pu_t0 = bender_pu_now();
++    int pu_packed = bender_chan_pack(channel, &x);
++    if (pu_on) {
++        BENDER_PU_ADD(bender_pu_pack, bender_pu_now() - pu_t0);
++        if (pu_packed) BENDER_PU_ADD(bender_pu_packed, 1);
+     }
++    if (pu_packed) {
++#else
+     if (bender_chan_pack(channel, &x)) {
++#endif
+         bender_chan_unlock(channel);
+         bender_panicf("failed to pack value for channel: %v", x);
+     }
+@@ -1773,7 +1844,18 @@
+                 msg.argp = channel;
+                 msg.argj = x;
+                 if (vm) {
++#ifdef BENDER_PUSH_PROBE
++                    {
++                        uint64_t pu_p0 = bender_pu_now();
++                        bender_ev_post_event(vm, bender_thread_chan_cb, msg);
++                        if (bender_pu_armed()) {
++                            BENDER_PU_ADD(bender_pu_post, bender_pu_now() - pu_p0);
++                            BENDER_PU_ADD(bender_pu_posted, 1);
++                        }
++                    }
++#else
+                     bender_ev_post_event(vm, bender_thread_chan_cb, msg);
++#endif
+                 } else {
+                     /* If no vm to send to, we must clean up (unpack) the packed payload to avoid leak */
+                     bender_chan_unpack(channel, &x, 1);

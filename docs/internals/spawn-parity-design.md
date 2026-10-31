@@ -74,13 +74,33 @@ pathological (0.149 -> 1.86 ms/hop as N grows, a separate O(N^2) tracked as
 Phase 10), so co-location currently buys the wave what it costs the spawn.
 That interaction must be measured before this is adopted.
 
-**(b) Batch routed spawns per target lane.** Both measured components of the
-routed constant -- the self-pipe drain at 58% and the closure marshal plus
-pipe post at 40% -- are per-EVENT, so coalescing consecutive same-lane spawns
-into one control message attacks both at once. `bender_proc_find_pid_lane`
-already sends an entire chain to one lane, which is the ideal case. Lower
-ceiling than (a), much lower risk. Measure against the 1.87 us local floor,
-not against zero.
+**(b) Batch routed spawns per target lane.** Measured ceiling, which is what
+justifies writing it. `tools/push-split-probe.patch` on
+`bench/spawn-only-chain.ben` (where pushes == spawns exactly: 200,016 for
+n=200,000) splits the routed cost by WHAT IT IS PER:
+
+| component | us/spawn | per | batchable |
+|---|---:|---|---|
+| `bender_loop1_poll_now` drain | 3.22 | message | yes |
+| push remainder (lock, queue, pending reader) | ~1.0 | message | yes |
+| `bender_ev_post_event` pipe post | 0.119 | message | yes |
+| `bender_chan_pack` closure marshal | **1.089** | **closure** | **no** |
+
+So ~4.3 us of ~8.5 us is per-message and amortises with the batch factor,
+while 1.089 us is per-closure and does not. Ceiling is therefore roughly
+**1.5-2.5 us/spawn**, i.e. a 3.4-5.7x spawn win landing at about the 1.87 us
+local-spawn floor. Measure against that floor, not against zero.
+
+This does NOT contradict the rejected drain-tuning experiment recorded in
+`proc-spawn-scaling.md`. That experiment cut the drain's FREQUENCY while event
+production stayed at one per spawn, so the cost moved into `push` and wall time
+got worse. Batching cuts event PRODUCTION, so the self-pipe pressure that makes
+the drain necessary falls proportionally rather than being deferred. The two
+changes act on different variables and the earlier negative result does not
+transfer.
+
+`bender_proc_find_pid_lane` already routes an entire chain to one lane, which
+is the ideal case for batching. Lower ceiling than (a), much lower risk.
 
 **(c) Make a pid an immediate.** The deepest fix and the one that makes the
 model genuinely BEAM-shaped: a pid becomes a tagged index into a pre-sized
