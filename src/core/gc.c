@@ -193,6 +193,16 @@ static BENDER_THREAD_LOCAL int32_t bender_gc_epoch = 0;
 
 static void bender_gc_epoch_next(void) {
     bender_gc_epoch = (bender_gc_epoch % 15) + 1;
+    /* Re-base the proc-chain depth for a fresh, non-nested collection.
+     * bender_procat_mark balances its own ++/--, but a longjmp out of the
+     * mark phase (bender_env_maybe_detach allocates, and an allocation
+     * failure panics) would leave the counter high forever, after which
+     * every later scoped minor would shallow-mark proc fibers immediately
+     * and could free a still-live object. gc_mark_phase is still 0 here for
+     * a top-level collection and already 1 for one re-entered from inside
+     * marking, so a nested collection correctly leaves the outer walk's
+     * depth alone. */
+    if (!bender_vm.gc_mark_phase) bender_proc_mark_depth = 0;
     /* Threaded-abstract visit cycle (Erlang-parity residual O(n) fix):
      * this function runs exactly once at the start of EVERY collection
      * (fiber minor, proc minor, global minor, full major), so bumping
