@@ -100,7 +100,55 @@ changes act on different variables and the earlier negative result does not
 transfer.
 
 `bender_proc_find_pid_lane` already routes an entire chain to one lane, which
-is the ideal case for batching. Lower ceiling than (a), much lower risk.
+is the ideal case for batching.
+
+### Prototype result: the win is real, the backpressure path is not solved
+
+A working prototype (reverted, not shipped) confirmed the ceiling and then
+failed at scale. Shape: a gcrooted thread-local array accumulating
+`[:spawn serial cap entry]` tuples, one `[:spawn-batch 0 0 entries]` control
+message per `BENDER_SPAWN_BATCH_MAX` = 16, a dispatcher arm
+`:spawn-batch (each entry y (handle-spawn entry))`, and the flush hooked into
+`bender_channel_push` itself -- one choke point that no future caller can
+bypass -- so no other message can overtake a pending spawn.
+
+Measured spawn phase on `wave.ben`, `result == N` verified each time:
+
+| N | before | prototype | us/spawn |
+|---|---:|---:|---:|
+| 20,000 | 114 ms | **38 ms** | 1.90 |
+| 30,000 | -- | 59 ms | 1.97 |
+| 50,000 | 291 ms | **130 ms** | 2.60 |
+| 100,000 | 761 ms | **194 ms** | **1.94** |
+
+So ~4x at 100,000, landing at the 1.87 us local-spawn floor and matching the
+predicted 1.5-2.5 us window exactly. The per-message/per-closure split was the
+right model.
+
+**Why it was reverted.** Above ~100,000 the ctl channel fills even at 1/16th
+the message count, and the flush must then apply backpressure. Two attempts
+both failed:
+
+1. Reuse the single-spawn "plan" mechanism (return a tuple the boot wrapper
+   completes). Unsound for a batch: the plan carried `bender_wrap_array` of
+   the SAME array that the flush then cleared, so it would re-push zero
+   entries and lose all 16 spawns silently. Worse, a batch has no frame to
+   defer to -- the other 15 pids were already returned to the program.
+2. Try-push (mode 2) in a `bender_loop1_poll_now` retry loop, to avoid parking
+   entirely. Segfaults at N=5.
+
+`bender_await` is not available as a third option: it is `bender_signalv`,
+i.e. a longjmp, so calling it from inside `bender_channel_push` unwinds out of
+a push in progress.
+
+**What the next attempt needs.** Not a bigger batch or a different interval --
+a correct way for a flush to exert backpressure from a C frame that has
+already handed out pids. The candidates are: flush only at points where no pid
+is outstanding (so the plan mechanism remains usable for the one in flight);
+or give the lane ctl enough capacity that a 1/16-rate producer provably cannot
+outrun it, and prove the bound rather than assume it; or move the flush to the
+boot wrapper so a parked write has a Bender frame to suspend. The prototype's
+segfault must be understood before any of these, not patched around.
 
 **(c) Make a pid an immediate.** The deepest fix and the one that makes the
 model genuinely BEAM-shaped: a pid becomes a tagged index into a pre-sized
