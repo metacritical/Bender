@@ -245,16 +245,39 @@ Reverted rather than shipped: a 4x spawn win is not worth a runtime that
 deadlocks on one spawn followed by a wait. Tree verified after revert: wave
 correct at 200,000, `suite-lane-chan` 9/9.
 
-### Possibly pre-existing: the `:steal` overflow push also uses mode 2
+### The `:steal` mode-2 push: NOT a live defect, because `:steal` is inert
 
 `proc.c` pushes a closure-bearing `[:spawn serial cap entry]` tuple to the
-threaded `bender_lane_overflow` channel with mode 2, and reads the result as
-"0 = refused, nonzero = enqueued" -- the try-push convention, which the mode-2
-branch does not implement. That is the same misuse this prototype died on,
-in shipped code, though it is reached only under the non-default `:steal`
-lane policy (`2 == bender_lane_policy`), which is why no suite covers it.
-NOT verified as a live defect here, and deliberately not fixed as a drive-by:
-it needs its own reproducer under the `:steal` policy before any change.
+threaded `bender_lane_overflow` channel with mode 2 and reads the result as
+"0 = refused, nonzero = enqueued" -- the try-push convention mode 2 does not
+implement, i.e. the same misuse that crashed batching attempt 2. Flagged as a
+possible shipped defect; a reproducer now exists
+(`test/suite-lane-steal.ben`) and the flag is **withdrawn**.
+
+The overflow push is unreachable in practice. It is gated on
+`bender_channel_count(ctl) >= 1`, and the lane dispatcher sits parked on
+`(ev/take ctl)`, so a push hands off directly to the parked reader and the
+queue count never rises above zero. Measured `:overflow-pushed 0` at 20,000
+procs across 4 lanes, 5,000 across 4, and 3,000 on a single lane with
+deliberately busy proc bodies. Every proc still ran and reported, 3/3 runs.
+
+Two consequences:
+
+- The mode-2 misuse sits in code that does not execute, so it is a latent
+  trap rather than a bug. `test/suite-lane-steal.ben` prints the overflow
+  counters, so whoever makes the path live sees it here first instead of
+  meeting it as a premature free inside a collector walk.
+- **`:steal` never steals.** It silently behaves as `:round-robin`. The
+  surrounding comment also claims the trigger is "high water (3/4 capacity)"
+  while the code tests `>= 1`; neither description matches the behaviour,
+  because neither threshold is ever crossed. Whether `:steal` should be fixed
+  or withdrawn is a product decision, not a correctness one.
+
+Separately, this reproducer re-confirmed the documented self-pipe ceiling: at
+N=100,000 with 4 lanes it aborts with "failed to write event to self-pipe",
+matching `proc-spawn-backpressure.md` ("50000 and 80000 complete, 100000
+aborts"). The suite is pinned at 20,000 to stay below it, since that ceiling is
+unrelated to the policy under test.
 
 **(c) Make a pid an immediate.** The deepest fix and the one that makes the
 model genuinely BEAM-shaped: a pid becomes a tagged index into a pre-sized

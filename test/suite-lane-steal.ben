@@ -1,0 +1,67 @@
+# The :steal lane policy, which no other suite exercises.
+#
+# WHY THIS EXISTS. The :steal path offloads a spawn to the shared overflow
+# queue with bender_channel_push(..., 2) and reads the result as the try-push
+# convention "0 = refused, nonzero = enqueued" (src/core/proc.c). Mode 2 is
+# NOT the try-push: it is choice-write (BENDER_CP_MODE_CHOICE_WRITE, select
+# semantics) whose pushes ignore their return value, while MODE 3 is the
+# try-push that reports a full queue without buffering and unpacks the marshal
+# buffer on refusal. Using mode 2 there is the same misuse that crashed a
+# spawn-batching prototype: the receiving lane's unmarshalled copy pointed into
+# a dead marshal buffer, and the next collection to walk it died in
+# bender_mark_fiber on a garbage abstract type pointer.
+#
+# The overflow path is entered whenever the target ctl has ANY queued message
+# (`bender_channel_count(ctl) >= 1`), so sustained spawning under :steal routes
+# nearly every spawn through it. :steal is not the default policy, which is why
+# this was never covered.
+#
+# MEASURED RESULT: the mode-2 push is NOT currently reachable, so this is a
+# regression guard rather than a bug reproducer. The overflow path is gated on
+# `bender_channel_count(ctl) >= 1`, and the lane dispatcher sits parked on
+# (ev/take ctl), so a push hands off directly to the parked reader and the
+# queue count never rises above zero. Measured :overflow-pushed 0 at 20000
+# procs / 4 lanes, 5000 / 4 lanes, and 3000 / 1 lane with deliberately busy
+# proc bodies. So :steal never actually steals: it behaves as round-robin.
+#
+# This suite therefore pins TWO things. It covers a policy that had no
+# coverage at all, and it prints the overflow counters so that if anyone makes
+# the path live, the mode-2 misuse above becomes visible here instead of
+# surfacing as a premature free in a collector walk.
+#
+# N is held at 20000 on purpose: at 100000 with 4 lanes this aborts with
+# "failed to write event to self-pipe", which is the documented self-pipe
+# ceiling in docs/internals/proc-spawn-backpressure.md ("50000 and 80000
+# complete, 100000 aborts"), not a fault of this policy.
+
+(import ./helper :prefix "" :exit true)
+(start-suite)
+
+(def N 20000)
+
+(proc/lanes-start 4)
+(assert (= :steal (proc/lanes-policy :steal)) "steal policy selected")
+
+(def done (ev/thread-chan 1024))
+
+(var i 0)
+(while (< i N)
+  (proc/spawn (fn [] (ev/give done :ok)) 8)
+  (set i (+ i 1)))
+
+# Collect every result. A premature free of a spawn payload loses procs, so a
+# short count is a real failure rather than a timing artifact.
+(var got 0)
+(while (< got N)
+  (ev/take done)
+  (set got (+ got 1)))
+
+(assert (= N got) "every :steal-routed proc ran and reported")
+
+# Recorded, not asserted: a nonzero push count means the overflow path went
+# live and the mode-2 vs mode-3 question above now needs answering.
+(def stats (proc/lanes-stats))
+(printf "steal-overflow stats: %j" stats)
+
+(proc/lanes-stop)
+(end-suite)
