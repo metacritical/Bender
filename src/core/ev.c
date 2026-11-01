@@ -841,6 +841,9 @@ void bender_ev_mark_shallow(void) {
 
 /* Push/pop bodies live here; proc.c shares them via ev.h (Step P1). */
 int bender_channel_push(BenderChannel *channel, Bender x, int mode);
+/* proc.c: flush a routed-spawn batch pending for this ctl, or any when NULL.
+ * Called from the push path (ORDERING) and from bender_await (LIVENESS). */
+void bender_proc_spawn_batch_flush_for(void *chan);
 int bender_channel_pop(BenderChannel *channel, Bender *item, int is_choice);
 /* Phase C: harvest helper defined with the pool code below (used by
  * both thread/new completions and pool worker exits). */
@@ -926,6 +929,10 @@ void bender_ev_deinit_common(void) {
 
 /* Shorthand to yield to event loop */
 void bender_await(void) {
+    /* LIVENESS for batched routed spawns: the single path every event wait
+     * takes, so exactly "this fiber is about to park", and a spawn burst never
+     * reaches it. Before the signal, since bender_signalv longjmps. */
+    bender_proc_spawn_batch_flush_for(NULL);
     /* Store the fiber in a global table */
     bender_signalv(BENDER_SIGNAL_EVENT, bender_wrap_nil());
 }
@@ -1819,6 +1826,8 @@ static BENDER_NO_RETURN void bender_chan_foreign_lane_panic(BenderChannel *chann
 }
 
 int bender_channel_push(BenderChannel *channel, Bender x, int mode) {
+    /* ORDERING: nothing may overtake a pending spawn batch to the same lane. */
+    bender_proc_spawn_batch_flush_for((void *) channel);
     /* Step 4.1 home-lane pin: isolated channels are lock-free, so a
      * foreign thread would race silently — refuse loudly instead
      * (use ev/thread-chan across threads). One predictable branch on

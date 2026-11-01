@@ -268,6 +268,154 @@ static int32_t bender_proc_find_pid_lane(BenderFunction *func) {
     return 0;
 }
 
+/* ---- same-lane routed spawn batching ------------------------------------
+ * One lane-control message per spawn was costing ~8.5 us/spawn. Split by what
+ * each part is charged PER (tools/push-split-probe.patch on
+ * bench/spawn-only-chain.ben, N=200,000):
+ *
+ *   bender_loop1_poll_now drain                 3.22  us/spawn  per message
+ *   push remainder (lock, queue, pending read)  ~1.0  us/spawn  per message
+ *   bender_ev_post_event pipe post              0.119 us/spawn  per message
+ *   bender_chan_pack closure marshal            1.089 us/spawn  per CLOSURE
+ *
+ * ~4.3 us is per-MESSAGE and amortises with the batch factor; the marshal is
+ * per-closure and does not. Target ~4.2-4.5 us/spawn, about 2x.
+ *
+ * NOT the rejected "drain less often" change, which cut the drain's frequency
+ * while event production stayed at one per spawn and merely moved cost into
+ * push. This cuts event PRODUCTION.
+ *
+ * THE MARSHAL IS EAGER, and that is load-bearing, not an optimisation. The
+ * entry carries a pre-marshalled BUFFER, not a live function. A batch holding
+ * bender_wrap_function(func) would defer the marshal to flush time, and the
+ * marshal is what SNAPSHOTS captured values -- so every batched closure would
+ * observe a later value of anything the spawner mutates afterwards. Measured:
+ * five procs closing over the spawner's loop variable returned [1 4 9 16 25]
+ * instead of [0 1 4 9 16]. A semantic bug, not a performance detail. Eager
+ * marshalling also forfeits marsh.c's intra-message seen_defs dedup, so the
+ * funcdef is copied per proc and footprint does not improve; that trade is
+ * mandatory.
+ *
+ * THREE flush obligations, each for a different reason:
+ *
+ *  ORDERING -- the lane ctl is FIFO and the dispatcher resolves a delivery
+ *  with (get serials serial) under an if-let with NO else branch, so a
+ *  :deliver, :proc-fwd, :kill or :proc-monitor reaching the lane BEFORE the
+ *  :spawn that creates its serial is dropped SILENTLY. Flushed from
+ *  bender_channel_push: one choke point no future caller can bypass.
+ *
+ *  LIVENESS -- a program that spawns fewer than the batch limit and then waits
+ *  has no size or ordering trigger, and its procs would never reach the lane.
+ *  Flushed from bender_await, which is the single path every event wait takes
+ *  and which a spawn burst never reaches. Loop-level predicates were tried and
+ *  all failed: at the top of bender_loop1 and at its idle point they fire
+ *  throughout a burst (the main VM's run queue is legitimately empty because
+ *  the procs sit on a lane), collapsing the average batch to ~1 and making
+ *  200,000 spawns 7,224 ms -- worse than no batching.
+ *
+ *  BACKPRESSURE -- a spawn into a FULL ctl must SUSPEND the calling fiber
+ *  (test/suite-proc-spawn-return.ben installs a gated worker, fills the ctl
+ *  and asserts :suspended). Only the :proc-spawn-write plan return can do
+ *  that, so a full ctl bypasses batching entirely and takes the original
+ *  single-spawn path verbatim.
+ *
+ * Also bypassed under :steal: batching leaves a ctl message queued, which
+ * makes bender_channel_count(ctl) >= 1 true and activates that policy's
+ * never-exercised overflow branch, which does not work (its mode-2 push hands
+ * the pulling lane a corrupted task). Repairing :steal is separate work. */
+/* OPT-IN, default OFF, via BENDER_SPAWN_BATCH=<n>. Batching is a measured
+ * TRADE, not a free win, so the default must not impose it:
+ *
+ *   N=100,000   spawn 840 -> 249 ms (3.4x)   wave 146 -> 397 ms (2.7x WORSE)
+ *               total 986 -> 647 ms (1.5x)   RSS 328 -> 362 MB (+10%)
+ *   N=200,000   spawn 1448 -> 701 ms (2.1x)  wave 320 -> 715 ms (2.2x WORSE)
+ *               total 1768 -> 1416 ms (1.25x) RSS 663 -> 728 MB (+10%)
+ *
+ * Matched alternating runs, min of 2 by total. Total improves, but the WAVE
+ * regresses more than spawn gains in steady state, and a game loop spends its
+ * life in the wave, not in spawn. So: enable it for mass-spawn workloads,
+ * leave it off where message throughput dominates.
+ *
+ * The likely mechanism for the wave regression (consistent with the +10% RSS
+ * but NOT directly measured): the eager marshal forfeits marsh.c's
+ * intra-message seen_defs dedup, so every proc gets its own funcdef copy
+ * instead of sharing one, and the wave then executes N distinct bytecode
+ * copies rather than one hot one. If that is confirmed, sharing the funcdef
+ * across a batch while keeping per-entry eager env snapshots would get both
+ * wins -- that is the next step, not a bigger batch. */
+#define BENDER_LANE_CTL_CAP 4096
+
+static BENDER_THREAD_LOCAL int32_t bender_spawn_batch_max = -1;
+
+static int32_t bender_spawn_batch_limit(void) {
+    if (bender_spawn_batch_max < 0) {
+        const char *e = getenv("BENDER_SPAWN_BATCH");
+        int32_t v = (NULL != e) ? (int32_t) strtol(e, NULL, 10) : 1;
+        if (v < 1) v = 1;
+        if (v > 64) v = 64;
+        bender_spawn_batch_max = v;
+    }
+    return bender_spawn_batch_max;
+}
+
+static BENDER_THREAD_LOCAL BenderChannel *bender_spawn_batch_ctl = NULL;
+static BENDER_THREAD_LOCAL BenderArray *bender_spawn_batch = NULL;
+static BENDER_THREAD_LOCAL int bender_spawn_batch_flushing = 0;
+
+/* A TUPLE SNAPSHOT of the entries, never the live array: the array is cleared
+ * as soon as the push is accepted, and a message still aliasing it would carry
+ * zero entries, silently losing every spawn in the batch. */
+static Bender bender_spawn_batch_message(void) {
+    Bender entries = bender_wrap_tuple(
+            bender_tuple_n(bender_spawn_batch->data, bender_spawn_batch->count));
+    Bender m[4];
+    m[0] = bender_ckeywordv("spawn-batch");
+    m[1] = bender_wrap_number(0);
+    m[2] = bender_wrap_number(0);
+    m[3] = entries;
+    return bender_wrap_tuple(bender_tuple_n(m, 4));
+}
+
+/* Push the pending batch. Never parks, never longjmps.
+ *
+ * MODE 3, not 2. Mode 3 is the try-push: on a full queue it reports without
+ * buffering AND calls bender_chan_unpack, so a refused attempt leaves no
+ * unreconciled marshal buffer. Mode 2 is choice-write (select semantics) whose
+ * pushes ignore their return value; used as a try-push it left the lane's
+ * unmarshalled copy pointing into a dead marshal buffer and the next
+ * collection died in bender_mark_fiber on a garbage abstract type pointer.
+ *
+ * A batch cannot use the plan return (its other pids are already with the
+ * program, so there is no frame to defer to) and bender_await is a longjmp, so
+ * backpressure here is drain-and-retry. It terminates because the target lane
+ * consumes ctl on its own thread. The message is gcrooted across the retry:
+ * bender_loop1_poll_now can collect and it is otherwise reachable only from
+ * this C local. */
+static void bender_spawn_batch_push(void) {
+    if (NULL == bender_spawn_batch || 0 == bender_spawn_batch->count) return;
+    BenderChannel *ctl = bender_spawn_batch_ctl;
+    if (NULL == ctl) { bender_spawn_batch->count = 0; return; }
+    Bender msg = bender_spawn_batch_message();
+    bender_gcroot(msg);
+    bender_spawn_batch_flushing = 1;
+    while (bender_channel_push(ctl, msg, 3)) {
+        bender_loop1_poll_now();
+    }
+    bender_spawn_batch_flushing = 0;
+    bender_gcunroot(msg);
+    bender_spawn_batch->count = 0;
+    bender_spawn_batch_ctl = NULL;
+}
+
+/* Flush a batch pending for this ctl, or for ANY ctl when chan is NULL (the
+ * liveness call from bender_await). Cheap and non-reentrant. */
+void bender_proc_spawn_batch_flush_for(void *chan) {
+    if (bender_spawn_batch_flushing) return;
+    if (NULL == bender_spawn_batch_ctl) return;
+    if (NULL != chan && chan != (void *) bender_spawn_batch_ctl) return;
+    bender_spawn_batch_push();
+}
+
 static Bender bender_proc_spawn_routed(BenderFunction *func, int32_t cap) {
     bender_lanes_maybe_autostart();
     if (0 == bender_lane_count) return cfun_proc_spawn_impl(func, cap, 0);
@@ -324,7 +472,18 @@ static Bender bender_proc_spawn_routed(BenderFunction *func, int32_t cap) {
      * backpressure in the lane dispatcher, not a bigger drain frequency. */
     {
         static BENDER_THREAD_LOCAL uint32_t spawn_tick = 0;
-        if (0 == (++spawn_tick & 3)) bender_loop1_poll_now();
+        /* The drain interval tracks EVENT PRODUCTION, not spawn count. With
+         * batching one message covers BENDER_SPAWN_BATCH_MAX spawns, so 16
+         * reproduces the pipe-event rate that one-per-spawn had at 4. Under
+         * :steal batching is bypassed, production stays at one per spawn, and
+         * a wider interval starves the self-pipe -- a hang, not a slowdown
+         * (suite-lane-steal.ben catches it). */
+        uint32_t tick_mask = (bender_spawn_batch_limit() > 1 &&
+                              2 != bender_lane_policy) ? 15u : 3u;
+        if (0 == (++spawn_tick & tick_mask)) {
+            bender_spawn_batch_push();
+            bender_loop1_poll_now();
+        }
     }
     Bender msg[4];
     msg[0] = bender_ckeywordv("spawn");
@@ -369,6 +528,46 @@ static Bender bender_proc_spawn_routed(BenderFunction *func, int32_t cap) {
         }
         /* try-push refused (full): fall through to the ctl path */
     }
+    /* Batched path, unless disabled or bypassed (see the header comment).
+     * A limit of 1 means OFF: it must fall through to the original path
+     * entirely, not merely flush every entry, because the batch path's eager
+     * marshal is itself what costs the wave phase. */
+    if (bender_spawn_batch_limit() > 1 && 2 != bender_lane_policy &&
+            bender_channel_count(ctl) < BENDER_LANE_CTL_CAP) {
+        if (NULL == bender_spawn_batch) {
+            bender_spawn_batch = bender_array(bender_spawn_batch_limit());
+            bender_gcroot(bender_wrap_array(bender_spawn_batch));
+        }
+        if (NULL != bender_spawn_batch_ctl && ctl != bender_spawn_batch_ctl) {
+            bender_spawn_batch_push();
+        }
+        /* EAGER marshal: snapshot the closure HERE, where the spawn happens.
+         * Deferring it to flush time would let the closure observe later
+         * values of the spawner's mutable captures. */
+        BenderBuffer *ebuf = bender_buffer(64);
+        bender_marshal(ebuf, bender_wrap_function(func), NULL,
+                       BENDER_MARSHAL_UNSAFE);
+        Bender e[4];
+        e[0] = bender_ckeywordv("spawn");
+        e[1] = bender_wrap_number((double) serial);
+        e[2] = bender_wrap_number(cap);
+        e[3] = bender_wrap_buffer(ebuf);
+        bender_spawn_batch_ctl = ctl;
+        bender_array_push(bender_spawn_batch,
+                          bender_wrap_tuple(bender_tuple_n(e, 4)));
+        Bender btup[4];
+        btup[0] = bender_ckeywordv("pid");
+        btup[1] = bender_wrap_number((double) (lane + 1));
+        btup[2] = bender_wrap_number((double) serial);
+        btup[3] = bender_wrap_abstract(ctl);
+        Bender bpid = bender_wrap_tuple(bender_tuple_n(btup, 4));
+        if (bender_spawn_batch->count >= bender_spawn_batch_limit()) {
+            bender_spawn_batch_push();
+        }
+        return bpid;
+    }
+    bender_spawn_batch_push();
+
     /* Try-mode never parks: preserve the immediate path when accepted. */
     int needs_write = bender_channel_push(ctl, spawn_msg, 3);
     Bender tup[4];
@@ -1878,7 +2077,28 @@ BENDER_CORE_FN(cfun_proc_killed,
     return bender_wrap_boolean(proc->killed);
 }
 
+BENDER_CORE_FN(cfun_proc_unmarshal_entry,
+              "(proc/lane-unmarshal-entry buffer)",
+              "INTERNAL lane-dispatcher protocol. Unmarshal one batched spawn "
+              "entry's closure from BUFFER. The spawner marshals eagerly, at "
+              "spawn time, because the marshal is what snapshots a closure's "
+              "captured values -- deferring it to flush time would let the "
+              "closure observe later values of anything the spawner mutates "
+              "afterwards. The Bender-level `unmarshal` cannot be used here: "
+              "it refuses threaded abstract pointers (a captured thread-chan "
+              "is exactly that) because it has no unsafe flag, while the "
+              "cross-lane channel path already marshals with "
+              "BENDER_MARSHAL_UNSAFE for the same values. Not for general "
+              "use: unmarshalling arbitrary bytecode is unsafe by "
+              "construction, which is why the safe builtin refuses it.") {
+    bender_fixarity(argc, 1);
+    BenderBuffer *buf = bender_getbuffer(argv, 0);
+    return bender_unmarshal(buf->data, buf->count, BENDER_MARSHAL_UNSAFE,
+                            NULL, NULL);
+}
+
 static const BenderRegExt proc_cfuns_ext[] = {
+    BENDER_CORE_REG("proc/lane-unmarshal-entry", cfun_proc_unmarshal_entry),
     BENDER_CORE_REG("proc/spawn-prepare", cfun_proc_spawn),
     BENDER_CORE_REG("proc/spawn-isolated", cfun_proc_spawn_isolated),
         BENDER_CORE_REG("proc/self-pid", cfun_proc_self_pid),

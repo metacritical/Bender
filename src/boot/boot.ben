@@ -3717,6 +3717,14 @@
                 (def task (proc/lane-pull overflow))
                 (if task (handle-spawn task) (set going false))))
       :spawn (handle-spawn [op serial x y])
+      # [:spawn-batch 0 0 entries] -- several spawns in one control message, in
+      # spawn order. Each entry is [:spawn serial cap BUFFER]: the spawner
+      # marshals the closure EAGERLY, at spawn time, because the marshal is
+      # what snapshots captured values and deferring it would let a closure see
+      # later values of the spawner's mutable captures. So unmarshal here.
+      :spawn-batch (each entry y
+                     (def [eop eserial ecap ebuf] entry)
+                     (handle-spawn [eop eserial ecap (proc/lane-unmarshal-entry ebuf)]))
       :deliver (if-let [p (or (get serials serial) (proc/lane-lookup serial))]
                  (proc/send p x))
       # [:proc-fwd serial msg] -- resolve to the LOCAL proc first
