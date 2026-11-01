@@ -281,15 +281,57 @@ instead of suspending -- and against a gated lane would spin forever. Also
 `suite-lanes.ben` regressed ("kids sum over 2 lanes": a wrong total, so procs
 lost or misdelivered), which is NOT yet diagnosed.
 
-**What the next attempt must do.** Keep the `bender_await` liveness flush and
-the per-policy `tick_mask`; both are correct. Then make batching BYPASS itself
-whenever the target ctl is already full: in that case take the original
-single-spawn path verbatim, plan return included, so the suspend contract holds
-exactly as today. A `bender_channel_count(ctl)` check per spawn is cheap --
-the `:steal` branch already performs one. Batching is then a fast path for the
-uncontended case only, which is the case it was measured on. `suite-lanes`
-must be diagnosed separately before anything lands; a wrong SUM is a
-correctness failure, not a performance one.
+### Attempt 5: the `suite-lanes` wrong sum is a SEMANTIC bug, and it
+### invalidates the headline numbers
+
+The full-ctl bypass works and the suspend contract is satisfiable: bypass
+batching when `bender_channel_count(ctl) >= 4096` (the ctl's capacity) or under
+`:steal`, taking the original single-spawn path with its plan return verbatim.
+That is not the blocker.
+
+The blocker is `suite-lanes`' wrong sum, and it is a correctness violation, not
+a lost message. Minimal probe -- five procs, each closing over the spawner's
+loop variable, sending `(* i i)` back:
+
+| `BENDER_SPAWN_BATCH` | values |
+|---|---|
+| 1 | `[0 1 4 9 16]` -- correct |
+| 16 | `[1 4 9 16 25]` -- **every proc sees `i+1`** |
+
+`spawn_msg` holds `bender_wrap_function(func)`, a LIVE reference to a closure
+whose environment is the spawner's. The MARSHAL is what snapshots captured
+values, and it happens inside `bender_chan_pack` during the push. Deferring the
+push therefore defers the snapshot, so every batched closure observes a later
+value of any variable the spawner mutates afterwards -- here shifted by exactly
+one increment. Batching as designed changes observable program behaviour.
+
+**This also invalidates the attempt-3 and attempt-4 speed figures.** The
+intra-message funcdef dedup that made batching look 4.6x faster at 100,000 is
+the SAME deferral that breaks captures: those runs were fast partly because
+they were wrong. No measurement taken with a deferred marshal can be quoted.
+
+**Corrected design, with an honest ceiling.** The closure must be marshalled
+EAGERLY, at spawn time, and the batch must carry the resulting buffers:
+`[:spawn serial cap <marshalled-buffer>]`, with the dispatcher unmarshalling
+each entry. Then:
+
+- capture semantics are preserved, because the snapshot happens where it does
+  today;
+- the per-MESSAGE costs still amortise -- ctl lock, queue push, self-pipe
+  event, and the spawner-side drain they necessitate, ~4.3 of ~8.5 us/spawn;
+- the per-CLOSURE marshal (1.089 us) is unchanged, as it always was;
+- **the funcdef dedup is LOST**, because each closure is marshalled separately,
+  so footprint does not improve and `marsh.c`'s `seen_defs` no longer applies
+  across a batch.
+
+Expected spawn phase is therefore roughly 8.5 -> ~4.2-4.5 us/spawn: about
+**2x, not 4.6x**, with no footprint change. Still worth doing -- it is the
+largest remaining spawn item -- but it must be measured fresh after the eager
+marshal, and the earlier numbers must not be carried over.
+
+A cross-message marshal registry becomes interesting again in that design,
+since intra-message dedup no longer applies; but it carries the
+wrong-code-on-desync risk recorded above, so it is a later question.
 
 Reverted again rather than shipped. Tree verified: `suite-lanes`,
 `suite-proc-spawn-return`, `suite-lane-chan` and `suite-lane-steal` all pass,
