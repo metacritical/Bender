@@ -468,6 +468,62 @@ Gates, none of which may be assumed:
 - **Both axes together**, since sharing defers reclamation exactly as the
   hybrid nursery cursor did.
 
+## Three-way comparison, and the "why not compile to Go" question
+
+Same `wave.ben` / `wave.erl` / `wave.go` trampoline chain, same machine, fresh
+builds (Bender `-O2` at `e35b8117`, Go 1.27.3, OTP 17.1.1), min of 2 each:
+
+| N | runtime | spawn us/proc | wave ms | total ms | RSS MB |
+|---|---|---:|---:|---:|---:|
+| 100,000 | bender | 7.97 | 132 | 929 | 326 |
+| 100,000 | erlang | 0.57 | 104 | 161 | 440 |
+| 100,000 | **go** | **0.63** | **35** | **98** | **277** |
+| 200,000 | bender | 6.95 | 320 | 1,709 | 662 |
+| 200,000 | erlang | 0.59 | 189 | 308 | 694 |
+| 200,000 | **go** | **0.65** | **72** | **202** | **550** |
+| 500,000 | bender | 8.50 | 838 | 5,090 | 1,514 |
+| 500,000 | erlang | 0.61 | 457 | 763 | 1,457 |
+| 500,000 | **go** | **0.67** | **203** | **538** | **1,367** |
+| 1,000,000 | bender | 8.96 | 2,072 | 11,032 | 2,533 |
+| 1,000,000 | erlang | 0.65 | 790 | **1,443** | 2,728 |
+| 1,000,000 | **go** | 1.05 | **749** | 1,802 | **2,410** |
+
+Marginal bytes per process over 100,000 -> 1,000,000: **go 2,485, bender 2,571,
+erlang 2,666** -- all within measurement noise of each other.
+
+Go matches BEAM on spawn, is the FASTEST of the three on channel hops, and has
+the lowest footprint. On this benchmark Go wins three of four axes, spawn by
+14x over Bender's routed path.
+
+**So would compiling to Go have been the better route?** On these numbers,
+mostly yes -- and the reason it is still not a settled question is semantic,
+not numeric:
+
+- **Go has ONE shared heap.** There are no per-process heaps and no isolated
+  collection. The entire mechanism this document and
+  `proc-spawn-scaling.md` are about -- `gc_owner`, `heap_lists`, per-owner
+  scoped minors, the barrier and remembered set that make them sound -- has no
+  counterpart in Go and cannot be built on top of it. Go marks the whole live
+  set concurrently behind write barriers; that works well, but its pause and
+  throughput profile becomes a permanent inherited property.
+- Compiling to Go therefore buys BEAM's SCHEDULER and cheap growable stacks,
+  not BEAM's MEMORY MODEL. It would mean implementing Erlang's API over Go's
+  isolation story, which is none. For an AOT game compiler, frame-time
+  determinism under a shared concurrent collector is exactly the hard case.
+- The ceiling is asymmetric: Go's GC tuning, stack-growth policy and absence
+  of per-process heaps all become unfixable, and the toolchain becomes a hard
+  dependency for a language whose stated goal is native AOT output.
+
+**Honest accounting of the C path.** Footprint is DONE -- 2,571 B/proc sits
+between Go and Erlang. Spawn is flat to 1,000,000 (`N^1.11`). The whole
+remaining gap is one localised item, the routed spawn path: local spawn is
+already 1.87 us/spawn, within 3x of Go. That is a bounded piece of work, not an
+open-ended grind.
+
+The decision therefore rests on whether per-process heap isolation is a core
+semantic of Bender or a negotiable one. If negotiable, Go was the cheaper
+route to these numbers. If not, Go cannot supply it at any price.
+
 ## Non-goals
 
 Not a claim that BEAM has no global synchronisation, nor that every BEAM spawn
