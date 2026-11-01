@@ -1,0 +1,89 @@
+# Per-type allocation census (development instrumentation, NOT shipped)
+#
+# Applies to src/core/gc.c. Build with:
+#     make -j12 CFLAGS="-O2 -g -DBENDER_ALLOC_CENSUS"
+# Run with BENDER_ALLOC_CENSUS=1; prints gcalloc counts and requested bytes
+# per BenderMemoryType at exit. Divide by the proc count the bench reports.
+#
+# Use this, NOT workload ablation, to answer "where do the bytes per live proc
+# go". Ablation fails: a proc that COMPLETES is reclaimed, so an inert-proc
+# arm reads ~1 B/proc and tells you nothing about a live one. Run it on
+# bench/spawn-only-chain.ben so every allocation belongs to the spawn path.
+#
+# Measured at N=200,000, BENDER_LANES=11 -- 18 allocations and 1,654 requested
+# bytes per proc (measured marginal RSS is 2,847, the difference being slab
+# size-class rounding, the malloc'd fiber stack, and page slack):
+#
+#   tuple     6.0/proc  384 B      fiber    1.0/proc  400 B
+#   abstract  2.0/proc  376 B      funcdef  1.0/proc  169 B   <- see below
+#   function  3.0/proc  128 B      table    1.0/proc   48 B
+#   funcenv   3.0/proc   96 B      string   1.0/proc   52 B
+#
+# The funcdef row is the finding: a funcdef is the compiled prototype
+# (bytecode, constants, source info) and is identical for every proc spawned
+# from the same closure, yet the routed spawn marshal-copies one PER PROC.
+#
+# Apply with:  patch -p0 < tools/alloc-census-probe.patch
+--- src/core/gc.c	2026-11-01 10:40:21
++++ /tmp/gc-with-census.c	2026-11-01 10:40:21
+@@ -2540,10 +2540,60 @@
+      * symmetric, so whichever of the two heaps runs a minor finds it. */
+     if (own_v != own_o) {
+         bender_xfb_bucket_append(ss, own_v, cobj);
++    }
++}
++
++/* ---- per-type allocation census (development only) ----------------------
++ * Compiled in with -DBENDER_ALLOC_CENSUS, armed with BENDER_ALLOC_CENSUS=1.
++ * Counts gcalloc calls and requested bytes by BenderMemoryType, plus the
++ * malloc'd fiber stacks, so "where do the ~2,847 bytes per live proc go" is
++ * answered by an inventory rather than by ablating the workload (which fails:
++ * a completing proc is reclaimed, so its footprint reads as ~1 B/proc).
++ * Run on bench/spawn-only-chain.ben so every allocation belongs to the spawn
++ * path. Divide by the proc count printed by the bench. */
++#ifdef BENDER_ALLOC_CENSUS
++#define BENDER_CENSUS_NTYPES 18
++static const char *bender_census_names[BENDER_CENSUS_NTYPES] = {
++    "none","string","symbol","array","tuple","table","struct","fiber","buffer",
++    "function","abstract","funcenv","funcdef","threaded_abstract",
++    "table_weakk","table_weakv","table_weakkv","array_weak"
++};
++static uint64_t bender_census_n[BENDER_CENSUS_NTYPES];
++static uint64_t bender_census_b[BENDER_CENSUS_NTYPES];
++static int bender_census_on = -1;
++static void bender_census_report(void) {
++    if (1 != bender_census_on) return;
++    uint64_t tn = 0, tb = 0;
++    fprintf(stderr, "[alloc-census] type count bytes\n");
++    for (int i = 0; i < BENDER_CENSUS_NTYPES; i++) {
++        uint64_t n = __atomic_load_n(&bender_census_n[i], __ATOMIC_RELAXED);
++        uint64_t b = __atomic_load_n(&bender_census_b[i], __ATOMIC_RELAXED);
++        if (0 == n) continue;
++        tn += n; tb += b;
++        fprintf(stderr, "[alloc-census] %-18s %10llu %12llu\n",
++                bender_census_names[i],
++                (unsigned long long) n, (unsigned long long) b);
++    }
++    fprintf(stderr, "[alloc-census] %-18s %10llu %12llu\n", "TOTAL",
++            (unsigned long long) tn, (unsigned long long) tb);
++}
++static int bender_census_armed(void) {
++    if (bender_census_on < 0) {
++        const char *e = getenv("BENDER_ALLOC_CENSUS");
++        bender_census_on = (NULL != e && '0' != e[0]) ? 1 : 0;
++        if (bender_census_on) atexit(bender_census_report);
+     }
++    return bender_census_on;
+ }
++#endif
+ 
+ void *bender_gcalloc(enum BenderMemoryType type, size_t size) {
++#ifdef BENDER_ALLOC_CENSUS
++    if (bender_census_armed() && (int) type < BENDER_CENSUS_NTYPES) {
++        __atomic_fetch_add(&bender_census_n[(int) type], 1, __ATOMIC_RELAXED);
++        __atomic_fetch_add(&bender_census_b[(int) type], (uint64_t) size, __ATOMIC_RELAXED);
++    }
++#endif
+     BenderGCObject *mem;
+ 
+     /* Make sure everything is inited */

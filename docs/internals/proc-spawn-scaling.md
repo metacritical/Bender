@@ -537,7 +537,58 @@ Three items, in value order.
    `src/boot/boot.ben`), not a constant tweak. Measure against the local-spawn
    floor of 1.87 us/spawn, not against zero.
 
-2. **Per-proc footprint: close the last 1.67x.** The hybrid cursor took
+2. **Per-proc footprint: the inventory, and the real floor.** Asked whether
+   ~300 B/proc is reachable. It is not, and the reason is worth stating
+   precisely: `sizeof(BenderFiber)` is 392 bytes, so the fiber block alone is
+   408 and no arrangement of the other objects gets a *runnable* process under
+   ~400 B. For scale, BEAM's own floor is a 233-word initial heap = 1,864 B,
+   so 300 B would be 6x better than BEAM, not 1.5x.
+
+   What IS reachable comes from `tools/alloc-census-probe.patch`, which
+   inventories gcalloc by type instead of ablating the workload (ablation
+   fails: a proc that completes is reclaimed and reads ~1 B/proc). At
+   N=200,000 on `bench/spawn-only-chain.ben`: **18 allocations and 1,654
+   requested bytes per proc**, against 2,847 B measured marginal RSS -- the
+   gap being slab size-class rounding, the malloc'd fiber stack and residual
+   page slack.
+
+   | type | per proc | B/proc | what it is |
+   |---|---:|---:|---|
+   | tuple | 6.0 | 384 | pid tuple, spawn message, cross-pid, ... |
+   | fiber | 1.0 | 400 | irreducible without shrinking `BenderFiber` |
+   | abstract | 2.0 | 376 | sup channel + materialized mailbox |
+   | function | 3.0 | 128 | entry closure, dispatcher wrapper, marshal copies |
+   | funcenv | 3.0 | 96 | their environments |
+   | funcdef | 1.0 | 169 | **one compiled prototype PER PROC** |
+   | table | 1.0 | 48 | the `setdyn :proc-cross-pid` dyns table |
+   | string | 1.0 | 52 | |
+   | **total** | **18.0** | **1,654** | |
+
+   Ranked by removable bytes:
+
+   - **Deduplicate the marshalled funcdef (169 B + part of the 128+96 B of
+     function/funcenv copies).** A funcdef is bytecode, constants and source
+     info, identical for every proc spawned from the same closure, yet the
+     routed spawn copies one per proc. A per-lane cache keyed on the source
+     funcdef would copy it once per lane instead of once per process. This is
+     the largest single item and also cuts the 1.089 us/spawn marshal that
+     batching provably cannot amortise, so it helps BOTH footprint and spawn
+     latency -- the only candidate on this list that does.
+   - **Lazy supervisor channel (188 B).** Eager only for the late-monitor
+     semantic `suite-proc` test 11 pins; the mailbox is already lazy.
+   - **The `:proc-cross-pid` dyns table plus its tuple (~100 B).** Set eagerly
+     in the dispatcher's wrapper for every proc; computable on demand.
+   - **Audit the 6 tuples/proc.** Unknown how many are necessary; the pid
+     shape itself is one of them, which is candidate (c) in
+     `spawn-parity-design.md` (make a pid an immediate).
+   - **Fold fiber into proc (~80 B)** and shrink `BenderFiber` -- the only
+     routes below ~400 B, and both are structural.
+
+   Realistic target after the first three: **~900-1,100 B/proc**, i.e. 1.6-1.9x
+   BETTER than BEAM rather than 1.67x worse. Gate both axes together as
+   before, since sharing and laziness both defer reclamation.
+
+3. **Previously item 2: close the last 1.67x.** The hybrid cursor took
    marginal cost from 5,945 to 2,847 B/proc (landed, `35befbb2`), so a live
    proc is now 1.67x Erlang's 1,709 B rather than 3.5x. What remains is the
    ~920 B of structs (fiber block 408, its separate 128 B stack realloc, proc
@@ -548,7 +599,7 @@ Three items, in value order.
    fiber into the proc, which is worth ~80 B and ~17% of per-proc mark visits
    (see the merge analysis above). Measure both gates together again.
 
-3. **A `1.4x` live-set residual on the co-located chain, i.e. `N^1.11`.** The
+4. **A `1.4x` live-set residual on the co-located chain, i.e. `N^1.11`.** The
    surviving whole-live-set walks (3 at N=200,000, down from 17) are still
    Theta(N) each, so this is the **marking constant**, hypothesis H3:
    `bender_procat_mark` re-walks ~6 blocks per proc. Cutting the *number* of
