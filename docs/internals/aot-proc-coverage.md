@@ -85,8 +85,60 @@ proc code is different, and open:
   compiles loop bodies rather than whole functions, the right tier for proc
   bodies instead of the kernel path?
 
-Neither is answered yet. What IS settled is that this is an ABI-shape problem,
-not a missing-metadata problem.
+Partly answered now, by measurement.
+
+### Loops are the EXECUTOR tier's job, and it does accept them
+
+A function with a loop is refused by the kernel tier for a third, separate
+reason:
+
+    native-skip 1 hot loop requires resumable VM quantum polls
+
+That is correct and expected: a kernel is straight-line C with no preemption
+points. Loops belong to the Tier-B frame-executor tier
+(`tools/loop-executor.ben`), and it DOES accept exactly this function:
+
+    native-executor 1 hot
+
+Two prerequisites that are easy to miss. The emitting side needs
+`BENDER_NATIVE_EXECUTORS=1`, and the RUNTIME must be built with
+`make NATIVE_EXECUTORS=1` -- otherwise registration is refused at startup
+("native executor registration refused id=1") and `build/.native-executors-mode`
+reads `disabled`.
+
+### But an executor is never entered from inside a proc
+
+With everything above satisfied, the same `hot` function:
+
+| context | `native_entries` |
+|---|---:|
+| called directly on the main VM | **128** |
+| called from a proc body, `BENDER_LANES=2` | **0** |
+| called from a proc body, `BENDER_LANES=0` | **0** |
+
+So it is not the lane boundary -- `LANES=0` is zero too. Work inside a PROC
+runs interpreted, whether or not lanes exist, even when a validated native
+executor for that exact function is registered and demonstrably entered from
+ordinary code.
+
+**For an AOT game compiler this is the operative finding: AOT accelerates
+non-proc code only.** It is independent of the spawn-cost work, and for a game
+loop built from procs it matters more.
+
+Mechanism NOT yet established, and worth stating as open rather than guessed.
+What is known: `vm_native()` is gated on the thread-local
+`bender_vm.native_possible`, which is set at registration, so it cannot be a
+cross-thread visibility problem at `LANES=0`; and attach matches a descriptor
+by a bytecode SHAPE key (`native_shape_key` over length, slotcount, arity,
+min/max arity, flags, constants_length and words), not by name. Candidates to
+test next: the per-definition validation epoch is bumped at every resume entry
+and a proc body resumes constantly; the quantum/interrupt machinery that the
+kernel tier already cites; or a shape mismatch for the instance a proc calls.
+
+What IS settled: the original "missing library signatures" diagnosis was wrong
+on both counts. The kernel-tier blocker is ABI shape (arity), and the
+executor-tier blocker is something about executing inside a proc -- neither is
+missing metadata.
 
 Scope note before anyone starts: a signature asserts a CONTRACT. Declaring a
 return type that the C implementation can violate (e.g. a cfun that returns nil
