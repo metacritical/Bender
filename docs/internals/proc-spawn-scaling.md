@@ -349,6 +349,52 @@ it no other way to discharge, which is what `proc.c:323-324` already says
 ("needs real backpressure in the lane dispatcher, not a bigger drain
 frequency").
 
+## Fresh-build matrix, 100,000 to 1,000,000 (supersedes the RSS claims below)
+
+`make clean` then a default `-O2 -g` build at `eaceb931`, matched alternating
+arms, min of 2 each, `BENDER_LANES=11`, `BENDER_NO_PROFILE=1`. `wave.ben`
+asserts `result == N`, so every proc provably stayed live.
+
+| N | arm | spawn ms | wave ms | total ms | RSS MB | us/spawn |
+|---|---|---:|---:|---:|---:|---:|
+| 100,000 | bender | 797 | 132 | 929 | **326** | 7.97 |
+| 100,000 | erlang | 57 | 104 | 161 | 440 | 0.57 |
+| 200,000 | bender | 1,389 | 320 | 1,709 | **662** | 6.95 |
+| 200,000 | erlang | 119 | 189 | 308 | 694 | 0.59 |
+| 500,000 | bender | 4,252 | 838 | 5,090 | 1,514 | 8.50 |
+| 500,000 | erlang | 306 | 457 | 763 | **1,457** | 0.61 |
+| 1,000,000 | bender | 8,960 | 2,072 | 11,032 | **2,533** | 8.96 |
+| 1,000,000 | erlang | 653 | 790 | 1,443 | 2,728 | 0.65 |
+
+- **Spawn is flat**: 7.97 / 6.95 / 8.50 / 8.96 us over a 10x range is 1.12x of
+  drift with no trend, which is the `N^1.11` fix holding at 1,000,000. The
+  ~14x gap to BEAM is entirely the routed path; local spawn is 1.87 us.
+- **Absolute RSS now favours Bender** at three of four sizes: 326 vs 440 MB,
+  662 vs 694, 2,533 vs 2,728. Only 500,000 goes the other way, by 4%. BEAM
+  carries a larger fixed footprint; Bender's is small.
+
+### CORRECTION to the per-proc footprint claim
+
+The "1.67x heavier per live proc than BEAM" figure recorded below does NOT
+survive a fresh matched run. Marginal bytes per proc from the table above:
+
+| span | bender | erlang |
+|---|---:|---:|
+| 100,000 -> 1,000,000 | 2,571 | 2,666 |
+| 200,000 -> 1,000,000 | 2,452 | 2,666 |
+
+They are within measurement noise, with Bender marginally LIGHTER. The earlier
+Erlang marginal of 1,709 B/proc rested on a single 500,000 reading of 1,183 MB;
+this run measures 1,457 MB for the same point, and Erlang's own 500,000 RSS is
+evidently the noisy value. One unreproduced data point.
+
+What survives unchanged is the ABSOLUTE accounting, which does not depend on
+the cross-runtime ratio: ~18 gcalloc'd objects and ~1,654 requested bytes per
+proc, plus the malloc'd mailbox, plus slab rounding and page slack, against
+~2,500 B measured. The removable items and the ~544 B floor (fiber 400 +
+`BenderProcess` 144) are unaffected, and so is the ranking of what to cut. Only
+the "worse than BEAM" framing was wrong.
+
 ## End-to-end trampoline wave, after both fixes
 
 Matched alternating runs, min of 2, same box at ~3.5 GiB swap, `BENDER_LANES=11`,
