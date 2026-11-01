@@ -296,7 +296,28 @@ what keeps a scoped sweep sound. Allowing it would reintroduce exactly the
 cross-heap tracing that made spawn O(N^2) in the first place. That is an
 architecture decision, not a footprint optimisation.
 
-**The right mechanism already exists and is unused.** Both halves of the
+> **CORRECTION, and it reverses the recommendation below.** `marsh.c` already
+> de-duplicates repeated objects WITHIN one marshal call: `st->seen` (`:35`),
+> `st->seen_envs` (`:211-219`) and `st->seen_defs` (`:262-270`), the last of
+> which emits a reference for a funcdef it has already written. So batching
+> 16 spawns into one control message makes the marshal write the shared
+> funcdef ONCE plus 15 backreferences, and the unmarshal resolve them to a
+> single object -- dropping the funcdef from 169 B/proc to ~11 B/proc for
+> free. That is most of what a cross-message registry would buy, and it also
+> explains the ~10% RSS improvement observed in the batched build that was
+> otherwise unattributed.
+>
+> A registry is therefore NOT the high-value item, and it is NOT a flag flip:
+> `rreg` and `reg` must be symmetric with agreed indices, which is why
+> Janet pre-populates them for image load. Incremental cross-thread population
+> needs a protocol where the first message carries the funcdef and installs it
+> at a sender-assigned index, and a sender/receiver desync makes a lane run
+> the WRONG CODE -- a worse failure than the segfault that stopped attempt 2.
+> Its remaining value over batching is ~11 B/proc. **Do batching's liveness
+> trigger first; revisit a registry only if cross-message sharing still shows
+> up in a census afterwards.**
+
+**The mechanism exists and is unused.** Both halves of the
 marshal API take a registry:
 
     bender_marshal(BenderBuffer *buf, Bender x, BenderTable *rreg, int flags)
@@ -312,11 +333,12 @@ seen encode as a reference rather than a fresh copy: one copy per
 (lane x distinct closure) instead of one per spawn. On the wave that is 1
 instead of 200,000.
 
-This is the best remaining candidate because it is the only one that moves
-BOTH axes: it removes most of the ~445 B/proc of marshal allocations (funcdef
-169, plus a share of function 128, funcenv 96 and string 52) AND attacks the
-1.089 us/spawn closure marshal, which the batching measurement proved is
-per-CLOSURE and therefore cannot be amortised by any batch factor.
+It would move both axes -- footprint and the 1.089 us/spawn marshal -- but see
+the correction above: intra-message dedup already captures most of it once
+spawns are batched, leaving a registry worth roughly 11 B/proc for a protocol
+whose failure mode is executing the wrong code. The 1.089 us marshal figure
+was measured at ONE spawn per message; batching changes what it contains,
+since 15 of every 16 funcdef writes become backreferences.
 
 Gates, none of which may be assumed:
 - **Registry lifetime.** It pins every funcdef it has seen, so it must be
