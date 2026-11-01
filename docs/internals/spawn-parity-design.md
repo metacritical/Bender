@@ -272,6 +272,61 @@ the fiber into the proc (~80 B plus ~17% of per-proc mark visits -- see the
 merge analysis in `proc-spawn-scaling.md`). This is the footprint and
 mark-work lever, not the spawn-latency lever.
 
+## Copy-on-write: considered and REJECTED; use the marshal registry instead
+
+Asked whether processes should get copy-on-write mechanics to cut the
+marshal cost. No -- CoW is the wrong mechanism for this cost, on two grounds.
+
+**The dominant item is immutable by construction.** The per-proc `BenderFuncDef`
+(169 B, the largest removable row in the inventory) is bytecode, constants,
+arity, environment layout and source map. It is never written after
+compilation, so CoW's on-write branch is unreachable: what it needs is
+SHARING, not copy-on-write.
+
+**Nothing mutable crosses a lane anyway.** `bender_proc_find_mutable_capture`
+(`proc.c:288`) detects a mutable capture and places the proc on the LOCAL VM
+instead, precisely because marshalling would hand the child a detached copy.
+So everything a routed spawn marshals is immutable BY POLICY, and CoW would
+add a write barrier, ownership tracking and a copy path to defend against
+writes the placement policy already prevents.
+
+The case where CoW semantics would genuinely be needed is shared MUTABLE state
+across lanes -- which this design deliberately refuses, and that refusal is
+what keeps a scoped sweep sound. Allowing it would reintroduce exactly the
+cross-heap tracing that made spawn O(N^2) in the first place. That is an
+architecture decision, not a footprint optimisation.
+
+**The right mechanism already exists and is unused.** Both halves of the
+marshal API take a registry:
+
+    bender_marshal(BenderBuffer *buf, Bender x, BenderTable *rreg, int flags)
+    bender_unmarshal(data, count, flags, reg, next)
+
+and the spawn path passes NULL to both:
+
+    bender_marshal(buf, bender_wrap_function(func), NULL, BENDER_MARSHAL_UNSAFE);
+    bender_unmarshal(buf->data, buf->count, BENDER_MARSHAL_UNSAFE, NULL, NULL);
+
+A persistent PER-LANE registry makes a funcdef the receiving lane has already
+seen encode as a reference rather than a fresh copy: one copy per
+(lane x distinct closure) instead of one per spawn. On the wave that is 1
+instead of 200,000.
+
+This is the best remaining candidate because it is the only one that moves
+BOTH axes: it removes most of the ~445 B/proc of marshal allocations (funcdef
+169, plus a share of function 128, funcenv 96 and string 52) AND attacks the
+1.089 us/spawn closure marshal, which the batching measurement proved is
+per-CLOSURE and therefore cannot be amortised by any batch factor.
+
+Gates, none of which may be assumed:
+- **Registry lifetime.** It pins every funcdef it has seen, so it must be
+  per-lane and cleared at lane stop, or it is an unbounded leak keyed on the
+  number of distinct closures ever spawned.
+- **No mutable dedup.** Guaranteed today by the placement policy above, but
+  the gate must ASSERT it rather than depend on it staying true.
+- **Both axes together**, since sharing defers reclamation exactly as the
+  hybrid nursery cursor did.
+
 ## Non-goals
 
 Not a claim that BEAM has no global synchronisation, nor that every BEAM spawn
