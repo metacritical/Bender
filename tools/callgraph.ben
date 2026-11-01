@@ -3915,7 +3915,21 @@
     (def d (info :d))
     (def pt (get pts id))
     (def rt (rts id))
-    (var concrete (and (> (length pt) 0) (not (d :vararg))))
+    # Why a candidate was refused, not merely that it was. Every gate below
+    # used to funnel into a single "types not proven" message, which is wrong
+    # for most of them and actively misleading: a zero-arity function with a
+    # proven numeric return reported "types not proven: params [] ret long".
+    # First reason wins, so the message names the PRIMARY cause.
+    (var concrete true)
+    (var why nil)
+    (defn refuse [r] (when (nil? why) (set why r)) (set concrete false))
+    # A kernel takes its inputs through the C ABI. A zero-arity function has
+    # none to take -- its inputs live in its captured environment, which that
+    # ABI cannot reach -- and a vararg frame has no fixed shape to lower.
+    # Both are SHAPE preconditions and have nothing to do with types.
+    (when (= 0 (length pt))
+      (refuse "zero-arity: no ABI inputs (a thunk's inputs live in its captured env)"))
+    (when (d :vararg) (refuse "vararg: no fixed frame shape to lower"))
     # Provably dead code is never a kernel candidate. Gated on
     # dce-dead-ids, which is non-empty ONLY under a :safe
     # dce-reachable verdict -- never on bare static reachability,
@@ -3926,21 +3940,27 @@
     # retention (6f1a74d0) no gate was needed at all: an unreferenced
     # top-level defn was dropped by dead-store elimination and never
     # reached `defs`.
-    (when (get dce-dead-ids id) (set concrete false))
+    (when (get dce-dead-ids id)
+      (refuse "provably dead code (dce-reachable :safe verdict)"))
     # Step 11: :array params are opaque-but-emittable (pointer temps);
     # :array returns are the (in-place) array itself
-    (each t pt (unless (or (get infer/numeric-types t) (get abi-param-types t)) (set concrete false)))
+    (each t pt (unless (or (get infer/numeric-types t) (get abi-param-types t))
+                 (refuse (string "param type not in the ABI set: " t))))
     # Stream F: :u64 is an INTERNAL kernel domain only (wrapper boxes
     # through double; >2^53 would silently round). Enter via int/u64,
     # leave via int/to-number, never the ABI.
-    (each t pt (when (= t :u64) (set concrete false)))
-    (when (= rt :u64) (set concrete false))
+    (each t pt (when (= t :u64)
+                 (refuse ":u64 param (internal kernel domain; enter via int/u64)")))
+    (when (= rt :u64)
+      (refuse ":u64 return (internal kernel domain; leave via int/to-number)"))
     # Phase 1: :nil is concrete -- a whole-program-proven-always-nil
     # return is a legitimate void kernel, not an unproven boxed value.
-    (unless (or (get infer/numeric-types rt) (get abi-return-types rt)) (set concrete false))
+    (unless (or (get infer/numeric-types rt) (get abi-return-types rt))
+      (refuse (string "return type not proven: " (if (= rt :unknown) "?" (string rt)))))
     # a def named like a declared extern is the compiled fallback
     # artifact — the real implementation lives in C
-    (when (get externs (string (or (d :name) "?"))) (set concrete false))
+    (when (get externs (string (or (d :name) "?")))
+      (refuse "name matches a declared extern (real implementation is in C)"))
     # one site, one kernel: a duplicate registration of an imported
     # function never emits — the surviving registration owns the name,
     # the C symbol and the profile/hint identity
@@ -3952,7 +3972,7 @@
       concrete
       (put cand id true)
       (array/push skips [id (string (or (d :name) "?"))
-                          (string "types not proven: " (describe-types pt rt))])))
+                          (string (or why "refused") ": " (describe-types pt rt))])))
   # two-round dependency resolution: leaves first, then callers whose
   # targets are all emitted
   (def emitted-names @{})  # id -> bender name
@@ -5271,7 +5291,21 @@
     (def d (info :d))
     (def pt (get pts id))
     (def rt (rts id))
-    (var concrete (and (> (length pt) 0) (not (d :vararg))))
+    # Why a candidate was refused, not merely that it was. Every gate below
+    # used to funnel into a single "types not proven" message, which is wrong
+    # for most of them and actively misleading: a zero-arity function with a
+    # proven numeric return reported "types not proven: params [] ret long".
+    # First reason wins, so the message names the PRIMARY cause.
+    (var concrete true)
+    (var why nil)
+    (defn refuse [r] (when (nil? why) (set why r)) (set concrete false))
+    # A kernel takes its inputs through the C ABI. A zero-arity function has
+    # none to take -- its inputs live in its captured environment, which that
+    # ABI cannot reach -- and a vararg frame has no fixed shape to lower.
+    # Both are SHAPE preconditions and have nothing to do with types.
+    (when (= 0 (length pt))
+      (refuse "zero-arity: no ABI inputs (a thunk's inputs live in its captured env)"))
+    (when (d :vararg) (refuse "vararg: no fixed frame shape to lower"))
     # Provably dead code is never a kernel candidate. Gated on
     # dce-dead-ids, which is non-empty ONLY under a :safe
     # dce-reachable verdict -- never on bare static reachability,
@@ -5282,18 +5316,23 @@
     # retention (6f1a74d0) no gate was needed at all: an unreferenced
     # top-level defn was dropped by dead-store elimination and never
     # reached `defs`.
-    (when (get dce-dead-ids id) (set concrete false))
+    (when (get dce-dead-ids id)
+      (refuse "provably dead code (dce-reachable :safe verdict)"))
     # Step 11: :array params are opaque-but-emittable (pointer temps);
     # :array returns are the (in-place) array itself
-    (each t pt (unless (or (get infer/numeric-types t) (get abi-param-types t)) (set concrete false)))
+    (each t pt (unless (or (get infer/numeric-types t) (get abi-param-types t))
+                 (refuse (string "param type not in the ABI set: " t))))
     # Stream F: :u64 is an INTERNAL kernel domain only (wrapper boxes
     # through double; >2^53 would silently round). Enter via int/u64,
     # leave via int/to-number, never the ABI.
-    (each t pt (when (= t :u64) (set concrete false)))
-    (when (= rt :u64) (set concrete false))
+    (each t pt (when (= t :u64)
+                 (refuse ":u64 param (internal kernel domain; enter via int/u64)")))
+    (when (= rt :u64)
+      (refuse ":u64 return (internal kernel domain; leave via int/to-number)"))
     # Phase 1: :nil is concrete -- a whole-program-proven-always-nil
     # return is a legitimate void kernel, not an unproven boxed value.
-    (unless (or (get infer/numeric-types rt) (get abi-return-types rt)) (set concrete false))
+    (unless (or (get infer/numeric-types rt) (get abi-return-types rt))
+      (refuse (string "return type not proven: " (if (= rt :unknown) "?" (string rt)))))
     # Hybrid wrappers replace the bytecode definition entirely. A C loop
     # cannot yield a VM quantum and later resume its native stack/locals.
     # Keep loops boxed until native continuations exist; callers also stay
@@ -5395,7 +5434,7 @@
                   (put joint-cand id (seq [key :in (sorted (keys sigs))] (get sigs key)))))
               (unless (get joint-cand id)
                 (array/push lib-skips [id nmj
-                                       (string "types not proven: " (describe-types-lib pt rt))])))))))
+                                       (string (or why "refused") ": " (describe-types-lib pt rt))])))))))
   (def emitted-names @{})
   (def kernels @[])
   (def lib-skip-reason @{})

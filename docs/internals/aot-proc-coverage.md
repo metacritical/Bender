@@ -38,25 +38,55 @@ The gate is not the problem either. `abi-return-types`
 :string :keyword :symbol :table :struct :buffer :fiber :function :cfunction
 :abstract :pointer` -- boxed values are perfectly emittable.
 
-**The problem is that the inferencer has no knowledge of the standard
-library.** `tools/infer.ben`'s `pure-calls` (`:152-165`) holds SEVEN entries:
-six libm wrappers and two u64 casts. It is not a signature registry at all --
-it is a LOWERING table, mapping a call to an exact C equivalent
-(`math/floor -> floor`). Every other cfun, including the whole proc, ev and
-channel API, infers `:unknown`, i.e. `?`.
+**The real reason is ARITY, not types.** `tools/callgraph.ben` starts the
+candidate flag at
 
-So `wave.ben`'s spawn closure calls `proc/recv` and `proc/send`, its return
-type is `?`, and it is refused. For a project describing itself as an AOT game
-compiler this is the significant finding: any game loop that uses procs gets no
-native compilation whatsoever.
+    (var concrete (and (> (length pt) 0) (not (d :vararg))))
 
-### The fix is library signatures, not kernels
+so a zero-arity function is refused before any type is examined. With the
+diagnostic corrected (see below), `wave.ben` reports:
 
-What is missing is a declaration WEAKER than `pure-calls`: not "lower this call
-to a C function" but merely "this cfun returns a boxed `:value`" (or `:tuple`,
-`:nil`, ...). That alone satisfies `abi-return-types` and makes callers
-provable, with no lowering and no new codegen. It is additive, and it is the
-cheapest route to native coverage for concurrent code.
+    native-skip 0 thunk  zero-arity: no ABI inputs ... : params [] ret nil
+    native-skip 1        zero-arity: no ABI inputs ... : params [] ret ?
+    native-skip 2 while  zero-arity: no ABI inputs ... : params [] ret nil
+    native-skip 3        zero-arity: no ABI inputs ... : params [] ret ?
+
+All four. Not one is a type failure. Confirmed directly: a probe with
+`(defn with-param [x] ...)` and `(defn zero-arity [] ...)` emits exactly one
+kernel, and the zero-arity function is refused even though its return type is
+the fully proven `:long`.
+
+And the precondition is *sound*, not an oversight. A kernel receives its
+inputs through the C ABI. A zero-arity function has none to receive: its
+inputs live in its captured environment, which that ABI cannot reach.
+
+**This is structural for proc code.** `proc/spawn` takes a THUNK, so every
+proc entry closure is zero-arity by construction. No proc body can ever be a
+kernel candidate under this precondition, whatever the type signatures say.
+
+### CORRECTION: library signatures are NOT the fix
+
+An earlier version of this document concluded that the blocker was
+`tools/infer.ben`'s missing standard-library signatures -- `pure-calls`
+(`:152-165`) holds seven entries, six libm wrappers and two u64 casts, and is
+a LOWERING table (`math/floor -> floor`) rather than a signature registry, so
+every other cfun including the proc/ev/channel API infers `:unknown`. That
+observation is true but it is NOT the operative cause: arity refuses these
+functions first, and adding signatures would not have emitted a single extra
+kernel for `wave.ben`.
+
+Signatures remain mildly useful for functions that DO take parameters and call
+cfuns, and that is now tracked as a low-priority item. The real question for
+proc code is different, and open:
+
+- can a proc entry thunk be made eligible at all -- e.g. by passing its
+  captured environment as an explicit ABI parameter?
+- or is the Tier-B loop-executor path (`tools/loop-executor.ben`), which
+  compiles loop bodies rather than whole functions, the right tier for proc
+  bodies instead of the kernel path?
+
+Neither is answered yet. What IS settled is that this is an ABI-shape problem,
+not a missing-metadata problem.
 
 Scope note before anyone starts: a signature asserts a CONTRACT. Declaring a
 return type that the C implementation can violate (e.g. a cfun that returns nil
@@ -71,8 +101,19 @@ ANY `concrete = false`, including causes that are not type-related at all:
 `dce-dead-ids` membership, a `:u64` parameter or return, a name shadowing a
 declared extern, and duplicate site registration.
 
-That is why the output above says `while types not proven: params [] ret nil`
-when `:nil` is in fact an admissible return type -- that skip had some other
-cause, hidden by the message. Anyone auditing native coverage is pointed at
-types regardless of the real reason. Carry the actual reason into the skip
-record before using these messages to drive work.
+That is why the output above said `while types not proven: params [] ret nil`
+when `:nil` is in fact an admissible return type -- the real cause was arity,
+hidden by the message.
+
+**FIXED.** Both emission paths (the kernel path and the lib path carried
+identical copies of the gate) now thread a `why` string through a `refuse`
+helper, first reason wins, and report it instead of the funnel message.
+Reasons distinguished: zero-arity, vararg, provably dead, param type outside
+the ABI set, `:u64` param, `:u64` return, return type not proven, and
+extern-shadowing. Verified by the correction above -- the fix immediately
+overturned this document's own prior conclusion, which is precisely what it
+was for. Gates: suite-callgraph 256/256, suite-aot-multiseed 36/36,
+suite-aot-quantum 5/5, suite-aot-release 14/14, suite-aot-size 13/13,
+suite-dce-reachable 12/12, suite-dce-strip 61/61, suite-dce-harness 2/2,
+suite-hinted-export 81/81, suite-autopgo 98/98, suite-native-dispatch 24/24,
+suite-native-fiber 52/52, suite-native-joint-dispatch 28/28.
