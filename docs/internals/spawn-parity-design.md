@@ -234,12 +234,66 @@ placements were tried:
 | gate on a blocking turn via `bender_loop1_impl(has_timeout, ...)` | `bender_loop1_poll_now` calls `bender_loop1_impl` DIRECTLY, bypassing `bender_loop1`, yet the flush still fired throughout a burst, so `bender_loop1` is itself re-entered constantly |
 
 So the trigger must distinguish "this fiber is about to wait" from "the
-scheduler was entered", and no loop-level predicate tried so far does. The
-promising hook is the fiber SUSPEND path rather than any loop iteration: the
-spawner never suspends during its burst (it runs a `while` loop, and the
-periodic drain does not suspend it), but it does suspend on `ev/sleep` or
-`ev/take`. That is a single, semantically correct hook and it is where the next
-attempt should go -- not another loop predicate.
+scheduler was entered", and no loop-level predicate does.
+
+### Attempt 4: liveness SOLVED at `bender_await`; blocked on the BACKPRESSURE
+### contract instead
+
+`bender_await` (`ev.c:930`) is `bender_signalv(BENDER_SIGNAL_EVENT, nil)` and
+is the single path every event wait takes (15 call sites). Flushing there is
+exactly "this fiber is about to park", and a spawn burst never reaches it,
+because the burst runs a loop and its periodic drain does not suspend. That
+works: `suite-lane-chan` 9/9 with the win kept -- 20,000 spawns in 42 ms
+(113 pre-batch), 100,000 in 181 ms (761 pre-batch).
+
+**The liveness problem is therefore solved. Three further things were found,
+and the third is the new blocker.**
+
+**Found and fixed: the drain interval must track EVENT PRODUCTION, not spawn
+count.** Widening it from every 4 spawns to every 16 is only valid where
+batching posts one message per 16. Under `:steal`, where batching is disabled
+(below), production stays at one message per spawn and the wider interval
+starves the self-pipe -- a hang, not a slowdown. `tick_mask` must be chosen
+per policy. `test/suite-lane-steal.ben` caught this.
+
+**Found: batching must not apply under `:steal`.** Batching leaves a message
+queued in the target ctl, which makes `bender_channel_count(ctl) >= 1` true and
+so ACTIVATES the overflow branch that has never run. It does not work once
+live: with its mode-2 push the pulling lane gets a corrupted task ("expected
+... got 0" in `handle-spawn`, via the `:pull` arm), and correcting that to
+mode 3 only moves the failure -- the `[:pull]` wakeup nudge is itself a mode-2
+push, the queue never drains, and the run parks at 0% CPU. Both the mode fix
+and its revert are recorded below. A spawn-throughput change must not smuggle
+in a repair of an unrelated broken feature, so `:steal` keeps the
+one-message-per-spawn path.
+
+**BLOCKER: a spawn into a FULL control channel must SUSPEND the calling
+fiber.** `test/suite-proc-spawn-return.ben` pins this deliberately: it installs
+a gated lane worker that never consumes, fills the ctl to capacity, spawns from
+two fibers and asserts both are `:suspended`. That is what the single-spawn
+"plan" return (`[:proc-spawn-write pid ctl msg]`) exists for -- the boot wrapper
+performs a blocking give, so the FIBER parks. It is a contract, not an
+implementation detail.
+
+Attempt 4 replaced it with a C-level drain-and-retry loop
+(`while (push(ctl, msg, 3)) bender_loop1_poll_now();`), which spins in C
+instead of suspending -- and against a gated lane would spin forever. Also
+`suite-lanes.ben` regressed ("kids sum over 2 lanes": a wrong total, so procs
+lost or misdelivered), which is NOT yet diagnosed.
+
+**What the next attempt must do.** Keep the `bender_await` liveness flush and
+the per-policy `tick_mask`; both are correct. Then make batching BYPASS itself
+whenever the target ctl is already full: in that case take the original
+single-spawn path verbatim, plan return included, so the suspend contract holds
+exactly as today. A `bender_channel_count(ctl)` check per spawn is cheap --
+the `:steal` branch already performs one. Batching is then a fast path for the
+uncontended case only, which is the case it was measured on. `suite-lanes`
+must be diagnosed separately before anything lands; a wrong SUM is a
+correctness failure, not a performance one.
+
+Reverted again rather than shipped. Tree verified: `suite-lanes`,
+`suite-proc-spawn-return`, `suite-lane-chan` and `suite-lane-steal` all pass,
+wave correct at 200,000.
 
 Reverted rather than shipped: a 4x spawn win is not worth a runtime that
 deadlocks on one spawn followed by a wait. Tree verified after revert: wave
