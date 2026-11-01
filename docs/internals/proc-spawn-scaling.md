@@ -556,13 +556,39 @@ Three items, in value order.
    |---|---:|---:|---|
    | tuple | 6.0 | 384 | pid tuple, spawn message, cross-pid, ... |
    | fiber | 1.0 | 400 | irreducible without shrinking `BenderFiber` |
-   | abstract | 2.0 | 376 | sup channel + materialized mailbox |
+   | abstract | 2.0 | 376 | proc abstract (144) + supervisor channel (240) |
    | function | 3.0 | 128 | entry closure, dispatcher wrapper, marshal copies |
    | funcenv | 3.0 | 96 | their environments |
    | funcdef | 1.0 | 169 | **one compiled prototype PER PROC** |
    | table | 1.0 | 48 | the `setdyn :proc-cross-pid` dyns table |
    | string | 1.0 | 52 | |
    | **total** | **18.0** | **1,654** | |
+
+   > **The mailbox is NOT in this census.** `bender_abstract_begin_threaded`
+   > uses `bender_malloc`, not `bender_gcalloc`, because a threaded abstract
+   > must outlive any one VM's heap so any lane can push to it. So the
+   > materialized mailbox (~240 B) is invisible here, and the identified total
+   > is really ~1,894 B of the 2,847 measured. Correcting an earlier version of
+   > this table that attributed the two `none` rows to "sup channel +
+   > mailbox": they are the proc abstract (64 B head + 80 B `BenderProcess` =
+   > 144) and the supervisor channel (64 + 176 = 240), averaging 192 B against
+   > the 188 B measured. Abstracts land in the `none` row because
+   > `bender_abstract_begin` allocates as `BENDER_MEMORY_NONE` and only then
+   > calls `bender_gc_settype(..., BENDER_MEMORY_ABSTRACT)`.
+
+   What each allocation is for:
+
+   | allocation | purpose |
+   |---|---|
+   | `BenderFiber` | the execution context: frames, pc, status, `gc_owner`, the eight `nursery_cur` page cursors, three `heap_lists`, env, and the in-flight resume values. What the scheduler runs and what a scoped minor sweeps. Exists WITHOUT a proc for `ev/go` tasklets, generators and the root fiber. |
+   | `BenderProcess` | the actor layer over that fiber: `mbox`/`sup` channels, `mbox_cap`, `fiber`, pid `serial`, `done`, the selective-receive `stash`, the `monitors` list, `exit_reason`, `trap_exit`, `killed`, `isolated_heap`. 80 bytes of the 144. |
+   | supervisor channel | carries the `:down` completion event, eagerly so a monitor registered AFTER the proc died still observes it (`suite-proc` test 11). The mailbox is already lazy; this is not. |
+   | `BenderFuncDef` | the compiled PROTOTYPE -- bytecode, constants, arity, environment layout, source map, name. Immutable and identical for every proc spawned from the same closure, yet copied per proc. |
+   | `BenderFunction` x3 | a closure = funcdef pointer + captured environment. Three: the user's entry closure, the dispatcher's wrapper `(fn [] (setdyn :proc-cross-pid ...) (entry))`, and the marshal copy. |
+   | `BenderFuncEnv` x3 | the captured-variable environment for each of those, either a window into a live fiber's stack (`offset > 0`) or a detached values array. |
+   | tuples x6 | the pid `[:pid lane serial ctl]`, the spawn control message `[:spawn serial cap entry]`, the `:proc-cross-pid` tuple, and marshal copies. |
+   | `BenderTable` | the proc's own dynamic-binding table, created solely because the wrapper calls `(setdyn :proc-cross-pid ...)`. |
+   | string | marshal of the funcdef's name/source info. |
 
    Ranked by removable bytes:
 
